@@ -20,6 +20,13 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    container_name: cchis_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
   backend:
     build:
       context: ./backend
@@ -35,6 +42,40 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_started
+
+  celery_worker:
+    build:
+      context: ./backend
+    container_name: cchis_celery_worker
+    restart: unless-stopped
+    command: sh -c "celery -A core worker --loglevel=INFO"
+    volumes:
+      - ./backend:/app
+    env_file:
+      - ./.env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  celery_beat:
+    build:
+      context: ./backend
+    container_name: cchis_celery_beat
+    restart: unless-stopped
+    command: sh -c "celery -A core beat --loglevel=INFO"
+    volumes:
+      - ./backend:/app
+    env_file:
+      - ./.env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
 
 volumes:
   postgres_data:

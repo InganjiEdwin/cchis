@@ -1,7 +1,19 @@
+import logging
+from datetime import timedelta
+
+from decouple import config
 from django.utils import timezone
-from .models import Alert, CHV, RiskScore, Ward
-from django.utils import timezone
-from .models import Alert, CHV, RiskScore, TriageSession, Ward
+
+from .models import Alert, CHV, HealthFacility, RiskScore, SyncQueue, TriageSession, Ward
+from .providers import DeliveryResult, get_sms_provider
+
+
+alerts_logger = logging.getLogger("risk.alerts")
+ml_logger = logging.getLogger("risk.ml")
+
+
+def alert_retry_delay() -> timedelta:
+    return timedelta(minutes=config("ALERT_RETRY_DELAY_MINUTES", cast=int, default=5))
 
 
 def build_alert_message(ward: Ward, risk_score: RiskScore) -> str:
@@ -13,49 +25,121 @@ def build_alert_message(ward: Ward, risk_score: RiskScore) -> str:
     )
 
 
-def send_sms_stub(phone_number: str, message: str) -> dict:
-    return {
-        "success": True,
-        "external_id": f"stub-{phone_number}-{timezone.now().timestamp()}",
-        "error": "",
-    }
+def send_sms(phone_number: str, message: str, provider_name: str | None = None) -> DeliveryResult:
+    provider = get_sms_provider(provider_name=provider_name)
+    return provider.send(phone_number, message)
 
 
-def trigger_alerts_for_riskscore(risk_score: RiskScore, send_sms: bool = False) -> list[Alert]:
+def create_alerts_for_riskscore(risk_score: RiskScore, send_sms_enabled: bool = False) -> list[Alert]:
     ward = risk_score.ward
-    alerts_created = []
+    alerts_created: list[Alert] = []
 
+    alerts_logger.info(
+        "trigger_alerts_started",
+        extra={
+            "ward_id": ward.id,
+            "risk_score_id": risk_score.id,
+            "risk_level": risk_score.risk_level,
+            "send_sms_enabled": send_sms_enabled,
+        },
+    )
+
+    delivered_at = timezone.now()
     dashboard_alert = Alert.objects.create(
         ward=ward,
         risk_score=risk_score,
         channel=Alert.CHANNEL_DASHBOARD,
         recipient="dashboard",
         message=build_alert_message(ward, risk_score),
-        status=Alert.STATUS_SENT,
-        sent_at=timezone.now(),
+        status=Alert.STATUS_DELIVERED,
+        delivery_backend="internal-dashboard",
+        attempt_count=1,
+        max_attempts=1,
+        last_attempted_at=delivered_at,
+        sent_at=delivered_at,
     )
     alerts_created.append(dashboard_alert)
 
-    if send_sms:
+    if send_sms_enabled:
         chvs = CHV.objects.filter(ward=ward, is_active=True)
+
         for chv in chvs:
             message = build_alert_message(ward, risk_score)
-            result = send_sms_stub(chv.phone_number, message)
-
             alert = Alert.objects.create(
                 ward=ward,
                 risk_score=risk_score,
                 channel=Alert.CHANNEL_SMS,
                 recipient=chv.phone_number,
                 message=message,
-                status=Alert.STATUS_SENT if result["success"] else Alert.STATUS_FAILED,
-                external_id=result["external_id"],
-                sent_at=timezone.now() if result["success"] else None,
-                error_message=result["error"],
+                status=Alert.STATUS_QUEUED,
+                delivery_backend=config("SMS_PROVIDER", default="stub").strip().lower() or "stub",
+                max_attempts=config("ALERT_MAX_ATTEMPTS", cast=int, default=3),
             )
             alerts_created.append(alert)
 
+    alerts_logger.info(
+        "trigger_alerts_completed",
+        extra={
+            "ward_id": ward.id,
+            "risk_score_id": risk_score.id,
+            "alerts_created": len(alerts_created),
+        },
+    )
+
     return alerts_created
+
+
+def deliver_alert(alert: Alert) -> Alert:
+    if alert.channel == Alert.CHANNEL_DASHBOARD:
+        return alert
+
+    if alert.channel != Alert.CHANNEL_SMS:
+        alert.status = Alert.STATUS_FAILED
+        alert.error_message = f"Unsupported alert channel: {alert.channel}"
+        alert.next_retry_at = None
+        alert.save(update_fields=["status", "error_message", "next_retry_at"])
+        return alert
+
+    attempted_at = timezone.now()
+    alert.attempt_count += 1
+    alert.last_attempted_at = attempted_at
+
+    provider_name = alert.delivery_backend or None
+    result = send_sms(alert.recipient, alert.message, provider_name=provider_name)
+    alert.external_id = result.external_id
+    alert.error_message = result.error
+    alert.delivery_backend = result.provider
+
+    if result.success:
+        alert.status = Alert.STATUS_DELIVERED
+        alert.sent_at = attempted_at
+        alert.next_retry_at = None
+    elif alert.attempt_count < alert.max_attempts:
+        alert.status = Alert.STATUS_RETRY_PENDING
+        alert.next_retry_at = attempted_at + alert_retry_delay()
+        alert.sent_at = None
+    else:
+        alert.status = Alert.STATUS_FAILED
+        alert.next_retry_at = None
+        alert.sent_at = None
+
+    alert.save(
+        update_fields=[
+            "attempt_count",
+            "last_attempted_at",
+            "delivery_backend",
+            "external_id",
+            "error_message",
+            "status",
+            "next_retry_at",
+            "sent_at",
+        ]
+    )
+    return alert
+
+
+def trigger_alerts_for_riskscore(risk_score: RiskScore, send_sms_enabled: bool = False) -> list[Alert]:
+    return create_alerts_for_riskscore(risk_score, send_sms_enabled=send_sms_enabled)
 
 
 def latest_riskscore_for_ward(ward: Ward) -> RiskScore | None:
@@ -79,36 +163,42 @@ def generate_triage_recommendation(
                 True,
             )
         return (
-            "Severe diarrhea case. Start ORS immediately, assess dehydration, and refer to a health facility urgently.",
+            "Severe diarrhea case. Start ORS immediately, assess dehydration, "
+            "and refer to a health facility urgently.",
             True,
         )
 
     if diarrhea and dehydration:
         return (
-            "Possible acute watery diarrhea with dehydration. Start ORS, monitor closely, and refer if symptoms worsen.",
+            "Possible acute watery diarrhea with dehydration. Start ORS, monitor closely, "
+            "and refer if symptoms worsen.",
             True,
         )
 
     if diarrhea and vomiting:
         return (
-            "Possible diarrheal illness. Give ORS, reinforce safe water and hygiene guidance, and monitor closely.",
+            "Possible diarrheal illness. Give ORS, reinforce safe water and hygiene guidance, "
+            "and monitor closely.",
             False,
         )
 
     if fever and ward_risk == Ward.RISK_HIGH:
         return (
-            "Fever reported in high-risk ward. Assess for malaria and diarrheal symptoms, advise prompt testing and follow-up.",
+            "Fever reported in high-risk ward. Assess for malaria and diarrheal symptoms, "
+            "advise prompt testing and follow-up.",
             False,
         )
 
     if diarrhea:
         return (
-            "Provide ORS, advise safe water use, handwashing, and monitor for worsening symptoms or dehydration signs.",
+            "Provide ORS, advise safe water use, handwashing, and monitor for worsening symptoms "
+            "or dehydration signs.",
             False,
         )
 
     return (
-        "No immediate cholera danger signs identified. Continue observation, reinforce prevention messaging, and follow routine guidance.",
+        "No immediate cholera danger signs identified. Continue observation, reinforce prevention "
+        "messaging, and follow routine guidance.",
         False,
     )
 
@@ -130,11 +220,20 @@ def create_triage_session(
         dehydration=dehydration,
         fever=fever,
     )
+    referral_facility = None
+
+    if referral_needed:
+        referral_facility = (
+            HealthFacility.objects.filter(ward=ward, is_active=True)
+            .order_by("name")
+            .first()
+        )
 
     return TriageSession.objects.create(
         channel=channel,
         phone_number=phone_number,
         ward=ward,
+        referral_facility=referral_facility,
         text_input=text_input,
         diarrhea=diarrhea,
         vomiting=vomiting,
@@ -145,59 +244,56 @@ def create_triage_session(
     )
 
 
-def build_alert_message(ward: Ward, risk_score: RiskScore) -> str:
-    return (
-        f"Cholera early warning for {ward.name}. "
-        f"Risk level: {risk_score.risk_level}. "
-        f"Predicted cases: {risk_score.predicted_cases}. "
-        f"Advise households on safe water, hygiene, and early referral."
+def process_sync_payload(
+    *,
+    ward: Ward,
+    phone_number: str,
+    source_device_id: str,
+    payload: dict,
+) -> tuple[SyncQueue, TriageSession, bool]:
+    client_submission_id = (payload.get("client_submission_id") or "").strip()
+    if not client_submission_id:
+        raise ValueError("client_submission_id is required.")
+
+    existing_sync_item = (
+        SyncQueue.objects.select_related("triage_session")
+        .filter(
+            source_device_id=source_device_id,
+            client_submission_id=client_submission_id,
+        )
+        .first()
     )
+    if existing_sync_item and existing_sync_item.triage_session:
+        return existing_sync_item, existing_sync_item.triage_session, True
 
-
-def send_sms_stub(phone_number: str, message: str) -> dict:
-    return {
-        "success": True,
-        "external_id": f"stub-{phone_number}-{timezone.now().timestamp()}",
-        "error": "",
-    }
-
-
-def trigger_alerts_for_riskscore(risk_score: RiskScore, send_sms: bool = False) -> list[Alert]:
-    ward = risk_score.ward
-    alerts_created = []
-
-    dashboard_alert = Alert.objects.create(
+    sync_item = SyncQueue.objects.create(
+        source_device_id=source_device_id,
+        client_submission_id=client_submission_id,
+        phone_number=phone_number,
         ward=ward,
-        risk_score=risk_score,
-        channel=Alert.CHANNEL_DASHBOARD,
-        recipient="dashboard",
-        message=build_alert_message(ward, risk_score),
-        status=Alert.STATUS_SENT,
-        sent_at=timezone.now(),
+        payload=payload,
+        status=SyncQueue.STATUS_PENDING,
     )
-    alerts_created.append(dashboard_alert)
 
-    if send_sms:
-        chvs = CHV.objects.filter(ward=ward, is_active=True)
-        for chv in chvs:
-            message = build_alert_message(ward, risk_score)
-            result = send_sms_stub(chv.phone_number, message)
-
-            alert = Alert.objects.create(
-                ward=ward,
-                risk_score=risk_score,
-                channel=Alert.CHANNEL_SMS,
-                recipient=chv.phone_number,
-                message=message,
-                status=Alert.STATUS_SENT if result["success"] else Alert.STATUS_FAILED,
-                external_id=result["external_id"],
-                sent_at=timezone.now() if result["success"] else None,
-                error_message=result["error"],
-            )
-            alerts_created.append(alert)
-
-    return alerts_created
-
-
-def latest_riskscore_for_ward(ward: Ward) -> RiskScore | None:
-    return ward.risk_scores.order_by("-generated_at").first()
+    try:
+        triage_session = create_triage_session(
+            ward=ward,
+            phone_number=phone_number,
+            diarrhea=payload.get("diarrhea", False),
+            vomiting=payload.get("vomiting", False),
+            dehydration=payload.get("dehydration", False),
+            fever=payload.get("fever", False),
+            text_input=payload.get("text_input", ""),
+            channel="OFFLINE_SYNC",
+        )
+        sync_item.status = SyncQueue.STATUS_PROCESSED
+        sync_item.triage_session = triage_session
+        sync_item.processed_at = timezone.now()
+        sync_item.save(update_fields=["status", "triage_session", "processed_at"])
+        return sync_item, triage_session, False
+    except Exception as exc:
+        sync_item.status = SyncQueue.STATUS_FAILED
+        sync_item.error_message = str(exc)
+        sync_item.processed_at = timezone.now()
+        sync_item.save(update_fields=["status", "error_message", "processed_at"])
+        raise

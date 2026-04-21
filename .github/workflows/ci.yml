@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        run: docker compose build backend
+
+      - name: Start database and Redis
+        run: docker compose up -d db redis
+
+      - name: Wait for database health check
+        run: docker compose ps
+
+      - name: Run backend compile check
+        run: docker compose run --rm backend python -m compileall .
+
+      - name: Run backend test suite
+        run: docker compose run --rm backend python manage.py test --noinput
+        env:
+          SECRET_KEY: ci-secret-key
+          DEBUG: "False"
+          ALLOWED_HOSTS: localhost,127.0.0.1
+          DB_NAME: cchis_db
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+          DB_HOST: db
+          DB_PORT: "5432"
+          CELERY_BROKER_URL: redis://redis:6379/0
+          CELERY_RESULT_BACKEND: redis://redis:6379/1
+
+      - name: Shut down services
+        if: always()
+        run: docker compose down -v
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pip-audit
+        run: python -m pip install --upgrade pip pip-audit
+
+      - name: Audit Python dependencies
+        run: pip-audit -r backend/requirements.txt

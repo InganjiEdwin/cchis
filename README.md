@@ -1,301 +1,612 @@
-# 🛠️ CCHIS Technical Project Plan
+# Child-Centered Climate Health Intelligence System (CCHIS)
 
-## 1. Project Overview
+CCHIS is an open-source, AI-assisted public health platform focused on predicting flood-driven cholera risk and enabling early, coordinated response in climate-vulnerable communities.
 
-**Project Name:**  
-Child-Centered Climate Health Intelligence System (CCHIS)
+This repository currently contains the backend foundation for that platform: authenticated APIs, risk data workflows, async processing, CHV support endpoints, and low-connectivity access patterns.
 
-**Objective:**  
-To build an open-source, AI-powered platform that predicts flood-driven cholera risk and enables early warning, anticipatory action, healthcare readiness, and point-of-care decision support to reduce child morbidity and mortality.
+## Why This Matters
 
-**Deployment Context:**  
-Pilot in flood-prone wards in Migori County, Kenya:
-- North Kamagambo
-- North Kadem
-- Macalder Kanyarwanda (Kimai area)
-- Got Kachola
+Flood-prone regions such as Migori County in Kenya face recurring cholera outbreaks driven by climate variability and extreme weather events. In many settings, response systems are still reactive, fragmented, and slow to act.
 
----
+CCHIS is designed to shift that workflow from reaction to prediction to early action, with particular attention to children under five and other vulnerable populations.
 
-## 2. System Objectives
+## What CCHIS Does
 
-### Core Capabilities
-1. Generate ward-level cholera risk predictions (7–14 days ahead)
-2. Trigger automated alerts and early action workflows
-3. Support CHVs with decision guidance at point-of-care
-4. Provide dashboards for government and planners
-5. Support low-connectivity access through offline-first mobile workflows, USSD, and SMS
+CCHIS turns climate, environmental, and health data into localized operational intelligence.
 
----
+Current and planned capabilities include:
 
-## 3. System Architecture
+- ward-level cholera risk prediction and storage
+- automated early warning and alert workflows
+- CHV triage and offline sync support
+- USSD handling for low-connectivity and feature-phone flows
+- role-based operational APIs for supervisors, analysts, and admins
+- auditability and abuse controls around auth and public endpoints
 
-### High-Level Layers
+## Current Backend Capabilities
 
-#### 1. Data Layer
-- Rainfall data (historical + real-time)
-- Flood indicators (satellite or proxy)
-- Health data (cholera trends)
-- Geospatial data (wards, facilities)
+- ward-level cholera risk score storage and retrieval
+- async alert triggering with Celery and Redis
+- CHV triage and offline sync endpoints
+- USSD session handling and logging
+- JWT authentication with role-based API permissions
+- DB-backed auth audit events for key account actions
+- scoped API throttling for auth endpoints and public USSD callbacks
+- Docker-first local development with PostGIS and Redis
 
-#### 2. AI Prediction Layer
-- Flood risk estimation
-- Cholera risk classification model
-- Risk scoring engine
+## System Architecture
 
-#### 3. Action Layer
-- Alert engine (SMS, API, USSD-triggered workflows)
-- Trigger rules (threshold-based)
-- Forecast outputs (cases, supplies)
+At a high level, CCHIS follows this flow:
 
-#### 4. User Layer
-- CHV mobile app with offline data capture and delayed sync
-- USSD interface for low-end phone access
-- Government dashboard
-- Community SMS alerts
+```text
+Data Sources -> ETL / Ingestion -> Feature Engineering -> ML Prediction -> Decision Engine -> Alerts and Interfaces
+```
 
----
+Core layers:
 
-## 4. Technical Stack
+- Data layer: rainfall, flood proxy signals, historical cholera data, and geospatial context
+- AI prediction layer: risk classification and scoring models
+- Action layer: alerting, trigger rules, and recommended interventions
+- User layer: CHV workflows, USSD access, dashboards, and messaging channels
 
-### Backend
+## Machine Learning Direction
+
+Initial MVP model direction:
+
+- Logistic Regression for interpretable baseline risk prediction
+- Random Forest for nonlinear benchmark comparisons
+
+Feature areas:
+
+- rainfall accumulation across short windows
+- rainfall anomalies
+- flood indicators
+- historical cholera incidence
+- seasonality
+- spatial relationships between wards
+
+Planned evolution:
+
+- Gradient Boosting such as XGBoost or LightGBM
+- time-series forecasting models
+- spatiotemporal approaches
+- Bayesian methods for uncertainty-aware forecasting
+
+## Local Stack
+
 - Django
 - Django REST Framework
 - PostgreSQL + PostGIS
-
-### Data Science
-- Python (pandas, scikit-learn)
-- Jupyter notebooks
-
-### Frontend
-- React (dashboard)
-- React Native or web app (CHV tool)
-
-### Messaging and Access Channels
-- Africa’s Talking SMS API
-- Africa’s Talking USSD API
-
-### Background Jobs
 - Celery + Redis
+- Docker Compose
 
-### Offline Storage
-- SQLite or local device storage for CHV mobile app
-- Background sync when connectivity returns
+## Supported Tooling Baseline
 
-### Deployment
-- Docker + Docker Compose
-- DigitalOcean droplet
-- Nginx
+- Python `3.12`
+- Docker Engine with Docker Compose v2
+- PostgreSQL `16` with PostGIS `3.4`
+- Redis `7`
 
----
+The backend image and local development flow are currently aligned to these versions. If you change them, update the Docker image, dependency policy, and CI workflow together so contributors are not debugging mismatched environments.
 
-## 5. Core Modules
+## Authentication
 
-### 5.1 Risk Prediction Module
-**Inputs:**
-- Rainfall levels
-- Flood proxy signals
-- Historical cholera data
+The backend uses JWT authentication via `djangorestframework-simplejwt`.
 
-**Outputs:**
-- Risk classification (LOW, MEDIUM, HIGH)
-- Risk score (0–1)
+Auth endpoints:
 
----
+- `POST /api/v1/auth/login/`
+- `POST /api/v1/auth/refresh/`
+- `POST /api/v1/auth/logout/`
+- `POST /api/v1/auth/change-password/`
+- `GET /api/v1/auth/me/`
+- `POST /api/v1/auth/register/` for admin-controlled user creation
+- `POST /api/v1/auth/users/<id>/deactivate/` for admin-controlled deactivation
+- `POST /api/v1/auth/users/<id>/reactivate/` for admin-controlled reactivation
+- `GET /api/v1/auth/audit-events/` for admin-only auth audit review
+- `GET /api/v1/auth/audit-events/summary/` for admin-only auth event aggregation
 
-### 5.2 Alert and Trigger Engine
-**Logic:**
-- IF risk_score > threshold → trigger alert
+Most API endpoints are protected. The deliberate public exception is the USSD callback endpoint:
 
-**Actions:**
-- Send SMS to CHVs and stakeholders
-- Expose alerts through USSD menus
-- Log alert events
-- Recommend interventions
+- `POST /api/v1/ussd/menu/`
 
----
+For abuse monitoring, the most important auth events currently captured are login success or failure, refresh success or failure, logout attempts, password changes, user creation, and user activation changes.
 
-### 5.3 CHV Decision Support Tool
-**Primary channel:**
-- Offline-first mobile app for smartphone-based CHVs
+## Public Endpoint Policy
 
-**Secondary channels:**
-- USSD for guided menu access on feature phones
-- SMS for notifications and simple prompts
+The backend is intentionally private-by-default. If an endpoint is not documented here as public, contributors should assume it requires authentication and role checks.
 
-**Input:**
-- Symptoms (diarrhea, vomiting, dehydration)
+Current intentionally public endpoint:
 
-**Context-aware logic:**
-- Flood + symptoms = higher cholera likelihood
+- `POST /api/v1/ussd/menu/`
 
-**Output:**
-- Guidance (ORS, referral, hygiene advice)
+Why it is public:
 
-**Offline design:**
-- Mobile app stores submissions locally when offline
-- Syncs automatically when connectivity returns
-- USSD provides low-bandwidth access but requires mobile network availability
+- it supports provider-initiated USSD callbacks
+- it enables low-connectivity access patterns for feature-phone users
+- it is rate-limited because public endpoints are part of the abuse surface
 
----
+If you introduce a new public endpoint, document the rationale, abuse controls, and expected deployment assumptions in both `README.md` and `SECURITY.md`.
 
-### 5.4 Dashboard Module
-- Ward-level risk visualization
-- Alert logs
-- Trends and forecasts
-- Facility readiness indicators
+## API Surface Snapshot
 
----
+Current notable API routes include:
 
-## 6. Data Model (Core Entities)
+- `GET /api/v1/wards/`
+- `GET /api/v1/risk-scores/`
+- `GET /api/v1/risk-score/latest/`
+- `GET /api/v1/alerts/`
+- `POST /api/v1/alerts/trigger/`
+- `POST /api/v1/chv/triage/`
+- `POST /api/v1/chv/sync/`
+- `POST /api/v1/ussd/menu/`
+- `GET /api/v1/ussd/logs/`
 
-- Ward
-- RiskScore
-- Alert
-- HealthFacility
-- CHVUser
-- CaseReport
-- SyncQueue
-- UssdSessionLog
+Example usage:
 
----
+```bash
+curl -X POST http://localhost:8000/api/v1/auth/login/ \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"ChangeMe123!"}'
+```
 
-## 7. API Design (Sample Endpoints)
+Machine-readable schema:
 
-- `GET /api/wards/`
-- `GET /api/risk-score/latest/`
-- `POST /api/predict-risk/`
-- `POST /api/trigger-alerts/`
-- `GET /api/alerts/`
-- `POST /api/chv/case-report/`
-- `POST /api/chv/sync/`
-- `POST /api/ussd/`
+- `GET /api/v1/schema/`
 
----
+The canonical API surface is `/api/v1/`. Unversioned `/api/` routes are intentionally removed so the contract stays explicit from this point forward.
 
-## 8. Development Phases
+The schema endpoint is intentionally public so client developers and integrators can inspect the contract, but the routes described inside it still keep their own authentication and permission requirements.
 
-### Phase 1: Core Backend (Days 1–3)
-- Project setup
-- Database schema
-- Basic API endpoints
+## API Versioning Strategy
 
----
+CCHIS now uses URL-path versioning for public API contracts.
 
-### Phase 2: Prediction Engine (Days 4–6)
-- Data ingestion
-- Initial ML model
-- Risk scoring
+Current policy:
 
----
+- `/api/v1/` is the canonical stable contract for the current backend
+- there is no parallel unversioned public API surface
+- additive, backward-compatible changes may ship inside `v1`
+- breaking changes require a new version path such as `/api/v2/`
+- version retirement must be documented before an older version is removed
 
-### Phase 3: Alerts and USSD System (Days 7–10)
-- SMS integration
-- USSD integration
-- Trigger logic
-- Alert logging
+This keeps future expansion additive instead of forcing disruptive rewrites when dashboard, CHV mobile, analytics, or partner integrations mature.
 
----
+## v1 Route Freeze Notes
 
-### Phase 4: Dashboard (Days 11–13)
-- Risk map visualization
-- Charts and alerts
+The current v1 contract being frozen is:
 
----
+- auth routes under `/api/v1/auth/`
+- risk and operational routes under `/api/v1/`
+- public USSD callback at `POST /api/v1/ussd/menu/`
+- machine-readable contract at `GET /api/v1/schema/`
 
-### Phase 5: CHV Tool with Offline Sync (Days 14–17)
-- Symptom input interface
-- Decision logic
-- Local storage for offline capture
-- Background sync flow
+Migration note:
 
----
+- there is no supported unversioned route surface
+- future docs and client examples must use the versioned form
+- breaking route moves must happen through new version paths, not hidden aliases
 
-### Phase 6: Integration (Days 18–20)
-- Connect all modules
-- Test full flow across app, SMS, and USSD
+## API Contract Conventions
 
----
+The v1 backend now follows a basic contract baseline for list and error responses.
 
-### Phase 7: Deployment (Days 21–23)
-- Dockerize services
-- Deploy on DigitalOcean
-- Configure domain and SSL
+### Pagination
 
----
+- list endpoints are paginated by default
+- the default page size is controlled by `API_PAGE_SIZE`
+- clients may request a smaller or larger page with `page_size`, up to the server-side maximum
+- paginated responses return:
+  - `count`
+  - `next`
+  - `previous`
+  - `results`
 
-## 9. Key Metrics (for Evaluation)
+### Filtering
 
-- Prediction accuracy > 75%
-- Alert delivery time < 5 minutes
-- CHV usage rate > 70%
-- Successful offline sync completion rate > 90%
-- USSD session completion rate > 60%
-- Reduction in response time > 30%
-- Number of households reached
+Current list endpoints use predictable query parameter names based on the resource:
 
----
+- `ward_id` for ward-scoped records such as CHVs, risk scores, alerts, audit events, and USSD logs
+- `status` for status-based filtering
+- `risk_level` for risk score filtering
+- `event_type` for auth audit filtering
+- `session_id` and `phone_number` for USSD log filtering
+- `county`, `sub_county`, and `is_active` where they apply to ward or CHV listings
 
-## 10. Open Source Strategy
+### Ordering
 
-- License: MIT or Apache 2.0
-- Public GitHub repository
-- Documentation includes:
-  - Setup guide
-  - API documentation
-  - Architecture overview
-  - USSD flow documentation
-  - Offline sync design notes
+- list endpoints support an `ordering` query parameter
+- use field names such as `name`, `created_at`, or `generated_at`
+- prefix with `-` for descending order, for example `?ordering=-generated_at`
+- each list endpoint exposes only an explicit safe set of ordering fields
 
----
+### Error Responses
 
-## 11. Risks and Mitigation
+The backend uses these response conventions:
 
-| Risk | Mitigation |
-|------|-----------|
-| Limited real data | Use simulated and open datasets |
-| Model accuracy | Start simple and iterate |
-| Connectivity issues | Offline-first CHV app with delayed sync; SMS and USSD as low-bandwidth channels |
-| USSD is not fully offline | Use USSD for accessibility and fallback, not as the offline mechanism |
-| Scope creep | Focus on core features only |
+- non-field API errors return a top-level `detail`
+- validation errors return:
+  - `detail`
+  - `errors`
+- validation field entries are preserved for backward compatibility with current clients and tests
 
----
+This contract baseline is intended to reduce future breakage as dashboard, mobile, and partner integrations are added.
 
-## 12. Definition of Working Prototype
+## Core Endpoint Contracts
 
-The system is considered complete when:
-- Risk prediction is functional
-- SMS alerts are triggered automatically
-- USSD menu is working for basic CHV access
-- Dashboard displays real-time risk
-- CHV mobile tool supports offline capture and later sync
-- System is deployed and accessible online
+These are the main v1 contract expectations for current backend consumers.
 
----
+### Auth Endpoints
 
-## 13. USSD Scope for MVP
+- `POST /api/v1/auth/login/`
+  - public
+  - request body: `username`, `password`
+  - returns access token, refresh token, and serialized current user
+- `POST /api/v1/auth/refresh/`
+  - public
+  - request body: `refresh`
+  - returns a rotated access token and refresh token
+- `GET /api/v1/auth/me/`
+  - authenticated
+  - returns the current user profile
 
-### CHV USSD Menu
-- 1. View latest ward risk level
-- 2. Report suspected diarrhea case
-- 3. Get cholera prevention guidance
-- 4. Find nearest linked facility
-- 5. Request callback or follow-up
+### Risk and Operational Endpoints
 
-### Community USSD Menu
-- 1. Flood safety advice
-- 2. Safe water guidance
-- 3. Child diarrhea guidance
-- 4. When to seek urgent care
+- `GET /api/v1/wards/`
+  - authenticated
+  - paginated
+  - supports filtering and ordering
+- `GET /api/v1/risk-scores/`
+  - authenticated
+  - paginated
+  - supports `ward_id`, `risk_level`, `source`, and `ordering`
+- `GET /api/v1/alerts/`
+  - admin or supervisor
+  - paginated
+  - supports `ward_id`, `channel`, `status`, and `ordering`
 
----
+### Field and Low-Connectivity Endpoints
 
-## 🚀 Next Steps
+- `POST /api/v1/chv/triage/`
+  - operational user roles only
+  - accepts ward and symptom data
+  - returns triage guidance and referral decision
+- `POST /api/v1/chv/sync/`
+  - operational user roles only
+  - accepts one or more offline payloads
+  - returns sync processing results
+- `POST /api/v1/ussd/menu/`
+  - public
+  - accepts provider-style session payloads
+  - returns a single `response` string for the USSD flow
 
-- Initialize GitHub repository
-- Set up Django backend and database
-- Build `/risk-score` endpoint
-- Build `/ussd/` endpoint
-- Develop offline-first CHV case reporting flow
-- Integrate SMS and USSD
-- Deploy first working version
+For exact machine-readable field definitions, use `GET /api/v1/schema/`.
+
+## Domain Boundary Map
+
+The backend will not keep expanding everything inside `risk`.
+
+Current target bounded contexts:
+
+- `accounts`
+  - authentication, roles, password lifecycle, account audit events
+- `geo`
+  - geographic hierarchy, ward metadata, boundaries, centroids, future facility locations
+- `forecasting`
+  - feature inputs, model runs, model metadata, risk scores, forecast lineage
+- `surveillance`
+  - case-like records, triage records, referrals, follow-up outcomes, sync ingestion
+- `operations`
+  - alerts, interventions, preparedness actions, assignment workflows
+- `messaging`
+  - SMS, USSD, templates, delivery events, provider callbacks
+- `integrations`
+  - DHIS2 mappings, import/export jobs, partner identifiers, external payload logs
+- `platform`
+  - shared API concerns, idempotency helpers, provenance utilities, common operational tooling
+
+Current v1 placement rule:
+
+- `risk` remains a temporary composite app for prototype velocity
+- no new concern should be added to `risk` unless it is directly about risk computation or ward-level forecasting
+- new messaging, surveillance, integration, or operational workflow work should be designed toward its future bounded context from day one
+
+Current `risk` audit summary:
+
+- should stay in `risk` for now:
+  - `RiskScore`
+  - model-triggering tasks
+  - forecast-oriented querying and scoring helpers
+- acceptable to stay temporarily but should become `geo`:
+  - `Ward`
+  - geographic filters and serializers
+- should eventually move to `surveillance`:
+  - `CHV`
+  - `TriageSession`
+  - `SyncQueue`
+- should eventually move to `operations`:
+  - `Alert`
+- should eventually move to `messaging`:
+  - `UssdSessionLog`
+  - USSD menu handling
+  - SMS provider delivery code currently living in `risk.services`
+
+The practical rule for v1 is simple: we do not need to split every app immediately, but we do need to stop deepening the current mixing of geography, forecasting, field operations, and communications as if they were one domain.
+
+## Future-Critical Entity Decisions
+
+Phase 2.2 decisions for v1 are now explicit:
+
+- `HealthFacility` is introduced now as a minimal anchor entity for future facility-aware forecasting and referral workflows
+- `TriageSession` remains a decision-support encounter record, not the long-term surveillance or case model
+- `Alert` remains a notification record, not the long-term intervention or preparedness action model
+
+The detailed design note lives in [docs/DOMAIN_BOUNDARIES.md](/Users/edwininganji/VSCodeProjects/cchis/docs/DOMAIN_BOUNDARIES.md) and [docs/FUTURE_ENTITY_DECISIONS.md](/Users/edwininganji/VSCodeProjects/cchis/docs/FUTURE_ENTITY_DECISIONS.md).
+
+## Identifier Policy
+
+CCHIS now treats display names as labels, not canonical identifiers.
+
+Current rule set:
+
+- `Ward.public_id` is the immutable CCHIS-level ward identifier
+- `HealthFacility.public_id` is the immutable CCHIS-level facility identifier
+- `ward_code` and `facility_code` are reference codes for ops and cross-system mapping
+- names must not be used as long-term integration keys
+
+The full policy lives in [docs/IDENTIFIER_POLICY.md](/Users/edwininganji/VSCodeProjects/cchis/docs/IDENTIFIER_POLICY.md).
+
+## Ingestion Provenance
+
+Rainfall ingestion now persists `IngestionRun` records so we can audit:
+
+- which wards were requested
+- which source mode was used
+- whether live data or fallback data was used
+- which coordinate source was used
+- whether the run completed fully or partially
+
+Current rainfall policy:
+
+- live mode prefers `Ward.centroid` when available
+- if no centroid exists, the prototype may still fall back to the temporary hardcoded ward map
+- live-fetch failures fall back to static rainfall sources and are recorded as partial ingestion
+
+The full provenance and fallback policy lives in [docs/INGESTION_PROVENANCE.md](/Users/edwininganji/VSCodeProjects/cchis/docs/INGESTION_PROVENANCE.md).
+
+## Model Lineage
+
+Forecast execution now persists `ModelRun` records so model-generated `RiskScore` rows can be traced to:
+
+- a concrete run
+- the algorithm and model version used
+- the feature keys used for inference
+- the feature schema version
+- the training and inference dataset references
+- lightweight evaluation metadata
+- the rainfall ingestion run used by that forecast
+
+This means `model_version` is no longer the only lineage clue. Model-generated scores now have a real run link.
+
+The detailed policy lives in [docs/MODEL_LINEAGE.md](/Users/edwininganji/VSCodeProjects/cchis/docs/MODEL_LINEAGE.md).
+
+## Feature and Dataset Provenance
+
+The backend now carries explicit lightweight provenance for:
+
+- feature schema version
+- feature keys
+- training dataset reference
+- inference dataset reference
+
+This is intentionally lighter than a full feature store or experiment tracker, but it gives v1 a real path for future ML maturity instead of leaving those concepts invisible.
+
+The detailed policy lives in [docs/FEATURE_AND_DATASET_PROVENANCE.md](/Users/edwininganji/VSCodeProjects/cchis/docs/FEATURE_AND_DATASET_PROVENANCE.md).
+
+## Domain Audit Direction
+
+Durable auditing is currently implemented for auth-sensitive actions through `AuthAuditEvent`, but v1 now also defines the future-required non-auth audit inventory so later operational trust work does not get improvised.
+
+That current domain audit direction covers future audit expectations for:
+
+- manual risk-score overrides
+- manual alert triggering and alert requeue actions
+- ingestion corrections and model backfills
+- triage referral overrides
+- sync replay actions
+- future intervention or response-action state overrides
+
+The policy boundary is explicit: non-auth operational history should not be stuffed into the auth audit table. The detailed direction lives in [docs/DOMAIN_AUDIT_READINESS.md](/Users/edwininganji/VSCodeProjects/cchis/docs/DOMAIN_AUDIT_READINESS.md).
+
+## Operational Runbook Direction
+
+The repo now also defines the minimum incident-review and recovery inputs maintainers should expect before operational tooling gets more sophisticated.
+
+That current runbook direction covers:
+
+- the logs, metrics, and durable records needed to diagnose API, auth, sync, triage, USSD, forecasting, and alert incidents
+- the minimum visibility expected from backup workflows
+- the minimum visibility expected from restore workflows
+- post-restore validation expectations so recovery is not declared complete without evidence
+
+The detailed policy lives in [docs/OPERATIONAL_RUNBOOK_AND_RECOVERY_INPUTS.md](/Users/edwininganji/VSCodeProjects/cchis/docs/OPERATIONAL_RUNBOOK_AND_RECOVERY_INPUTS.md).
+
+## Deployment Security Notes
+
+Local Docker defaults are intentionally developer-friendly. Before any shared, staging, or production deployment, you should change the security-related environment variables in `.env`.
+
+`CCHIS_ENVIRONMENT` is the deployer-owned environment label used by the backend for environment discipline:
+
+- `local` for isolated developer machines and disposable local Docker stacks
+- `staging` for shared test, QA, or rehearsal environments
+- `production` for real operational deployments
+
+If you leave it unset, the backend defaults to `local`.
+
+At minimum review and set:
+
+- `CCHIS_ENVIRONMENT`
+- `DEBUG=False`
+- `ALLOWED_HOSTS`
+- `CORS_ALLOW_ALL_ORIGINS=False`
+- `CORS_ALLOWED_ORIGINS`
+- `CSRF_TRUSTED_ORIGINS`
+- `SECURE_SSL_REDIRECT=True` when TLS is terminated correctly
+- `SESSION_COOKIE_SECURE=True`
+- `CSRF_COOKIE_SECURE=True`
+- `USE_X_FORWARDED_HOST=True` only when you trust the reverse proxy
+- `TRUST_X_FORWARDED_PROTO=True` only when your proxy sets `X-Forwarded-Proto` correctly
+- `TRUST_X_FORWARDED_FOR=True` only when your proxy strips and rewrites `X-Forwarded-For`
+- `SECURE_HSTS_SECONDS` with non-zero values only after HTTPS is confirmed end to end
+
+The app now supports these deployment-oriented settings in [backend/core/settings.py](/Users/edwininganji/VSCodeProjects/cchis/backend/core/settings.py).
+
+For deployment boundaries, assume TLS terminates at Nginx or your cloud load balancer and only trust forwarded headers from that layer. In local Docker development, keep the forwarded-header trust flags disabled unless you are deliberately testing behind a proxy that you control.
+
+The full environment promotion, migration, and seeding policy lives in [docs/ENVIRONMENT_DISCIPLINE.md](/Users/edwininganji/VSCodeProjects/cchis/docs/ENVIRONMENT_DISCIPLINE.md).
+
+## Demo Credentials
+
+The seed command creates local demo users with password `ChangeMe123!`.
+
+- `admin` with role `ADMIN`
+- `supervisor` with role `SUPERVISOR`
+- `chv_demo` with role `CHV`
+- `analyst_demo` with role `ANALYST`
+
+These credentials are for local development only. Do not reuse them in shared or deployed environments.
+
+The seed command also creates a dedicated `superuser` account for local administration. You can override the seeded usernames, emails, and passwords with:
+
+- `SEED_ENABLE_SUPERUSER`
+- `SEED_ENABLE_DEMO_USERS`
+- `SEED_ALLOW_NON_LOCAL`
+- `SEED_SUPERUSER_USERNAME`
+- `SEED_SUPERUSER_EMAIL`
+- `SEED_SUPERUSER_PASSWORD`
+- `SEED_DEFAULT_PASSWORD`
+
+By default, `seed_demo_data` is blocked when `CCHIS_ENVIRONMENT` is `staging` or `production`. For shared demos or rehearsal environments, require an explicit one-time opt-in with `SEED_ALLOW_NON_LOCAL=True`, and keep `SEED_ENABLE_DEMO_USERS=False` unless you intentionally need demo accounts for that session.
+
+## Demo Use Versus Real Deployment
+
+Safe for isolated local development:
+
+- demo users seeded by `seed_demo_data`
+- Docker-exposed local ports
+- non-HTTPS localhost traffic
+- permissive local CORS values used only on your machine
+
+Not acceptable for real deployment without change:
+
+- demo passwords
+- `DEBUG=True`
+- broad `ALLOWED_HOSTS`
+- `CORS_ALLOW_ALL_ORIGINS=True`
+- disabled secure-cookie and SSL redirect settings
+- trusting forwarded headers without a controlled reverse proxy
+
+For real deployment, review the deployment security notes, disable demo-user seeding, and treat every environment variable as deployer-owned configuration.
+
+## Environment Promotion Policy
+
+The backend now assumes three environment classes:
+
+- `local`: developer-friendly defaults, local Docker ports, disposable data, and demo seeding allowed
+- `staging`: production-like config rehearsal, no habitual demo seeding, and explicit host/origin/proxy settings
+- `production`: real operational data, least-privilege configuration, and no demo seeding by habit
+
+Migration and seed discipline:
+
+- run schema migrations in every environment as a deliberate deployment step
+- treat seed/demo commands as local-only unless a shared-environment demo is explicitly approved
+- never rely on fixture or demo seeding as part of staging or production startup
+- keep sample credentials and local convenience flags out of deployment defaults
+
+See [docs/ENVIRONMENT_DISCIPLINE.md](/Users/edwininganji/VSCodeProjects/cchis/docs/ENVIRONMENT_DISCIPLINE.md) for the fuller policy.
+
+## Data Lifecycle Policy
+
+The backend now defines a v1 data lifecycle direction so retention and sensitive-data handling are not left informal while more field data accumulates.
+
+Current direction:
+
+- request logs are short-lived operational traces, not indefinite history
+- auth audit events are durable security records
+- USSD logs, sync payloads, triage sessions, and alert records are bounded operational or field records and should not grow forever by habit
+- ingestion runs, model runs, and risk scores are durable provenance and analytical history
+- future patient-like or household-linked records should default to structured, least-identifying data
+
+The detailed policy lives in [docs/DATA_LIFECYCLE_POLICY.md](/Users/edwininganji/VSCodeProjects/cchis/docs/DATA_LIFECYCLE_POLICY.md).
+
+## Backup And Restore Discipline
+
+The backend now defines a v1 backup-and-restore discipline so recoverability is treated as a design expectation rather than an emergency-only concern.
+
+Current direction:
+
+- backups must leave identifiable artifact, timing, engine-version, schema-state, and coverage-window evidence
+- restores must record source artifact, target environment, applied migration state, and completion outcome
+- post-restore validation must include app health, API smoke checks, and critical-record sanity summaries
+- recovery rehearsals should leave written evidence of duration, gaps, and follow-up actions
+
+The detailed policy lives in [docs/BACKUP_AND_RESTORE_DISCIPLINE.md](/Users/edwininganji/VSCodeProjects/cchis/docs/BACKUP_AND_RESTORE_DISCIPLINE.md).
+
+## Local Reset and Bootstrap
+
+If you are resetting the local database to adopt the custom user model from a clean baseline:
+
+```bash
+docker compose down -v
+find backend -path "*/migrations/*.py" ! -name "__init__.py" -delete
+find backend -path "*/migrations/*.pyc" -delete
+docker compose up --build -d
+docker compose ps
+docker compose exec backend python manage.py makemigrations
+docker compose exec backend python manage.py migrate
+docker compose exec backend python manage.py seed_demo_data
+docker compose exec backend python manage.py test
+```
+
+The `docker compose ps` step is there to confirm the `backend`, `db`, and `redis` services are actually up before you run migrations or seeding.
+
+## Project Structure
+
+```text
+cchis/
+├── backend/
+│   ├── accounts/
+│   ├── core/
+│   └── risk/
+├── docs/
+├── docker-compose.yml
+├── README.md
+├── SECURITY.md
+└── CONTRIBUTING.md
+```
+
+## Dependency and CI Policy
+
+The project currently uses bounded version ranges in [backend/requirements.txt](/Users/edwininganji/VSCodeProjects/cchis/backend/requirements.txt) rather than fully pinned transitive lockfiles. That keeps early development flexible, but it increases the importance of CI and routine dependency review.
+
+Current maintenance guardrails:
+
+- GitHub Actions CI builds the backend container and runs compile plus Django test checks
+- `pip-audit` runs in CI against `backend/requirements.txt`
+- Dependabot is configured for both Python dependencies and GitHub Actions updates
+
+Recommended maintainer workflow:
+
+- review dependency PRs promptly, especially security-related updates
+- merge dependency bumps only after CI passes
+- keep Docker, Python, and dependency changes coordinated in the same patch set when they are coupled
+
+## Contributing
+
+See [CONTRIBUTING.md](/Users/edwininganji/VSCodeProjects/cchis/CONTRIBUTING.md) for local setup, secrets handling, seeded-credential guidance, and expectations for security-sensitive changes.
+
+## Additional Documentation
+
+- [SECURITY.md](/Users/edwininganji/VSCodeProjects/cchis/SECURITY.md) for deployment and incident guidance
+- [docs/TECHNICAL_APPENDIX.md](/Users/edwininganji/VSCodeProjects/cchis/docs/TECHNICAL_APPENDIX.md) for deeper technical context
+- `CCHIS_README_UPDATED.md` remains as a separate draft/reference file if you still want to compare alternative wording

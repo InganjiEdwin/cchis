@@ -2,11 +2,13 @@ from django.urls import path
 from .views import (
     AlertListAPIView,
     CHVListAPIView,
+    CHVSyncAPIView,
     CHVTriageAPIView,
     LatestWardRiskAPIView,
     RiskScoreListAPIView,
     TriggerAlertsAPIView,
     USSDMenuAPIView,
+    UssdSessionLogListAPIView,
     WardListAPIView,
 )
 
@@ -18,5 +20,7 @@ urlpatterns = [
     path("alerts/", AlertListAPIView.as_view(), name="alert-list"),
     path("alerts/trigger/", TriggerAlertsAPIView.as_view(), name="trigger-alerts"),
     path("chv/triage/", CHVTriageAPIView.as_view(), name="chv-triage"),
+    path("chv/sync/", CHVSyncAPIView.as_view(), name="chv-sync"),
     path("ussd/menu/", USSDMenuAPIView.as_view(), name="ussd-menu"),
+    path("ussd/logs/", UssdSessionLogListAPIView.as_view(), name="ussd-log-list"),
 ]
