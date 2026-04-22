@@ -1,6 +1,10 @@
 "use client";
 
-import { Bell, RefreshCcw } from "lucide-react";
+import { Bell, Moon, RefreshCcw, Sun } from "lucide-react";
+import { useEffect, useState } from "react";
+
+import { useAuth } from "@/components/auth-provider";
+import type { ThemePreference } from "@/lib/auth";
 
 type DashboardTopbarProps = {
   title: string;
@@ -17,6 +21,53 @@ export function DashboardTopbar({
   onRefresh,
   children,
 }: DashboardTopbarProps) {
+  const { currentUser, updateAppearance } = useAuth();
+  const [effectiveTheme, setEffectiveTheme] = useState<"LIGHT" | "DARK">("LIGHT");
+  const [isUpdatingTheme, setIsUpdatingTheme] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const resolveEffectiveTheme = () => {
+      if (currentUser?.theme_preference === "DARK") {
+        setEffectiveTheme("DARK");
+        return;
+      }
+      if (currentUser?.theme_preference === "LIGHT") {
+        setEffectiveTheme("LIGHT");
+        return;
+      }
+      setEffectiveTheme(mediaQuery.matches ? "DARK" : "LIGHT");
+    };
+
+    resolveEffectiveTheme();
+    mediaQuery.addEventListener("change", resolveEffectiveTheme);
+    return () => {
+      mediaQuery.removeEventListener("change", resolveEffectiveTheme);
+    };
+  }, [currentUser?.theme_preference]);
+
+  async function handleThemeToggle() {
+    if (!currentUser || isUpdatingTheme) {
+      return;
+    }
+
+    const nextTheme: ThemePreference = effectiveTheme === "DARK" ? "LIGHT" : "DARK";
+    setIsUpdatingTheme(true);
+
+    try {
+      await updateAppearance(nextTheme);
+    } finally {
+      setIsUpdatingTheme(false);
+    }
+  }
+
+  const themeToggleLabel = effectiveTheme === "DARK" ? "Switch to light mode" : "Switch to dark mode";
+  const ThemeToggleIcon = effectiveTheme === "DARK" ? Sun : Moon;
+
   return (
     <header className="dashboard-topbar">
       <div className="dashboard-topbar-copy">
@@ -31,6 +82,19 @@ export function DashboardTopbar({
             <span>Last updated: {lastUpdatedLabel}</span>
           </div>
         ) : null}
+
+        <button
+          type="button"
+          className="dashboard-icon-button"
+          onClick={() => {
+            void handleThemeToggle();
+          }}
+          aria-label={themeToggleLabel}
+          title={themeToggleLabel}
+          disabled={isUpdatingTheme}
+        >
+          <ThemeToggleIcon aria-hidden="true" />
+        </button>
 
         <button
           type="button"
