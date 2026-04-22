@@ -6,7 +6,6 @@ import {
   Bell,
   CircleAlert,
   MapPin,
-  Siren,
   TriangleAlert,
 } from "lucide-react";
 import Link from "next/link";
@@ -21,7 +20,7 @@ import {
   type LatestWardRisk,
   type WardSummary,
 } from "@/lib/dashboard";
-import { formatRelativeTimestamp, getLatestTimestamp } from "@/lib/freshness";
+import { getLatestTimestamp } from "@/lib/freshness";
 
 type OverviewViewModel = {
   wards: WardSummary[];
@@ -51,7 +50,7 @@ function formatStatusLabel(status: AlertRecord["status"]) {
 
 function formatChannelLabel(channel: AlertRecord["channel"]) {
   if (channel === "DASHBOARD") {
-    return "Dashboard";
+    return "System";
   }
   return channel;
 }
@@ -93,10 +92,61 @@ function formatRiskScore(score: number) {
   if (!Number.isFinite(score)) {
     return "N/A";
   }
-  if (score <= 1) {
-    return score.toFixed(2);
+  return Math.round(normalizeRiskScore(score)).toString();
+}
+
+function formatCompactRelativeMinutes(timestamp: string | null) {
+  if (!timestamp) {
+    return "No recent update";
   }
-  return (score / 100).toFixed(2);
+
+  const date = new Date(timestamp);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Invalid timestamp";
+  }
+
+  const diffMinutes = Math.max(0, Math.round((Date.now() - date.getTime()) / 60000));
+
+  if (diffMinutes < 1) {
+    return "Just now";
+  }
+  if (diffMinutes === 1) {
+    return "1 min ago";
+  }
+  if (diffMinutes < 60) {
+    return `${diffMinutes} min ago`;
+  }
+
+  const diffHours = Math.round(diffMinutes / 60);
+  if (diffHours === 1) {
+    return "1 hr ago";
+  }
+  if (diffHours < 24) {
+    return `${diffHours} hr ago`;
+  }
+
+  const diffDays = Math.round(diffHours / 24);
+  return `${diffDays} d ago`;
+}
+
+function formatOperationalTime(timestamp: string | null) {
+  if (!timestamp) {
+    return "No timestamp";
+  }
+
+  const date = new Date(timestamp);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Invalid timestamp";
+  }
+
+  const timeLabel = date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  return `${timeLabel} (${formatCompactRelativeMinutes(timestamp)})`;
 }
 
 function getScoreTone(score: number) {
@@ -216,17 +266,12 @@ export default function OverviewPage() {
     return null;
   }
 
-  const titlePrefix =
-    overview?.primaryCountyLabel && overview.primaryCountyLabel !== "Operational"
-      ? `${overview.primaryCountyLabel} County Overview`
-      : "Migori County Overview";
-
   return (
     <div className="overview-dashboard">
       <DashboardTopbar
-        title={titlePrefix}
+        title="Overview"
         subtitle="Climate Health Risk Monitoring"
-        lastUpdatedLabel={isLoading ? "Refreshing..." : formatRelativeTimestamp(overview?.latestTimestamp ?? null)}
+        lastUpdatedLabel={isLoading ? "Refreshing..." : formatOperationalTime(overview?.latestTimestamp ?? null)}
         onRefresh={() => setRefreshKey((value) => value + 1)}
       >
         <TriggerAlertPanel
@@ -249,7 +294,7 @@ export default function OverviewPage() {
             <MapPin aria-hidden="true" />
           </div>
           <div className="overview-metric-copy">
-            <span className="overview-metric-label">View wards</span>
+            <span className="overview-metric-label">Total wards</span>
             <strong>{isLoading ? "..." : overview?.totalWards ?? 0}</strong>
             <p>Total wards monitored</p>
           </div>
@@ -306,7 +351,7 @@ export default function OverviewPage() {
                 <tr>
                   <th>Administrative ward</th>
                   <th>Channel</th>
-                  <th>Score</th>
+                  <th className="overview-table-score-column">Score</th>
                   <th>Status</th>
                   <th>Time</th>
                 </tr>
@@ -325,7 +370,7 @@ export default function OverviewPage() {
                         <strong>{alert.ward_name}</strong>
                       </td>
                       <td>{formatChannelLabel(alert.channel)}</td>
-                      <td>
+                      <td className="overview-table-score-column">
                         {typeof alert.risk_score === "number" ? (
                           <span className={`overview-score-pill ${getScoreTone(alert.risk_score)}`}>
                             {formatRiskScore(alert.risk_score)}
@@ -339,7 +384,7 @@ export default function OverviewPage() {
                           {formatStatusLabel(alert.status)}
                         </span>
                       </td>
-                      <td>{formatRelativeTimestamp(alert.created_at)}</td>
+                      <td>{formatOperationalTime(alert.created_at)}</td>
                     </tr>
                   ))
                 ) : (
@@ -371,15 +416,18 @@ export default function OverviewPage() {
                   <p>Loading priority wards...</p>
                 </div>
               ) : immediateAttention.length > 0 ? (
-                immediateAttention.map((ward) => (
-                  <article key={ward.ward_id} className={`overview-attention-card ${getRiskTone(ward.risk_level)}`}>
+                immediateAttention.map((ward, index) => (
+                  <article
+                    key={ward.ward_id}
+                    className={`overview-attention-card ${getRiskTone(ward.risk_level)}${index === 0 ? " overview-attention-card-primary" : ""}`}
+                  >
                     <div className="overview-attention-card-top">
                       <strong>{ward.ward_name}</strong>
                       <span>{ward.risk_level ?? "Unknown"}</span>
                     </div>
-                    <p>Risk severity</p>
+                    <p>{index === 0 ? "Highest current risk score" : "Current risk score"}</p>
                     <div className="overview-attention-score">
-                      <strong>{typeof ward.risk_score === "number" ? Math.round(ward.risk_score) : "N/A"}</strong>
+                      <strong>{typeof ward.risk_score === "number" ? formatRiskScore(ward.risk_score) : "N/A"}</strong>
                       <span>/100</span>
                     </div>
                   </article>

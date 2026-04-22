@@ -31,7 +31,7 @@ export function DashboardSidebar() {
         />
         <div className="dashboard-brand-copy">
           <strong>Migori County</strong>
-          <span>CHIS pilot surveillance</span>
+          <span>Climate Health Intelligence System</span>
         </div>
       </div>
 
