@@ -79,6 +79,44 @@ function getRiskTone(level: LatestWardRisk["risk_level"]) {
   return "dashboard-risk-low";
 }
 
+function normalizeRiskScore(score: number) {
+  if (!Number.isFinite(score)) {
+    return 0;
+  }
+  if (score <= 1) {
+    return Math.max(0, Math.min(score * 100, 100));
+  }
+  return Math.max(0, Math.min(score, 100));
+}
+
+function formatRiskScore(score: number) {
+  if (!Number.isFinite(score)) {
+    return "N/A";
+  }
+  if (score <= 1) {
+    return score.toFixed(2);
+  }
+  return (score / 100).toFixed(2);
+}
+
+function getScoreTone(score: number) {
+  const normalizedScore = normalizeRiskScore(score);
+
+  if (normalizedScore >= 80) {
+    return "overview-score-pill-danger";
+  }
+  if (normalizedScore >= 65) {
+    return "overview-score-pill-high";
+  }
+  if (normalizedScore >= 45) {
+    return "overview-score-pill-medium";
+  }
+  if (normalizedScore >= 25) {
+    return "overview-score-pill-low";
+  }
+  return "overview-score-pill-minimal";
+}
+
 function buildOverviewViewModel(wards: WardSummary[], latestRisks: LatestWardRisk[], alerts: AlertRecord[]): OverviewViewModel {
   const highRiskWards = latestRisks
     .filter((item) => item.risk_level === "HIGH")
@@ -287,7 +325,15 @@ export default function OverviewPage() {
                         <strong>{alert.ward_name}</strong>
                       </td>
                       <td>{formatChannelLabel(alert.channel)}</td>
-                      <td>{typeof alert.risk_score === "number" ? Math.round(alert.risk_score) : "N/A"}</td>
+                      <td>
+                        {typeof alert.risk_score === "number" ? (
+                          <span className={`overview-score-pill ${getScoreTone(alert.risk_score)}`}>
+                            {formatRiskScore(alert.risk_score)}
+                          </span>
+                        ) : (
+                          "N/A"
+                        )}
+                      </td>
                       <td>
                         <span className={`dashboard-status-badge ${getStatusTone(alert.status)}`}>
                           {formatStatusLabel(alert.status)}

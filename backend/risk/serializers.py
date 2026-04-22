@@ -112,6 +112,7 @@ class ModelRunSerializer(serializers.ModelSerializer):
 
 class AlertSerializer(serializers.ModelSerializer):
     ward_name = serializers.CharField(source="ward.name", read_only=True)
+    risk_score = serializers.FloatField(source="risk_score.score", allow_null=True, read_only=True)
 
     class Meta:
         model = Alert
