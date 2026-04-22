@@ -1,0 +1,178 @@
+0 verbose cli /usr/local/bin/node /usr/local/bin/npm
+1 info using npm@11.8.0
+2 info using node@v25.6.0
+3 silly config load:file:/usr/local/lib/node_modules/npm/npmrc
+4 silly config load:file:/Users/edwininganji/VSCodeProjects/cchis/frontend/.npmrc
+5 silly config load:file:/Users/edwininganji/.npmrc
+6 silly config load:file:/usr/local/etc/npmrc
+7 verbose title npm install @vitejs/plugin-react
+8 verbose argv "install" "--save-dev" "@vitejs/plugin-react" "--cache" ".npm-cache"
+9 verbose logfile logs-max:10 dir:/Users/edwininganji/VSCodeProjects/cchis/frontend/.npm-cache/_logs/2026-04-21T20_30_56_432Z-
+10 verbose logfile /Users/edwininganji/VSCodeProjects/cchis/frontend/.npm-cache/_logs/2026-04-21T20_30_56_432Z-debug-0.log
+11 silly logfile done cleaning log files
+12 silly packumentCache heap:2348810240 maxSize:587202560 maxEntrySize:293601280
+13 verbose shrinkwrap failed to load node_modules/.package-lock.json out of date, updated: node_modules
+14 silly idealTree buildDeps
+15 silly fetch manifest @vitejs/plugin-react@*
+16 silly packumentCache full:https://registry.npmjs.org/@vitejs%2fplugin-react cache-miss
+17 http fetch GET 200 https://registry.npmjs.org/@vitejs%2fplugin-react 725ms (cache miss)
+18 silly packumentCache full:https://registry.npmjs.org/@vitejs%2fplugin-react set size:undefined disposed:false
+19 silly fetch manifest @rolldown/plugin-babel@^0.1.7 || ^0.2.0
+20 silly packumentCache full:https://registry.npmjs.org/@rolldown%2fplugin-babel cache-miss
+21 http fetch GET 200 https://registry.npmjs.org/@rolldown%2fplugin-babel 190ms (cache miss)
+22 silly packumentCache full:https://registry.npmjs.org/@rolldown%2fplugin-babel set size:undefined disposed:false
+23 silly fetch manifest @babel/core@^7.29.0 || ^8.0.0-rc.1
+24 silly packumentCache full:https://registry.npmjs.org/@babel%2fcore cache-miss
+25 http fetch GET 200 https://registry.npmjs.org/@babel%2fcore 359ms (cache miss)
+26 silly packumentCache full:https://registry.npmjs.org/@babel%2fcore set size:undefined disposed:false
+27 silly fetch manifest @babel/plugin-transform-runtime@^7.29.0 || ^8.0.0-rc.1
+28 silly packumentCache full:https://registry.npmjs.org/@babel%2fplugin-transform-runtime cache-miss
+29 http fetch GET 200 https://registry.npmjs.org/@babel%2fplugin-transform-runtime 206ms (cache miss)
+30 silly packumentCache full:https://registry.npmjs.org/@babel%2fplugin-transform-runtime set size:undefined disposed:false
+31 silly fetch manifest @babel/runtime@^7.27.0 || ^8.0.0-rc.1
+32 silly packumentCache full:https://registry.npmjs.org/@babel%2fruntime cache-miss
+33 http cache https://registry.npmjs.org/@babel%2fruntime 10ms (cache hit)
+34 silly packumentCache full:https://registry.npmjs.org/@babel%2fruntime set size:3372292 disposed:false
+35 silly fetch manifest rolldown@^1.0.0-rc.5
+36 silly packumentCache full:https://registry.npmjs.org/rolldown cache-miss
+37 http cache https://registry.npmjs.org/rolldown 5ms (cache hit)
+38 silly packumentCache full:https://registry.npmjs.org/rolldown set size:3682064 disposed:false
+39 silly fetch manifest vite@^8.0.0
+40 silly packumentCache full:https://registry.npmjs.org/vite cache-miss
+41 http cache https://registry.npmjs.org/vite 57ms (cache hit)
+42 silly packumentCache full:https://registry.npmjs.org/vite set size:38811285 disposed:false
+43 silly fetch manifest @types/node@22.9.0
+44 silly packumentCache full:https://registry.npmjs.org/@types%2fnode cache-miss
+45 http cache https://registry.npmjs.org/@types%2fnode 23ms (cache hit)
+46 silly packumentCache full:https://registry.npmjs.org/@types%2fnode set size:10972342 disposed:false
+47 silly fetch manifest @types/node@^20.19.0 || >=22.12.0
+48 silly packumentCache full:https://registry.npmjs.org/@types%2fnode cache-miss
+49 http cache https://registry.npmjs.org/@types%2fnode 14ms (cache hit)
+50 silly packumentCache full:https://registry.npmjs.org/@types%2fnode set size:10972342 disposed:false
+51 silly fetch manifest @vitejs/devtools@^0.1.0
+52 silly packumentCache full:https://registry.npmjs.org/@vitejs%2fdevtools cache-miss
+53 http cache https://registry.npmjs.org/@vitejs%2fdevtools 3ms (cache hit)
+54 silly packumentCache full:https://registry.npmjs.org/@vitejs%2fdevtools set size:170332 disposed:false
+55 silly fetch manifest esbuild@^0.27.0 || ^0.28.0
+56 silly packumentCache full:https://registry.npmjs.org/esbuild cache-miss
+57 http cache https://registry.npmjs.org/esbuild 3ms (cache hit)
+58 silly packumentCache full:https://registry.npmjs.org/esbuild set size:1254708 disposed:false
+59 silly fetch manifest jiti@>=1.21.0
+60 silly packumentCache full:https://registry.npmjs.org/jiti cache-miss
+61 http cache https://registry.npmjs.org/jiti 2ms (cache hit)
+62 silly packumentCache full:https://registry.npmjs.org/jiti set size:382310 disposed:false
+63 silly fetch manifest less@^4.0.0
+64 silly packumentCache full:https://registry.npmjs.org/less cache-miss
+65 http cache https://registry.npmjs.org/less 2ms (cache hit)
+66 silly packumentCache full:https://registry.npmjs.org/less set size:461684 disposed:false
+67 silly fetch manifest sass@^1.70.0
+68 silly packumentCache full:https://registry.npmjs.org/sass cache-miss
+69 http cache https://registry.npmjs.org/sass 3ms (cache hit)
+70 silly packumentCache full:https://registry.npmjs.org/sass set size:726244 disposed:false
+71 silly fetch manifest sass-embedded@^1.70.0
+72 silly packumentCache full:https://registry.npmjs.org/sass-embedded cache-miss
+73 http cache https://registry.npmjs.org/sass-embedded 2ms (cache hit)
+74 silly packumentCache full:https://registry.npmjs.org/sass-embedded set size:415594 disposed:false
+75 silly fetch manifest stylus@>=0.54.8
+76 silly packumentCache full:https://registry.npmjs.org/stylus cache-miss
+77 http cache https://registry.npmjs.org/stylus 2ms (cache hit)
+78 silly packumentCache full:https://registry.npmjs.org/stylus set size:286766 disposed:false
+79 silly fetch manifest sugarss@^5.0.0
+80 silly packumentCache full:https://registry.npmjs.org/sugarss cache-miss
+81 http cache https://registry.npmjs.org/sugarss 2ms (cache hit)
+82 silly packumentCache full:https://registry.npmjs.org/sugarss set size:44975 disposed:false
+83 silly fetch manifest postcss@^8.3.3
+84 silly packumentCache full:https://registry.npmjs.org/postcss cache-miss
+85 http cache https://registry.npmjs.org/postcss 4ms (cache hit)
+86 silly packumentCache full:https://registry.npmjs.org/postcss set size:708244 disposed:false
+87 silly fetch manifest terser@^5.16.0
+88 silly packumentCache full:https://registry.npmjs.org/terser cache-miss
+89 http cache https://registry.npmjs.org/terser 2ms (cache hit)
+90 silly packumentCache full:https://registry.npmjs.org/terser set size:789927 disposed:false
+91 silly fetch manifest tsx@^4.8.1
+92 silly packumentCache full:https://registry.npmjs.org/tsx cache-miss
+93 http cache https://registry.npmjs.org/tsx 2ms (cache hit)
+94 silly packumentCache full:https://registry.npmjs.org/tsx set size:289592 disposed:false
+95 silly fetch manifest yaml@^2.4.2
+96 silly packumentCache full:https://registry.npmjs.org/yaml cache-miss
+97 http cache https://registry.npmjs.org/yaml 2ms (cache hit)
+98 silly packumentCache full:https://registry.npmjs.org/yaml set size:375230 disposed:false
+99 silly fetch manifest babel-plugin-react-compiler@^1.0.0
+100 silly packumentCache full:https://registry.npmjs.org/babel-plugin-react-compiler cache-miss
+101 http fetch GET 200 https://registry.npmjs.org/babel-plugin-react-compiler 165ms (cache revalidated)
+102 silly packumentCache full:https://registry.npmjs.org/babel-plugin-react-compiler set size:1333788 disposed:false
+103 silly placeDep ROOT @vitejs/plugin-react@6.0.1 OK for: cchis-dashboard@0.1.0 want: *
+104 silly placeDep ROOT vite@8.0.9 OK for: @vitejs/plugin-react@6.0.1 want: ^8.0.0
+105 silly fetch manifest @rolldown/pluginutils@1.0.0-rc.7
+106 silly packumentCache full:https://registry.npmjs.org/@rolldown%2fpluginutils cache-miss
+107 silly fetch manifest picomatch@^4.0.4
+108 silly packumentCache full:https://registry.npmjs.org/picomatch cache-miss
+109 silly fetch manifest postcss@^8.5.10
+110 silly packumentCache full:https://registry.npmjs.org/postcss cache-hit
+111 http cache https://registry.npmjs.org/picomatch 7ms (cache hit)
+112 silly packumentCache full:https://registry.npmjs.org/picomatch set size:126376 disposed:false
+113 http cache https://registry.npmjs.org/@rolldown%2fpluginutils 8ms (cache hit)
+114 silly packumentCache full:https://registry.npmjs.org/@rolldown%2fpluginutils set size:286972 disposed:false
+115 silly placeDep node_modules/@vitejs/plugin-react @rolldown/pluginutils@1.0.0-rc.7 OK for: @vitejs/plugin-react@6.0.1 want: 1.0.0-rc.7
+116 verbose stack Error: could not resolve
+116 verbose stack     at PlaceDep.failPeerConflict (/usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/place-dep.js:503:25)
+116 verbose stack     at new PlaceDep (/usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/place-dep.js:157:21)
+116 verbose stack     at #buildDepStep (/usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/build-ideal-tree.js:934:18)
+116 verbose stack     at async Arborist.buildIdealTree (/usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/build-ideal-tree.js:170:7)
+116 verbose stack     at async Promise.all (index 1)
+116 verbose stack     at async Arborist.reify (/usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/reify.js:110:5)
+116 verbose stack     at async Install.exec (/usr/local/lib/node_modules/npm/lib/commands/install.js:150:5)
+116 verbose stack     at async Npm.exec (/usr/local/lib/node_modules/npm/lib/npm.js:208:9)
+116 verbose stack     at async module.exports (/usr/local/lib/node_modules/npm/lib/cli/entry.js:67:5)
+117 error code ERESOLVE
+118 error ERESOLVE could not resolve
+119 error
+120 error While resolving: vite@8.0.9
+120 error Found: @types/node@22.9.0
+120 error node_modules/@types/node
+120 error   peerOptional @types/node@"^20.0.0 || ^22.0.0 || >=24.0.0" from vitest@4.1.5
+120 error   node_modules/vitest
+120 error     dev vitest@"^4.1.5" from the root project
+120 error   dev @types/node@"22.9.0" from the root project
+120 error
+120 error Could not resolve dependency:
+120 error peerOptional @types/node@"^20.19.0 || >=22.12.0" from vite@8.0.9
+120 error node_modules/vite
+120 error   peer vite@"^8.0.0" from @vitejs/plugin-react@6.0.1
+120 error   node_modules/@vitejs/plugin-react
+120 error     dev @vitejs/plugin-react@"*" from the root project
+120 error   vite@"^6.0.0 || ^7.0.0 || ^8.0.0" from vitest@4.1.5
+120 error   node_modules/vitest
+120 error     dev vitest@"^4.1.5" from the root project
+120 error   1 more (@vitest/mocker)
+120 error
+120 error Conflicting peer dependency: @types/node@25.6.0
+120 error node_modules/@types/node
+120 error   peerOptional @types/node@"^20.19.0 || >=22.12.0" from vite@8.0.9
+120 error   node_modules/vite
+120 error     peer vite@"^8.0.0" from @vitejs/plugin-react@6.0.1
+120 error     node_modules/@vitejs/plugin-react
+120 error       dev @vitejs/plugin-react@"*" from the root project
+120 error     vite@"^6.0.0 || ^7.0.0 || ^8.0.0" from vitest@4.1.5
+120 error     node_modules/vitest
+120 error       dev vitest@"^4.1.5" from the root project
+120 error     1 more (@vitest/mocker)
+120 error
+120 error Fix the upstream dependency conflict, or retry
+120 error this command with --force or --legacy-peer-deps
+120 error to accept an incorrect (and potentially broken) dependency resolution.
+121 error
+121 error
+121 error For a full report see:
+121 error /Users/edwininganji/VSCodeProjects/cchis/frontend/.npm-cache/_logs/2026-04-21T20_30_56_432Z-eresolve-report.txt
+122 silly unfinished npm timer reify 1776803456788
+123 silly unfinished npm timer reify:loadTrees 1776803456791
+124 silly unfinished npm timer idealTree:buildDeps 1776803456892
+125 silly unfinished npm timer idealTree:node_modules/vite 1776803459085
+126 verbose cwd /Users/edwininganji/VSCodeProjects/cchis/frontend
+127 verbose os Darwin 25.3.0
+128 verbose node v25.6.0
+129 verbose npm  v11.8.0
+130 verbose exit 1
+131 verbose code 1
+132 error A complete log of this run can be found in: /Users/edwininganji/VSCodeProjects/cchis/frontend/.npm-cache/_logs/2026-04-21T20_30_56_432Z-debug-0.log

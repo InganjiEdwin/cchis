@@ -15,7 +15,7 @@ class Ward(models.Model):
     ]
 
     public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
-    name = models.CharField(max_length=120, unique=True)
+    name = models.CharField(max_length=120)
     county = models.CharField(max_length=120, default="Migori")
     sub_county = models.CharField(max_length=120, blank=True)
     ward_code = models.CharField(max_length=50, blank=True)
@@ -33,6 +33,9 @@ class Ward(models.Model):
 
     class Meta:
         ordering = ["county", "name"]
+        constraints = [
+            models.UniqueConstraint(fields=["county", "name"], name="unique_ward_name_per_county"),
+        ]
 
     def __str__(self) -> str:
         return f"{self.name}, {self.county}"

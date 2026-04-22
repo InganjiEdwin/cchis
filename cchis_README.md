@@ -215,7 +215,7 @@ cchis/
 │   ├── services/
 │   └── tasks/
 │
-├── frontend-dashboard/
+├── frontend/
 ├── mobile-chv-app/
 ├── data-pipelines/
 ├── notebooks/

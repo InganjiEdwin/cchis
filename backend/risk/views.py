@@ -1,10 +1,12 @@
+import logging
+
 from rest_framework import generics, permissions, status
 from rest_framework.filters import OrderingFilter
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import User
-from accounts.permissions import IsAdminOrSupervisor, IsOperationalUser
+from accounts.permissions import IsAdminOrSupervisor, IsAdminSupervisorOrAnalyst, IsFieldOperator
 
 from .tasks import trigger_alerts_task
 
@@ -27,6 +29,9 @@ from .services import (
 )
 
 
+alerts_logger = logging.getLogger("risk.alerts")
+
+
 def parse_bool_query_param(value: str | None) -> bool | None:
     if value is None:
         return None
@@ -38,9 +43,23 @@ def parse_bool_query_param(value: str | None) -> bool | None:
     return None
 
 
+def user_has_broad_dashboard_scope(user: User) -> bool:
+    return user.role in [User.ROLE_ADMIN, User.ROLE_ANALYST]
+
+
+def apply_ward_scope_or_none(queryset, user: User, field_name: str = "ward_id"):
+    if user_has_broad_dashboard_scope(user):
+        return queryset
+
+    if not user.ward_id:
+        return queryset.none()
+
+    return queryset.filter(**{field_name: user.ward_id})
+
+
 class WardListAPIView(generics.ListAPIView):
     serializer_class = WardSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsAdminSupervisorOrAnalyst]
     filter_backends = [OrderingFilter]
     ordering_fields = ["name", "county", "sub_county", "updated_at", "current_risk_score"]
     ordering = ["name"]
@@ -51,13 +70,7 @@ class WardListAPIView(generics.ListAPIView):
         county = self.request.query_params.get("county")
         sub_county = self.request.query_params.get("sub_county")
         is_active = parse_bool_query_param(self.request.query_params.get("is_active"))
-
-        if user.role in [User.ROLE_ADMIN, User.ROLE_ANALYST]:
-            pass
-        elif user.ward_id:
-            queryset = queryset.filter(id=user.ward_id)
-        else:
-            return queryset.none()
+        queryset = apply_ward_scope_or_none(queryset, user, field_name="id")
 
         if county:
             queryset = queryset.filter(county__iexact=county.strip())
@@ -80,13 +93,7 @@ class CHVListAPIView(generics.ListAPIView):
         user = self.request.user
         ward_id = self.request.query_params.get("ward_id")
         is_active = parse_bool_query_param(self.request.query_params.get("is_active"))
-
-        if user.role == User.ROLE_ADMIN:
-            pass
-        elif user.ward_id:
-            queryset = queryset.filter(ward_id=user.ward_id)
-        else:
-            return queryset.none()
+        queryset = apply_ward_scope_or_none(queryset, user)
 
         if ward_id:
             queryset = queryset.filter(ward_id=ward_id)
@@ -97,7 +104,7 @@ class CHVListAPIView(generics.ListAPIView):
 
 class RiskScoreListAPIView(generics.ListAPIView):
     serializer_class = RiskScoreSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsAdminSupervisorOrAnalyst]
     filter_backends = [OrderingFilter]
     ordering_fields = ["generated_at", "score", "risk_level", "predicted_cases", "ward__name"]
     ordering = ["-generated_at"]
@@ -108,11 +115,7 @@ class RiskScoreListAPIView(generics.ListAPIView):
         risk_level = self.request.query_params.get("risk_level")
         source = self.request.query_params.get("source")
         user = self.request.user
-
-        if user.role not in [User.ROLE_ADMIN, User.ROLE_ANALYST]:
-            if not user.ward_id:
-                return queryset.none()
-            queryset = queryset.filter(ward_id=user.ward_id)
+        queryset = apply_ward_scope_or_none(queryset, user)
 
         if ward_id:
             queryset = queryset.filter(ward_id=ward_id)
@@ -125,18 +128,13 @@ class RiskScoreListAPIView(generics.ListAPIView):
 
 
 class LatestWardRiskAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsAdminSupervisorOrAnalyst]
 
     def get(self, request):
         results = []
         wards = Ward.objects.filter(is_active=True).order_by("name")
         user = request.user
-
-        if user.role not in [User.ROLE_ADMIN, User.ROLE_ANALYST]:
-            if not user.ward_id:
-                wards = Ward.objects.none()
-            else:
-                wards = wards.filter(id=user.ward_id)
+        wards = apply_ward_scope_or_none(wards, user, field_name="id")
 
         for ward in wards:
             latest = latest_riskscore_for_ward(ward)
@@ -156,7 +154,7 @@ class LatestWardRiskAPIView(APIView):
 
 class AlertListAPIView(generics.ListAPIView):
     serializer_class = AlertSerializer
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [IsAdminSupervisorOrAnalyst]
     filter_backends = [OrderingFilter]
     ordering_fields = ["created_at", "sent_at", "channel", "status", "ward__name"]
     ordering = ["-created_at"]
@@ -167,13 +165,7 @@ class AlertListAPIView(generics.ListAPIView):
         ward_id = self.request.query_params.get("ward_id")
         channel = self.request.query_params.get("channel")
         status_value = self.request.query_params.get("status")
-
-        if user.role == User.ROLE_ADMIN:
-            pass
-        elif user.ward_id:
-            queryset = queryset.filter(ward_id=user.ward_id)
-        else:
-            return queryset.none()
+        queryset = apply_ward_scope_or_none(queryset, user)
 
         if ward_id:
             queryset = queryset.filter(ward_id=ward_id)
@@ -197,12 +189,8 @@ class TriggerAlertsAPIView(APIView):
 
         queryset = RiskScore.objects.select_related("ward").all()
         user = request.user
-
         if user.role != User.ROLE_ADMIN:
-            if not user.ward_id:
-                queryset = queryset.none()
-            else:
-                queryset = queryset.filter(ward_id=user.ward_id)
+            queryset = apply_ward_scope_or_none(queryset, user)
 
         if ward_id:
             queryset = queryset.filter(ward_id=ward_id)
@@ -211,12 +199,40 @@ class TriggerAlertsAPIView(APIView):
 
         risk_score = queryset.order_by("-generated_at").first()
         if not risk_score:
+            alerts_logger.warning(
+                "alert_trigger_request_rejected",
+                extra={
+                    "actor_user_id": user.id,
+                    "actor_role": user.role,
+                    "requested_ward_id": ward_id,
+                    "requested_risk_level": requested_risk_level,
+                    "send_sms": send_sms,
+                    "reason": "no_matching_risk_score_in_scope",
+                    "request_path": request.path,
+                    "request_method": request.method,
+                },
+            )
             return Response(
                 {"detail": "No matching risk score found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
         task = trigger_alerts_task.delay(risk_score.id, send_sms=send_sms)
+        alerts_logger.info(
+            "alert_trigger_request_queued",
+            extra={
+                "actor_user_id": user.id,
+                "actor_role": user.role,
+                "effective_ward_id": risk_score.ward_id,
+                "risk_score_id": risk_score.id,
+                "requested_ward_id": ward_id,
+                "requested_risk_level": requested_risk_level,
+                "send_sms": send_sms,
+                "task_id": task.id,
+                "request_path": request.path,
+                "request_method": request.method,
+            },
+        )
 
         return Response(
             {
@@ -229,7 +245,7 @@ class TriggerAlertsAPIView(APIView):
 
 
 class CHVTriageAPIView(APIView):
-    permission_classes = [IsOperationalUser]
+    permission_classes = [IsFieldOperator]
 
     def post(self, request):
         serializer = CHVTriageRequestSerializer(data=request.data)
@@ -270,7 +286,7 @@ class CHVTriageAPIView(APIView):
 
 
 class CHVSyncAPIView(APIView):
-    permission_classes = [IsOperationalUser]
+    permission_classes = [IsFieldOperator]
 
     def post(self, request):
         serializer = CHVSyncRequestSerializer(data=request.data)
@@ -409,13 +425,7 @@ class UssdSessionLogListAPIView(generics.ListAPIView):
         ward_id = self.request.query_params.get("ward_id")
         session_id = self.request.query_params.get("session_id")
         phone_number = self.request.query_params.get("phone_number")
-
-        if user.role == User.ROLE_ADMIN:
-            pass
-        elif user.ward_id:
-            queryset = queryset.filter(ward_id=user.ward_id)
-        else:
-            return queryset.none()
+        queryset = apply_ward_scope_or_none(queryset, user)
 
         if ward_id:
             queryset = queryset.filter(ward_id=ward_id)

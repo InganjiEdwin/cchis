@@ -76,6 +76,14 @@ OPERATIONAL_METRICS: tuple[MetricDefinition, ...] = (
         description="Count successful and failed login attempts.",
     ),
     MetricDefinition(
+        name="auth_login_cooldowns_total",
+        category="auth",
+        metric_type="counter",
+        unit="cooldowns",
+        source="accounts.views",
+        description="Count login attempts blocked by temporary cooldown after repeated failures.",
+    ),
+    MetricDefinition(
         name="auth_refresh_attempts_total",
         category="auth",
         metric_type="counter",
@@ -194,6 +202,30 @@ OPERATIONAL_METRICS: tuple[MetricDefinition, ...] = (
         unit="alerts",
         source="risk.models",
         description="Track how many alerts are waiting for retry.",
+    ),
+    MetricDefinition(
+        name="access_request_submissions_total",
+        category="auth",
+        metric_type="counter",
+        unit="requests",
+        source="accounts.views",
+        description="Count accepted public access-request submissions.",
+    ),
+    MetricDefinition(
+        name="access_request_duplicates_suppressed_total",
+        category="auth",
+        metric_type="counter",
+        unit="requests",
+        source="accounts.views",
+        description="Count duplicate public access requests suppressed within the configured cooling-off window.",
+    ),
+    MetricDefinition(
+        name="access_request_suspicious_rejections_total",
+        category="auth",
+        metric_type="counter",
+        unit="requests",
+        source="accounts.serializers",
+        description="Count public access requests rejected by honeypot or suspicious submission-timing rules.",
     ),
 )
 

@@ -1,0 +1,47 @@
+'Log files:
+/Users/edwininganji/VSCodeProjects/cchis/frontend/.npm-cache/_logs/2026-04-21T20_30_56_432Z-debug-0.log
+
+# npm resolution error report
+
+While resolving: vite@8.0.9
+Found: @types/node@22.9.0
+node_modules/@types/node
+  peerOptional @types/node@"^20.0.0 || ^22.0.0 || >=24.0.0" from vitest@4.1.5
+  node_modules/vitest
+    dev vitest@"^4.1.5" from the root project
+  dev @types/node@"22.9.0" from the root project
+
+Could not resolve dependency:
+peerOptional @types/node@"^20.19.0 || >=22.12.0" from vite@8.0.9
+node_modules/vite
+  peer vite@"^8.0.0" from @vitejs/plugin-react@6.0.1
+  node_modules/@vitejs/plugin-react
+    dev @vitejs/plugin-react@"*" from the root project
+  vite@"^6.0.0 || ^7.0.0 || ^8.0.0" from vitest@4.1.5
+  node_modules/vitest
+    dev vitest@"^4.1.5" from the root project
+  peerOptional vite@"^6.0.0 || ^7.0.0 || ^8.0.0" from @vitest/mocker@4.1.5
+  node_modules/vitest/node_modules/@vitest/mocker
+    @vitest/mocker@"4.1.5" from vitest@4.1.5
+    node_modules/vitest
+      dev vitest@"^4.1.5" from the root project
+
+Conflicting peer dependency: @types/node@25.6.0
+node_modules/@types/node
+  peerOptional @types/node@"^20.19.0 || >=22.12.0" from vite@8.0.9
+  node_modules/vite
+    peer vite@"^8.0.0" from @vitejs/plugin-react@6.0.1
+    node_modules/@vitejs/plugin-react
+      dev @vitejs/plugin-react@"*" from the root project
+    vite@"^6.0.0 || ^7.0.0 || ^8.0.0" from vitest@4.1.5
+    node_modules/vitest
+      dev vitest@"^4.1.5" from the root project
+    peerOptional vite@"^6.0.0 || ^7.0.0 || ^8.0.0" from @vitest/mocker@4.1.5
+    node_modules/vitest/node_modules/@vitest/mocker
+      @vitest/mocker@"4.1.5" from vitest@4.1.5
+      node_modules/vitest
+        dev vitest@"^4.1.5" from the root project
+
+Fix the upstream dependency conflict, or retry
+this command with --force or --legacy-peer-deps
+to accept an incorrect (and potentially broken) dependency resolution.

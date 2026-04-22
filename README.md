@@ -96,10 +96,17 @@ The backend uses JWT authentication via `djangorestframework-simplejwt`.
 Auth endpoints:
 
 - `POST /api/v1/auth/login/`
+- `POST /api/v1/auth/verify-2fa/`
 - `POST /api/v1/auth/refresh/`
 - `POST /api/v1/auth/logout/`
 - `POST /api/v1/auth/change-password/`
 - `GET /api/v1/auth/me/`
+- `POST /api/v1/auth/password-reset/request/`
+- `POST /api/v1/auth/password-reset/confirm/`
+- `POST /api/v1/auth/access/request/`
+- `GET /api/v1/auth/access/requests/`
+- `POST /api/v1/auth/access/requests/<id>/approve/`
+- `POST /api/v1/auth/access/requests/<id>/reject/`
 - `POST /api/v1/auth/register/` for admin-controlled user creation
 - `POST /api/v1/auth/users/<id>/deactivate/` for admin-controlled deactivation
 - `POST /api/v1/auth/users/<id>/reactivate/` for admin-controlled reactivation
@@ -132,6 +139,9 @@ If you introduce a new public endpoint, document the rationale, abuse controls, 
 
 Current notable API routes include:
 
+- `POST /api/v1/auth/password-reset/request/`
+- `POST /api/v1/auth/password-reset/confirm/`
+- `POST /api/v1/auth/access/request/`
 - `GET /api/v1/wards/`
 - `GET /api/v1/risk-scores/`
 - `GET /api/v1/risk-score/latest/`
@@ -241,7 +251,11 @@ These are the main v1 contract expectations for current backend consumers.
 - `POST /api/v1/auth/login/`
   - public
   - request body: `username`, `password`
-  - returns access token, refresh token, and serialized current user
+  - returns final JWTs and serialized current user, or a `requires_2fa` branch with a temporary pre-auth token for privileged users
+- `POST /api/v1/auth/verify-2fa/`
+  - public after successful primary credential verification
+  - request body: `token`, `code`
+  - returns final access token, refresh token, and serialized current user
 - `POST /api/v1/auth/refresh/`
   - public
   - request body: `refresh`
@@ -249,6 +263,23 @@ These are the main v1 contract expectations for current backend consumers.
 - `GET /api/v1/auth/me/`
   - authenticated
   - returns the current user profile
+- `POST /api/v1/auth/password-reset/request/`
+  - public
+  - request body: username or email identifier
+  - returns a non-enumerating recovery response
+- `POST /api/v1/auth/password-reset/confirm/`
+  - public
+  - request body: reset token and new password
+  - sets the new password and invalidates existing refresh sessions
+- `POST /api/v1/auth/access/request/`
+  - public
+  - accepts access-request submission data
+- `GET /api/v1/auth/access/requests/`
+  - admin only
+- `POST /api/v1/auth/access/requests/<id>/approve/`
+  - admin only
+- `POST /api/v1/auth/access/requests/<id>/reject/`
+  - admin only
 
 ### Risk and Operational Endpoints
 
@@ -261,7 +292,7 @@ These are the main v1 contract expectations for current backend consumers.
   - paginated
   - supports `ward_id`, `risk_level`, `source`, and `ordering`
 - `GET /api/v1/alerts/`
-  - admin or supervisor
+  - admin, supervisor, or analyst
   - paginated
   - supports `ward_id`, `channel`, `status`, and `ordering`
 

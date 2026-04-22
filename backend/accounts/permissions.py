@@ -9,7 +9,7 @@ class IsAdminOrSupervisor(BasePermission):
         return bool(
             user
             and user.is_authenticated
-            and (user.is_staff or user.role in [User.ROLE_ADMIN, User.ROLE_SUPERVISOR])
+            and user.role in [User.ROLE_ADMIN, User.ROLE_SUPERVISOR]
         )
 
 
@@ -23,7 +23,7 @@ class IsAdminOnly(BasePermission):
         )
 
 
-class IsCHVOrHigher(BasePermission):
+class IsAdminSupervisorOrAnalyst(BasePermission):
     def has_permission(self, request, view):
         user = request.user
         return bool(
@@ -32,20 +32,18 @@ class IsCHVOrHigher(BasePermission):
             and user.role in [
                 User.ROLE_ADMIN,
                 User.ROLE_SUPERVISOR,
-                User.ROLE_CHV,
                 User.ROLE_ANALYST,
             ]
         )
 
 
-class IsOperationalUser(BasePermission):
+class IsFieldOperator(BasePermission):
     def has_permission(self, request, view):
         user = request.user
         return bool(
             user
             and user.is_authenticated
             and user.role in [
-                User.ROLE_ADMIN,
                 User.ROLE_SUPERVISOR,
                 User.ROLE_CHV,
             ]

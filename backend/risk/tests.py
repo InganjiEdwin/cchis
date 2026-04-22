@@ -1,11 +1,16 @@
 import os
+import time
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from django.contrib.admin.sites import AdminSite
 from django.contrib.auth import get_user_model
 from django.contrib.gis.geos import Point
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.core.cache import cache
+from django.test import RequestFactory
 from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -15,7 +20,12 @@ from rest_framework.test import APITestCase
 from rest_framework.settings import api_settings
 
 from accounts.audit import get_client_ip
-from accounts.models import AuthAuditEvent
+from accounts.admin import AccessRequestAdmin
+from accounts.models import AccessRequest, AuthAuditEvent, PasswordResetToken, PreAuthToken
+from accounts.turnstile import TurnstileVerificationResult
+from accounts.two_factor import generate_current_totp_code, generate_totp_secret
+from communications.providers import MailgunEmailProvider, StubEmailProvider, get_email_provider
+from communications.services import send_email
 from accounts.views import (
     ChangePasswordAPIView,
     DeactivateUserAPIView,
@@ -23,6 +33,7 @@ from accounts.views import (
     LogoutAPIView,
     ReactivateUserAPIView,
     RefreshAPIView,
+    VerifyTwoFactorAPIView,
 )
 from core.observability import (
     DOMAIN_AUDIT_INVENTORY,
@@ -50,6 +61,10 @@ from risk.interoperability import (
 from risk.providers import DeliveryResult, StubSmsProvider, get_sms_provider
 from risk.services import create_alerts_for_riskscore, deliver_alert
 from risk.tasks import deliver_alert_task, trigger_alerts_task
+
+
+def started_at_ms(offset_ms: int = 2000) -> int:
+    return int(time.time() * 1000) - offset_ms
 from risk.views import USSDMenuAPIView
 
 from .models import Alert, CHV, HealthFacility, IngestionRun, ModelRun, RiskScore, SyncQueue, TriageSession, UssdSessionLog, Ward
@@ -179,6 +194,9 @@ class AuthenticatedAPITestCase(APITestCase):
             ward=self.other_ward,
         )
 
+        self._enroll_user_for_totp(self.admin_user)
+        self._enroll_user_for_totp(self.supervisor_user)
+
     def _create_user(
         self,
         username: str,
@@ -203,19 +221,71 @@ class AuthenticatedAPITestCase(APITestCase):
         return user
 
     def authenticate(self, username: str, password: str | None = None) -> str:
+        self.client.credentials()
         response = self.client.post(
             reverse("auth-login"),
             {"username": username, "password": password or self.password},
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        token = response.data["access"]
+        if response.data.get("requires_2fa"):
+            user = User.objects.get(username=username)
+            verify_response = self.client.post(
+                reverse("auth-verify-2fa"),
+                {
+                    "token": response.data["temp_token"],
+                    "code": generate_current_totp_code(user.totp_secret),
+                },
+                format="json",
+            )
+            self.assertEqual(verify_response.status_code, status.HTTP_200_OK)
+            token = verify_response.data["access"]
+        else:
+            token = response.data["access"]
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
         return token
+
+    def _enroll_user_for_totp(self, user: User):
+        user.totp_secret = generate_totp_secret()
+        user.is_totp_enabled = True
+        user.save(update_fields=["totp_secret", "is_totp_enabled"])
 
 
 class AuthEndpointsTestCase(AuthenticatedAPITestCase):
     def test_login_returns_tokens_and_user_profile(self):
+        response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.chv_user.username, "password": self.password},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
+        self.assertFalse(response.data["requires_2fa"])
+        self.assertEqual(response.data["user"]["role"], User.ROLE_CHV)
+        self.assertEqual(response.data["user"]["two_factor_policy"], "NONE")
+        self.assertEqual(response.data["user"]["theme_preference"], User.THEME_SYSTEM)
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_LOGIN_SUCCESS,
+                status=AuthAuditEvent.STATUS_SUCCESS,
+                target_user=self.chv_user,
+            ).exists()
+        )
+
+    def test_login_exposes_optional_two_factor_policy_for_analyst(self):
+        response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.analyst_user.username, "password": self.password},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data["requires_2fa"])
+        self.assertEqual(response.data["user"]["two_factor_policy"], "OPTIONAL")
+
+    def test_login_returns_temp_token_for_enrolled_admin(self):
         response = self.client.post(
             reverse("auth-login"),
             {"username": self.admin_user.username, "password": self.password},
@@ -223,18 +293,247 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIn("access", response.data)
-        self.assertIn("refresh", response.data)
-        self.assertEqual(response.data["user"]["role"], User.ROLE_ADMIN)
+        self.assertTrue(response.data["requires_2fa"])
+        self.assertIn("temp_token", response.data)
+        self.assertNotIn("access", response.data)
+        self.assertNotIn("refresh", response.data)
+        self.assertTrue(
+            PreAuthToken.objects.filter(
+                user=self.admin_user,
+                token=response.data["temp_token"],
+            ).exists()
+        )
         self.assertTrue(
             AuthAuditEvent.objects.filter(
-                event_type=AuthAuditEvent.EVENT_LOGIN_SUCCESS,
+                event_type=AuthAuditEvent.EVENT_2FA_REQUIRED,
                 status=AuthAuditEvent.STATUS_SUCCESS,
                 target_user=self.admin_user,
             ).exists()
         )
 
+    def test_login_blocks_required_role_without_totp_enrollment(self):
+        unenrolled_admin = self._create_user(
+            username="pilot_admin_blocked",
+            role=User.ROLE_ADMIN,
+            ward=self.ward,
+            is_staff=True,
+            is_superuser=True,
+        )
+
+        response = self.client.post(
+            reverse("auth-login"),
+            {"username": unenrolled_admin.username, "password": self.password},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["requires_2fa_enrollment"])
+        self.assertFalse(response.data["requires_2fa"])
+        self.assertIn("temp_token", response.data)
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_2FA_ENROLLMENT_REQUIRED,
+                status=AuthAuditEvent.STATUS_SUCCESS,
+                target_user=unenrolled_admin,
+            ).exists()
+        )
+
+    def test_begin_two_factor_enrollment_returns_setup_details_for_pre_auth_token(self):
+        unenrolled_admin = self._create_user(
+            username="pilot_admin_setup",
+            role=User.ROLE_ADMIN,
+            ward=self.ward,
+            is_staff=True,
+            is_superuser=True,
+        )
+
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": unenrolled_admin.username, "password": self.password},
+            format="json",
+        )
+
+        response = self.client.post(
+            reverse("auth-2fa-setup"),
+            {"token": login_response.data["temp_token"]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("manual_entry_key", response.data)
+        self.assertIn("provisioning_uri", response.data)
+        unenrolled_admin.refresh_from_db()
+        self.assertTrue(unenrolled_admin.totp_secret)
+
+    def test_confirm_two_factor_enrollment_issues_tokens_for_pre_auth_token(self):
+        unenrolled_admin = self._create_user(
+            username="pilot_admin_enroll",
+            role=User.ROLE_ADMIN,
+            ward=self.ward,
+            is_staff=True,
+            is_superuser=True,
+        )
+
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": unenrolled_admin.username, "password": self.password},
+            format="json",
+        )
+        setup_response = self.client.post(
+            reverse("auth-2fa-setup"),
+            {"token": login_response.data["temp_token"]},
+            format="json",
+        )
+
+        confirm_response = self.client.post(
+            reverse("auth-2fa-setup-confirm"),
+            {
+                "token": login_response.data["temp_token"],
+                "code": generate_current_totp_code(setup_response.data["manual_entry_key"]),
+            },
+            format="json",
+        )
+
+        self.assertEqual(confirm_response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", confirm_response.data)
+        self.assertIn("refresh", confirm_response.data)
+        unenrolled_admin.refresh_from_db()
+        self.assertTrue(unenrolled_admin.is_totp_enabled)
+
+    def test_authenticated_optional_user_can_complete_two_factor_enrollment(self):
+        analyst = self._create_user(
+            username="analyst_setup",
+            role=User.ROLE_ANALYST,
+            ward=self.ward,
+        )
+        self.authenticate(analyst.username)
+
+        setup_response = self.client.post(reverse("auth-2fa-setup"), {}, format="json")
+        self.assertEqual(setup_response.status_code, status.HTTP_200_OK)
+
+        confirm_response = self.client.post(
+            reverse("auth-2fa-setup-confirm"),
+            {"code": generate_current_totp_code(setup_response.data["manual_entry_key"])},
+            format="json",
+        )
+
+        self.assertEqual(confirm_response.status_code, status.HTTP_200_OK)
+        self.assertTrue(confirm_response.data["enrollment_completed"])
+        self.assertTrue(confirm_response.data["user"]["is_totp_enabled"])
+
+    def test_verify_2fa_returns_tokens_for_valid_code(self):
+        secret = self.admin_user.totp_secret
+
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+
+        verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": login_response.data["temp_token"],
+                "code": generate_current_totp_code(secret),
+            },
+            format="json",
+        )
+
+        self.assertEqual(verify_response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", verify_response.data)
+        self.assertIn("refresh", verify_response.data)
+        self.assertFalse(verify_response.data["requires_2fa"])
+        self.assertEqual(verify_response.data["user"]["role"], User.ROLE_ADMIN)
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_2FA_VERIFIED,
+                status=AuthAuditEvent.STATUS_SUCCESS,
+                target_user=self.admin_user,
+            ).exists()
+        )
+
+    def test_verify_2fa_rejects_invalid_code(self):
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+
+        verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": login_response.data["temp_token"],
+                "code": "000000",
+            },
+            format="json",
+        )
+
+        self.assertEqual(verify_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(verify_response.data["detail"], "Invalid or expired code. Please try again.")
+        token_record = PreAuthToken.objects.get(token=login_response.data["temp_token"])
+        self.assertIsNone(token_record.used_at)
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_2FA_FAILED,
+                status=AuthAuditEvent.STATUS_FAILED,
+                target_user=self.admin_user,
+            ).exists()
+        )
+
+    @override_settings(
+        AUTH_2FA_FAILURE_LIMIT=2,
+        AUTH_2FA_FAILURE_WINDOW_SECONDS=300,
+        AUTH_2FA_COOLDOWN_SECONDS=300,
+    )
+    def test_verify_2fa_enforces_temporary_cooldown_after_repeated_failures(self):
+        cache.clear()
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+        token = login_response.data["temp_token"]
+
+        first_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {"token": token, "code": "000000"},
+            format="json",
+        )
+        second_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {"token": token, "code": "000000"},
+            format="json",
+        )
+        cooldown_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {"token": token, "code": generate_current_totp_code(self.admin_user.totp_secret)},
+            format="json",
+        )
+
+        self.assertEqual(first_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(second_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(cooldown_response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertEqual(cooldown_response.data["detail"], "Too many verification attempts. Please wait and try again.")
+
+        cooldown_event = AuthAuditEvent.objects.filter(
+            event_type=AuthAuditEvent.EVENT_2FA_FAILED,
+            status=AuthAuditEvent.STATUS_FAILED,
+            metadata__reason="cooldown_active",
+        ).latest("created_at")
+        self.assertEqual(cooldown_event.target_user, self.admin_user)
+
+    def test_verify_2fa_rejects_invalid_or_expired_temp_token(self):
+        response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {"token": "not-a-real-token", "code": "123456"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "Invalid or expired 2FA token.")
+
     def test_login_rejects_invalid_password(self):
+        cache.clear()
         response = self.client.post(
             reverse("auth-login"),
             {"username": self.admin_user.username, "password": "wrong-password"},
@@ -242,11 +541,160 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(response.data["detail"], "Unable to sign in with those credentials.")
         event = AuthAuditEvent.objects.filter(
             event_type=AuthAuditEvent.EVENT_LOGIN_FAILED,
             status=AuthAuditEvent.STATUS_FAILED,
         ).latest("created_at")
         self.assertEqual(event.metadata["username"], self.admin_user.username)
+        self.assertEqual(event.metadata["reason"], "invalid_credentials")
+
+    @override_settings(
+        AUTH_LOGIN_FAILURE_LIMIT=2,
+        AUTH_LOGIN_FAILURE_WINDOW_SECONDS=300,
+        AUTH_LOGIN_COOLDOWN_SECONDS=300,
+    )
+    def test_login_enforces_temporary_cooldown_after_repeated_failures(self):
+        cache.clear()
+
+        first_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": "wrong-password"},
+            format="json",
+        )
+        second_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": "wrong-password"},
+            format="json",
+        )
+        cooldown_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+
+        self.assertEqual(first_response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(second_response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(cooldown_response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertEqual(cooldown_response.data["detail"], "Too many sign-in attempts. Please wait and try again.")
+
+        cooldown_event = AuthAuditEvent.objects.filter(
+            event_type=AuthAuditEvent.EVENT_LOGIN_FAILED,
+            status=AuthAuditEvent.STATUS_FAILED,
+            metadata__reason="cooldown_active",
+        ).latest("created_at")
+        self.assertEqual(cooldown_event.metadata["username"], self.admin_user.username)
+
+    @override_settings(
+        AUTH_LOGIN_TURNSTILE_ENABLED=True,
+        AUTH_LOGIN_TURNSTILE_THRESHOLD=1,
+        AUTH_LOGIN_FAILURE_LIMIT=5,
+        AUTH_LOGIN_FAILURE_WINDOW_SECONDS=300,
+        AUTH_LOGIN_COOLDOWN_SECONDS=300,
+    )
+    def test_login_requires_turnstile_after_repeated_failures(self):
+        cache.clear()
+
+        first_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.chv_user.username, "password": "wrong-password"},
+            format="json",
+        )
+        challenge_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.chv_user.username, "password": self.password},
+            format="json",
+        )
+
+        self.assertEqual(first_response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(challenge_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            challenge_response.data["detail"],
+            "Additional verification is required. Complete the challenge and try again.",
+        )
+
+        challenge_event = AuthAuditEvent.objects.filter(
+            event_type=AuthAuditEvent.EVENT_LOGIN_FAILED,
+            status=AuthAuditEvent.STATUS_FAILED,
+            metadata__reason="turnstile_required",
+        ).latest("created_at")
+        self.assertEqual(challenge_event.metadata["username"], self.chv_user.username)
+
+    @override_settings(
+        AUTH_LOGIN_TURNSTILE_ENABLED=True,
+        AUTH_LOGIN_TURNSTILE_THRESHOLD=1,
+        AUTH_LOGIN_FAILURE_LIMIT=5,
+        AUTH_LOGIN_FAILURE_WINDOW_SECONDS=300,
+        AUTH_LOGIN_COOLDOWN_SECONDS=300,
+    )
+    @patch("accounts.views.verify_turnstile_token")
+    def test_login_rejects_invalid_turnstile_after_repeated_failures(self, mock_verify_turnstile):
+        cache.clear()
+        mock_verify_turnstile.return_value = TurnstileVerificationResult(
+            success=False,
+            error_codes=("invalid-input-response",),
+        )
+
+        self.client.post(
+            reverse("auth-login"),
+            {"username": self.chv_user.username, "password": "wrong-password"},
+            format="json",
+        )
+        challenge_response = self.client.post(
+            reverse("auth-login"),
+            {
+                "username": self.chv_user.username,
+                "password": self.password,
+                "turnstile_token": "bad-token",
+            },
+            format="json",
+        )
+
+        self.assertEqual(challenge_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            challenge_response.data["detail"],
+            "Additional verification is required. Complete the challenge and try again.",
+        )
+        mock_verify_turnstile.assert_called_once()
+
+        challenge_event = AuthAuditEvent.objects.filter(
+            event_type=AuthAuditEvent.EVENT_LOGIN_FAILED,
+            status=AuthAuditEvent.STATUS_FAILED,
+            metadata__reason="turnstile_failed",
+        ).latest("created_at")
+        self.assertEqual(challenge_event.metadata["username"], self.chv_user.username)
+        self.assertEqual(challenge_event.metadata["turnstile_error_codes"], ["invalid-input-response"])
+
+    @override_settings(
+        AUTH_LOGIN_TURNSTILE_ENABLED=True,
+        AUTH_LOGIN_TURNSTILE_THRESHOLD=1,
+        AUTH_LOGIN_FAILURE_LIMIT=5,
+        AUTH_LOGIN_FAILURE_WINDOW_SECONDS=300,
+        AUTH_LOGIN_COOLDOWN_SECONDS=300,
+    )
+    @patch("accounts.views.verify_turnstile_token")
+    def test_login_accepts_valid_turnstile_after_repeated_failures(self, mock_verify_turnstile):
+        cache.clear()
+        mock_verify_turnstile.return_value = TurnstileVerificationResult(success=True, hostname="localhost")
+
+        self.client.post(
+            reverse("auth-login"),
+            {"username": self.chv_user.username, "password": "wrong-password"},
+            format="json",
+        )
+        challenge_response = self.client.post(
+            reverse("auth-login"),
+            {
+                "username": self.chv_user.username,
+                "password": self.password,
+                "turnstile_token": "good-token",
+            },
+            format="json",
+        )
+
+        self.assertEqual(challenge_response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", challenge_response.data)
+        mock_verify_turnstile.assert_called_once()
 
     def test_me_requires_authentication(self):
         response = self.client.get(reverse("auth-me"))
@@ -259,15 +707,72 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["username"], self.admin_user.username)
         self.assertEqual(response.data["role"], User.ROLE_ADMIN)
+        self.assertEqual(response.data["scope_type"], "BROAD")
+        self.assertIsNone(response.data["scope_ward_id"])
+        self.assertEqual(response.data["two_factor_policy"], "REQUIRED")
+        self.assertTrue(response.data["is_totp_enabled"])
+        self.assertEqual(response.data["theme_preference"], User.THEME_SYSTEM)
+
+    def test_me_returns_ward_scope_for_supervisor(self):
+        self.authenticate(self.supervisor_user.username)
+        response = self.client.get(reverse("auth-me"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["role"], User.ROLE_SUPERVISOR)
+        self.assertEqual(response.data["scope_type"], "WARD")
+        self.assertEqual(response.data["scope_ward_id"], self.other_ward.id)
+        self.assertEqual(response.data["two_factor_policy"], "REQUIRED")
+
+    def test_me_allows_authenticated_theme_preference_updates(self):
+        self.authenticate(self.analyst_user.username)
+
+        response = self.client.patch(
+            reverse("auth-me"),
+            {"theme_preference": User.THEME_DARK},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["theme_preference"], User.THEME_DARK)
+        self.analyst_user.refresh_from_db()
+        self.assertEqual(self.analyst_user.theme_preference, User.THEME_DARK)
+
+    def test_me_rejects_invalid_theme_preference_updates(self):
+        self.authenticate(self.analyst_user.username)
+
+        response = self.client.patch(
+            reverse("auth-me"),
+            {"theme_preference": "MIDNIGHT"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("theme_preference", response.data)
+
+    def test_me_returns_no_two_factor_requirement_for_chv(self):
+        self.authenticate(self.chv_user.username)
+        response = self.client.get(reverse("auth-me"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["role"], User.ROLE_CHV)
+        self.assertEqual(response.data["two_factor_policy"], "NONE")
 
     def test_logout_blacklists_refresh_token(self):
-        response = self.client.post(
+        login_response = self.client.post(
             reverse("auth-login"),
             {"username": self.admin_user.username, "password": self.password},
             format="json",
         )
-        refresh = response.data["refresh"]
-        access = response.data["access"]
+        verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": login_response.data["temp_token"],
+                "code": generate_current_totp_code(self.admin_user.totp_secret),
+            },
+            format="json",
+        )
+        refresh = verify_response.data["refresh"]
+        access = verify_response.data["access"]
 
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
         logout_response = self.client.post(
@@ -292,12 +797,20 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         )
 
     def test_refresh_rotates_token(self):
-        response = self.client.post(
+        login_response = self.client.post(
             reverse("auth-login"),
             {"username": self.admin_user.username, "password": self.password},
             format="json",
         )
-        refresh = response.data["refresh"]
+        verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": login_response.data["temp_token"],
+                "code": generate_current_totp_code(self.admin_user.totp_secret),
+            },
+            format="json",
+        )
+        refresh = verify_response.data["refresh"]
 
         refresh_response = self.client.post(
             reverse("auth-refresh"),
@@ -325,6 +838,43 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
             AuthAuditEvent.objects.filter(
                 event_type=AuthAuditEvent.EVENT_REFRESH_FAILED,
                 status=AuthAuditEvent.STATUS_FAILED,
+            ).exists()
+        )
+
+    @override_settings(
+        AUTH_REFRESH_FAILURE_LIMIT=2,
+        AUTH_REFRESH_FAILURE_WINDOW_SECONDS=300,
+        AUTH_REFRESH_COOLDOWN_SECONDS=300,
+    )
+    def test_refresh_enforces_temporary_cooldown_after_repeated_failures(self):
+        cache.clear()
+
+        first_response = self.client.post(
+            reverse("auth-refresh"),
+            {"refresh": "bad-refresh-token"},
+            format="json",
+        )
+        second_response = self.client.post(
+            reverse("auth-refresh"),
+            {"refresh": "bad-refresh-token"},
+            format="json",
+        )
+        cooldown_response = self.client.post(
+            reverse("auth-refresh"),
+            {"refresh": "bad-refresh-token"},
+            format="json",
+        )
+
+        self.assertEqual(first_response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(second_response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(cooldown_response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertEqual(cooldown_response.data["detail"], "Too many token refresh attempts. Please wait and try again.")
+
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_REFRESH_FAILED,
+                status=AuthAuditEvent.STATUS_FAILED,
+                metadata__reason="cooldown_active",
             ).exists()
         )
 
@@ -496,6 +1046,537 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.data["detail"], "Validation error.")
         self.assertIn("errors", response.data)
         self.assertIn("current_password", response.data)
+
+    @patch("accounts.views.send_password_reset_email")
+    def test_password_reset_request_returns_generic_success_and_sends_email_for_existing_user(self, mock_send):
+        response = self.client.post(
+            reverse("auth-password-reset-request"),
+            {"identifier": self.chv_user.email},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("will be sent", response.data["detail"])
+        self.assertEqual(PasswordResetToken.objects.filter(user=self.chv_user).count(), 1)
+        token_record = PasswordResetToken.objects.get(user=self.chv_user)
+        self.assertTrue(token_record.is_usable)
+        mock_send.assert_called_once()
+
+    @patch("accounts.views.send_password_reset_email")
+    def test_password_reset_request_does_not_leak_unknown_account(self, mock_send):
+        response = self.client.post(
+            reverse("auth-password-reset-request"),
+            {"identifier": "unknown-user@example.com"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("will be sent", response.data["detail"])
+        self.assertEqual(PasswordResetToken.objects.count(), 0)
+        mock_send.assert_not_called()
+
+    def test_password_reset_confirm_changes_password_invalidates_refresh_and_marks_token_used(self):
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.chv_user.username, "password": self.password},
+            format="json",
+        )
+        refresh = login_response.data["refresh"]
+        token_record = PasswordResetToken.objects.create(
+            user=self.chv_user,
+            token="reset-token-123",
+            expires_at=timezone.now() + timedelta(hours=1),
+        )
+
+        response = self.client.post(
+            reverse("auth-password-reset-confirm"),
+            {"token": token_record.token, "new_password": "ResetStrongPass123!"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        token_record.refresh_from_db()
+        self.assertIsNotNone(token_record.used_at)
+
+        old_login = self.client.post(
+            reverse("auth-login"),
+            {"username": self.chv_user.username, "password": self.password},
+            format="json",
+        )
+        self.assertEqual(old_login.status_code, status.HTTP_401_UNAUTHORIZED)
+
+        new_login = self.client.post(
+            reverse("auth-login"),
+            {"username": self.chv_user.username, "password": "ResetStrongPass123!"},
+            format="json",
+        )
+        self.assertEqual(new_login.status_code, status.HTTP_200_OK)
+
+        refresh_response = self.client.post(
+            reverse("auth-refresh"),
+            {"refresh": refresh},
+            format="json",
+        )
+        self.assertEqual(refresh_response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_PASSWORD_RESET_COMPLETED,
+                status=AuthAuditEvent.STATUS_SUCCESS,
+                target_user=self.chv_user,
+            ).exists()
+        )
+
+    def test_password_reset_confirm_get_validates_usable_token(self):
+        token_record = PasswordResetToken.objects.create(
+            user=self.chv_user,
+            token="valid-reset-token-123",
+            expires_at=timezone.now() + timedelta(hours=1),
+        )
+
+        response = self.client.get(
+            reverse("auth-password-reset-confirm"),
+            {"token": token_record.token},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["valid"])
+
+    def test_password_reset_confirm_rejects_invalid_or_expired_token(self):
+        expired = PasswordResetToken.objects.create(
+            user=self.chv_user,
+            token="expired-token-123",
+            expires_at=timezone.now() - timedelta(minutes=1),
+        )
+
+        invalid_response = self.client.post(
+            reverse("auth-password-reset-confirm"),
+            {"token": "not-a-real-token", "new_password": "ResetStrongPass123!"},
+            format="json",
+        )
+        self.assertEqual(invalid_response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        expired_response = self.client.post(
+            reverse("auth-password-reset-confirm"),
+            {"token": expired.token, "new_password": "ResetStrongPass123!"},
+            format="json",
+        )
+        self.assertEqual(expired_response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        invalid_get_response = self.client.get(
+            reverse("auth-password-reset-confirm"),
+            {"token": "not-a-real-token"},
+        )
+        self.assertEqual(invalid_get_response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    @patch("accounts.views.send_access_request_acknowledgement")
+    def test_access_request_submission_creates_record_and_sends_acknowledgement(self, mock_send):
+        response = self.client.post(
+            reverse("access-request"),
+            {
+                "full_name": "County Analyst",
+                "phone_number": "+254711000321",
+                "county": self.ward.county,
+                "administrative_ward": self.ward.name,
+                "organization": "Migori County Health Department",
+                "desired_role": User.ROLE_ANALYST,
+                "contact_email": "analyst@example.com",
+                "message": "Requesting read-only county-wide dashboard access.",
+                "website": "",
+                "client_started_at_ms": started_at_ms(),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["review_status"], AccessRequest.STATUS_PENDING)
+        self.assertEqual(AccessRequest.objects.count(), 1)
+        access_request = AccessRequest.objects.get()
+        self.assertEqual(access_request.contact_email, "analyst@example.com")
+        self.assertEqual(access_request.county, self.ward.county)
+        self.assertEqual(access_request.administrative_ward, self.ward.name)
+        self.assertEqual(access_request.review_status, AccessRequest.STATUS_PENDING)
+        self.assertEqual(access_request.submitted_from_ip, self.client.defaults["REMOTE_ADDR"])
+        self.assertFalse(access_request.challenge_verified)
+        mock_send.assert_called_once_with(access_request)
+
+    def test_access_request_submission_validates_required_fields(self):
+        response = self.client.post(
+            reverse("access-request"),
+            {
+                "full_name": "",
+                "county": "",
+                "administrative_ward": "",
+                "desired_role": User.ROLE_ANALYST,
+                "contact_email": "not-an-email",
+                "website": "",
+                "client_started_at_ms": started_at_ms(),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("errors", response.data)
+
+    def test_access_request_submission_rejects_invalid_phone_number(self):
+        response = self.client.post(
+            reverse("access-request"),
+            {
+                "full_name": "County Analyst",
+                "phone_number": "12345",
+                "county": self.ward.county,
+                "administrative_ward": self.ward.name,
+                "desired_role": User.ROLE_ANALYST,
+                "contact_email": "analyst@example.com",
+                "website": "",
+                "client_started_at_ms": started_at_ms(),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("errors", response.data)
+        self.assertIn("phone_number", response.data["errors"])
+
+    def test_access_request_submission_rejects_ward_county_mismatch(self):
+        response = self.client.post(
+            reverse("access-request"),
+            {
+                "full_name": "County Analyst",
+                "phone_number": "+254711000321",
+                "county": "Kisumu",
+                "administrative_ward": self.ward.name,
+                "desired_role": User.ROLE_ANALYST,
+                "contact_email": "analyst@example.com",
+                "website": "",
+                "client_started_at_ms": started_at_ms(),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("errors", response.data)
+        self.assertIn("administrative_ward", response.data["errors"])
+
+    @patch("accounts.views.send_access_request_acknowledgement")
+    def test_access_request_duplicate_submission_is_suppressed(self, mock_send):
+        AccessRequest.objects.create(
+            full_name="County Analyst",
+            phone_number="+254711000321",
+            county=self.ward.county,
+            administrative_ward=self.ward.name,
+            organization="Migori County Health Department",
+            desired_role=User.ROLE_ANALYST,
+            contact_email="analyst@example.com",
+            message="Requesting read-only county-wide dashboard access.",
+        )
+
+        response = self.client.post(
+            reverse("access-request"),
+            {
+                "full_name": "County Analyst",
+                "phone_number": "0711000321",
+                "county": self.ward.county,
+                "administrative_ward": self.ward.name,
+                "organization": "Migori County Health Department",
+                "desired_role": User.ROLE_ANALYST,
+                "contact_email": "analyst@example.com",
+                "message": "Requesting read-only county-wide dashboard access.",
+                "website": "",
+                "client_started_at_ms": started_at_ms(),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(AccessRequest.objects.count(), 1)
+        mock_send.assert_not_called()
+
+    def test_access_request_submission_rejects_honeypot_population(self):
+        response = self.client.post(
+            reverse("access-request"),
+            {
+                "full_name": "County Analyst",
+                "phone_number": "+254711000321",
+                "county": self.ward.county,
+                "administrative_ward": self.ward.name,
+                "desired_role": User.ROLE_ANALYST,
+                "contact_email": "analyst@example.com",
+                "website": "https://spam.example.com",
+                "client_started_at_ms": started_at_ms(),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("detail", response.data)
+
+    def test_access_request_submission_rejects_suspiciously_fast_post(self):
+        response = self.client.post(
+            reverse("access-request"),
+            {
+                "full_name": "County Analyst",
+                "phone_number": "+254711000321",
+                "county": self.ward.county,
+                "administrative_ward": self.ward.name,
+                "desired_role": User.ROLE_ANALYST,
+                "contact_email": "analyst@example.com",
+                "website": "",
+                "client_started_at_ms": started_at_ms(offset_ms=100),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("detail", response.data)
+
+    @override_settings(ACCESS_REQUEST_TURNSTILE_ENABLED=True, TURNSTILE_SECRET_KEY="test-secret")
+    @patch("accounts.views.send_access_request_acknowledgement")
+    @patch("accounts.views.verify_turnstile_token")
+    def test_access_request_submission_accepts_valid_turnstile_token(self, mock_verify_turnstile, mock_send):
+        mock_verify_turnstile.return_value = TurnstileVerificationResult(success=True, hostname="localhost")
+
+        response = self.client.post(
+            reverse("access-request"),
+            {
+                "full_name": "County Analyst",
+                "phone_number": "+254711000321",
+                "county": self.ward.county,
+                "administrative_ward": self.ward.name,
+                "desired_role": User.ROLE_ANALYST,
+                "contact_email": "analyst@example.com",
+                "website": "",
+                "client_started_at_ms": started_at_ms(),
+                "turnstile_token": "test-token",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        mock_verify_turnstile.assert_called_once()
+        mock_send.assert_called_once()
+        self.assertTrue(AccessRequest.objects.get().challenge_verified)
+
+    @override_settings(ACCESS_REQUEST_TURNSTILE_ENABLED=True, TURNSTILE_SECRET_KEY="test-secret")
+    def test_access_request_submission_rejects_missing_turnstile_token_when_enabled(self):
+        response = self.client.post(
+            reverse("access-request"),
+            {
+                "full_name": "County Analyst",
+                "phone_number": "+254711000321",
+                "county": self.ward.county,
+                "administrative_ward": self.ward.name,
+                "desired_role": User.ROLE_ANALYST,
+                "contact_email": "analyst@example.com",
+                "website": "",
+                "client_started_at_ms": started_at_ms(),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "Challenge verification failed. Please try again.")
+
+    @override_settings(ACCESS_REQUEST_TURNSTILE_ENABLED=True, TURNSTILE_SECRET_KEY="test-secret")
+    @patch("accounts.views.verify_turnstile_token")
+    def test_access_request_submission_rejects_invalid_turnstile_token(self, mock_verify_turnstile):
+        mock_verify_turnstile.return_value = TurnstileVerificationResult(
+            success=False,
+            error_codes=("invalid-input-response",),
+            hostname="localhost",
+        )
+
+        response = self.client.post(
+            reverse("access-request"),
+            {
+                "full_name": "County Analyst",
+                "phone_number": "+254711000321",
+                "county": self.ward.county,
+                "administrative_ward": self.ward.name,
+                "desired_role": User.ROLE_ANALYST,
+                "contact_email": "analyst@example.com",
+                "website": "",
+                "client_started_at_ms": started_at_ms(),
+                "turnstile_token": "bad-token",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "Challenge verification failed. Please try again.")
+
+    def test_access_request_list_requires_admin(self):
+        AccessRequest.objects.create(
+            full_name="County Analyst",
+            county="Migori",
+            administrative_ward="Suna East",
+            organization="Migori County",
+            desired_role=User.ROLE_ANALYST,
+            contact_email="analyst@example.com",
+            message="Need read-only dashboard access.",
+        )
+
+        self.authenticate(self.chv_user.username)
+        response = self.client.get(reverse("access-request-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_admin_can_list_access_requests(self):
+        AccessRequest.objects.create(
+            full_name="County Analyst",
+            county="Migori",
+            administrative_ward="Suna East",
+            organization="Migori County",
+            desired_role=User.ROLE_ANALYST,
+            contact_email="analyst@example.com",
+            message="Need read-only dashboard access.",
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.get(reverse("access-request-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = get_results(response)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["review_status"], AccessRequest.STATUS_PENDING)
+        self.assertEqual(results[0]["county"], "Migori")
+        self.assertEqual(results[0]["duplicate_email_count"], 0)
+        self.assertEqual(results[0]["duplicate_phone_count"], 0)
+        self.assertEqual(results[0]["duplicate_ip_count"], 0)
+        self.assertEqual(results[0]["pending_related_count"], 0)
+        self.assertEqual(results[0]["review_flags"], [])
+
+    def test_admin_list_exposes_duplicate_review_signals(self):
+        AccessRequest.objects.create(
+            full_name="County Analyst",
+            phone_number="+254711000321",
+            county="Migori",
+            administrative_ward="Suna East",
+            organization="Migori County",
+            desired_role=User.ROLE_ANALYST,
+            contact_email="analyst@example.com",
+            message="Need read-only dashboard access.",
+            submitted_from_ip="127.0.0.50",
+        )
+        AccessRequest.objects.create(
+            full_name="County Analyst Repeat",
+            phone_number="+254711000321",
+            county="Migori",
+            administrative_ward="North Kamagambo",
+            organization="Migori County",
+            desired_role=User.ROLE_ANALYST,
+            contact_email="analyst@example.com",
+            message="Following up on my request.",
+            submitted_from_ip="127.0.0.50",
+            challenge_verified=True,
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.get(reverse("access-request-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = get_results(response)
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(item["duplicate_email_count"] >= 1 for item in results))
+        self.assertTrue(all(item["duplicate_phone_count"] >= 1 for item in results))
+        self.assertTrue(all(item["duplicate_ip_count"] >= 1 for item in results))
+        self.assertTrue(all(item["pending_related_count"] >= 1 for item in results))
+        self.assertTrue(all("email_reuse" in item["review_flags"] for item in results))
+        self.assertTrue(all("phone_reuse" in item["review_flags"] for item in results))
+        self.assertTrue(all("ip_reuse" in item["review_flags"] for item in results))
+        self.assertTrue(all("related_pending_requests" in item["review_flags"] for item in results))
+        self.assertTrue(any("challenge_verified" in item["review_flags"] for item in results))
+
+    @patch("accounts.views.send_access_request_decision")
+    def test_admin_can_approve_access_request(self, mock_send):
+        access_request = AccessRequest.objects.create(
+            full_name="County Analyst",
+            county="Migori",
+            administrative_ward="Suna East",
+            organization="Migori County",
+            desired_role=User.ROLE_ANALYST,
+            contact_email="analyst@example.com",
+            message="Need read-only dashboard access.",
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.post(
+            reverse("access-request-approve", kwargs={"request_id": access_request.id}),
+            {"message": "Your request has been approved for onboarding."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        access_request.refresh_from_db()
+        self.assertEqual(access_request.review_status, AccessRequest.STATUS_APPROVED)
+        self.assertEqual(access_request.decision_message, "Your request has been approved for onboarding.")
+        self.assertIsNotNone(access_request.reviewed_at)
+        mock_send.assert_called_once()
+
+    @patch("accounts.views.send_access_request_decision")
+    def test_admin_can_reject_access_request(self, mock_send):
+        access_request = AccessRequest.objects.create(
+            full_name="County Analyst",
+            county="Migori",
+            administrative_ward="Suna East",
+            organization="Migori County",
+            desired_role=User.ROLE_ANALYST,
+            contact_email="analyst@example.com",
+            message="Need read-only dashboard access.",
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.post(
+            reverse("access-request-reject", kwargs={"request_id": access_request.id}),
+            {"message": "We cannot approve this request at this time."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        access_request.refresh_from_db()
+        self.assertEqual(access_request.review_status, AccessRequest.STATUS_REJECTED)
+        self.assertEqual(access_request.decision_message, "We cannot approve this request at this time.")
+        self.assertIsNotNone(access_request.reviewed_at)
+        mock_send.assert_called_once()
+
+    @patch("accounts.admin.send_access_request_decision")
+    def test_django_admin_sends_decision_email_when_ops_reviews_request(self, mock_send):
+        access_request = AccessRequest.objects.create(
+            full_name="County Analyst",
+            county="Migori",
+            administrative_ward="Suna East",
+            organization="Migori County",
+            desired_role=User.ROLE_ANALYST,
+            contact_email="analyst@example.com",
+            message="Need read-only dashboard access.",
+        )
+        admin_site = AdminSite()
+        model_admin = AccessRequestAdmin(AccessRequest, admin_site)
+        request = RequestFactory().post("/admin/accounts/accessrequest/")
+        request.user = self.admin_user
+
+        access_request.review_status = AccessRequest.STATUS_APPROVED
+        access_request.decision_message = "Approved for onboarding."
+        form = SimpleNamespace(changed_data=["review_status", "decision_message"])
+
+        model_admin.save_model(request, access_request, form, change=True)
+
+        access_request.refresh_from_db()
+        self.assertEqual(access_request.review_status, AccessRequest.STATUS_APPROVED)
+        self.assertEqual(access_request.decision_message, "Approved for onboarding.")
+        self.assertIsNotNone(access_request.reviewed_at)
+        mock_send.assert_called_once_with(
+            access_request,
+            approved=True,
+            decision_message="Approved for onboarding.",
+        )
+
+    def test_access_request_options_returns_counties_and_wards_for_public_form(self):
+        response = self.client.get(reverse("access-request-options"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("counties", response.data)
+        self.assertIn("wards", response.data)
+        self.assertTrue(any(ward["name"] == self.ward.name for ward in response.data["wards"]))
 
     def test_admin_can_deactivate_and_reactivate_user(self):
         login_response = self.client.post(
@@ -833,6 +1914,10 @@ class ObservabilityInventoryTestCase(APITestCase):
         self.assertTrue({"api", "auth", "sync", "triage", "ussd", "forecasting", "alerts"}.issubset(categories))
         self.assertIn("http_requests_total", names)
         self.assertIn("auth_login_attempts_total", names)
+        self.assertIn("auth_login_cooldowns_total", names)
+        self.assertIn("access_request_submissions_total", names)
+        self.assertIn("access_request_duplicates_suppressed_total", names)
+        self.assertIn("access_request_suspicious_rejections_total", names)
         self.assertIn("sync_payload_replays_total", names)
         self.assertIn("risk_model_runs_total", names)
         self.assertIn("alert_delivery_attempts_total", names)
@@ -1009,14 +2094,20 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         response = self.client.get(reverse("ward-list"))
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
-    def test_authenticated_user_can_list_wards(self):
+    def test_chv_cannot_list_wards(self):
         self.authenticate(self.chv_user.username)
+        response = self.client.get(reverse("ward-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_supervisor_only_sees_assigned_ward_in_ward_list(self):
+        self.authenticate(self.supervisor_user.username)
         response = self.client.get(reverse("ward-list"))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         results = get_results(response)
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["id"], self.ward.id)
+        self.assertEqual(results[0]["id"], self.other_ward.id)
 
     def test_analyst_can_list_all_wards(self):
         self.authenticate(self.analyst_user.username)
@@ -1051,21 +2142,36 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         response = self.client.get(reverse("risk-score-list"))
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
-    def test_authenticated_user_can_filter_risk_scores(self):
-        self.authenticate(self.chv_user.username)
-        response = self.client.get(reverse("risk-score-list"), {"ward_id": self.ward.id})
+    def test_supervisor_can_filter_risk_scores_for_assigned_ward(self):
+        self.authenticate(self.supervisor_user.username)
+        response = self.client.get(reverse("risk-score-list"), {"ward_id": self.other_ward.id})
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         results = get_results(response)
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["ward"], self.ward.id)
+        self.assertEqual(results[0]["ward"], self.other_ward.id)
 
-    def test_chv_cannot_read_other_ward_risk_scores(self):
+    def test_chv_cannot_read_risk_scores(self):
         self.authenticate(self.chv_user.username)
-        response = self.client.get(reverse("risk-score-list"), {"ward_id": self.other_ward.id})
+        response = self.client.get(reverse("risk-score-list"), {"ward_id": self.ward.id})
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_analyst_can_view_alerts(self):
+        Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="dashboard",
+            message="Test alert",
+            status=Alert.STATUS_DELIVERED,
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("alert-list"))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(get_results(response)), 0)
+        self.assertEqual(len(get_results(response)), 1)
 
     def test_alert_list_requires_admin_or_supervisor(self):
         Alert.objects.create(
@@ -1279,6 +2385,91 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         with self.assertRaisesMessage(ValueError, "Unsupported SMS provider: unknown-provider"):
             get_sms_provider("unknown-provider")
 
+
+class EmailProviderFoundationTestCase(AuthenticatedAPITestCase):
+    def test_get_email_provider_defaults_to_stub(self):
+        with override_settings(EMAIL_PROVIDER="stub"):
+            provider = get_email_provider()
+
+        self.assertIsInstance(provider, StubEmailProvider)
+
+    def test_get_email_provider_returns_mailgun_provider(self):
+        with override_settings(EMAIL_PROVIDER="mailgun"):
+            provider = get_email_provider()
+
+        self.assertIsInstance(provider, MailgunEmailProvider)
+
+    def test_get_email_provider_raises_for_unknown_provider(self):
+        with self.assertRaisesMessage(ValueError, "Unsupported email provider: unknown-provider"):
+            get_email_provider("unknown-provider")
+
+    @override_settings(EMAIL_PROVIDER="stub")
+    def test_send_email_uses_stub_provider_successfully(self):
+        result = send_email(
+            to_email="ops@example.com",
+            subject="Test message",
+            text_body="Mailgun phase 1 foundation test.",
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.provider, "stub")
+        self.assertTrue(result.external_id.startswith("stub-ops@example.com-"))
+
+    @override_settings(
+        EMAIL_PROVIDER="mailgun",
+        MAILGUN_API_KEY="",
+        MAILGUN_DOMAIN="",
+        MAILGUN_FROM_EMAIL="",
+    )
+    def test_mailgun_provider_returns_safe_failure_when_credentials_missing(self):
+        provider = MailgunEmailProvider()
+
+        result = provider.send(
+            to_email="ops@example.com",
+            subject="Credential test",
+            text_body="This should fail safely.",
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.provider, "mailgun")
+        self.assertIn("credentials are missing", result.error.lower())
+
+    @patch("communications.providers.requests.post")
+    @override_settings(
+        EMAIL_PROVIDER="mailgun",
+        MAILGUN_API_KEY="key-test",
+        MAILGUN_DOMAIN="mg.example.org",
+        MAILGUN_FROM_EMAIL="Kodi Alerts <alerts@mg.example.org>",
+        MAILGUN_HOST="postmaster@mg.example.org",
+        MAILGUN_BASE_URL="https://api.mailgun.net/v3",
+        MAILGUN_REPLY_TO="",
+    )
+    def test_mailgun_provider_sends_email_with_expected_payload(self, mock_post):
+        mock_response = SimpleNamespace(
+            status_code=200,
+            json=lambda: {"id": "<mailgun-message-id>"},
+            raise_for_status=lambda: None,
+        )
+        mock_post.return_value = mock_response
+
+        result = send_email(
+            to_email="ops@example.com",
+            subject="Alert test",
+            text_body="Plaintext body",
+            html_body="<p>HTML body</p>",
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.provider, "mailgun")
+        self.assertEqual(result.external_id, "<mailgun-message-id>")
+        mock_post.assert_called_once()
+        _, kwargs = mock_post.call_args
+        self.assertEqual(kwargs["auth"], ("api", "key-test"))
+        self.assertEqual(kwargs["data"]["from"], "Kodi Alerts <alerts@mg.example.org>")
+        self.assertEqual(kwargs["data"]["to"], ["ops@example.com"])
+        self.assertEqual(kwargs["data"]["subject"], "Alert test")
+        self.assertEqual(kwargs["headers"]["h:Reply-To"], "postmaster@mg.example.org")
+
     @patch("risk.tasks.deliver_alert_task.delay")
     def test_trigger_alerts_task_queues_delivery_for_sms_alerts(self, mock_delay):
         dashboard_alert = Alert.objects.create(
@@ -1360,6 +2551,21 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
+    def test_admin_cannot_submit_triage(self):
+        self.authenticate(self.admin_user.username)
+        response = self.client.post(
+            reverse("chv-triage"),
+            {
+                "ward_id": self.ward.id,
+                "phone_number": "+254711111111",
+                "channel": "API",
+                "diarrhea": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
     def test_chv_sync_requires_authenticated_role(self):
         response = self.client.post(
             reverse("chv-sync"),
@@ -1423,6 +2629,21 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
             reverse("chv-sync"),
             {
                 "ward_id": self.other_ward.id,
+                "phone_number": "+254700000009",
+                "source_device_id": "device-001",
+                "payloads": [{"client_submission_id": "submission-001", "diarrhea": True}],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_admin_cannot_sync_payloads(self):
+        self.authenticate(self.admin_user.username)
+        response = self.client.post(
+            reverse("chv-sync"),
+            {
+                "ward_id": self.ward.id,
                 "phone_number": "+254700000009",
                 "source_device_id": "device-001",
                 "payloads": [{"client_submission_id": "submission-001", "diarrhea": True}],
@@ -1574,20 +2795,26 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         response = self.client.get(reverse("latest-ward-risk"))
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
-    def test_authenticated_user_can_view_latest_risk(self):
+    def test_analyst_can_view_latest_risk(self):
         self.authenticate(self.analyst_user.username)
         response = self.client.get(reverse("latest-ward-risk"))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 2)
 
-    def test_chv_only_sees_latest_risk_for_assigned_ward(self):
-        self.authenticate(self.chv_user.username)
+    def test_supervisor_only_sees_latest_risk_for_assigned_ward(self):
+        self.authenticate(self.supervisor_user.username)
         response = self.client.get(reverse("latest-ward-risk"))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 1)
-        self.assertEqual(response.data[0]["ward_id"], self.ward.id)
+        self.assertEqual(response.data[0]["ward_id"], self.other_ward.id)
+
+    def test_chv_cannot_view_latest_risk(self):
+        self.authenticate(self.chv_user.username)
+        response = self.client.get(reverse("latest-ward-risk"))
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_triage_assigns_referral_facility_when_referral_needed(self):
         self.authenticate(self.chv_user.username)
