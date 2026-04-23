@@ -6,16 +6,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TriggerAlertPanel } from "@/components/trigger-alert-panel";
 
 const mockUseAuth = vi.fn();
-const mockFetchWardRiskData = vi.fn();
-const mockTriggerAlert = vi.fn();
+const mockFetchWardRiskDataViaBff = vi.fn();
+const mockTriggerAlertViaBff = vi.fn();
 
 vi.mock("@/components/auth-provider", () => ({
   useAuth: () => mockUseAuth(),
 }));
 
 vi.mock("@/lib/dashboard", () => ({
-  fetchWardRiskData: (...args: unknown[]) => mockFetchWardRiskData(...args),
-  triggerAlert: (...args: unknown[]) => mockTriggerAlert(...args),
+  fetchWardRiskDataViaBff: (...args: unknown[]) => mockFetchWardRiskDataViaBff(...args),
+  triggerAlertViaBff: (...args: unknown[]) => mockTriggerAlertViaBff(...args),
 }));
 
 describe("TriggerAlertPanel", () => {
@@ -23,7 +23,6 @@ describe("TriggerAlertPanel", () => {
     vi.clearAllMocks();
 
     mockUseAuth.mockReturnValue({
-      accessToken: "test-access-token",
       currentUser: {
         id: 1,
         username: "supervisor",
@@ -39,7 +38,7 @@ describe("TriggerAlertPanel", () => {
       },
     });
 
-    mockFetchWardRiskData.mockResolvedValue({
+    mockFetchWardRiskDataViaBff.mockResolvedValue({
       wards: {
         count: 2,
         next: null,
@@ -91,7 +90,7 @@ describe("TriggerAlertPanel", () => {
       ],
     });
 
-    mockTriggerAlert.mockResolvedValue({
+    mockTriggerAlertViaBff.mockResolvedValue({
       message: "Alert task queued successfully.",
       risk_score_id: 88,
       task_id: "task-123",
@@ -106,7 +105,7 @@ describe("TriggerAlertPanel", () => {
     await user.click(screen.getByRole("button", { name: "Trigger Alert" }));
 
     await waitFor(() => {
-      expect(mockFetchWardRiskData).toHaveBeenCalledWith("test-access-token");
+      expect(mockFetchWardRiskDataViaBff).toHaveBeenCalled();
     });
 
     expect(screen.getByRole("combobox", { name: "Ward" })).toHaveValue("2");
@@ -121,7 +120,7 @@ describe("TriggerAlertPanel", () => {
     await user.click(screen.getByRole("button", { name: "Confirm and trigger" }));
 
     await waitFor(() => {
-      expect(mockTriggerAlert).toHaveBeenCalledWith("test-access-token", {
+      expect(mockTriggerAlertViaBff).toHaveBeenCalledWith({
         ward_id: 2,
         send_sms: true,
       });
@@ -139,10 +138,10 @@ describe("TriggerAlertPanel", () => {
     await user.click(screen.getByRole("button", { name: "Trigger Alert" }));
 
     await waitFor(() => {
-      expect(mockFetchWardRiskData).toHaveBeenCalled();
+      expect(mockFetchWardRiskDataViaBff).toHaveBeenCalled();
     });
 
     expect(screen.getByRole("button", { name: "Confirm and trigger" })).toBeDisabled();
-    expect(mockTriggerAlert).not.toHaveBeenCalled();
+    expect(mockTriggerAlertViaBff).not.toHaveBeenCalled();
   });
 });

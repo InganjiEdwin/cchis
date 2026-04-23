@@ -20,6 +20,7 @@ from .serializers import (
     RiskScoreSerializer,
     TriggerAlertRequestSerializer,
     UssdSessionLogSerializer,
+    WardDetailSerializer,
     WardSerializer,
 )
 from .services import (
@@ -67,18 +68,33 @@ class WardListAPIView(generics.ListAPIView):
     def get_queryset(self):
         queryset = Ward.objects.filter(is_active=True).order_by("name")
         user = self.request.user
+        q = self.request.query_params.get("q")
         county = self.request.query_params.get("county")
         sub_county = self.request.query_params.get("sub_county")
+        risk_level = self.request.query_params.get("risk")
         is_active = parse_bool_query_param(self.request.query_params.get("is_active"))
         queryset = apply_ward_scope_or_none(queryset, user, field_name="id")
 
+        if q:
+            queryset = queryset.filter(name__icontains=q.strip())
         if county:
             queryset = queryset.filter(county__iexact=county.strip())
         if sub_county:
             queryset = queryset.filter(sub_county__iexact=sub_county.strip())
+        if risk_level:
+            queryset = queryset.filter(current_risk_level=risk_level.strip().upper())
         if is_active is not None:
             queryset = queryset.filter(is_active=is_active)
         return queryset
+
+
+class WardDetailAPIView(generics.RetrieveAPIView):
+    serializer_class = WardDetailSerializer
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get_queryset(self):
+        queryset = Ward.objects.filter(is_active=True).prefetch_related("risk_scores")
+        return apply_ward_scope_or_none(queryset, self.request.user, field_name="id")
 
 
 class CHVListAPIView(generics.ListAPIView):
@@ -134,7 +150,20 @@ class LatestWardRiskAPIView(APIView):
         results = []
         wards = Ward.objects.filter(is_active=True).order_by("name")
         user = request.user
+        q = request.query_params.get("q")
+        county = request.query_params.get("county")
+        sub_county = request.query_params.get("sub_county")
+        risk_level = request.query_params.get("risk")
         wards = apply_ward_scope_or_none(wards, user, field_name="id")
+
+        if q:
+            wards = wards.filter(name__icontains=q.strip())
+        if county:
+            wards = wards.filter(county__iexact=county.strip())
+        if sub_county:
+            wards = wards.filter(sub_county__iexact=sub_county.strip())
+        if risk_level:
+            wards = wards.filter(current_risk_level=risk_level.strip().upper())
 
         for ward in wards:
             latest = latest_riskscore_for_ward(ward)

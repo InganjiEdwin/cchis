@@ -15,7 +15,7 @@ import { useAuth } from "@/components/auth-provider";
 import { DashboardTopbar } from "@/components/dashboard-topbar";
 import { TriggerAlertPanel } from "@/components/trigger-alert-panel";
 import {
-  fetchOverviewData,
+  fetchOverviewDataViaBff,
   type AlertRecord,
   type LatestWardRisk,
   type WardSummary,
@@ -203,18 +203,17 @@ function buildOverviewViewModel(wards: WardSummary[], latestRisks: LatestWardRis
 }
 
 export default function OverviewPage() {
-  const { accessToken, currentUser } = useAuth();
+  const { currentUser } = useAuth();
   const [overview, setOverview] = useState<OverviewViewModel | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
-    if (!accessToken) {
+    if (!currentUser) {
       return;
     }
 
-    const token = accessToken;
     let isActive = true;
 
     async function loadOverview() {
@@ -222,7 +221,7 @@ export default function OverviewPage() {
       setError(null);
 
       try {
-        const data = await fetchOverviewData(token);
+        const data = await fetchOverviewDataViaBff();
 
         if (!isActive) {
           return;
@@ -255,7 +254,7 @@ export default function OverviewPage() {
     return () => {
       isActive = false;
     };
-  }, [accessToken, refreshKey]);
+  }, [currentUser, refreshKey]);
 
   const immediateAttention = useMemo(
     () => overview?.highRiskWards.slice(0, 3) ?? [],

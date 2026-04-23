@@ -20,6 +20,7 @@ from .views import (
     RegisterAPIView,
     AuthAuditEventListAPIView,
     AuthAuditSummaryAPIView,
+    SessionAPIView,
     VerifyTwoFactorAPIView,
 )
 
@@ -34,6 +35,7 @@ urlpatterns = [
     path("2fa/setup/", BeginTwoFactorEnrollmentAPIView.as_view(), name="auth-2fa-setup"),
     path("2fa/setup/confirm/", ConfirmTwoFactorEnrollmentAPIView.as_view(), name="auth-2fa-setup-confirm"),
     path("refresh/", RefreshAPIView.as_view(), name="auth-refresh"),
+    path("session/", SessionAPIView.as_view(), name="auth-session"),
     path("logout/", LogoutAPIView.as_view(), name="auth-logout"),
     path("password-reset/request/", PasswordResetRequestAPIView.as_view(), name="auth-password-reset-request"),
     path("password-reset/confirm/", PasswordResetConfirmAPIView.as_view(), name="auth-password-reset-confirm"),

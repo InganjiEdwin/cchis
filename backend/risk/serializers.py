@@ -20,6 +20,51 @@ class WardSerializer(serializers.ModelSerializer):
         ]
 
 
+class WardDetailSerializer(serializers.ModelSerializer):
+    predicted_cases = serializers.SerializerMethodField()
+    latest_generated_at = serializers.SerializerMethodField()
+    latest_source = serializers.SerializerMethodField()
+    latest_model_version = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Ward
+        fields = [
+            "id",
+            "public_id",
+            "name",
+            "county",
+            "sub_county",
+            "ward_code",
+            "current_risk_level",
+            "current_risk_score",
+            "predicted_cases",
+            "latest_generated_at",
+            "latest_source",
+            "latest_model_version",
+            "is_active",
+            "updated_at",
+        ]
+
+    def _get_latest_risk(self, obj: Ward):
+        return obj.risk_scores.order_by("-generated_at").first()
+
+    def get_predicted_cases(self, obj: Ward):
+        latest = self._get_latest_risk(obj)
+        return latest.predicted_cases if latest else 0
+
+    def get_latest_generated_at(self, obj: Ward):
+        latest = self._get_latest_risk(obj)
+        return latest.generated_at if latest else None
+
+    def get_latest_source(self, obj: Ward):
+        latest = self._get_latest_risk(obj)
+        return latest.source if latest else None
+
+    def get_latest_model_version(self, obj: Ward):
+        latest = self._get_latest_risk(obj)
+        return latest.model_version if latest else None
+
+
 class CHVSerializer(serializers.ModelSerializer):
     ward_name = serializers.CharField(source="ward.name", read_only=True)
 

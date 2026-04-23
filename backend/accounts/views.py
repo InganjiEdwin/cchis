@@ -15,6 +15,7 @@ from rest_framework.views import APIView
 from rest_framework.generics import get_object_or_404
 from rest_framework import status
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
+from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.tokens import RefreshToken, TokenError
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
@@ -33,7 +34,6 @@ from .serializers import (
     CCHISTokenObtainPairSerializer,
     ChangePasswordSerializer,
     ConfirmTwoFactorEnrollmentSerializer,
-    LogoutSerializer,
     RegisterSerializer,
     AuthAuditEventSerializer,
     UserAppearanceSerializer,
@@ -61,6 +61,44 @@ from .two_factor import (
 
 User = get_user_model()
 security_logger = logging.getLogger("accounts.security")
+
+
+def get_refresh_cookie_name() -> str:
+    return getattr(settings, "AUTH_REFRESH_COOKIE_NAME", "cchis_refresh")
+
+
+def get_refresh_cookie_value(request) -> str:
+    return str(request.COOKIES.get(get_refresh_cookie_name()) or "")
+
+
+def set_refresh_cookie(response: Response, refresh_token: str) -> None:
+    response.set_cookie(
+        key=get_refresh_cookie_name(),
+        value=refresh_token,
+        max_age=int(settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds()),
+        httponly=getattr(settings, "AUTH_REFRESH_COOKIE_HTTPONLY", True),
+        secure=getattr(settings, "AUTH_REFRESH_COOKIE_SECURE", False),
+        samesite=getattr(settings, "AUTH_REFRESH_COOKIE_SAMESITE", "Lax"),
+        path=getattr(settings, "AUTH_REFRESH_COOKIE_PATH", "/"),
+    )
+
+
+def clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=get_refresh_cookie_name(),
+        path=getattr(settings, "AUTH_REFRESH_COOKIE_PATH", "/"),
+        samesite=getattr(settings, "AUTH_REFRESH_COOKIE_SAMESITE", "Lax"),
+    )
+
+
+def build_session_response(*, authenticated: bool, user=None, access_token: str | None = None, session_source: str | None = None) -> Response:
+    payload = {
+        "authenticated": authenticated,
+        "user": UserSerializer(user).data if user else None,
+        "access": access_token,
+        "session_source": session_source,
+    }
+    return Response(payload, status=status.HTTP_200_OK)
 
 
 def build_login_attempt_key(request, username: str) -> str:
@@ -380,7 +418,13 @@ class LoginAPIView(TokenObtainPairView):
                 target_user=user,
             )
 
-        return Response(serializer.validated_data, status=status.HTTP_200_OK)
+        response = Response(serializer.validated_data, status=status.HTTP_200_OK)
+
+        refresh_token = serializer.validated_data.get("refresh")
+        if refresh_token:
+            set_refresh_cookie(response, refresh_token)
+
+        return response
 
 
 class RefreshAPIView(TokenRefreshView):
@@ -389,9 +433,17 @@ class RefreshAPIView(TokenRefreshView):
     throttle_scope = "auth_refresh"
 
     def post(self, request, *args, **kwargs):
-        refresh_token = request.data.get("refresh", "")
+        refresh_token = get_refresh_cookie_value(request)
         refresh_fingerprint = fingerprint_refresh_token(str(refresh_token))
         user = None
+
+        if not refresh_token:
+            response = Response(
+                {"detail": "Refresh session is missing or expired."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+            clear_refresh_cookie(response)
+            return response
 
         if is_refresh_cooldown_active(request, refresh_fingerprint):
             record_auth_event(
@@ -414,7 +466,7 @@ class RefreshAPIView(TokenRefreshView):
             except TokenError:
                 user = None
 
-        serializer = self.get_serializer(data=request.data)
+        serializer = self.get_serializer(data={"refresh": refresh_token})
 
         try:
             serializer.is_valid(raise_exception=True)
@@ -428,7 +480,12 @@ class RefreshAPIView(TokenRefreshView):
                 target_user=user,
                 metadata={"reason": "invalid_refresh"},
             )
-            raise
+            response = Response(
+                {"detail": "Invalid or expired refresh token."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+            clear_refresh_cookie(response)
+            return response
 
         clear_failed_refresh_attempts(request, refresh_fingerprint)
         record_auth_event(
@@ -439,7 +496,11 @@ class RefreshAPIView(TokenRefreshView):
             target_user=user,
         )
 
-        return Response(serializer.validated_data, status=status.HTTP_200_OK)
+        response = Response(serializer.validated_data, status=status.HTTP_200_OK)
+        issued_refresh = serializer.validated_data.get("refresh") or refresh_token
+        if issued_refresh:
+            set_refresh_cookie(response, issued_refresh)
+        return response
 
 
 class MeAPIView(APIView):
@@ -453,6 +514,74 @@ class MeAPIView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(UserSerializer(request.user).data, status=status.HTTP_200_OK)
+
+
+class SessionAPIView(APIView):
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        jwt_authenticator = JWTAuthentication()
+        authorization_header = request.META.get("HTTP_AUTHORIZATION")
+
+        if authorization_header:
+            try:
+                auth_result = jwt_authenticator.authenticate(request)
+            except AuthenticationFailed:
+                auth_result = None
+
+            if auth_result:
+                user, _ = auth_result
+                return build_session_response(
+                    authenticated=True,
+                    user=user,
+                    session_source="access",
+                )
+
+        refresh_token = request.COOKIES.get(get_refresh_cookie_name())
+        refresh_fingerprint = fingerprint_refresh_token(refresh_token or "")
+
+        if not refresh_token:
+            return build_session_response(authenticated=False)
+
+        if is_refresh_cooldown_active(request, refresh_fingerprint):
+            response = build_session_response(authenticated=False)
+            clear_refresh_cookie(response)
+            return response
+
+        try:
+            refresh = RefreshToken(refresh_token)
+            refresh.check_blacklist()
+            access_token = str(refresh.access_token)
+            user = get_object_or_404(User, id=refresh["user_id"])
+        except TokenError:
+            register_failed_refresh_attempt(request, refresh_fingerprint)
+            response = build_session_response(authenticated=False)
+            clear_refresh_cookie(response)
+            return response
+        except AuthenticationFailed:
+            register_failed_refresh_attempt(request, refresh_fingerprint)
+            response = build_session_response(authenticated=False)
+            clear_refresh_cookie(response)
+            return response
+
+        clear_failed_refresh_attempts(request, refresh_fingerprint)
+        record_auth_event(
+            request=request,
+            event_type=AuthAuditEvent.EVENT_REFRESH_SUCCESS,
+            status=AuthAuditEvent.STATUS_SUCCESS,
+            actor=user,
+            target_user=user,
+            metadata={"source": "session_bootstrap"},
+        )
+
+        response = build_session_response(
+            authenticated=True,
+            user=user,
+            access_token=access_token,
+            session_source="refresh",
+        )
+        return response
 
 
 class VerifyTwoFactorAPIView(APIView):
@@ -523,7 +652,9 @@ class VerifyTwoFactorAPIView(APIView):
             actor=user,
             target_user=user,
         )
-        return Response(token_response, status=status.HTTP_200_OK)
+        response = Response(token_response, status=status.HTTP_200_OK)
+        set_refresh_cookie(response, token_response["refresh"])
+        return response
 
 
 class BeginTwoFactorEnrollmentAPIView(APIView):
@@ -603,7 +734,9 @@ class ConfirmTwoFactorEnrollmentAPIView(APIView):
             consume_pre_auth_token(token_record)
             token_response = CCHISTokenObtainPairSerializer.build_token_response(user)
             token_response["enrollment_completed"] = True
-            return Response(token_response, status=status.HTTP_200_OK)
+            response = Response(token_response, status=status.HTTP_200_OK)
+            set_refresh_cookie(response, token_response["refresh"])
+            return response
 
         return Response(
             {
@@ -620,11 +753,18 @@ class LogoutAPIView(APIView):
     throttle_scope = "auth_write"
 
     def post(self, request):
-        serializer = LogoutSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        refresh_token = get_refresh_cookie_value(request)
+
+        if not refresh_token:
+            response = Response(
+                {"detail": "Refresh session is missing or expired."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+            clear_refresh_cookie(response)
+            return response
 
         try:
-            token = RefreshToken(serializer.validated_data["refresh"])
+            token = RefreshToken(refresh_token)
             token.blacklist()
         except TokenError:
             record_auth_event(
@@ -634,10 +774,12 @@ class LogoutAPIView(APIView):
                 actor=request.user,
                 target_user=request.user,
             )
-            return Response(
+            response = Response(
                 {"detail": "Invalid or expired refresh token."},
                 status=400,
             )
+            clear_refresh_cookie(response)
+            return response
 
         record_auth_event(
             request=request,
@@ -646,7 +788,9 @@ class LogoutAPIView(APIView):
             actor=request.user,
             target_user=request.user,
         )
-        return Response(status=205)
+        response = Response(status=205)
+        clear_refresh_cookie(response)
+        return response
 
 
 def blacklist_user_refresh_tokens(user):

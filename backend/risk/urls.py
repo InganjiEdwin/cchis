@@ -9,11 +9,13 @@ from .views import (
     TriggerAlertsAPIView,
     USSDMenuAPIView,
     UssdSessionLogListAPIView,
+    WardDetailAPIView,
     WardListAPIView,
 )
 
 urlpatterns = [
     path("wards/", WardListAPIView.as_view(), name="ward-list"),
+    path("wards/<int:pk>/", WardDetailAPIView.as_view(), name="ward-detail"),
     path("chvs/", CHVListAPIView.as_view(), name="chv-list"),
     path("risk-scores/", RiskScoreListAPIView.as_view(), name="risk-score-list"),
     path("risk-score/latest/", LatestWardRiskAPIView.as_view(), name="latest-ward-risk"),

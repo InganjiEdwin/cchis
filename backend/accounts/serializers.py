@@ -147,10 +147,6 @@ class RegisterSerializer(serializers.ModelSerializer):
         return user
 
 
-class LogoutSerializer(serializers.Serializer):
-    refresh = serializers.CharField()
-
-
 class ChangePasswordSerializer(serializers.Serializer):
     current_password = serializers.CharField(write_only=True)
     new_password = serializers.CharField(write_only=True, min_length=8)

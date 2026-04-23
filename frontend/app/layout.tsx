@@ -3,6 +3,7 @@ import localFont from "next/font/local";
 
 import "./globals.css";
 import { AuthProvider } from "@/components/auth-provider";
+import { fetchServerSession, sanitizeSessionResponse } from "@/lib/server-session";
 
 const axiforma = localFont({
   src: [
@@ -82,11 +83,18 @@ const axiforma = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "CCHIS Dashboard",
+  title: "CHIS",
   description: "Role-aware dashboard shell for cholera risk monitoring and operational response.",
+  icons: {
+    icon: "/brand/chis-brief-colored.png",
+    shortcut: "/brand/chis-brief-colored.png",
+    apple: "/brand/chis-brief-colored.png",
+  },
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const initialSession = sanitizeSessionResponse(await fetchServerSession());
+
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={axiforma.variable}>
@@ -108,7 +116,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             `,
           }}
         />
-        <AuthProvider>{children}</AuthProvider>
+        <AuthProvider initialSession={initialSession}>{children}</AuthProvider>
       </body>
     </html>
   );

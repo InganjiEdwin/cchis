@@ -1,14 +1,3 @@
-import {
-  getApiBaseUrl,
-  persistAccessToken,
-  persistEnrollmentToken,
-  persistPreAuthToken,
-  persistRefreshToken,
-  readAccessToken,
-  readRefreshToken,
-  refreshAccessToken,
-} from "@/lib/auth";
-
 export type PaginatedResponse<T> = {
   count: number;
   next: string | null;
@@ -25,6 +14,23 @@ export type WardSummary = {
   ward_code: string;
   current_risk_level: "LOW" | "MEDIUM" | "HIGH";
   current_risk_score: number;
+  is_active: boolean;
+  updated_at: string;
+};
+
+export type WardDetailSummary = {
+  id: number;
+  public_id: string;
+  name: string;
+  county: string;
+  sub_county: string;
+  ward_code: string;
+  current_risk_level: "LOW" | "MEDIUM" | "HIGH";
+  current_risk_score: number;
+  predicted_cases: number;
+  latest_generated_at: string | null;
+  latest_source: string | null;
+  latest_model_version: string | null;
   is_active: boolean;
   updated_at: string;
 };
@@ -98,41 +104,45 @@ export type TriggerAlertResponse = {
   task_id: string;
 };
 
-async function request<T>(path: string, accessToken: string, init: RequestInit = {}): Promise<T> {
-  const execute = async (token: string) =>
-    fetch(`${getApiBaseUrl()}${path}`, {
-      ...init,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-        ...(init.headers ?? {}),
-      },
-    });
+export type FetchWardRiskDataParams = {
+  county?: string;
+  q?: string;
+  risk?: string;
+  sub_county?: string;
+  ordering?: string;
+};
 
-  const initialToken = readAccessToken() ?? accessToken;
-  let response = await execute(initialToken);
+type OverviewRouteResponse = {
+  wards: PaginatedResponse<WardSummary>;
+  latestRisks: LatestWardRisk[];
+  alerts: PaginatedResponse<AlertRecord>;
+};
 
-  if (response.status === 401) {
-    const refresh = readRefreshToken();
+type WardsRouteResponse = {
+  wards: PaginatedResponse<WardSummary>;
+  latestRisks: LatestWardRisk[];
+};
 
-    if (refresh) {
-      try {
-        const refreshed = await refreshAccessToken(refresh);
-        persistAccessToken(refreshed.access);
+type WardDetailRouteResponse = {
+  ward: WardDetailSummary;
+  riskHistory: PaginatedResponse<RiskScoreRecord>;
+  alerts: PaginatedResponse<AlertRecord>;
+};
 
-        if (refreshed.refresh) {
-          persistRefreshToken(refreshed.refresh);
-        }
+type AlertDetailRouteResponse = {
+  alert: AlertRecord | null;
+  wardDetail: WardDetailSummary | null;
+};
 
-        response = await execute(refreshed.access);
-      } catch {
-        persistAccessToken(null);
-        persistRefreshToken(null);
-        persistPreAuthToken(null);
-        persistEnrollmentToken(null);
-      }
-    }
-  }
+async function requestDashboardRoute<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await fetch(path, {
+    ...init,
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      ...(init.headers ?? {}),
+    },
+  });
 
   if (!response.ok) {
     let detail = "Unable to load dashboard data.";
@@ -150,82 +160,56 @@ async function request<T>(path: string, accessToken: string, init: RequestInit =
   return (await response.json()) as T;
 }
 
-function buildListPath(path: string, params: Record<string, string | number | undefined>) {
+export async function fetchOverviewDataViaBff() {
+  return requestDashboardRoute<OverviewRouteResponse>("/api/dashboard/overview");
+}
+
+export async function fetchWardRiskDataViaBff(params: FetchWardRiskDataParams = {}) {
   const searchParams = new URLSearchParams();
 
-  Object.entries(params).forEach(([key, value]) => {
-    if (value !== undefined && value !== "") {
-      searchParams.set(key, String(value));
-    }
-  });
+  if (params.county) {
+    searchParams.set("county", params.county);
+  }
+  if (params.q) {
+    searchParams.set("q", params.q);
+  }
+  if (params.risk) {
+    searchParams.set("risk", params.risk);
+  }
+  if (params.sub_county) {
+    searchParams.set("sub_county", params.sub_county);
+  }
+  if (params.ordering) {
+    searchParams.set("ordering", params.ordering);
+  }
 
   const query = searchParams.toString();
-  return query ? `${path}?${query}` : path;
+  return requestDashboardRoute<WardsRouteResponse>(`/api/dashboard/wards${query ? `?${query}` : ""}`);
 }
 
-export async function fetchOverviewData(accessToken: string) {
-  const [wards, latestRisks, alerts] = await Promise.all([
-    request<PaginatedResponse<WardSummary>>("/wards/?page_size=100&ordering=name&county=Migori", accessToken),
-    request<LatestWardRisk[]>("/risk-score/latest/", accessToken),
-    request<PaginatedResponse<AlertRecord>>("/alerts/?page_size=100&ordering=-created_at", accessToken),
-  ]);
-
-  return { wards, latestRisks, alerts };
+export async function fetchWardDetailViaBff(wardId: number) {
+  return requestDashboardRoute<WardDetailRouteResponse>(`/api/dashboard/wards/${wardId}`);
 }
 
-export async function fetchWardRiskData(accessToken: string) {
-  const [wards, latestRisks] = await Promise.all([
-    request<PaginatedResponse<WardSummary>>("/wards/?page_size=200&ordering=name", accessToken),
-    request<LatestWardRisk[]>("/risk-score/latest/", accessToken),
-  ]);
-
-  return { wards, latestRisks };
+export async function fetchAlertsDataViaBff() {
+  return requestDashboardRoute<PaginatedResponse<AlertRecord>>("/api/dashboard/alerts");
 }
 
-export async function fetchAlertsData(accessToken: string) {
-  return request<PaginatedResponse<AlertRecord>>("/alerts/?page_size=100&ordering=-created_at", accessToken);
+export async function fetchAlertByIdViaBff(alertId: number) {
+  return requestDashboardRoute<AlertDetailRouteResponse>(`/api/dashboard/alerts/${alertId}`);
 }
 
-export async function fetchAlertsForWard(accessToken: string, wardId: number) {
-  return request<PaginatedResponse<AlertRecord>>(
-    buildListPath("/alerts/", { page_size: 50, ordering: "-created_at", ward_id: wardId }),
-    accessToken,
-  );
-}
-
-export async function fetchAlertById(accessToken: string, alertId: number) {
-  const response = await request<PaginatedResponse<AlertRecord>>(
-    buildListPath("/alerts/", { page_size: 200, ordering: "-created_at" }),
-    accessToken,
-  );
-
-  return response.results.find((alert) => alert.id === alertId) ?? null;
-}
-
-export async function fetchChvData(accessToken: string) {
-  return request<PaginatedResponse<ChvRecord>>("/chvs/?page_size=100&ordering=name", accessToken);
-}
-
-export async function fetchSystemData(accessToken: string) {
-  const [wards, latestRisks, alerts] = await Promise.all([
-    request<PaginatedResponse<WardSummary>>("/wards/?page_size=1", accessToken),
-    request<LatestWardRisk[]>("/risk-score/latest/", accessToken),
-    request<PaginatedResponse<AlertRecord>>("/alerts/?page_size=20&ordering=-created_at", accessToken),
-  ]);
-
-  return { wards, latestRisks, alerts };
-}
-
-export async function fetchRiskHistoryForWard(accessToken: string, wardId: number) {
-  return request<PaginatedResponse<RiskScoreRecord>>(
-    buildListPath("/risk-scores/", { page_size: 20, ordering: "-generated_at", ward_id: wardId }),
-    accessToken,
-  );
-}
-
-export async function triggerAlert(accessToken: string, payload: TriggerAlertRequest) {
-  return request<TriggerAlertResponse>("/alerts/trigger/", accessToken, {
+export async function triggerAlertViaBff(payload: TriggerAlertRequest) {
+  return requestDashboardRoute<TriggerAlertResponse>("/api/dashboard/alerts/trigger", {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export async function fetchChvDataViaBff() {
+  return requestDashboardRoute<PaginatedResponse<ChvRecord>>("/api/dashboard/chvs");
+}
+
+export async function fetchSystemDataViaBff() {
+  return requestDashboardRoute<OverviewRouteResponse>("/api/dashboard/system");
 }

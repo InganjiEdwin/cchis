@@ -132,6 +132,7 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 CORS_ALLOW_ALL_ORIGINS = config("CORS_ALLOW_ALL_ORIGINS", cast=bool, default=False)
+CORS_ALLOW_CREDENTIALS = config("CORS_ALLOW_CREDENTIALS", cast=bool, default=True)
 CORS_ALLOWED_ORIGINS = [
     origin.strip()
     for origin in config("CORS_ALLOWED_ORIGINS", default="http://localhost:3000").split(",")
@@ -260,6 +261,15 @@ PASSWORD_RESET_TOKEN_LIFETIME_MINUTES = config(
     default=60,
 )
 FRONTEND_APP_URL = config("FRONTEND_APP_URL", default="http://localhost:3000").strip().rstrip("/")
+AUTH_REFRESH_COOKIE_NAME = config("AUTH_REFRESH_COOKIE_NAME", default="cchis_refresh").strip()
+AUTH_REFRESH_COOKIE_PATH = config("AUTH_REFRESH_COOKIE_PATH", default="/").strip() or "/"
+AUTH_REFRESH_COOKIE_SECURE = config(
+    "AUTH_REFRESH_COOKIE_SECURE",
+    cast=bool,
+    default=SESSION_COOKIE_SECURE,
+)
+AUTH_REFRESH_COOKIE_HTTPONLY = config("AUTH_REFRESH_COOKIE_HTTPONLY", cast=bool, default=True)
+AUTH_REFRESH_COOKIE_SAMESITE = config("AUTH_REFRESH_COOKIE_SAMESITE", default="Lax").strip() or "Lax"
 PRE_AUTH_TOKEN_LIFETIME_MINUTES = config(
     "PRE_AUTH_TOKEN_LIFETIME_MINUTES",
     cast=int,

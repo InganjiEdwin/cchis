@@ -5,8 +5,8 @@ import { useEffect, useMemo, useState } from "react";
 
 import { useAuth } from "@/components/auth-provider";
 import {
-  fetchWardRiskData,
-  triggerAlert,
+  fetchWardRiskDataViaBff,
+  triggerAlertViaBff,
   type LatestWardRisk,
   type TriggerAlertResponse,
   type WardSummary,
@@ -20,10 +20,22 @@ type TriggerableWard = {
   latestRisk: LatestWardRisk | null;
 };
 
+type FixedWardContext = {
+  id: number;
+  name: string;
+  county: string;
+  subCounty: string;
+  riskLevel: "LOW" | "MEDIUM" | "HIGH" | "UNKNOWN";
+  riskScore: number | null;
+  predictedCases: number | null;
+  updatedAt: string | null;
+};
+
 type TriggerAlertPanelProps = {
   buttonLabel?: string;
   closeLabel?: string;
   buttonClassName?: string;
+  fixedWard?: FixedWardContext | null;
 };
 
 function formatWardOptionLabel(ward: TriggerableWard) {
@@ -49,8 +61,9 @@ export function TriggerAlertPanel({
   buttonLabel = "Trigger Alert",
   closeLabel = "Close Trigger Panel",
   buttonClassName = "button",
+  fixedWard = null,
 }: TriggerAlertPanelProps) {
-  const { accessToken, currentUser } = useAuth();
+  const { currentUser } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
   const [wards, setWards] = useState<TriggerableWard[]>([]);
   const [selectedWardId, setSelectedWardId] = useState("");
@@ -63,11 +76,33 @@ export function TriggerAlertPanel({
   const [submitSuccess, setSubmitSuccess] = useState<TriggerAlertResponse | null>(null);
 
   useEffect(() => {
-    if (!isOpen || !accessToken || !currentUser) {
+    if (!isOpen || !currentUser) {
       return;
     }
 
-    const token = accessToken;
+    if (fixedWard) {
+      setWards([
+        {
+          id: fixedWard.id,
+          name: fixedWard.name,
+          county: fixedWard.county,
+          subCounty: fixedWard.subCounty,
+          latestRisk: {
+            ward_id: fixedWard.id,
+            ward_name: fixedWard.name,
+            risk_level: fixedWard.riskLevel === "UNKNOWN" ? null : fixedWard.riskLevel,
+            risk_score: fixedWard.riskScore,
+            predicted_cases: fixedWard.predictedCases ?? 0,
+            generated_at: fixedWard.updatedAt,
+          },
+        },
+      ]);
+      setSelectedWardId(String(fixedWard.id));
+      setIsLoading(false);
+      setLoadError(null);
+      return;
+    }
+
     const user = currentUser;
     let isActive = true;
 
@@ -76,7 +111,7 @@ export function TriggerAlertPanel({
       setLoadError(null);
 
       try {
-        const data = await fetchWardRiskData(token);
+        const data = await fetchWardRiskDataViaBff();
 
         if (!isActive) {
           return;
@@ -118,7 +153,7 @@ export function TriggerAlertPanel({
     return () => {
       isActive = false;
     };
-  }, [accessToken, currentUser, isOpen]);
+  }, [currentUser, fixedWard, isOpen]);
 
   const selectedWard = useMemo(
     () => wards.find((ward) => ward.id === Number(selectedWardId)) ?? null,
@@ -128,7 +163,7 @@ export function TriggerAlertPanel({
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!accessToken || !selectedWard) {
+    if (!selectedWard) {
       setSubmitError("Select a ward before queuing an alert.");
       return;
     }
@@ -143,7 +178,7 @@ export function TriggerAlertPanel({
     setSubmitSuccess(null);
 
     try {
-      const response = await triggerAlert(accessToken, {
+      const response = await triggerAlertViaBff({
         ward_id: selectedWard.id,
         send_sms: sendSms,
       });
@@ -210,25 +245,32 @@ export function TriggerAlertPanel({
 
           <form className="stack" onSubmit={handleSubmit}>
             <div className="trigger-panel-grid">
-              <label className="field">
-                <span>Ward</span>
-                <select
-                  value={selectedWardId}
-                  onChange={(event) => {
-                    setSelectedWardId(event.target.value);
-                    setSubmitError(null);
-                    setSubmitSuccess(null);
-                  }}
-                  disabled={isLoading || isSubmitting}
-                >
-                  <option value="">Select a ward</option>
-                  {wards.map((ward) => (
-                    <option key={ward.id} value={ward.id}>
-                      {formatWardOptionLabel(ward)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              {fixedWard ? (
+                <label className="field">
+                  <span>Ward</span>
+                  <input value={fixedWard.name} readOnly disabled />
+                </label>
+              ) : (
+                <label className="field">
+                  <span>Ward</span>
+                  <select
+                    value={selectedWardId}
+                    onChange={(event) => {
+                      setSelectedWardId(event.target.value);
+                      setSubmitError(null);
+                      setSubmitSuccess(null);
+                    }}
+                    disabled={isLoading || isSubmitting}
+                  >
+                    <option value="">Select a ward</option>
+                    {wards.map((ward) => (
+                      <option key={ward.id} value={ward.id}>
+                        {formatWardOptionLabel(ward)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
 
               <label className="checkbox-field">
                 <input

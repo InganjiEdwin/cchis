@@ -10,6 +10,7 @@ type DashboardTopbarProps = {
   title: string;
   subtitle: string;
   lastUpdatedLabel?: string;
+  lastUpdatedTone?: "default" | "stale";
   onRefresh?: () => void;
   children?: React.ReactNode;
 };
@@ -18,6 +19,7 @@ export function DashboardTopbar({
   title,
   subtitle,
   lastUpdatedLabel,
+  lastUpdatedTone = "default",
   onRefresh,
   children,
 }: DashboardTopbarProps) {
@@ -77,8 +79,17 @@ export function DashboardTopbar({
 
       <div className="dashboard-topbar-actions">
         {lastUpdatedLabel ? (
-          <div className="dashboard-topbar-status">
-            <span className="dashboard-topbar-status-dot" aria-hidden="true" />
+          <div
+            className={`dashboard-topbar-status${
+              lastUpdatedTone === "stale" ? " dashboard-topbar-status-stale" : ""
+            }`}
+          >
+            <span
+              className={`dashboard-topbar-status-dot${
+                lastUpdatedTone === "stale" ? " dashboard-topbar-status-dot-stale" : ""
+              }`}
+              aria-hidden="true"
+            />
             <span>Last updated: {lastUpdatedLabel}</span>
           </div>
         ) : null}

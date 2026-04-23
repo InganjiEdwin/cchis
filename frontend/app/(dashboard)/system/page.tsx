@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { PageFrame } from "@/components/page-frame";
 import { RoleGate } from "@/components/role-gate";
 import { useAuth } from "@/components/auth-provider";
-import { fetchSystemData } from "@/lib/dashboard";
+import { fetchSystemDataViaBff } from "@/lib/dashboard";
 
 type SystemSnapshot = {
   visibleWards: number;
@@ -39,7 +39,7 @@ function describeFreshness(timestamp: string | null, thresholdMinutes: number) {
 }
 
 export default function SystemPage() {
-  const { accessToken, currentUser } = useAuth();
+  const { currentUser } = useAuth();
   const [snapshot, setSnapshot] = useState<SystemSnapshot | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -49,11 +49,9 @@ export default function SystemPage() {
   }
 
   useEffect(() => {
-    if (!accessToken) {
+    if (!currentUser) {
       return;
     }
-
-    const token = accessToken;
     let isActive = true;
 
     async function loadSystemSnapshot() {
@@ -61,7 +59,7 @@ export default function SystemPage() {
       setError(null);
 
       try {
-        const data = await fetchSystemData(token);
+        const data = await fetchSystemDataViaBff();
 
         if (!isActive) {
           return;
@@ -111,7 +109,7 @@ export default function SystemPage() {
     return () => {
       isActive = false;
     };
-  }, [accessToken]);
+  }, [currentUser]);
 
   const riskFreshness = describeFreshness(snapshot?.latestRiskTimestamp ?? null, 360);
   const alertFreshness = describeFreshness(snapshot?.latestAlertTimestamp ?? null, 15);

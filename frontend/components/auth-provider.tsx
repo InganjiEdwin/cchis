@@ -4,24 +4,24 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 
 import {
   beginTwoFactorEnrollment as beginTwoFactorEnrollmentRequest,
+  beginTwoFactorEnrollmentViaBff,
   confirmTwoFactorEnrollment as confirmTwoFactorEnrollmentRequest,
-  fetchCurrentUser,
+  confirmTwoFactorEnrollmentViaBff,
+  fetchSession,
   login as loginRequest,
-  logout as logoutRequest,
-  persistAccessToken,
+  logoutViaBff,
+  persistCurrentUser,
   persistEnrollmentToken,
   persistPreAuthToken,
-  persistRefreshToken,
-  readAccessToken,
+  readCurrentUser,
   readEnrollmentToken,
   readPreAuthToken,
-  readRefreshToken,
-  refreshAccessToken,
-  updateAppearance as updateAppearanceRequest,
+  updateAppearanceViaBff,
   verifyTwoFactor as verifyTwoFactorRequest,
   type CurrentUser,
   type LoginPayload,
   type ThemePreference,
+  type SessionResponse,
 } from "@/lib/auth";
 
 type PendingTwoFactorState = {
@@ -33,7 +33,6 @@ type PendingEnrollmentState = {
 };
 
 type AuthContextValue = {
-  accessToken: string | null;
   currentUser: CurrentUser | null;
   pendingTwoFactor: PendingTwoFactorState | null;
   pendingEnrollment: PendingEnrollmentState | null;
@@ -85,22 +84,56 @@ function persistThemePreference(themePreference: ThemePreference | null) {
   window.localStorage.setItem(THEME_PREFERENCE_KEY, themePreference);
 }
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+function isEstablishedSession(session: SessionResponse): session is SessionResponse & {
+  authenticated: true;
+  user: CurrentUser;
+} {
+  return Boolean(session.authenticated && session.user);
+}
+
+export function AuthProvider({
+  children,
+  initialSession = null,
+}: {
+  children: React.ReactNode;
+  initialSession?: SessionResponse | null;
+}) {
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(
+    initialSession?.authenticated ? initialSession.user : null,
+  );
   const [pendingTwoFactor, setPendingTwoFactor] = useState<PendingTwoFactorState | null>(null);
   const [pendingEnrollment, setPendingEnrollment] = useState<PendingEnrollmentState | null>(null);
-  const [isHydrating, setIsHydrating] = useState(true);
+  const [isHydrating, setIsHydrating] = useState(initialSession === null);
   const refreshInFlight = useRef<Promise<void> | null>(null);
 
+  async function adoptEstablishedSession() {
+    const session = await fetchSession();
+
+    if (!isEstablishedSession(session)) {
+      throw new Error("We could not establish a full dashboard session. Please sign in again.");
+    }
+
+    setCurrentUser(session.user);
+    persistCurrentUser(session.user);
+    persistPreAuthToken(null);
+    persistEnrollmentToken(null);
+    setPendingTwoFactor(null);
+    setPendingEnrollment(null);
+
+    return session.user;
+  }
+
   useEffect(() => {
-    const access = readAccessToken();
-    const refresh = readRefreshToken();
+    const cachedUser = readCurrentUser();
     const preAuthToken = readPreAuthToken();
     const enrollmentToken = readEnrollmentToken();
 
-    if (access) {
-      setAccessToken(access);
+    if (!initialSession && cachedUser) {
+      setCurrentUser(cachedUser);
+    }
+
+    if (!initialSession && cachedUser) {
+      setIsHydrating(false);
     }
 
     if (preAuthToken) {
@@ -111,41 +144,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setPendingEnrollment({ tempToken: enrollmentToken });
     }
 
-    if (!refresh) {
+    if (initialSession) {
+      if (initialSession.authenticated && initialSession.user) {
+        persistCurrentUser(initialSession.user);
+        setCurrentUser(initialSession.user);
+      } else if (cachedUser) {
+        persistCurrentUser(cachedUser);
+      }
+
       setIsHydrating(false);
       return;
     }
 
     const hydrate = async () => {
       try {
-        const refreshed = await refreshAccessToken(refresh);
-        setAccessToken(refreshed.access);
-        persistAccessToken(refreshed.access);
-        if (refreshed.refresh) {
-          persistRefreshToken(refreshed.refresh);
+        const session = await fetchSession();
+
+        if (!session.authenticated || !session.user) {
+          persistCurrentUser(null);
+          setCurrentUser(null);
+          return;
         }
         persistPreAuthToken(null);
         persistEnrollmentToken(null);
         setPendingTwoFactor(null);
         setPendingEnrollment(null);
-        const user = await fetchCurrentUser(refreshed.access);
-        setCurrentUser(user);
+        setCurrentUser(session.user);
+        persistCurrentUser(session.user);
       } catch {
-        persistAccessToken(null);
-        persistRefreshToken(null);
-        persistPreAuthToken(null);
-        persistEnrollmentToken(null);
-        setAccessToken(null);
+        persistCurrentUser(null);
         setCurrentUser(null);
-        setPendingTwoFactor(null);
-        setPendingEnrollment(null);
       } finally {
         setIsHydrating(false);
       }
     };
 
     refreshInFlight.current = hydrate();
-  }, []);
+  }, [initialSession]);
 
   useEffect(() => {
     if (currentUser?.theme_preference) {
@@ -154,7 +189,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    if (!isHydrating && !readRefreshToken()) {
+    if (!isHydrating) {
       applyThemePreference(null);
       persistThemePreference(null);
     }
@@ -162,19 +197,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo<AuthContextValue>(
     () => ({
-      accessToken,
       currentUser,
       pendingEnrollment,
       pendingTwoFactor,
       isHydrating,
-      isAuthenticated: !!accessToken && !!currentUser,
+      isAuthenticated: !!currentUser,
       async login(payload: LoginPayload) {
         const response = await loginRequest(payload);
 
         if (response.requires_2fa) {
-          persistAccessToken(null);
-          persistRefreshToken(null);
-          setAccessToken(null);
+          persistCurrentUser(null);
           setCurrentUser(null);
           persistPreAuthToken(response.temp_token);
           persistEnrollmentToken(null);
@@ -185,9 +217,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
 
         if (response.requires_2fa_enrollment) {
-          persistAccessToken(null);
-          persistRefreshToken(null);
-          setAccessToken(null);
+          persistCurrentUser(null);
           setCurrentUser(null);
           persistPreAuthToken(null);
           persistEnrollmentToken(response.temp_token);
@@ -200,54 +230,45 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         persistEnrollmentToken(null);
         setPendingTwoFactor(null);
         setPendingEnrollment(null);
-        setAccessToken(response.access);
-        persistAccessToken(response.access);
-        setCurrentUser(response.user);
-        persistRefreshToken(response.refresh);
-        return response.user;
+        return adoptEstablishedSession();
       },
       async verifyTwoFactor(code: string) {
         if (!pendingTwoFactor?.tempToken) {
           throw new Error("Your verification session expired. Please sign in again.");
         }
 
-        const response = await verifyTwoFactorRequest(pendingTwoFactor.tempToken, code);
-        persistPreAuthToken(null);
-        setPendingTwoFactor(null);
-        setAccessToken(response.access);
-        persistAccessToken(response.access);
-        setCurrentUser(response.user);
-        persistRefreshToken(response.refresh);
-        return response.user;
+        await verifyTwoFactorRequest(pendingTwoFactor.tempToken, code);
+        return adoptEstablishedSession();
       },
       async beginTwoFactorEnrollment() {
         const token = pendingEnrollment?.tempToken;
-        return beginTwoFactorEnrollmentRequest(token, token ? undefined : accessToken ?? undefined);
+        if (token) {
+          return beginTwoFactorEnrollmentRequest(token);
+        }
+        return beginTwoFactorEnrollmentViaBff();
       },
       async updateAppearance(themePreference: ThemePreference) {
-        if (!accessToken) {
+        if (!currentUser) {
           throw new Error("Your session expired. Please sign in again.");
         }
 
-        const user = await updateAppearanceRequest(themePreference, accessToken);
+        const user = await updateAppearanceViaBff(themePreference);
         setCurrentUser(user);
+        persistCurrentUser(user);
         return user;
       },
       async confirmTwoFactorEnrollment(code: string) {
         const token = pendingEnrollment?.tempToken;
-        const response = await confirmTwoFactorEnrollmentRequest(code, token, token ? undefined : accessToken ?? undefined);
+        const response = token
+          ? await confirmTwoFactorEnrollmentRequest(code, token)
+          : await confirmTwoFactorEnrollmentViaBff(code);
 
-        if ("access" in response) {
-          persistEnrollmentToken(null);
-          setPendingEnrollment(null);
-          setAccessToken(response.access);
-          persistAccessToken(response.access);
-          setCurrentUser(response.user);
-          persistRefreshToken(response.refresh);
-          return response.user;
+        if (token) {
+          return adoptEstablishedSession();
         }
 
         setCurrentUser(response.user);
+        persistCurrentUser(response.user);
         return response.user;
       },
       clearPendingEnrollment() {
@@ -259,27 +280,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setPendingTwoFactor(null);
       },
       async logout() {
-        const refresh = readRefreshToken();
-
         try {
-          if (refresh && accessToken) {
-            await logoutRequest(refresh, accessToken);
+          if (currentUser) {
+            await logoutViaBff();
           }
         } finally {
-          persistAccessToken(null);
-          persistRefreshToken(null);
+          persistCurrentUser(null);
           persistPreAuthToken(null);
           persistEnrollmentToken(null);
           persistThemePreference(null);
           applyThemePreference(null);
-          setAccessToken(null);
           setCurrentUser(null);
           setPendingTwoFactor(null);
           setPendingEnrollment(null);
         }
       },
     }),
-    [accessToken, currentUser, isHydrating, pendingEnrollment, pendingTwoFactor],
+    [currentUser, isHydrating, pendingEnrollment, pendingTwoFactor],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

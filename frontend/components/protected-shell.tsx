@@ -11,6 +11,7 @@ import { isDashboardRole } from "@/lib/roles";
 export function ProtectedShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const { currentUser, isAuthenticated, isHydrating } = useAuth();
+  const isDashboardUser = currentUser ? isDashboardRole(currentUser.role) : false;
 
   useEffect(() => {
     if (isHydrating) {
@@ -27,10 +28,10 @@ export function ProtectedShell({ children }: { children: React.ReactNode }) {
     }
   }, [currentUser, isAuthenticated, isHydrating, router]);
 
-  if (isHydrating || !currentUser) {
+  if (isHydrating) {
     return (
       <div className="auth-shell">
-      <div className="auth-card">
+        <div className="auth-card">
           <p className="eyebrow">CHIS Dashboard</p>
           <h1 className="title">Restoring your session</h1>
           <p className="subtitle">
@@ -39,6 +40,10 @@ export function ProtectedShell({ children }: { children: React.ReactNode }) {
         </div>
       </div>
     );
+  }
+
+  if (!isAuthenticated || !currentUser || !isDashboardUser) {
+    return null;
   }
 
   return (

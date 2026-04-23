@@ -3,13 +3,43 @@
 import { ArrowLeft, CircleHelp, Eye, EyeOff, LockKeyhole, Shield } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, Suspense, useEffect, useMemo, useState } from "react";
 
 import { confirmPasswordReset, validatePasswordResetToken } from "@/lib/auth";
 
 type ResetState = "checking" | "ready" | "invalid" | "success";
 
 export default function ResetPasswordPage() {
+  return (
+    <Suspense fallback={<ResetPasswordPageFallback />}>
+      <ResetPasswordPageContent />
+    </Suspense>
+  );
+}
+
+function ResetPasswordPageFallback() {
+  return (
+    <div className="reset-screen">
+      <header className="forgot-topbar">
+        <Link href="/login" className="forgot-brand">
+          CHIS
+        </Link>
+      </header>
+
+      <main className="reset-shell">
+        <section className="reset-card">
+          <div className="forgot-copy">
+            <h1 className="reset-title">Create New Password</h1>
+            <p className="reset-subtitle">Preparing your password reset screen...</p>
+          </div>
+          <div className="status reset-status-card">Checking your reset link...</div>
+        </section>
+      </main>
+    </div>
+  );
+}
+
+function ResetPasswordPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const token = useMemo(() => searchParams.get("token")?.trim() ?? "", [searchParams]);

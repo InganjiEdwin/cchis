@@ -42,7 +42,7 @@ class Command(BaseCommand):
                 "SEED_ALLOW_NON_LOCAL=True for an intentional shared-environment demo seed."
             )
 
-        seed_kenya_counties_and_wards(stdout=self.stdout)
+        seed_kenya_counties_and_wards(stdout=self.stdout, county_names=["Migori"])
 
         wards_data = [
             {

@@ -19,11 +19,10 @@ export type CurrentUser = {
 };
 
 export type LoginSuccessResponse = {
-  access: string;
-  refresh: string;
   user: CurrentUser;
   requires_2fa: false;
   requires_2fa_enrollment: false;
+  session_established: true;
 };
 
 export type LoginTwoFactorResponse = {
@@ -47,10 +46,9 @@ export type LoginPayload = {
 };
 
 export type VerifyTwoFactorResponse = {
-  access: string;
-  refresh: string;
   user: CurrentUser;
   requires_2fa: false;
+  session_established: true;
 };
 
 export type BeginTwoFactorEnrollmentResponse = {
@@ -69,20 +67,21 @@ export type ConfirmTwoFactorEnrollmentAuthenticatedResponse = {
 };
 
 export type ConfirmTwoFactorEnrollmentLoginResponse = {
-  access: string;
-  refresh: string;
   user: CurrentUser;
   requires_2fa: false;
   enrollment_completed: true;
+  session_established: true;
 };
 
 export type ConfirmTwoFactorEnrollmentResponse =
   | ConfirmTwoFactorEnrollmentAuthenticatedResponse
   | ConfirmTwoFactorEnrollmentLoginResponse;
 
-export type RefreshResponse = {
-  access: string;
-  refresh?: string;
+export type SessionResponse = {
+  authenticated: boolean;
+  user: CurrentUser | null;
+  access: string | null;
+  session_source: "access" | "refresh" | null;
 };
 
 export type UpdateAppearanceResponse = CurrentUser;
@@ -127,39 +126,43 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "http://localhost:8000/api/v1";
 const REQUEST_TIMEOUT_MS = 10000;
 
-const ACCESS_TOKEN_KEY = "cchis.access_token";
-const REFRESH_TOKEN_KEY = "cchis.refresh_token";
 const PRE_AUTH_TOKEN_KEY = "cchis.pre_auth_token";
 const ENROLLMENT_TOKEN_KEY = "cchis.enrollment_token";
+const CURRENT_USER_KEY = "cchis.current_user";
+
+function readStorageValue(key: string, storage: Storage) {
+  try {
+    return storage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStorageValue(key: string, value: string | null, storage: Storage) {
+  try {
+    if (value) {
+      storage.setItem(key, value);
+      return;
+    }
+
+    storage.removeItem(key);
+  } catch {
+    // Ignore storage write failures in constrained browser contexts.
+  }
+}
 
 export function getApiBaseUrl() {
   return API_BASE_URL;
 }
 
-export function persistAccessToken(token: string | null) {
+export function persistCurrentUser(user: CurrentUser | null) {
   if (typeof window === "undefined") {
     return;
   }
 
-  if (token) {
-    window.sessionStorage.setItem(ACCESS_TOKEN_KEY, token);
-    return;
-  }
-
-  window.sessionStorage.removeItem(ACCESS_TOKEN_KEY);
-}
-
-export function persistRefreshToken(token: string | null) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  if (token) {
-    window.sessionStorage.setItem(REFRESH_TOKEN_KEY, token);
-    return;
-  }
-
-  window.sessionStorage.removeItem(REFRESH_TOKEN_KEY);
+  const serialized = user ? JSON.stringify(user) : null;
+  writeStorageValue(CURRENT_USER_KEY, serialized, window.localStorage);
+  writeStorageValue(CURRENT_USER_KEY, serialized, window.sessionStorage);
 }
 
 export function persistPreAuthToken(token: string | null) {
@@ -167,12 +170,7 @@ export function persistPreAuthToken(token: string | null) {
     return;
   }
 
-  if (token) {
-    window.sessionStorage.setItem(PRE_AUTH_TOKEN_KEY, token);
-    return;
-  }
-
-  window.sessionStorage.removeItem(PRE_AUTH_TOKEN_KEY);
+  writeStorageValue(PRE_AUTH_TOKEN_KEY, token, window.sessionStorage);
 }
 
 export function persistEnrollmentToken(token: string | null) {
@@ -180,28 +178,35 @@ export function persistEnrollmentToken(token: string | null) {
     return;
   }
 
-  if (token) {
-    window.sessionStorage.setItem(ENROLLMENT_TOKEN_KEY, token);
-    return;
-  }
-
-  window.sessionStorage.removeItem(ENROLLMENT_TOKEN_KEY);
+  writeStorageValue(ENROLLMENT_TOKEN_KEY, token, window.sessionStorage);
 }
 
-export function readRefreshToken() {
+export function readCurrentUser() {
   if (typeof window === "undefined") {
     return null;
   }
 
-  return window.sessionStorage.getItem(REFRESH_TOKEN_KEY);
-}
+  const persistedUser = readStorageValue(CURRENT_USER_KEY, window.localStorage);
+  const sessionUser = readStorageValue(CURRENT_USER_KEY, window.sessionStorage);
+  const source = persistedUser ?? sessionUser;
 
-export function readAccessToken() {
-  if (typeof window === "undefined") {
+  if (!source) {
     return null;
   }
 
-  return window.sessionStorage.getItem(ACCESS_TOKEN_KEY);
+  try {
+    const parsed = JSON.parse(source) as CurrentUser;
+
+    if (persistedUser && !sessionUser) {
+      writeStorageValue(CURRENT_USER_KEY, persistedUser, window.sessionStorage);
+    }
+
+    return parsed;
+  } catch {
+    writeStorageValue(CURRENT_USER_KEY, null, window.localStorage);
+    writeStorageValue(CURRENT_USER_KEY, null, window.sessionStorage);
+    return null;
+  }
 }
 
 export function readPreAuthToken() {
@@ -209,7 +214,7 @@ export function readPreAuthToken() {
     return null;
   }
 
-  return window.sessionStorage.getItem(PRE_AUTH_TOKEN_KEY);
+  return readStorageValue(PRE_AUTH_TOKEN_KEY, window.sessionStorage);
 }
 
 export function readEnrollmentToken() {
@@ -217,10 +222,10 @@ export function readEnrollmentToken() {
     return null;
   }
 
-  return window.sessionStorage.getItem(ENROLLMENT_TOKEN_KEY);
+  return readStorageValue(ENROLLMENT_TOKEN_KEY, window.sessionStorage);
 }
 
-async function request<T>(path: string, init: RequestInit = {}, accessToken?: string): Promise<T> {
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -229,16 +234,61 @@ async function request<T>(path: string, init: RequestInit = {}, accessToken?: st
     headers.set("Content-Type", "application/json");
   }
 
-  if (accessToken) {
-    headers.set("Authorization", `Bearer ${accessToken}`);
-  }
-
   let response: Response;
 
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
       ...init,
       headers,
+      credentials: "include",
+      signal: controller.signal,
+    });
+  } catch (error) {
+    window.clearTimeout(timeoutId);
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("Request timed out. Please try again.");
+    }
+    throw error;
+  }
+
+  window.clearTimeout(timeoutId);
+
+  if (!response.ok) {
+    let detail = "Request failed.";
+
+    try {
+      const data = (await response.json()) as { detail?: string };
+      detail = data.detail ?? detail;
+    } catch {
+      // Ignore parse failures and keep the generic message.
+    }
+
+    throw new Error(detail);
+  }
+
+  if (response.status === 204 || response.status === 205) {
+    return undefined as T;
+  }
+
+  return (await response.json()) as T;
+}
+
+async function requestBff<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers);
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  if (!headers.has("Content-Type") && init.body) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  let response: Response;
+
+  try {
+    response = await fetch(path, {
+      ...init,
+      headers,
+      credentials: "include",
       signal: controller.signal,
     });
   } catch (error) {
@@ -272,32 +322,21 @@ async function request<T>(path: string, init: RequestInit = {}, accessToken?: st
 }
 
 export async function login(payload: LoginPayload) {
-  return request<LoginResponse>("/auth/login/", {
+  return requestBff<LoginResponse>("/api/session/login", {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
-export async function refreshAccessToken(refresh: string) {
-  return request<RefreshResponse>("/auth/refresh/", {
-    method: "POST",
-    body: JSON.stringify({ refresh }),
+export async function fetchSession() {
+  return requestBff<SessionResponse>("/api/session", { method: "GET" });
+}
+
+export async function updateAppearanceViaBff(themePreference: ThemePreference) {
+  return requestBff<UpdateAppearanceResponse>("/api/session/me", {
+    method: "PATCH",
+    body: JSON.stringify({ theme_preference: themePreference }),
   });
-}
-
-export async function fetchCurrentUser(accessToken: string) {
-  return request<CurrentUser>("/auth/me/", { method: "GET" }, accessToken);
-}
-
-export async function updateAppearance(themePreference: ThemePreference, accessToken: string) {
-  return request<UpdateAppearanceResponse>(
-    "/auth/me/",
-    {
-      method: "PATCH",
-      body: JSON.stringify({ theme_preference: themePreference }),
-    },
-    accessToken,
-  );
 }
 
 export async function requestPasswordReset(identifier: string) {
@@ -334,42 +373,38 @@ export async function submitAccessRequest(payload: AccessRequestPayload) {
   });
 }
 
-export async function logout(refresh: string, accessToken: string) {
-  return request<void>(
-    "/auth/logout/",
-    {
-      method: "POST",
-      body: JSON.stringify({ refresh }),
-    },
-    accessToken,
-  );
+export async function logoutViaBff() {
+  return requestBff<void>("/api/session/logout", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }
 
 export async function verifyTwoFactor(token: string, code: string) {
-  return request<VerifyTwoFactorResponse>("/auth/verify-2fa/", {
+  return requestBff<VerifyTwoFactorResponse>("/api/session/verify-2fa", {
     method: "POST",
     body: JSON.stringify({ token, code }),
   });
 }
 
-export async function beginTwoFactorEnrollment(token?: string, accessToken?: string) {
-  return request<BeginTwoFactorEnrollmentResponse>(
-    "/auth/2fa/setup/",
-    {
-      method: "POST",
-      body: JSON.stringify(token ? { token } : {}),
-    },
-    accessToken,
-  );
+export async function beginTwoFactorEnrollment(token?: string) {
+  return requestBff<BeginTwoFactorEnrollmentResponse>("/api/session/2fa/setup", {
+    method: "POST",
+    body: JSON.stringify(token ? { token } : {}),
+  });
 }
 
-export async function confirmTwoFactorEnrollment(code: string, token?: string, accessToken?: string) {
-  return request<ConfirmTwoFactorEnrollmentResponse>(
-    "/auth/2fa/setup/confirm/",
-    {
-      method: "POST",
-      body: JSON.stringify(token ? { token, code } : { code }),
-    },
-    accessToken,
-  );
+export async function beginTwoFactorEnrollmentViaBff() {
+  return beginTwoFactorEnrollment();
+}
+
+export async function confirmTwoFactorEnrollment(code: string, token?: string) {
+  return requestBff<ConfirmTwoFactorEnrollmentResponse>("/api/session/2fa/setup/confirm", {
+    method: "POST",
+    body: JSON.stringify(token ? { token, code } : { code }),
+  });
+}
+
+export async function confirmTwoFactorEnrollmentViaBff(code: string) {
+  return confirmTwoFactorEnrollment(code);
 }

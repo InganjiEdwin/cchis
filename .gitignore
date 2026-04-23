@@ -6,6 +6,6 @@ __pycache__/
 *.pyc
 db.sqlite3
 repomix-output.*
-CCHIS Proposal.pdf
 node_modules/
 .next/
+/docs/
