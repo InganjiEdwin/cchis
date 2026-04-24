@@ -25,56 +25,52 @@ function getInitials(name: string) {
 function buildCapabilityCopy(role: string) {
   if (role === "ADMIN") {
     return {
-      heading: "Your role grants full administrative control over the Migori regional intelligence node.",
+      heading: "This section summarizes role-facing dashboard access in broad terms only.",
       items: [
-        "View real-time alerts and climate-health trend triggers.",
-        "Manage CHVs, assign monitors, and audit community-health volunteers.",
-        "Trigger protocols and adjust threshold rules for operational response.",
-        "Modify regional thresholds and coordination settings.",
+        "View alert, ward, CHV, facility, and system summary pages available to your role.",
+        "Access on-page actions only where a real route is exposed in the dashboard.",
+        "Use linked pages to review recorded or calculated operational context.",
+        "Treat this card as role summary copy, not a full permission registry.",
       ],
-      trust: "Trust level: Tier 4 Administrator",
-      approvals: 12,
+      note: "Role summary copy only",
     };
   }
 
   if (role === "ANALYST") {
     return {
-      heading: "Your role focuses on analysis, quality review, and coordination support.",
+      heading: "This section summarizes role-facing dashboard access in broad terms only.",
       items: [
-        "Review real-time alerts and risk model output.",
-        "Export reports and investigate regional readiness trends.",
-        "Support escalation reviews and audit event trails.",
-        "Recommend protocol changes for admin approval.",
+        "View alert, ward, CHV, facility, and system summary pages available to your role.",
+        "Access on-page actions only where a real route is exposed in the dashboard.",
+        "Use linked pages to review recorded or calculated operational context.",
+        "Treat this card as role summary copy, not a full permission registry.",
       ],
-      trust: "Trust level: Tier 3 Analyst",
-      approvals: 4,
+      note: "Role summary copy only",
     };
   }
 
   if (role === "SUPERVISOR") {
     return {
-      heading: "Your role oversees sub-county coordination and operational readiness.",
+      heading: "This section summarizes role-facing dashboard access in broad terms only.",
       items: [
-        "Monitor visible alerts and local field conditions.",
-        "Coordinate CHV activity and ward-level follow-up.",
-        "Review readiness gaps and dispatch recommendations.",
-        "Escalate critical incidents to county administrators.",
+        "View alert, ward, CHV, facility, and system summary pages available to your role.",
+        "Access on-page actions only where a real route is exposed in the dashboard.",
+        "Use linked pages to review recorded or calculated operational context.",
+        "Treat this card as role summary copy, not a full permission registry.",
       ],
-      trust: "Trust level: Tier 2 Supervisor",
-      approvals: 3,
+      note: "Role summary copy only",
     };
   }
 
   return {
-    heading: "Your role provides field visibility and operational follow-up.",
+    heading: "This section summarizes role-facing dashboard access in broad terms only.",
     items: [
-      "View assigned alerts and local readiness signals.",
-      "Submit field updates and community observations.",
-      "Receive dispatch and escalation instructions.",
-      "Support follow-up workflows from the dashboard.",
+      "View alert, ward, CHV, facility, and system summary pages available to your role.",
+      "Access on-page actions only where a real route is exposed in the dashboard.",
+      "Use linked pages to review recorded or calculated operational context.",
+      "Treat this card as role summary copy, not a full permission registry.",
     ],
-    trust: "Trust level: Tier 1 Field Operator",
-    approvals: 1,
+    note: "Role summary copy only",
   };
 }
 
@@ -356,7 +352,7 @@ export default function ProfilePage() {
 
         <Card className="rounded-[2rem] px-5 py-6">
           <div>
-            <h2 className="text-[1.25rem] font-semibold tracking-[-0.04em] text-panel-strong">Capabilities</h2>
+            <h2 className="text-[1.25rem] font-semibold tracking-[-0.04em] text-panel-strong">Role Summary</h2>
             <p className="mt-2 text-sm leading-6 text-panel-muted">{capabilityCopy.heading}</p>
           </div>
 
@@ -376,7 +372,7 @@ export default function ProfilePage() {
               <span className="inline-flex size-8 items-center justify-center rounded-xl bg-[color-mix(in_srgb,var(--brand)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]">
                 <ShieldCheck className="size-4" aria-hidden="true" />
               </span>
-              <span className="text-sm font-medium text-panel-copy">{capabilityCopy.trust}</span>
+              <span className="text-sm font-medium text-panel-copy">{capabilityCopy.note}</span>
             </div>
           </div>
         </Card>
