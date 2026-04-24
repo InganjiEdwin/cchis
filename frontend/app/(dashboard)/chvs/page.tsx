@@ -406,10 +406,10 @@ export default function ChvsPage() {
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h2 className="text-[clamp(1.6rem,1rem+1vw,2.35rem)] font-semibold leading-tight text-panel-strong">
-                  CHV Coverage &amp; Deployment
+                  CHV Ward Coverage
                 </h2>
                 <p className="mt-2 text-sm text-panel-muted">
-                  Backend-backed Migori ward geometry with current risk, CHV, alert, and facility counts
+                  Backend-backed Migori ward geometry with visible risk, CHV, alert, and facility counts
                 </p>
                 {wardMap ? (
                   <p className="mt-2 text-xs text-panel-subtle">
@@ -444,7 +444,7 @@ export default function ChvsPage() {
                   )}
                   onClick={() => setFocusFilter("HIGH_RISK")}
                 >
-                  High Risk Focus
+                  High-Risk Filter
                 </button>
               </div>
             </div>
@@ -475,13 +475,13 @@ export default function ChvsPage() {
                         <h3 className="text-lg font-semibold text-panel-strong">{selectedMapWard.properties.name}</h3>
                         <p className="mt-1 text-sm text-panel-muted">
                           {selectedMapWard.properties.has_backend_ward
-                            ? `${selectedMapWard.properties.active_chv_count}/${selectedMapWard.properties.chv_count} active CHVs`
+                            ? `${selectedMapWard.properties.active_chv_count}/${selectedMapWard.properties.chv_count} active CHVs in visible records`
                             : "Geometry present but no backend ward record yet"}
                         </p>
                       </div>
                       <div className="grid gap-3 text-sm text-panel-copy">
                         <div className="flex items-center justify-between gap-3">
-                          <span>Risk state</span>
+                          <span>Recorded risk</span>
                           {selectedMapWard.properties.risk_level ? (
                             <StatusBadge tone={riskTone(resolveRiskZone(selectedMapWard.properties.risk_level))}>
                               {toRiskZoneLabel(resolveRiskZone(selectedMapWard.properties.risk_level))}
@@ -511,21 +511,21 @@ export default function ChvsPage() {
                       <div className="space-y-3 border-t border-panel-table-wrap pt-4 text-sm text-panel-copy">
                         <div className="flex items-center gap-2">
                           <span className="size-3 rounded-full bg-brand" />
-                          <span>Backend-matched ward</span>
+                          <span>Backend-matched ward row</span>
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="size-3 rounded-full bg-[color:var(--warning)]" />
-                          <span>Watch / medium risk</span>
+                          <span>Watch / medium recorded risk</span>
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="size-3 rounded-full bg-[color:var(--danger)]" />
-                          <span>High-risk ward</span>
+                          <span>High recorded risk ward</span>
                         </div>
                       </div>
                     </div>
                   ) : (
                     <p className="mt-4 text-sm text-panel-muted">
-                      Select a ward on the map to inspect its backend-backed coverage summary.
+                      Select a ward on the map to inspect its visible backend-backed counts.
                     </p>
                   )}
                 </Card>
