@@ -279,7 +279,7 @@ export default function AlertDetailPage() {
           <div className="space-y-5">
             <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <h2 className="text-2xl font-semibold text-panel-strong">Alert Overview</h2>
+                <h2 className="text-2xl font-semibold text-panel-strong">Alert Record Summary</h2>
                 <span className="inline-flex rounded-full border border-panel-table-wrap px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-panel-subtle">
                   ID: {alert.external_id || `${alert.id}-A`}
                 </span>
@@ -287,7 +287,7 @@ export default function AlertDetailPage() {
 
               <div className="mt-6 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
                 <div className="space-y-2">
-                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Target ward</span>
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Linked ward</span>
                   <strong className="block text-base text-panel-strong">{alert.ward_name}</strong>
                 </div>
                 <div className="space-y-2">
@@ -323,7 +323,7 @@ export default function AlertDetailPage() {
             </Card>
 
             <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
-              <h2 className="text-2xl font-semibold text-panel-strong">Current State</h2>
+              <h2 className="text-2xl font-semibold text-panel-strong">Recorded State</h2>
               <div className="mt-5 flex flex-col gap-3">
                 {currentState.map((item) => (
                   <div
@@ -350,7 +350,7 @@ export default function AlertDetailPage() {
                 <div>
                   <h2 className="text-2xl font-semibold text-panel-strong">Alert Record Timeline</h2>
                   <p className="mt-2 text-sm text-panel-muted">
-                    Record-based lifecycle from creation through the backend delivery state changes visible on this record.
+                    Recorded timeline for this alert, from creation through the delivery-state changes visible on this record.
                   </p>
                 </div>
                 <StatusBadge
@@ -363,7 +363,7 @@ export default function AlertDetailPage() {
 
               <div className="mt-6 grid gap-4 md:grid-cols-4">
                 <Card className="rounded-[1.4rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-4 shadow-none">
-                  <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Recipient</p>
+                  <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Recipient count</p>
                   <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-panel-strong">
                     {delivery?.recipient_count ?? 1}
                   </p>
@@ -390,8 +390,8 @@ export default function AlertDetailPage() {
                 {[
                   { value: "all", label: "All" },
                   { value: "delivery", label: "Delivery" },
-                  { value: "responses", label: "Responses" },
-                  { value: "system", label: "System Events" },
+                  { value: "responses", label: "Review items" },
+                  { value: "system", label: "System records" },
                 ].map((filter) => (
                   <button
                     key={filter.value}
@@ -481,7 +481,7 @@ export default function AlertDetailPage() {
 
               <div className="mt-5 space-y-5">
                 <div className="space-y-1">
-                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Derived review posture</span>
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Review posture</span>
                   <strong className="block text-base text-panel-strong">
                     {riskContext?.trend_label ?? "Monitoring"}
                   </strong>
@@ -518,11 +518,11 @@ export default function AlertDetailPage() {
               <dl className="mt-6 space-y-4 border-t border-panel-table-wrap pt-5 text-sm">
                 {[
                   ["Channel", delivery?.channel_label ?? alert.channel],
-                  ["Audience label", delivery?.audience_label ?? "Recorded recipient"],
+                  ["Audience", delivery?.audience_label ?? "Recorded recipient"],
                   ["Recipient", alert.recipient],
                   ["Attempt count", `${alert.attempt_count} of ${alert.max_attempts}`],
                   ["External ID", alert.external_id || "No external ID recorded"],
-                  ["Failure reason", alert.error_message || "No active failure reason"],
+                  ["Failure reason", alert.error_message || "No failure reason recorded"],
                 ].map(([label, value]) => (
                   <div key={label} className="flex items-start justify-between gap-4">
                     <dt className="text-panel-muted">{label}</dt>

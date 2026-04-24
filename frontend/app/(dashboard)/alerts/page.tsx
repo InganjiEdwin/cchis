@@ -555,7 +555,7 @@ export default function AlertsPage() {
               <strong className="block text-base text-panel-strong">
                 {mostCriticalAlert
                   ? `${formatAlertPublicId(mostCriticalAlert.id)} - ${mostCriticalAlert.ward_name}`
-                  : "No priority alert in current scope."}
+                  : "No priority alert record in the current filter."}
               </strong>
               <p className="mt-2 text-sm text-panel-muted">
                 {mostCriticalAlert
@@ -568,7 +568,7 @@ export default function AlertsPage() {
                 href={`/alerts/${mostCriticalAlert.id}`}
                 className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--dashboard-icon-button-ink-hover)]"
               >
-                Review Alert Detail
+                Open Alert Detail
                 <ChevronRight className="size-4" aria-hidden="true" />
               </Link>
             ) : null}
@@ -836,7 +836,7 @@ export default function AlertsPage() {
         </Card>
 
         <Card className="rounded-[2rem] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--brand)_10%,var(--panel)),var(--panel))] px-5 py-5">
-          <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Current review target</span>
+          <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Current record to review</span>
           <strong className="mt-3 block text-2xl leading-tight text-panel-strong">
             {mostCriticalAlert
               ? `${formatAlertPublicId(mostCriticalAlert.id)} in ${mostCriticalAlert.ward_name}`
