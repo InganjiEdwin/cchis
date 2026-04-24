@@ -241,6 +241,18 @@ type FacilityDetailRouteResponse = {
   facility: FacilityRecord | null;
 };
 
+type SystemRouteResponse = {
+  wards: PaginatedResponse<WardSummary>;
+  latestRisks: LatestWardRisk[];
+  alerts: PaginatedResponse<AlertRecord>;
+  queuedAlerts: PaginatedResponse<AlertRecord>;
+  retryAlerts: PaginatedResponse<AlertRecord>;
+  failedAlerts: PaginatedResponse<AlertRecord>;
+  deliveredAlerts: PaginatedResponse<AlertRecord>;
+  facilities: PaginatedResponse<FacilityRecord>;
+  chvOperations: ChvOperationsRecord[];
+};
+
 async function requestDashboardRoute<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -338,5 +350,5 @@ export async function fetchTopbarDataViaBff() {
 }
 
 export async function fetchSystemDataViaBff() {
-  return requestDashboardRoute<OverviewRouteResponse>("/api/dashboard/system");
+  return requestDashboardRoute<SystemRouteResponse>("/api/dashboard/system");
 }

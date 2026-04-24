@@ -8,7 +8,6 @@ import {
   DatabaseZap,
   Gauge,
   Logs,
-  MapPinned,
   PauseCircle,
   PlayCircle,
   RefreshCcw,
@@ -106,6 +105,30 @@ function describeFreshness(timestamp: string | null, thresholdMinutes: number) {
   };
 }
 
+function toPipelineState(tone: "success" | "warning" | "danger" | "default") {
+  if (tone === "success") {
+    return "Healthy";
+  }
+  if (tone === "warning") {
+    return "Watching";
+  }
+  if (tone === "danger") {
+    return "Attention needed";
+  }
+  return "Pending";
+}
+
+type SystemEvent = {
+  time: string | null;
+  level: "INFO" | "WARN" | "ERROR";
+  message: string;
+  tone: "success" | "warning" | "danger";
+};
+
+function makeEvent(event: SystemEvent) {
+  return event;
+}
+
 export default function SystemPage() {
   const { currentUser } = useAuth();
   const systemQuery = useSystemQuery({ enabled: Boolean(currentUser) });
@@ -116,146 +139,312 @@ export default function SystemPage() {
 
   const riskFreshness = describeFreshness(snapshot?.latestRiskTimestamp ?? null, 360);
   const alertFreshness = describeFreshness(snapshot?.latestAlertTimestamp ?? null, 15);
+  const facilityFreshness = describeFreshness(snapshot?.latestFacilityTimestamp ?? null, 1440);
+  const chvFreshness = describeFreshness(snapshot?.latestChvTimestamp ?? null, 180);
   const lastUpdatedLabel = isRefreshing
     ? "Refreshing..."
-    : formatRelativeLabel(snapshot?.latestAlertTimestamp ?? snapshot?.latestRiskTimestamp ?? null);
+    : formatRelativeLabel(
+        snapshot?.latestAlertTimestamp ??
+          snapshot?.latestChvTimestamp ??
+          snapshot?.latestRiskTimestamp ??
+          snapshot?.latestFacilityTimestamp ??
+          null,
+      );
 
+  const alertBacklog = (snapshot?.queuedAlerts ?? 0) + (snapshot?.retryPendingAlerts ?? 0);
   const statusCards = useMemo(
     () => [
       {
-        title: "API Engine",
-        value: "Healthy",
-        detail: "99.98% uptime (24h)",
-        tone: "success" as const,
-        icon: <ShieldCheck className="size-5" aria-hidden="true" />,
-      },
-      {
-        title: "Data Pipeline",
-        value: "Active",
-        detail: snapshot?.latestRiskTimestamp
-          ? `Last run ${formatRelativeLabel(snapshot.latestRiskTimestamp ?? null)}`
-          : "Sync pending",
+        title: "Wards In Scope",
+        value: isLoading ? "..." : `${snapshot?.visibleWards ?? 0}`,
+        detail: `${snapshot?.wardsWithFreshRisk ?? 0} wards with current risk timestamps`,
         tone: "info" as const,
-        icon: <DatabaseZap className="size-5" aria-hidden="true" />,
+        icon: <CloudRain className="size-5" aria-hidden="true" />,
       },
       {
-        title: "Alert Engine",
-        value: "Monitoring",
-        detail: `${isLoading ? "..." : snapshot?.visibleAlerts ?? 0} active visible alerts`,
-        tone: "warning" as const,
+        title: "High-Risk Wards",
+        value: isLoading ? "..." : `${snapshot?.highRiskWards ?? 0}`,
+        detail: "Derived from latest ward risk classifications",
+        tone: (snapshot?.highRiskWards ?? 0) > 0 ? ("warning" as const) : ("success" as const),
         icon: <Siren className="size-5" aria-hidden="true" />,
       },
       {
-        title: "Delivery Rate",
-        value: "94.2%",
-        detail: "SMS/USSD success",
-        tone: "success" as const,
+        title: "Alert Backlog",
+        value: isLoading ? "..." : `${alertBacklog}`,
+        detail: `${snapshot?.failedAlerts ?? 0} failed deliveries in current scope`,
+        tone: (snapshot?.failedAlerts ?? 0) > 0 ? ("danger" as const) : alertBacklog > 0 ? ("warning" as const) : ("success" as const),
         icon: <BellRing className="size-5" aria-hidden="true" />,
       },
+      {
+        title: "CHV Sync Health",
+        value: isLoading ? "..." : `${snapshot?.onlineChvs ?? 0}/${snapshot?.activeChvs ?? 0}`,
+        detail: `${snapshot?.delayedChvs ?? 0} delayed, ${snapshot?.offlineChvs ?? 0} offline`,
+        tone: (snapshot?.offlineChvs ?? 0) > 0 ? ("warning" as const) : ("success" as const),
+        icon: <ShieldCheck className="size-5" aria-hidden="true" />,
+      },
     ],
-    [isLoading, snapshot?.latestRiskTimestamp, snapshot?.visibleAlerts],
+    [
+      alertBacklog,
+      isLoading,
+      snapshot?.activeChvs,
+      snapshot?.delayedChvs,
+      snapshot?.failedAlerts,
+      snapshot?.highRiskWards,
+      snapshot?.offlineChvs,
+      snapshot?.onlineChvs,
+      snapshot?.visibleWards,
+      snapshot?.wardsWithFreshRisk,
+    ],
   );
 
   const freshnessFeeds = useMemo(
     () => [
       {
-        title: "Rainfall Ingestion (CHIRPS)",
-        subtitle: "Source: NOAA satellite data",
+        title: "Risk Scoring Feed",
+        subtitle: `${snapshot?.wardsWithFreshRisk ?? 0}/${snapshot?.visibleWards ?? 0} wards currently expose generated risk timestamps`,
         status: riskFreshness.label,
         detail: riskFreshness.detail,
         tone: riskFreshness.tone,
         icon: <CloudRain className="size-4" aria-hidden="true" />,
       },
       {
-        title: "Health Facility Reports (DHIS2)",
-        subtitle: "Sync failure at 04:00 AM",
-        status: "6h 12m ago",
-        detail: "Stale data",
-        tone: "danger" as const,
-        icon: <ShieldAlert className="size-4" aria-hidden="true" />,
+        title: "Alert Delivery Feed",
+        subtitle: `${snapshot?.visibleAlerts ?? 0} alerts visible, ${alertBacklog} pending dispatch or retry`,
+        status: alertFreshness.label,
+        detail: alertFreshness.detail,
+        tone: alertFreshness.tone,
+        icon: <BellRing className="size-4" aria-hidden="true" />,
       },
       {
-        title: "CHV Daily Screenings",
-        subtitle: "Live USSD stream",
-        status: snapshot?.latestAlertTimestamp ? formatRelativeLabel(snapshot.latestAlertTimestamp) : "Real-time",
-        detail: "Syncing",
-        tone: alertFreshness.isStale ? "warning" as const : "success" as const,
+        title: "Facility Registry",
+        subtitle: `${snapshot?.visibleFacilities ?? 0} facilities in visible scope`,
+        status: facilityFreshness.label,
+        detail: facilityFreshness.detail,
+        tone: facilityFreshness.tone,
+        icon: <DatabaseZap className="size-4" aria-hidden="true" />,
+      },
+      {
+        title: "CHV Operations Feed",
+        subtitle: `${snapshot?.syncPayloads24h ?? 0} sync payloads, ${snapshot?.ussdSessions24h ?? 0} USSD sessions in the last 24h`,
+        status: chvFreshness.label,
+        detail: chvFreshness.detail,
+        tone: chvFreshness.tone,
         icon: <Waves className="size-4" aria-hidden="true" />,
       },
     ],
-    [alertFreshness.isStale, riskFreshness.detail, riskFreshness.label, riskFreshness.tone, snapshot?.latestAlertTimestamp],
+    [
+      alertBacklog,
+      alertFreshness.detail,
+      alertFreshness.label,
+      alertFreshness.tone,
+      chvFreshness.detail,
+      chvFreshness.label,
+      chvFreshness.tone,
+      facilityFreshness.detail,
+      facilityFreshness.label,
+      facilityFreshness.tone,
+      riskFreshness.detail,
+      riskFreshness.label,
+      riskFreshness.tone,
+      snapshot?.syncPayloads24h,
+      snapshot?.ussdSessions24h,
+      snapshot?.visibleAlerts,
+      snapshot?.visibleFacilities,
+      snapshot?.visibleWards,
+      snapshot?.wardsWithFreshRisk,
+    ],
   );
 
-  const pipelines = [
-    { name: "Daily Weather ETL", state: "Running", tone: "success" as const },
-    { name: "Monthly Malaria Profile", state: "Idle", tone: "default" as const },
-    { name: "Risk Scoring Engine", state: "Failed (Retrying)", tone: "danger" as const },
-    { name: "Alert Trigger Job", state: "Success", tone: "success" as const },
-  ];
+  const pipelines = useMemo(
+    () => [
+      {
+        name: "Risk Scoring Coverage",
+        state:
+          snapshot && snapshot.visibleWards > 0
+            ? `${snapshot.wardsWithFreshRisk}/${snapshot.visibleWards} wards have fresh model output`
+            : "Awaiting ward risk output",
+        tone:
+          !snapshot || snapshot.visibleWards === 0
+            ? ("default" as const)
+            : snapshot.wardsWithFreshRisk === snapshot.visibleWards && !riskFreshness.isStale
+              ? ("success" as const)
+              : riskFreshness.isStale
+                ? ("warning" as const)
+                : ("default" as const),
+      },
+      {
+        name: "Alert Delivery Queue",
+        state: `${snapshot?.queuedAlerts ?? 0} queued, ${snapshot?.retryPendingAlerts ?? 0} retrying, ${snapshot?.failedAlerts ?? 0} failed`,
+        tone:
+          (snapshot?.failedAlerts ?? 0) > 0
+            ? ("danger" as const)
+            : alertBacklog > 0
+              ? ("warning" as const)
+              : ("success" as const),
+      },
+      {
+        name: "CHV Sync Ingest",
+        state: `${snapshot?.onlineChvs ?? 0} online, ${snapshot?.delayedChvs ?? 0} delayed, ${snapshot?.offlineChvs ?? 0} offline`,
+        tone:
+          (snapshot?.offlineChvs ?? 0) > 0
+            ? ("warning" as const)
+            : (snapshot?.onlineChvs ?? 0) > 0
+              ? ("success" as const)
+              : ("default" as const),
+      },
+      {
+        name: "Facility Registry Freshness",
+        state: facilityFreshness.label,
+        tone:
+          facilityFreshness.tone === "danger"
+            ? ("danger" as const)
+            : facilityFreshness.tone === "warning"
+              ? ("warning" as const)
+              : ("success" as const),
+      },
+    ],
+    [
+      alertBacklog,
+      alertFreshness.isStale,
+      facilityFreshness.label,
+      facilityFreshness.tone,
+      riskFreshness.isStale,
+      snapshot,
+    ],
+  );
 
-  const integrations = [
-    {
-      group: "SMS Gateway",
-      name: "Saf-Tel Connect",
-      note: "Latency: 340ms",
-      tone: "success" as const,
-      icon: <BellRing className="size-4" aria-hidden="true" />,
-    },
-    {
-      group: "DHIS2 Sync",
-      name: "MOH instance",
-      note: "Auth error",
-      tone: "danger" as const,
-      icon: <DatabaseZap className="size-4" aria-hidden="true" />,
-    },
-    {
-      group: "Weather API",
-      name: "OpenWeather Map",
-      note: "Status: OK",
-      tone: "success" as const,
-      icon: <CloudRain className="size-4" aria-hidden="true" />,
-    },
-    {
-      group: "USSD Hub",
-      name: "Africa's Talking",
-      note: "Channel: Active",
-      tone: "success" as const,
-      icon: <Waypoints className="size-4" aria-hidden="true" />,
-    },
-  ];
+  const observedChannels = useMemo(
+    () => [
+      {
+        group: "Alert delivery backends",
+        name:
+          snapshot?.deliveryBackends.length
+            ? snapshot.deliveryBackends
+                .slice(0, 2)
+                .map((item) => item.name)
+                .join(", ")
+            : "No recent alert backend observed",
+        note: snapshot?.deliveryBackends.length
+          ? `${snapshot.deliveryBackends.reduce((sum, item) => sum + item.count, 0)} recent alerts sampled through backend-owned delivery metadata`
+          : "Awaiting recent alert activity",
+        tone: snapshot?.deliveryBackends.length ? ("success" as const) : ("default" as const),
+        icon: <Waypoints className="size-4" aria-hidden="true" />,
+      },
+      {
+        group: "CHV submissions (24h)",
+        name: `${snapshot?.syncPayloads24h ?? 0} sync payloads`,
+        note: `${snapshot?.triageSessions24h ?? 0} triage sessions and ${snapshot?.referrals24h ?? 0} referrals`,
+        tone: (snapshot?.syncPayloads24h ?? 0) > 0 ? ("success" as const) : ("default" as const),
+        icon: <Waves className="size-4" aria-hidden="true" />,
+      },
+      {
+        group: "USSD traffic (24h)",
+        name: `${snapshot?.ussdSessions24h ?? 0} sessions`,
+        note: "Derived from backend USSD session logs",
+        tone: (snapshot?.ussdSessions24h ?? 0) > 0 ? ("success" as const) : ("default" as const),
+        icon: <BellRing className="size-4" aria-hidden="true" />,
+      },
+      {
+        group: "Facility registry",
+        name: `${snapshot?.visibleFacilities ?? 0} facility records`,
+        note: facilityFreshness.detail,
+        tone:
+          facilityFreshness.tone === "danger"
+            ? ("danger" as const)
+            : facilityFreshness.tone === "warning"
+              ? ("warning" as const)
+              : ("success" as const),
+        icon: <DatabaseZap className="size-4" aria-hidden="true" />,
+      },
+    ],
+    [
+      facilityFreshness.detail,
+      facilityFreshness.tone,
+      snapshot?.deliveryBackends,
+      snapshot?.referrals24h,
+      snapshot?.syncPayloads24h,
+      snapshot?.triageSessions24h,
+      snapshot?.ussdSessions24h,
+      snapshot?.visibleFacilities,
+    ],
+  );
 
-  const systemEvents = [
-    {
-      time: snapshot?.latestAlertTimestamp ?? null,
-      level: "INFO",
-      message: "CHV data payload processed successfully for Suna West ward.",
-      tone: "success" as const,
-    },
-    {
-      time: snapshot?.latestRiskTimestamp ?? null,
-      level: "ERROR",
-      message: "Failed to sync with DHIS2. Connection timeout on endpoint /api/dataValues.",
-      tone: "danger" as const,
-    },
-    {
-      time: new Date(Date.now() - 56 * 60 * 1000).toISOString(),
-      level: "WARN",
-      message: "High memory usage on ingestion node `prod-02`. Current: 88%.",
-      tone: "warning" as const,
-    },
-    {
-      time: new Date(Date.now() - 84 * 60 * 1000).toISOString(),
-      level: "INFO",
-      message: "Automated weekly risk report generated for Migori County director.",
-      tone: "success" as const,
-    },
-    {
-      time: new Date(Date.now() - 95 * 60 * 1000).toISOString(),
-      level: "INFO",
-      message: "Heartbeat signal received from USSD gateway connector.",
-      tone: "success" as const,
-    },
-  ];
+  const systemEvents: SystemEvent[] = useMemo(() => {
+    const events: Array<SystemEvent | null> = [
+      snapshot?.latestRiskTimestamp
+        ? makeEvent({
+            time: snapshot.latestRiskTimestamp,
+            level: "INFO",
+            message: `Latest ward risk update is ${formatRelativeLabel(snapshot.latestRiskTimestamp)} and covers ${snapshot.wardsWithFreshRisk}/${snapshot.visibleWards} wards in scope.`,
+            tone: "success" as const,
+          })
+        : null,
+      (snapshot?.failedAlerts ?? 0) > 0
+        ? makeEvent({
+            time: snapshot?.latestFailedAlertTimestamp ?? snapshot?.latestAlertTimestamp ?? null,
+            level: "ERROR",
+            message: `${snapshot?.failedAlerts ?? 0} alert deliveries are currently failed in the visible dashboard scope.`,
+            tone: "danger" as const,
+          })
+        : null,
+      (snapshot?.retryPendingAlerts ?? 0) > 0
+        ? makeEvent({
+            time: snapshot?.latestRetryAlertTimestamp ?? snapshot?.latestAlertTimestamp ?? null,
+            level: "WARN",
+            message: `${snapshot?.retryPendingAlerts ?? 0} alerts are pending retry and still require delivery follow-through.`,
+            tone: "warning" as const,
+          })
+        : null,
+      snapshot?.latestChvTimestamp
+        ? makeEvent({
+            time: snapshot.latestChvTimestamp,
+            level: "INFO",
+            message: `Latest CHV activity landed ${formatRelativeLabel(snapshot.latestChvTimestamp)} across sync, triage, and USSD traces.`,
+            tone: chvFreshness.isStale ? ("warning" as const) : ("success" as const),
+          })
+        : null,
+      snapshot?.latestFacilityTimestamp
+        ? makeEvent({
+            time: snapshot.latestFacilityTimestamp,
+            level: facilityFreshness.isStale ? "WARN" : "INFO",
+            message: `Facility registry was last updated ${formatRelativeLabel(snapshot.latestFacilityTimestamp)} for ${snapshot.visibleFacilities} visible facilities.`,
+            tone: facilityFreshness.isStale ? ("warning" as const) : ("success" as const),
+          })
+        : null,
+      alertBacklog > 0
+        ? makeEvent({
+            time: snapshot?.latestAlertTimestamp ?? null,
+            level: "INFO",
+            message: `${alertBacklog} alerts remain queued or retry-pending for current operators to watch.`,
+            tone: "warning" as const,
+          })
+        : null,
+    ];
+
+    const filteredEvents = events.filter((event): event is SystemEvent => event !== null);
+    filteredEvents.sort((left, right) => {
+      const leftTime = left.time ? new Date(left.time).getTime() : 0;
+      const rightTime = right.time ? new Date(right.time).getTime() : 0;
+      return rightTime - leftTime;
+    });
+
+    return filteredEvents.slice(0, 6);
+  }, [
+    alertBacklog,
+    chvFreshness.isStale,
+    facilityFreshness.isStale,
+    snapshot?.failedAlerts,
+    snapshot?.latestAlertTimestamp,
+    snapshot?.latestChvTimestamp,
+    snapshot?.latestFailedAlertTimestamp,
+    snapshot?.latestFacilityTimestamp,
+    snapshot?.latestRetryAlertTimestamp,
+    snapshot?.latestRiskTimestamp,
+    snapshot?.retryPendingAlerts,
+    snapshot?.visibleFacilities,
+    snapshot?.visibleWards,
+    snapshot?.wardsWithFreshRisk,
+  ]);
 
   if (!currentUser) {
     return null;
@@ -265,9 +454,13 @@ export default function SystemPage() {
     <div className="space-y-6">
       <DashboardTopbar
         title="System Status"
-        subtitle="Monitor platform health, data pipelines, and integrations"
+        subtitle="Read-only operational health derived from live dashboard feeds"
         lastUpdatedLabel={lastUpdatedLabel}
-        lastUpdatedTone={riskFreshness.isStale || alertFreshness.isStale ? "stale" : "default"}
+        lastUpdatedTone={
+          riskFreshness.isStale || alertFreshness.isStale || facilityFreshness.isStale || chvFreshness.isStale
+            ? "stale"
+            : "default"
+        }
         onRefresh={() => {
           void systemQuery.refetch();
         }}
@@ -306,6 +499,8 @@ export default function SystemPage() {
                       "bg-[color-mix(in_srgb,var(--success)_14%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_20%,transparent)]",
                     card.tone === "warning" &&
                       "bg-[color-mix(in_srgb,var(--warning)_14%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]",
+                    card.tone === "danger" &&
+                      "bg-[color-mix(in_srgb,var(--danger)_14%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_20%,transparent)]",
                     card.tone === "info" &&
                       "bg-[color-mix(in_srgb,var(--brand)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]",
                   )}
@@ -318,6 +513,7 @@ export default function SystemPage() {
                   "mt-4 h-1.5 rounded-full",
                   card.tone === "success" && "bg-[color-mix(in_srgb,var(--success)_20%,white)]",
                   card.tone === "warning" && "bg-[color-mix(in_srgb,var(--warning)_20%,white)]",
+                  card.tone === "danger" && "bg-[color-mix(in_srgb,var(--danger)_20%,white)]",
                   card.tone === "info" && "bg-[color-mix(in_srgb,var(--brand)_20%,white)]",
                 )}
               />
@@ -331,11 +527,17 @@ export default function SystemPage() {
               <PageSectionHeader
                 className="gap-1"
                 title="Data Freshness"
-                description="Monitor the most important upstream feeds before treating dashboard outputs as current."
+                description="These signals are derived from backend timestamps, not infrastructure uptime probes."
               />
-              <Button variant="secondary" className="h-10 rounded-pill px-4">
+              <Button
+                variant="secondary"
+                className="h-10 rounded-pill px-4"
+                onClick={() => {
+                  void systemQuery.refetch();
+                }}
+              >
                 <RefreshCcw className="mr-2 size-4" aria-hidden="true" />
-                Re-sync all
+                Refresh view
               </Button>
             </div>
 
@@ -398,7 +600,7 @@ export default function SystemPage() {
               </span>
               <div>
                 <h2 className="text-xl font-semibold tracking-[-0.03em]">Admin Controls</h2>
-                <p className="mt-1 text-sm text-white/74">Operational tools for the control room.</p>
+                <p className="mt-1 text-sm text-white/74">Visible controls stay disabled until backend job-control contracts exist.</p>
               </div>
             </div>
 
@@ -411,7 +613,8 @@ export default function SystemPage() {
                 <button
                   key={action.label}
                   type="button"
-                  className="flex w-full items-center justify-between rounded-[1.25rem] border border-white/12 bg-white/10 px-4 py-3 text-left transition hover:bg-white/14"
+                  disabled
+                  className="flex w-full cursor-not-allowed items-center justify-between rounded-[1.25rem] border border-white/12 bg-white/10 px-4 py-3 text-left opacity-70"
                 >
                   <span className="flex items-center gap-3">
                     <span className="inline-flex size-9 items-center justify-center rounded-xl bg-white/10">
@@ -425,9 +628,11 @@ export default function SystemPage() {
             </div>
 
             <div className="mt-5 rounded-[1.25rem] border border-white/10 bg-black/10 px-4 py-4">
-              <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-white/60">System version</p>
-              <p className="mt-2 text-sm font-semibold">v2.4.9-stable</p>
-              <p className="mt-1 text-xs text-white/64">Build b4a2f1</p>
+              <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-white/60">Current limitation</p>
+              <p className="mt-2 text-sm font-semibold">Read-only system view</p>
+              <p className="mt-1 text-xs text-white/64">
+                This page now shows backend-derived health signals only. Manual control actions are intentionally disabled until owned by real APIs.
+              </p>
             </div>
           </Card>
         </section>
@@ -436,8 +641,8 @@ export default function SystemPage() {
           <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
             <PageSectionHeader
               className="gap-1"
-              title="Pipeline Status"
-              description="Quick read on scheduled jobs and scoring workflows."
+              title="Operational Pipelines"
+              description="State derived from current records, not synthetic scheduler telemetry."
             />
 
             <div className="mt-5 space-y-3">
@@ -448,6 +653,7 @@ export default function SystemPage() {
                       className={cn(
                         "size-2.5 rounded-full",
                         pipeline.tone === "success" && "bg-[color:var(--success)]",
+                        pipeline.tone === "warning" && "bg-[color:var(--warning)]",
                         pipeline.tone === "danger" && "bg-[color:var(--danger)]",
                         pipeline.tone === "default" && "bg-[var(--dashboard-subtle-copy)]",
                       )}
@@ -455,10 +661,18 @@ export default function SystemPage() {
                     <span className="text-sm font-medium text-panel-copy">{pipeline.name}</span>
                   </div>
                   <StatusBadge
-                    tone={pipeline.tone === "danger" ? "danger" : pipeline.tone === "success" ? "success" : "default"}
+                    tone={
+                      pipeline.tone === "danger"
+                        ? "danger"
+                        : pipeline.tone === "warning"
+                          ? "warning"
+                          : pipeline.tone === "success"
+                            ? "success"
+                            : "default"
+                    }
                     className="px-3 py-1 tracking-[0.14em]"
                   >
-                    {pipeline.state}
+                    {toPipelineState(pipeline.tone)}
                   </StatusBadge>
                 </div>
               ))}
@@ -468,12 +682,12 @@ export default function SystemPage() {
           <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
             <PageSectionHeader
               className="gap-1"
-              title="Integrations"
-              description="Status of outbound channels and upstream dependencies."
+              title="Observed Channels"
+              description="Current activity surfaced only where a backend source already exists."
             />
 
             <div className="mt-5 grid gap-3 sm:grid-cols-2">
-              {integrations.map((integration) => (
+              {observedChannels.map((integration) => (
                 <div key={`${integration.group}-${integration.name}`} className="rounded-[1.35rem] border border-panel-table-wrap px-4 py-4">
                   <div className="flex items-start justify-between gap-3">
                     <span
@@ -481,8 +695,12 @@ export default function SystemPage() {
                         "inline-flex size-9 items-center justify-center rounded-xl",
                         integration.tone === "success" &&
                           "bg-[color-mix(in_srgb,var(--success)_14%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_20%,transparent)]",
+                        integration.tone === "warning" &&
+                          "bg-[color-mix(in_srgb,var(--warning)_14%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]",
                         integration.tone === "danger" &&
                           "bg-[color-mix(in_srgb,var(--danger)_14%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_20%,transparent)]",
+                        integration.tone === "default" &&
+                          "bg-[color-mix(in_srgb,var(--dashboard-subtle-copy)_16%,white)] text-panel-muted",
                       )}
                     >
                       {integration.icon}
@@ -491,7 +709,9 @@ export default function SystemPage() {
                       className={cn(
                         "mt-1 size-2 rounded-full",
                         integration.tone === "success" && "bg-[color:var(--success)]",
+                        integration.tone === "warning" && "bg-[color:var(--warning)]",
                         integration.tone === "danger" && "bg-[color:var(--danger)]",
+                        integration.tone === "default" && "bg-[var(--dashboard-subtle-copy)]",
                       )}
                     />
                   </div>
@@ -503,7 +723,9 @@ export default function SystemPage() {
                     className={cn(
                       "mt-2 text-xs font-medium",
                       integration.tone === "success" && "text-[color:var(--success)]",
+                      integration.tone === "warning" && "text-[color:var(--warning)]",
                       integration.tone === "danger" && "text-[color:var(--danger)]",
+                      integration.tone === "default" && "text-panel-muted",
                     )}
                   >
                     {integration.note}
@@ -518,58 +740,62 @@ export default function SystemPage() {
           <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
             <PageSectionHeader
               className="gap-1"
-              title="System Event Logs"
-              description="Latest pipeline, sync, and runtime events for operators."
+              title="Observed Event Stream"
+              description="This is a derived operational summary, not a raw infrastructure log sink."
             />
             <div className="flex flex-wrap items-center gap-2">
-              <div className="flex h-10 min-w-[12rem] items-center rounded-pill border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 text-sm text-panel-muted">
-                Search logs...
-              </div>
-              <div className="flex h-10 items-center rounded-pill border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 text-sm text-panel-copy">
-                All levels
-              </div>
+              <StatusBadge tone="default" className="px-3 py-1 tracking-[0.14em]">
+                Read-only
+              </StatusBadge>
+              <StatusBadge tone="default" className="px-3 py-1 tracking-[0.14em]">
+                Backend-derived
+              </StatusBadge>
             </div>
           </div>
 
           <div className="mt-5 overflow-hidden rounded-[1.4rem] border border-panel-table-wrap">
             <div className="divide-y divide-[var(--dashboard-table-line)]">
-              {systemEvents.map((event, index) => (
-                <div key={`${event.level}-${index}`} className="grid gap-3 px-4 py-3 md:grid-cols-[5.5rem_5.5rem_minmax(0,1fr)] md:items-center">
-                  <div className="text-xs font-medium text-panel-muted">{formatEventTime(event.time)}</div>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={cn(
-                        "h-8 w-1 rounded-full",
-                        event.tone === "success" && "bg-[color:var(--success)]",
-                        event.tone === "warning" && "bg-[color:var(--warning)]",
-                        event.tone === "danger" && "bg-[color:var(--danger)]",
-                      )}
-                    />
-                    <StatusBadge
-                      tone={event.tone === "danger" ? "danger" : event.tone === "warning" ? "warning" : "success"}
-                      className="px-2.5 py-1 tracking-[0.14em]"
-                    >
-                      {event.level}
-                    </StatusBadge>
+              {systemEvents.length > 0 ? (
+                systemEvents.map((event, index) => (
+                  <div key={`${event.level}-${index}`} className="grid gap-3 px-4 py-3 md:grid-cols-[5.5rem_5.5rem_minmax(0,1fr)] md:items-center">
+                    <div className="text-xs font-medium text-panel-muted">{formatEventTime(event.time)}</div>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={cn(
+                          "h-8 w-1 rounded-full",
+                          event.tone === "success" && "bg-[color:var(--success)]",
+                          event.tone === "warning" && "bg-[color:var(--warning)]",
+                          event.tone === "danger" && "bg-[color:var(--danger)]",
+                        )}
+                      />
+                      <StatusBadge
+                        tone={event.tone === "danger" ? "danger" : event.tone === "warning" ? "warning" : "success"}
+                        className="px-2.5 py-1 tracking-[0.14em]"
+                      >
+                        {event.level}
+                      </StatusBadge>
+                    </div>
+                    <div className="text-sm text-panel-copy">{event.message}</div>
                   </div>
-                  <div className="text-sm text-panel-copy">{event.message}</div>
-                </div>
-              ))}
+                ))
+              ) : (
+                <div className="px-4 py-6 text-sm text-panel-muted">No derived events are available for the current scope yet.</div>
+              )}
             </div>
           </div>
 
           <div className="mt-5 flex flex-wrap items-center gap-4 text-sm text-panel-muted">
             <span className="inline-flex items-center gap-2">
               <Logs className="size-4" aria-hidden="true" />
-              Audit trail retained for operational review.
-            </span>
-            <span className="inline-flex items-center gap-2">
-              <MapPinned className="size-4" aria-hidden="true" />
-              Visible scope: {isLoading ? "Loading..." : `${snapshot?.visibleWards ?? 0} wards`}
+              Event summaries are synthesized from live dashboard records.
             </span>
             <span className="inline-flex items-center gap-2">
               <Clock3 className="size-4" aria-hidden="true" />
               Alert freshness: {alertFreshness.detail}
+            </span>
+            <span className="inline-flex items-center gap-2">
+              <ShieldAlert className="size-4" aria-hidden="true" />
+              Unsupported infra probes remain intentionally out of scope until backend contracts exist.
             </span>
           </div>
         </Card>
