@@ -263,7 +263,6 @@ function buildTimeline(alert: AlertRecord, triggerSource: string): TimelineEntry
       meta: alert.risk_score !== null ? `Risk score: ${Math.round(alert.risk_score)}/100` : undefined,
       category: "system",
       details: [
-        `Model confidence: ${alert.risk_score !== null && alert.risk_score >= 75 ? "High" : "Moderate"}`,
         `Trigger source: ${triggerSource}`,
       ],
     },
@@ -487,7 +486,7 @@ export default function AlertDetailPage() {
               ) : null}
             </div>
             <p className="max-w-3xl text-sm text-panel-muted">
-              Review delivery status, ward risk context, and the operational response path for this alert.
+              Review delivery status, ward risk context, and the available read-path context for this alert.
             </p>
           </div>
 
@@ -505,7 +504,7 @@ export default function AlertDetailPage() {
                 className="inline-flex h-11 items-center justify-center gap-2 rounded-pill bg-[var(--login-submit-start)] px-4 text-sm font-semibold text-white shadow-[var(--login-submit-shadow)] transition hover:bg-[var(--login-submit-end)] hover:shadow-[var(--login-submit-shadow-hover)]"
               >
                 <Share2 className="size-4" aria-hidden="true" />
-                <span>Share Ward Access</span>
+                <span>Open Ward Detail</span>
               </Link>
             ) : null}
           </div>

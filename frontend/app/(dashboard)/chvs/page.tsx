@@ -536,6 +536,9 @@ export default function ChvsPage() {
           <div className="space-y-5">
             <Card className="rounded-[2rem] px-5 py-5">
               <h2 className="text-2xl font-semibold text-panel-strong">Operations Command</h2>
+              <p className="mt-3 text-sm text-panel-muted">
+                Assignment, broadcast, and training actions are shown as derived operational priorities only. This page does not yet own the corresponding backend command workflows.
+              </p>
 
               <div className="mt-5 space-y-3">
                 {[
@@ -558,7 +561,8 @@ export default function ChvsPage() {
                   <button
                     key={item.title}
                     type="button"
-                    className="flex w-full items-center gap-3 rounded-[1.5rem] border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 py-4 text-left transition hover:border-[var(--dashboard-icon-button-border)] hover:bg-[color-mix(in_srgb,var(--dashboard-nav-hover)_40%,transparent)]"
+                    disabled
+                    className="flex w-full items-center gap-3 rounded-[1.5rem] border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 py-4 text-left"
                   >
                     <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--brand)_10%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]">
                       <item.icon className="size-5" aria-hidden="true" />
@@ -567,7 +571,7 @@ export default function ChvsPage() {
                       <strong className="block text-base text-panel-strong">{item.title}</strong>
                       <small className="mt-1 block text-sm text-panel-muted">{item.detail}</small>
                     </span>
-                    <ChevronsRight className="size-4 shrink-0 text-panel-muted" aria-hidden="true" />
+                    <span className="text-sm font-semibold text-panel-muted">Pending</span>
                   </button>
                 ))}
               </div>
@@ -601,8 +605,8 @@ export default function ChvsPage() {
                   ? `${criticalCoverageGap?.wardName} has only ${criticalCoverageGap?.activeCount} active CHV on duty while ${criticalCoverageGap?.predictedCases} predicted cases remain in play.`
                   : "No urgent CHV coverage gaps detected in visible wards."}
               </p>
-              <Button className="mt-5 w-full justify-center" disabled={!hasCriticalCoverageGap}>
-                Re-deploy now
+              <Button className="mt-5 w-full justify-center" disabled>
+                Re-deploy workflow pending
               </Button>
             </Card>
           </div>
