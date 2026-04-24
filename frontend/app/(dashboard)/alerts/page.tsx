@@ -547,7 +547,7 @@ export default function AlertsPage() {
           </div>
 
           <Card className="rounded-3xl bg-panel px-5 py-5">
-            <h2 className="text-2xl font-semibold text-panel-strong">Priority Alert Record</h2>
+            <h2 className="text-2xl font-semibold text-panel-strong">Alert Record In Focus</h2>
             <p className="mt-2 text-sm text-panel-muted">
               Derived summary of the visible alert record that currently sorts highest by failure state, risk score, and recency.
             </p>
@@ -568,7 +568,7 @@ export default function AlertsPage() {
                 href={`/alerts/${mostCriticalAlert.id}`}
                 className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--dashboard-icon-button-ink-hover)]"
               >
-                Open Alert Detail
+                Open record page
                 <ChevronRight className="size-4" aria-hidden="true" />
               </Link>
             ) : null}
@@ -836,7 +836,7 @@ export default function AlertsPage() {
         </Card>
 
         <Card className="rounded-[2rem] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--brand)_10%,var(--panel)),var(--panel))] px-5 py-5">
-          <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Current record to review</span>
+          <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Record in focus</span>
           <strong className="mt-3 block text-2xl leading-tight text-panel-strong">
             {mostCriticalAlert
               ? `${formatAlertPublicId(mostCriticalAlert.id)} in ${mostCriticalAlert.ward_name}`
@@ -937,7 +937,7 @@ export default function AlertsPage() {
                 href={`/alerts/${selectedAlert.id}`}
                 className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-pill border border-panel-table-wrap px-4 text-sm font-semibold text-panel-copy transition hover:border-[var(--dashboard-icon-button-border)] hover:text-panel-strong"
               >
-                Open full alert detail
+                Open record page
                 <ExternalLink className="size-4" aria-hidden="true" />
               </Link>
             </div>
