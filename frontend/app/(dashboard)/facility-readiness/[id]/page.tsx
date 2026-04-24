@@ -137,7 +137,6 @@ export default function FacilityDetailPage() {
   }
 
   const staffingPercent = facility ? Math.round((facility.staffingFilled / facility.staffingRequired) * 100) : 0;
-  const bedOccupancy = facility ? Math.min(97, facility.projectedCases + 18) : 0;
 
   return (
     <div className="space-y-6">
@@ -206,13 +205,13 @@ export default function FacilityDetailPage() {
                   <div className="mt-3 text-3xl font-semibold text-panel-strong">~{facility.projectedCases * 5} <span className="text-base font-medium text-panel-muted">cases/day</span></div>
                 </div>
                 <div className="border-l-2 border-[color:var(--danger)] px-4 py-2">
-                  <span className="text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">ORS stock</span>
+                  <span className="text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Derived ORS estimate</span>
                   <div className="mt-3 text-3xl font-semibold text-[color:var(--danger)]">
                     {facility.orsStockPercent}% <span className="text-sm font-semibold uppercase">{facility.orsState}</span>
                   </div>
                 </div>
                 <div className="border-l-2 border-panel-table-wrap px-4 py-2">
-                  <span className="text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Staffing</span>
+                  <span className="text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Derived staffing estimate</span>
                   <div className="mt-3 text-3xl font-semibold text-panel-strong">
                     {facility.staffingFilled}/{facility.staffingRequired} <span className="text-base font-medium text-panel-muted">Active</span>
                   </div>
@@ -289,9 +288,9 @@ export default function FacilityDetailPage() {
                         </span>
                         <span className="text-xs font-semibold text-[color:var(--danger)]">Declining</span>
                       </div>
-                      <div className="mt-4 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">ORS Stocks</div>
+                      <div className="mt-4 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Derived ORS estimate</div>
                       <div className="mt-2 text-4xl font-semibold text-panel-strong">{facility.orsStockPercent}%</div>
-                      <div className="mt-1 text-sm text-panel-muted">Current</div>
+                      <div className="mt-1 text-sm text-panel-muted">Estimated from ward pressure</div>
                       <div className="mt-4 h-1.5 rounded-full bg-[color-mix(in_srgb,var(--danger)_12%,white)]">
                         <div className="h-full rounded-full bg-[color:var(--danger)]" style={{ width: `${facility.orsStockPercent}%` }} />
                       </div>
@@ -304,9 +303,9 @@ export default function FacilityDetailPage() {
                         </span>
                         <span className="text-xs font-semibold text-brand">Stable</span>
                       </div>
-                      <div className="mt-4 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Staffing</div>
+                      <div className="mt-4 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Derived staffing estimate</div>
                       <div className="mt-2 text-4xl font-semibold text-panel-strong">{staffingPercent}%</div>
-                      <div className="mt-1 text-sm text-panel-muted">Capacity</div>
+                      <div className="mt-1 text-sm text-panel-muted">Estimated from surge posture</div>
                       <div className="mt-4 h-1.5 rounded-full bg-[color-mix(in_srgb,var(--brand)_12%,white)]">
                         <div className="h-full rounded-full bg-brand" style={{ width: `${staffingPercent}%` }} />
                       </div>
@@ -319,11 +318,11 @@ export default function FacilityDetailPage() {
                         </span>
                         <span className="text-xs font-semibold text-[color:var(--warning)]">Near limit</span>
                       </div>
-                      <div className="mt-4 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Bed Occupancy</div>
-                      <div className="mt-2 text-4xl font-semibold text-panel-strong">{bedOccupancy}%</div>
-                      <div className="mt-1 text-sm text-panel-muted">Full</div>
+                      <div className="mt-4 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Demand outlook</div>
+                      <div className="mt-2 text-4xl font-semibold text-panel-strong">~{facility.projectedCases * 5}</div>
+                      <div className="mt-1 text-sm text-panel-muted">Derived cases/day estimate</div>
                       <div className="mt-4 h-1.5 rounded-full bg-[color-mix(in_srgb,var(--warning)_12%,white)]">
-                        <div className="h-full rounded-full bg-[color:var(--warning)]" style={{ width: `${bedOccupancy}%` }} />
+                        <div className="h-full rounded-full bg-[color:var(--warning)]" style={{ width: `${Math.min(100, facility.projectedCases * 4)}%` }} />
                       </div>
                     </Card>
                   </div>
@@ -390,21 +389,8 @@ export default function FacilityDetailPage() {
                   <div className="text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">
                     Operational contacts
                   </div>
-                  <div className="mt-4 space-y-4">
-                    {[
-                      ["Dr. Silas Okoth", "County Health Superintendent"],
-                      ["Mercy Wanjiku", "Sub-County Logistics Lead"],
-                    ].map(([name, role]) => (
-                      <div key={name} className="flex items-start gap-3 rounded-[1.25rem] border border-panel-table-wrap px-4 py-3">
-                        <span className="inline-flex size-10 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--brand)_12%,white)] text-brand">
-                          <Users className="size-4" aria-hidden="true" />
-                        </span>
-                        <div>
-                          <strong className="block text-sm text-panel-strong">{name}</strong>
-                          <span className="block text-sm text-panel-muted">{role}</span>
-                        </div>
-                      </div>
-                    ))}
+                  <div className="mt-4 rounded-[1.25rem] border border-dashed border-panel-table-wrap px-4 py-4 text-sm text-panel-copy">
+                    No backend contact registry is exposed to this page yet, so named operational contacts are intentionally hidden rather than hardcoded.
                   </div>
                 </Card>
               </div>

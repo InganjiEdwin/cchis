@@ -826,7 +826,7 @@ export default function AlertsPage() {
                               <div className="font-semibold text-panel-strong">{alert.alertType.label}</div>
                               <div className="flex flex-wrap items-center gap-2">
                                 <StatusBadge tone="info" className="tracking-[0.12em]">
-                                  Auto-triggered
+                                  Backend record
                                 </StatusBadge>
                                 <StatusBadge
                                   tone={

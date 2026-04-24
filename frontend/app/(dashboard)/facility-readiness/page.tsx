@@ -112,7 +112,7 @@ export default function FacilityReadinessPage() {
     <div className="space-y-6">
       <DashboardTopbar
         title="Facility Readiness"
-        subtitle="Operational status and climate-driven surge forecasting for Migori County."
+        subtitle="Real facility registry records with derived readiness estimates for Migori County."
         lastUpdatedLabel={lastUpdatedLabel}
         lastUpdatedTone={freshness.isStale ? "stale" : "default"}
       />
@@ -183,11 +183,11 @@ export default function FacilityReadinessPage() {
                 <PackagePlus className="size-5" aria-hidden="true" />
               </span>
               <div>
-                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">ORS stock readiness</span>
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Derived ORS readiness</span>
                 <strong className="mt-2 block text-4xl font-semibold leading-none text-panel-strong">
                   {isLoading ? "..." : `${averageOrs}%`}
                 </strong>
-                <small className="mt-3 block text-sm text-panel-muted">County average across visible facilities</small>
+                <small className="mt-3 block text-sm text-panel-muted">Estimated from ward risk and facility identity, not live stock feeds</small>
               </div>
             </div>
           </Card>
@@ -201,7 +201,7 @@ export default function FacilityReadinessPage() {
                   Facility Preparedness Matrix
                 </h2>
                 <p className="mt-2 text-sm text-panel-muted">
-                  Real facility records with readiness indicators still derived from ward risk and alert activity
+                  Real facility records with readiness estimates derived from ward risk and alert activity
                 </p>
               </div>
 
@@ -261,8 +261,8 @@ export default function FacilityReadinessPage() {
                         "Facility name",
                         "Ward",
                         "Surge risk",
-                        "ORS stocks",
-                        "Staffing",
+                        "Derived ORS",
+                        "Derived staffing",
                         "Last reported",
                         "Action",
                       ].map((label) => (
@@ -419,14 +419,15 @@ export default function FacilityReadinessPage() {
                         </StatusBadge>
                       </div>
                       <p className="mt-3 text-sm leading-6 text-panel-copy">
-                        Surge pressure is rising in {row.wardName}. ORS levels are at {row.orsStockPercent}% with projected
+                        Derived readiness pressure is rising in {row.wardName}. Estimated ORS readiness is {row.orsStockPercent}% with projected
                         case activity at {row.projectedCases}.
                       </p>
                       <button
                         type="button"
-                        className="mt-4 text-sm font-semibold text-brand transition hover:text-[var(--dashboard-sidebar-title)]"
+                        className="mt-4 text-sm font-semibold text-panel-muted"
+                        disabled
                       >
-                        {row.orsStockPercent < 30 ? "Dispatch ORS supplies" : "Send alert to facility"}
+                        {row.orsStockPercent < 30 ? "Dispatch workflow pending" : "Facility notify workflow pending"}
                       </button>
                     </article>
                   ))
@@ -438,7 +439,7 @@ export default function FacilityReadinessPage() {
                     <div>
                       <strong className="block text-base text-panel-strong">No active facility alerts</strong>
                       <span className="mt-1 block text-sm text-panel-muted">
-                        System operating within safe thresholds across visible facilities.
+                        No high derived readiness pressure is visible across the current facility scope.
                       </span>
                     </div>
                   </div>
@@ -449,16 +450,16 @@ export default function FacilityReadinessPage() {
             <Card className="rounded-[2rem] px-5 py-5">
               <div>
                 <h2 className="text-2xl font-semibold text-panel-strong">Surge Forecast</h2>
-                <p className="mt-2 text-sm text-panel-muted">Next 14-day projection</p>
+                <p className="mt-2 text-sm text-panel-muted">Derived 14-day projection from ward risk and recent alert activity</p>
               </div>
 
               <div className="mt-5 rounded-[1.5rem] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] px-4 py-4">
-                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">7-day outlook</span>
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">7-day derived outlook</span>
                 <strong className="mt-3 block text-4xl font-semibold leading-none text-[color:var(--warning)]">
                   +{isLoading ? "..." : forecastCases} cases
                 </strong>
                 <span className="mt-3 block text-sm text-panel-copy">
-                  {isLoading ? "Loading..." : `${overloadedFacilities} facilities expected to exceed capacity`}
+                  {isLoading ? "Loading..." : `${overloadedFacilities} facilities flagged for readiness review`}
                 </span>
               </div>
 
@@ -476,9 +477,9 @@ export default function FacilityReadinessPage() {
               </div>
 
               <Card className="mt-5 rounded-[1.5rem] bg-[color-mix(in_srgb,var(--brand)_8%,var(--panel))] px-4 py-4 shadow-none">
-                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-brand">High reliability</span>
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-brand">Important limitation</span>
                 <p className="mt-2 text-sm text-panel-copy">
-                  Validated against current rainfall, ward risk, and recent alert activity.
+                  This page does not yet have live facility inventory, staffing roster, or bed occupancy feeds. These readiness figures remain derived estimates.
                 </p>
               </Card>
             </Card>
