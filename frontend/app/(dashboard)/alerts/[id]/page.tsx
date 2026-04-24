@@ -548,7 +548,7 @@ export default function AlertDetailPage() {
                     <strong className="text-base text-panel-strong">{alertType.label}</strong>
                   </div>
                   <StatusBadge tone="info" className="tracking-[0.12em]">
-                    Auto-triggered
+                    Backend record
                   </StatusBadge>
                 </div>
                 <div className="space-y-2">
@@ -721,17 +721,17 @@ export default function AlertDetailPage() {
 
               <div className="mt-5 space-y-5">
                 <div className="space-y-1">
-                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Escalation status</span>
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Derived escalation posture</span>
                   <strong className="block text-base text-panel-strong">
-                    {alert.risk_score !== null && alert.risk_score >= 75 ? "Escalation Required" : "Monitoring"}
+                    {alert.risk_score !== null && alert.risk_score >= 75 ? "Elevated review needed" : "Monitoring"}
                   </strong>
                 </div>
                 <div className="space-y-1">
-                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Recommended action</span>
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Suggested review path</span>
                   <strong className="block text-base leading-6 text-panel-strong">
                     {alert.risk_score !== null && alert.risk_score >= 75
-                      ? "Start escalation protocol and notify ward facilities."
-                      : "Send CHV follow-up and keep ward monitoring active."}
+                      ? "Review ward detail and backend delivery state before escalating outside this page."
+                      : "Continue monitoring this record and use ward detail for deeper context."}
                   </strong>
                 </div>
               </div>
@@ -741,7 +741,7 @@ export default function AlertDetailPage() {
                   Escalation, facility notification, and follow-up messaging actions are not backend-wired from this alert detail page yet.
                 </StatusBanner>
                 <Button className="w-full justify-center" disabled>
-                  Start Escalation Protocol
+                  Escalation Workflow Pending
                 </Button>
                 <Button variant="secondary" className="w-full justify-center" disabled>
                   Notify Facilities

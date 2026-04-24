@@ -682,20 +682,20 @@ export default function AlertsPage() {
           </div>
 
           <Card className="rounded-3xl bg-panel px-5 py-5">
-            <h2 className="text-2xl font-semibold text-panel-strong">Response Protocol</h2>
+            <h2 className="text-2xl font-semibold text-panel-strong">Priority Alert Review</h2>
             <p className="mt-2 text-sm text-panel-muted">
-              Immediate field coordination guidance for the highest-pressure visible ward.
+              Derived summary of the highest-pressure visible alert record in the current scope.
             </p>
             <div className="mt-5 rounded-2xl bg-[color-mix(in_srgb,var(--brand)_8%,var(--panel))] p-4">
               <strong className="block text-base text-panel-strong">
                 {mostCriticalAlert
-                  ? `${mostCriticalAlert.severity === "HIGH" ? "Escalation Required" : "Escalation Review"} - ${mostCriticalAlert.ward_name}`
-                  : "No active escalation required."}
+                  ? `${mostCriticalAlert.severity === "HIGH" ? "Highest priority alert" : "Review alert"} - ${mostCriticalAlert.ward_name}`
+                  : "No priority alert in current scope."}
               </strong>
               <p className="mt-2 text-sm text-panel-muted">
                 {mostCriticalAlert
                   ? `Priority signal: ${mostCriticalAlert.alertType.label} via ${mostCriticalAlert.channelLabel.toLowerCase()} triggered ${mostCriticalAlert.relativeLabel}.`
-                  : "Visible alerts are currently within a stable operating window."}
+                  : "No visible alert record currently stands out above the rest of the filtered scope."}
               </p>
             </div>
             {mostCriticalAlert ? (
@@ -703,7 +703,7 @@ export default function AlertsPage() {
                 href={`/alerts/${mostCriticalAlert.id}`}
                 className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--dashboard-icon-button-ink-hover)]"
               >
-                Start Escalation Protocol
+                Review Alert Detail
                 <ChevronRight className="size-4" aria-hidden="true" />
               </Link>
             ) : null}

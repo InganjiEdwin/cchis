@@ -98,15 +98,15 @@ export default function FacilityReadinessPage() {
   const forecastCases = facilityRows.reduce((sum, row) => sum + row.projectedCases, 0);
   const overloadedFacilities = facilityRows.filter((row) => row.surgeRisk === "EXTREME").length;
   const surgeCardIsCalm = criticalFacilities === 0;
-  const immediateAlertsTitle = immediateAlerts.length ? "Immediate Alerts" : "No Active Facility Alerts";
+  const immediateAlertsTitle = immediateAlerts.length ? "Priority Readiness Reviews" : "No Priority Facility Reviews";
   const immediateAlertsSubtitle = isLoading
     ? "Checking readiness..."
     : immediateAlerts.length
-      ? `${immediateAlerts.length} active`
-      : "System operating within safe thresholds";
+      ? `${immediateAlerts.length} derived reviews`
+      : "No high derived readiness pressure visible";
   const forecastActionGuidance = overloadedFacilities
-    ? `Action: dispatch and resupply review recommended for ${overloadedFacilities} facilities.`
-    : "Action: continue monitoring, no dispatch required.";
+    ? `Action: review dispatch and resupply readiness for ${overloadedFacilities} facilities.`
+    : "Action: continue monitoring derived readiness signals.";
 
   return (
     <div className="space-y-6">
