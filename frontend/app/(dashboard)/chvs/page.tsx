@@ -631,8 +631,7 @@ export default function ChvsPage() {
                 aria-label="Search by name"
               />
 
-              <label className="flex min-w-[12rem] flex-col gap-2">
-                <span className="text-sm font-medium text-panel-copy">Location</span>
+              <label className="flex min-w-[12rem] flex-col">
                 <span className="relative flex h-11 items-center rounded-pill border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 shadow-sm">
                   <select
                     value={selectedWard}
