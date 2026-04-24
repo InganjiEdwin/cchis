@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import type { AlertRecord, WardDetailSummary } from "@/lib/dashboard";
+import type { AlertRecord } from "@/lib/dashboard";
 import { ServerApiError, fetchBackendJson } from "@/lib/server-api";
 
 export async function GET(
@@ -16,25 +16,20 @@ export async function GET(
   }
 
   try {
-    const alert = await fetchBackendJson<AlertRecord>(`/alerts/${alertId}/`, {
+    const alertIntelligence = await fetchBackendJson<{
+      alert: AlertRecord | null;
+      ward_detail: unknown;
+      classification: unknown;
+      risk_context: unknown;
+      delivery: unknown;
+      current_state: unknown;
+      freshness: unknown;
+      timeline: unknown;
+      capabilities: unknown;
+    }>(`/alerts/${alertId}/intelligence/`, {
       cookieHeader,
     });
-
-    let wardDetail: WardDetailSummary | null = null;
-
-    try {
-      wardDetail = await fetchBackendJson<WardDetailSummary>(`/wards/${alert.ward}/`, {
-        cookieHeader,
-      });
-    } catch (error) {
-      if (error instanceof ServerApiError && (error.status === 403 || error.status === 404)) {
-        wardDetail = null;
-      } else {
-        throw error;
-      }
-    }
-
-    return NextResponse.json({ alert, wardDetail });
+    return NextResponse.json(alertIntelligence);
   } catch (error) {
     if (error instanceof ServerApiError) {
       return NextResponse.json({ detail: error.message }, { status: error.status });

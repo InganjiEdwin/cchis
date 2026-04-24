@@ -147,6 +147,293 @@ def latest_riskscore_for_ward(ward: Ward) -> RiskScore | None:
     return ward.risk_scores.order_by("-generated_at").first()
 
 
+def _classify_alert_record(alert: Alert) -> dict:
+    haystack = f"{alert.message} {alert.recipient} {alert.ward.name}".lower()
+
+    if "cholera" in haystack:
+        return {
+            "label": "Cholera Risk",
+            "tone": "red",
+            "icon_key": "droplets",
+            "trigger_source": "Cholera threshold exceeded",
+        }
+    if "flood" in haystack:
+        return {
+            "label": "Flood Risk",
+            "tone": "blue",
+            "icon_key": "waves",
+            "trigger_source": "Flood proxy exceeded",
+        }
+    if "water" in haystack:
+        return {
+            "label": "Water Contamination",
+            "tone": "red",
+            "icon_key": "circle-alert",
+            "trigger_source": "Water safety signal elevated",
+        }
+    if "rain" in haystack:
+        return {
+            "label": "Heavy Rainfall",
+            "tone": "orange",
+            "icon_key": "cloud-rain",
+            "trigger_source": "Rainfall threshold exceeded",
+        }
+
+    return {
+        "label": "Operational Alert",
+        "tone": "slate",
+        "icon_key": "shield-alert",
+        "trigger_source": "Recorded risk threshold crossed",
+    }
+
+
+def _alert_status_label(status_value: str) -> str:
+    if status_value == Alert.STATUS_DELIVERED:
+        return "Alert Delivered Successfully"
+    if status_value == Alert.STATUS_FAILED:
+        return "Delivery Failed"
+    if status_value == Alert.STATUS_RETRY_PENDING:
+        return "Delivery Retry Pending"
+    return "Queued for Dispatch"
+
+
+def _alert_status_tone(status_value: str) -> str:
+    if status_value == Alert.STATUS_DELIVERED:
+        return "success"
+    if status_value == Alert.STATUS_FAILED:
+        return "danger"
+    if status_value == Alert.STATUS_RETRY_PENDING:
+        return "warning"
+    return "default"
+
+
+def _alert_channel_label(channel: str) -> str:
+    if channel == Alert.CHANNEL_SMS:
+        return "SMS"
+    if channel == Alert.CHANNEL_WHATSAPP:
+        return "WhatsApp"
+    return "Dashboard"
+
+
+def _alert_channel_audience(channel: str) -> str:
+    if channel == Alert.CHANNEL_SMS:
+        return "CHVs & officials"
+    if channel == Alert.CHANNEL_WHATSAPP:
+        return "Field recipients"
+    return "Dashboard viewers"
+
+
+def build_alert_intelligence_snapshot(
+    alert: Alert,
+    *,
+    ward_detail: Ward | None = None,
+    stale_threshold_minutes: int = 30,
+) -> dict:
+    classification_core = _classify_alert_record(alert)
+    classification = {
+        **classification_core,
+        "mode": "derived_from_record_text",
+    }
+
+    risk_score_value = alert.risk_score.score if alert.risk_score else None
+    if risk_score_value is not None and risk_score_value >= 75:
+        risk_context = {
+            "level_label": "High Risk",
+            "trend_label": "Escalating",
+            "summary": "Threshold crossed in the recorded risk score. Review linked ward and delivery records closely.",
+            "recorded_risk_score": risk_score_value,
+            "threshold": 75,
+            "mode": "derived_from_risk_score",
+        }
+    elif risk_score_value is not None and risk_score_value >= 40:
+        risk_context = {
+            "level_label": "Medium Risk",
+            "trend_label": "Monitoring",
+            "summary": "Watch closely and prepare ward follow-up if indicators rise again.",
+            "recorded_risk_score": risk_score_value,
+            "threshold": 75,
+            "mode": "derived_from_risk_score",
+        }
+    else:
+        risk_context = {
+            "level_label": "Low Risk" if risk_score_value is not None else "Risk Score Unavailable",
+            "trend_label": "Stable" if risk_score_value is not None else "Unknown",
+            "summary": (
+                "Threshold not crossed. Maintain routine monitoring and review later records if conditions change."
+                if risk_score_value is not None
+                else "No linked risk score is available for interpretation on this alert record."
+            ),
+            "recorded_risk_score": risk_score_value,
+            "threshold": 75 if risk_score_value is not None else None,
+            "mode": "derived_from_risk_score" if risk_score_value is not None else "unavailable",
+        }
+
+    delivery = {
+        "channel_label": _alert_channel_label(alert.channel),
+        "audience_label": _alert_channel_audience(alert.channel),
+        "status_label": _alert_status_label(alert.status),
+        "status_tone": _alert_status_tone(alert.status),
+        "recipient_count": 1,
+        "mode": "backend_record_fields",
+    }
+
+    current_state = [
+        {
+            "label": (
+                "Alert delivered"
+                if alert.status == Alert.STATUS_DELIVERED
+                else "Delivery blocked"
+                if alert.status == Alert.STATUS_FAILED
+                else "Delivery still in progress"
+            ),
+            "tone": "warning" if alert.status == Alert.STATUS_FAILED else "success",
+        },
+        {
+            "label": (
+                "This alert record failed delivery"
+                if alert.status == Alert.STATUS_FAILED
+                else "A retry is still pending"
+                if alert.status == Alert.STATUS_RETRY_PENDING
+                else "No active delivery failure recorded"
+            ),
+            "tone": "warning" if alert.status in {Alert.STATUS_FAILED, Alert.STATUS_RETRY_PENDING} else "success",
+        },
+        {
+            "label": (
+                "High ward risk accompanies this alert"
+                if risk_score_value is not None and risk_score_value >= 75
+                else "No high ward-risk threshold recorded"
+            ),
+            "tone": "warning" if risk_score_value is not None and risk_score_value >= 75 else "neutral",
+        },
+    ]
+
+    timeline = [
+        {
+            "id": "triggered",
+            "title": "Alert triggered",
+            "description": f"Alert record generated from the risk model using {classification_core['trigger_source'].lower()} signals.",
+            "timestamp": alert.created_at,
+            "tone": "primary",
+            "category": "system",
+            "meta": f"Risk score: {round(risk_score_value)}/100" if risk_score_value is not None else None,
+            "details": [f"Trigger source: {classification_core['trigger_source']}"],
+        },
+        {
+            "id": "created",
+            "title": "Alert record created",
+            "description": f"A {_alert_channel_label(alert.channel).lower()} alert record was created for {alert.ward.name}.",
+            "timestamp": alert.created_at,
+            "tone": "neutral",
+            "category": "system",
+            "meta": None,
+            "details": [
+                f"Recipient: {alert.recipient}",
+                f"Channel: {_alert_channel_label(alert.channel)}",
+            ],
+        },
+        {
+            "id": "dispatch",
+            "title": "Delivery attempt state",
+            "description": f"Latest delivery activity is tracked through {alert.delivery_backend or 'the recorded backend'}.",
+            "timestamp": alert.last_attempted_at or alert.sent_at or alert.created_at,
+            "tone": (
+                "danger"
+                if alert.status == Alert.STATUS_FAILED
+                else "success"
+                if alert.status == Alert.STATUS_DELIVERED
+                else "progress"
+            ),
+            "category": "delivery",
+            "meta": None,
+            "details": [
+                f"Attempt count: {alert.attempt_count}/{alert.max_attempts}",
+                f"Backend: {alert.delivery_backend or 'Unspecified'}",
+            ],
+        },
+        {
+            "id": "delivery-status",
+            "title": "Recorded delivery outcome",
+            "description": (
+                "This alert record is marked as delivered."
+                if alert.status == Alert.STATUS_DELIVERED
+                else "This alert record is marked as failed and needs operator review."
+                if alert.status == Alert.STATUS_FAILED
+                else "This alert record is waiting for another delivery attempt."
+                if alert.status == Alert.STATUS_RETRY_PENDING
+                else "This alert record is queued and awaiting delivery processing."
+            ),
+            "timestamp": alert.sent_at or alert.last_attempted_at,
+            "tone": (
+                "success"
+                if alert.status == Alert.STATUS_DELIVERED
+                else "danger"
+                if alert.status == Alert.STATUS_FAILED
+                else "warning"
+            ),
+            "category": "delivery",
+            "meta": None,
+            "details": [
+                f"Status: {_alert_status_label(alert.status)}",
+                f"Last attempted at: {alert.last_attempted_at.isoformat() if alert.last_attempted_at else 'No timestamp'}",
+                f"Sent at: {alert.sent_at.isoformat() if alert.sent_at else 'No timestamp'}",
+            ],
+        },
+    ]
+    if alert.next_retry_at:
+        timeline.append(
+            {
+                "id": "retry",
+                "title": "Next retry scheduled",
+                "description": "The backend has recorded a future retry time for this alert record.",
+                "timestamp": alert.next_retry_at,
+                "tone": "warning",
+                "category": "delivery",
+                "meta": None,
+                "details": [f"Next retry at: {alert.next_retry_at.isoformat()}"],
+            }
+        )
+
+    updated_candidates = [
+        alert.sent_at,
+        alert.last_attempted_at,
+        alert.next_retry_at,
+        alert.created_at,
+        ward_detail.updated_at if ward_detail else None,
+    ]
+    updated_at = max((value for value in updated_candidates if value is not None), default=None)
+    is_stale = True
+    if updated_at is not None:
+        is_stale = (timezone.now() - updated_at).total_seconds() / 60 > stale_threshold_minutes
+
+    freshness = {
+        "updated_at": updated_at,
+        "is_stale": is_stale,
+        "stale_threshold_minutes": stale_threshold_minutes,
+        "mode": "timestamp_and_record_availability",
+    }
+
+    capabilities = {
+        "can_resend": False,
+        "can_recall": False,
+        "can_notify_facilities": False,
+        "can_send_follow_up": False,
+        "mode": "read_only_detail_with_trigger_flow_elsewhere",
+    }
+
+    return {
+        "alert": alert,
+        "ward_detail": ward_detail,
+        "classification": classification,
+        "risk_context": risk_context,
+        "delivery": delivery,
+        "current_state": current_state,
+        "freshness": freshness,
+        "timeline": timeline,
+        "capabilities": capabilities,
+    }
+
+
 def build_ward_intelligence_snapshot(ward: Ward, *, stale_threshold_minutes: int = 120) -> dict:
     risk_history = list(
         ward.risk_scores.select_related("model_run").order_by("-generated_at")[:6]

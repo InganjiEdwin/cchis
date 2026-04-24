@@ -263,6 +263,75 @@ class AlertSerializer(serializers.ModelSerializer):
         ]
 
 
+class AlertIntelligenceClassificationSerializer(serializers.Serializer):
+    label = serializers.CharField()
+    tone = serializers.ChoiceField(choices=["red", "amber", "orange", "blue", "slate"])
+    icon_key = serializers.CharField()
+    trigger_source = serializers.CharField()
+    mode = serializers.CharField()
+
+
+class AlertIntelligenceRiskContextSerializer(serializers.Serializer):
+    level_label = serializers.CharField()
+    trend_label = serializers.CharField()
+    summary = serializers.CharField()
+    recorded_risk_score = serializers.FloatField(allow_null=True)
+    threshold = serializers.IntegerField(allow_null=True)
+    mode = serializers.CharField()
+
+
+class AlertIntelligenceDeliverySerializer(serializers.Serializer):
+    channel_label = serializers.CharField()
+    audience_label = serializers.CharField()
+    status_label = serializers.CharField()
+    status_tone = serializers.ChoiceField(choices=["default", "success", "warning", "danger"])
+    recipient_count = serializers.IntegerField()
+    mode = serializers.CharField()
+
+
+class AlertIntelligenceStateItemSerializer(serializers.Serializer):
+    label = serializers.CharField()
+    tone = serializers.ChoiceField(choices=["success", "warning", "neutral"])
+
+
+class AlertIntelligenceFreshnessSerializer(serializers.Serializer):
+    updated_at = serializers.DateTimeField(allow_null=True)
+    is_stale = serializers.BooleanField()
+    stale_threshold_minutes = serializers.IntegerField()
+    mode = serializers.CharField()
+
+
+class AlertIntelligenceTimelineEntrySerializer(serializers.Serializer):
+    id = serializers.CharField()
+    title = serializers.CharField()
+    description = serializers.CharField()
+    timestamp = serializers.DateTimeField(allow_null=True)
+    tone = serializers.ChoiceField(choices=["primary", "progress", "success", "danger", "warning", "neutral"])
+    category = serializers.ChoiceField(choices=["all", "delivery", "responses", "system"])
+    meta = serializers.CharField(allow_null=True, allow_blank=True)
+    details = serializers.ListField(child=serializers.CharField(), required=False)
+
+
+class AlertIntelligenceCapabilitiesSerializer(serializers.Serializer):
+    can_resend = serializers.BooleanField()
+    can_recall = serializers.BooleanField()
+    can_notify_facilities = serializers.BooleanField()
+    can_send_follow_up = serializers.BooleanField()
+    mode = serializers.CharField()
+
+
+class AlertIntelligenceSerializer(serializers.Serializer):
+    alert = AlertSerializer()
+    ward_detail = WardDetailSerializer(allow_null=True)
+    classification = AlertIntelligenceClassificationSerializer()
+    risk_context = AlertIntelligenceRiskContextSerializer()
+    delivery = AlertIntelligenceDeliverySerializer()
+    current_state = AlertIntelligenceStateItemSerializer(many=True)
+    freshness = AlertIntelligenceFreshnessSerializer()
+    timeline = AlertIntelligenceTimelineEntrySerializer(many=True)
+    capabilities = AlertIntelligenceCapabilitiesSerializer()
+
+
 class WardIntelligenceSerializer(serializers.Serializer):
     ward = WardDetailSerializer()
     current_risk = WardIntelligenceCurrentRiskSerializer()

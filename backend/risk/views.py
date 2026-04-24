@@ -13,6 +13,7 @@ from .tasks import trigger_alerts_task
 from .models import Alert, CHV, HealthFacility, RiskScore, UssdSessionLog, Ward
 from .map_data import build_migori_ward_map_summary
 from .serializers import (
+    AlertIntelligenceSerializer,
     AlertSerializer,
     CHVSerializer,
     CHVOperationsSerializer,
@@ -28,6 +29,7 @@ from .serializers import (
     WardSerializer,
 )
 from .services import (
+    build_alert_intelligence_snapshot,
     build_chv_operations_snapshot,
     build_ward_intelligence_snapshot,
     create_triage_session,
@@ -274,6 +276,24 @@ class AlertDetailAPIView(generics.RetrieveAPIView):
     def get_queryset(self):
         queryset = Alert.objects.select_related("ward", "risk_score").all()
         return apply_ward_scope_or_none(queryset, self.request.user)
+
+
+class AlertIntelligenceAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request, pk: int):
+        queryset = Alert.objects.select_related("ward", "risk_score").all()
+        alert = apply_ward_scope_or_none(queryset, request.user).filter(pk=pk).first()
+
+        if alert is None:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        ward_queryset = Ward.objects.filter(is_active=True).prefetch_related("risk_scores")
+        ward_detail = apply_ward_scope_or_none(ward_queryset, request.user, field_name="id").filter(pk=alert.ward_id).first()
+
+        payload = build_alert_intelligence_snapshot(alert, ward_detail=ward_detail)
+        serializer = AlertIntelligenceSerializer(payload)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class MigoriWardMapAPIView(APIView):

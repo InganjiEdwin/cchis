@@ -223,6 +223,63 @@ export type WardIntelligenceFreshness = {
   mode: string;
 };
 
+export type AlertIntelligenceClassification = {
+  label: string;
+  tone: "red" | "amber" | "orange" | "blue" | "slate";
+  icon_key: string;
+  trigger_source: string;
+  mode: string;
+};
+
+export type AlertIntelligenceRiskContext = {
+  level_label: string;
+  trend_label: string;
+  summary: string;
+  recorded_risk_score: number | null;
+  threshold: number | null;
+  mode: string;
+};
+
+export type AlertIntelligenceDelivery = {
+  channel_label: string;
+  audience_label: string;
+  status_label: string;
+  status_tone: "default" | "success" | "warning" | "danger";
+  recipient_count: number;
+  mode: string;
+};
+
+export type AlertIntelligenceStateItem = {
+  label: string;
+  tone: "success" | "warning" | "neutral";
+};
+
+export type AlertIntelligenceFreshness = {
+  updated_at: string | null;
+  is_stale: boolean;
+  stale_threshold_minutes: number;
+  mode: string;
+};
+
+export type AlertIntelligenceTimelineEntry = {
+  id: string;
+  title: string;
+  description: string;
+  timestamp: string | null;
+  tone: "primary" | "progress" | "success" | "danger" | "warning" | "neutral";
+  category: "all" | "delivery" | "responses" | "system";
+  meta: string | null;
+  details?: string[];
+};
+
+export type AlertIntelligenceCapabilities = {
+  can_resend: boolean;
+  can_recall: boolean;
+  can_notify_facilities: boolean;
+  can_send_follow_up: boolean;
+  mode: string;
+};
+
 export type TriggerAlertRequest = {
   ward_id: number;
   send_sms: boolean;
@@ -280,7 +337,14 @@ export type WardIntelligenceRouteResponse = {
 
 type AlertDetailRouteResponse = {
   alert: AlertRecord | null;
-  wardDetail: WardDetailSummary | null;
+  ward_detail: WardDetailSummary | null;
+  classification: AlertIntelligenceClassification;
+  risk_context: AlertIntelligenceRiskContext;
+  delivery: AlertIntelligenceDelivery;
+  current_state: AlertIntelligenceStateItem[];
+  freshness: AlertIntelligenceFreshness;
+  timeline: AlertIntelligenceTimelineEntry[];
+  capabilities: AlertIntelligenceCapabilities;
 };
 
 type FacilityDetailRouteResponse = {

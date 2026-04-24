@@ -2657,6 +2657,30 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.data["id"], alert.id)
         self.assertEqual(response.data["ward"], self.ward.id)
 
+    def test_analyst_can_view_alert_intelligence(self):
+        alert = Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="dashboard",
+            message="Test alert intelligence",
+            status=Alert.STATUS_DELIVERED,
+            delivery_backend="internal-dashboard",
+            attempt_count=1,
+            max_attempts=1,
+            sent_at=timezone.now(),
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("alert-intelligence", args=[alert.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["alert"]["id"], alert.id)
+        self.assertEqual(response.data["classification"]["mode"], "derived_from_record_text")
+        self.assertEqual(response.data["delivery"]["mode"], "backend_record_fields")
+        self.assertGreaterEqual(len(response.data["timeline"]), 4)
+        self.assertFalse(response.data["capabilities"]["can_resend"])
+
     def test_supervisor_can_view_alert_detail_for_assigned_ward_only(self):
         in_scope_alert = Alert.objects.create(
             ward=self.other_ward,
@@ -2682,6 +2706,33 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(in_scope_response.data["id"], in_scope_alert.id)
 
         out_of_scope_response = self.client.get(reverse("alert-detail", args=[out_of_scope_alert.id]))
+        self.assertEqual(out_of_scope_response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_supervisor_can_view_alert_intelligence_for_assigned_ward_only(self):
+        in_scope_alert = Alert.objects.create(
+            ward=self.other_ward,
+            risk_score=self.other_risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="dashboard",
+            message="Ward two alert intelligence",
+            status=Alert.STATUS_DELIVERED,
+        )
+        out_of_scope_alert = Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="dashboard",
+            message="Ward one alert intelligence",
+            status=Alert.STATUS_DELIVERED,
+        )
+
+        self.authenticate(self.supervisor_user.username)
+
+        in_scope_response = self.client.get(reverse("alert-intelligence", args=[in_scope_alert.id]))
+        self.assertEqual(in_scope_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(in_scope_response.data["alert"]["id"], in_scope_alert.id)
+
+        out_of_scope_response = self.client.get(reverse("alert-intelligence", args=[out_of_scope_alert.id]))
         self.assertEqual(out_of_scope_response.status_code, status.HTTP_404_NOT_FOUND)
 
     @patch("risk.views.trigger_alerts_task.delay", return_value=SimpleNamespace(id="task-123"))

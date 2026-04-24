@@ -1,5 +1,6 @@
 from django.urls import path
 from .views import (
+    AlertIntelligenceAPIView,
     AlertDetailAPIView,
     AlertListAPIView,
     CHVOperationsAPIView,
@@ -32,6 +33,7 @@ urlpatterns = [
     path("maps/wards/", MigoriWardMapAPIView.as_view(), name="migori-ward-map"),
     path("alerts/", AlertListAPIView.as_view(), name="alert-list"),
     path("alerts/<int:pk>/", AlertDetailAPIView.as_view(), name="alert-detail"),
+    path("alerts/<int:pk>/intelligence/", AlertIntelligenceAPIView.as_view(), name="alert-intelligence"),
     path("alerts/trigger/", TriggerAlertsAPIView.as_view(), name="trigger-alerts"),
     path("chv/triage/", CHVTriageAPIView.as_view(), name="chv-triage"),
     path("chv/sync/", CHVSyncAPIView.as_view(), name="chv-sync"),

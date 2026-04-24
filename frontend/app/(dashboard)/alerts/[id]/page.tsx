@@ -28,133 +28,25 @@ import { StatusBanner } from "@/components/ui/status-banner";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { cn } from "@/lib/cn";
 import { type AlertRecord, type WardDetailSummary } from "@/lib/dashboard";
-import { describeFreshness, getLatestTimestamp } from "@/lib/freshness";
 import { useAlertDetailQuery } from "@/queries/use-alert-detail-query";
 
 type AlertTypeMeta = {
-  label: string;
   icon: typeof Droplets;
-  tone: "red" | "amber" | "orange" | "blue" | "slate";
-  triggerSource: string;
 };
 
-type TimelineEntry = {
-  id: string;
-  title: string;
-  description: string;
-  timestamp: string | null;
-  tone: "primary" | "progress" | "success" | "danger" | "warning" | "neutral";
-  category: "all" | "delivery" | "responses" | "system";
-  meta?: string;
-  details?: string[];
-};
-
-type StateItem = {
-  label: string;
-  tone: "success" | "warning" | "neutral";
-};
-
-const ALERT_TYPE_META: Record<string, AlertTypeMeta> = {
-  CHOLERA_RISK: {
-    label: "Cholera Risk",
-    icon: Droplets,
-    tone: "red",
-    triggerSource: "Cholera threshold exceeded",
-  },
-  FLOOD_RISK: {
-    label: "Flood Risk",
-    icon: Waves,
-    tone: "blue",
-    triggerSource: "Flood proxy exceeded",
-  },
-  WATER_CONTAMINATION: {
-    label: "Water Contamination",
-    icon: CircleAlert,
-    tone: "red",
-    triggerSource: "Water safety signal elevated",
-  },
-  HEAVY_RAINFALL: {
-    label: "Heavy Rainfall",
-    icon: CloudRain,
-    tone: "orange",
-    triggerSource: "Rainfall threshold exceeded",
-  },
-  OPERATIONAL_ALERT: {
-    label: "Operational Alert",
-    icon: ShieldAlert,
-    tone: "slate",
-    triggerSource: "Recorded risk threshold crossed",
-  },
-};
-
-function classifyAlertType(alert: AlertRecord): AlertTypeMeta {
-  const haystack = `${alert.message} ${alert.recipient} ${alert.ward_name}`.toLowerCase();
-
-  if (haystack.includes("cholera")) {
-    return ALERT_TYPE_META.CHOLERA_RISK;
-  }
-  if (haystack.includes("flood")) {
-    return ALERT_TYPE_META.FLOOD_RISK;
-  }
-  if (haystack.includes("water")) {
-    return ALERT_TYPE_META.WATER_CONTAMINATION;
-  }
-  if (haystack.includes("rain")) {
-    return ALERT_TYPE_META.HEAVY_RAINFALL;
-  }
-
-  return ALERT_TYPE_META.OPERATIONAL_ALERT;
-}
-
-function getChannelLabel(channel: AlertRecord["channel"]) {
-  switch (channel) {
-    case "SMS":
-      return "SMS Alert";
-    case "WHATSAPP":
-      return "Radio Broadcast";
-    case "DASHBOARD":
+function getClassificationIcon(iconKey: string): AlertTypeMeta["icon"] {
+  switch (iconKey) {
+    case "droplets":
+      return Droplets;
+    case "waves":
+      return Waves;
+    case "circle-alert":
+      return CircleAlert;
+    case "cloud-rain":
+      return CloudRain;
+    case "shield-alert":
     default:
-      return "USSD Notification";
-  }
-}
-
-function getChannelAudience(channel: AlertRecord["channel"]) {
-  switch (channel) {
-    case "SMS":
-      return "CHVs & officials";
-    case "WHATSAPP":
-      return "Field broadcast";
-    case "DASHBOARD":
-    default:
-      return "Dashboard viewers";
-  }
-}
-
-function getStatusLabel(status: AlertRecord["status"]) {
-  switch (status) {
-    case "DELIVERED":
-      return "Alert Delivered Successfully";
-    case "FAILED":
-      return "Delivery Failed";
-    case "RETRY_PENDING":
-      return "Delivery Retry Pending";
-    case "QUEUED":
-    default:
-      return "Queued for Dispatch";
-  }
-}
-
-function getStatusTone(status: AlertRecord["status"]) {
-  switch (status) {
-    case "DELIVERED":
-      return "success" as const;
-    case "FAILED":
-      return "danger" as const;
-    case "RETRY_PENDING":
-      return "warning" as const;
-    case "QUEUED":
-    default:
-      return "default" as const;
+      return ShieldAlert;
   }
 }
 
@@ -226,114 +118,13 @@ function formatAlertPublicId(alertId: number) {
   return `AL-${String(alertId).padStart(4, "0")}`;
 }
 
-function getRiskMeaning(score: number | null) {
-  const value = score ?? 0;
-
-  if (value >= 75) {
-    return {
-      level: "High Risk",
-      trend: "Escalating",
-      summary: "Threshold crossed in the recorded risk score. Review linked ward and delivery records closely.",
-    };
-  }
-
-  if (value >= 40) {
-    return {
-      level: "Medium Risk",
-      trend: "Monitoring",
-      summary: "Watch closely and prepare ward follow-up if indicators rise again.",
-    };
-  }
-
-  return {
-    level: "Low Risk",
-    trend: "Stable",
-    summary: "Threshold not crossed. Maintain routine monitoring and review later records if conditions change.",
-  };
-}
-
-function buildTimeline(alert: AlertRecord, triggerSource: string): TimelineEntry[] {
-  const items: TimelineEntry[] = [
-    {
-      id: "triggered",
-      title: "Alert triggered",
-      description: `Alert record generated from the risk model using ${triggerSource.toLowerCase()} signals.`,
-      timestamp: alert.created_at,
-      tone: "primary",
-      meta: alert.risk_score !== null ? `Risk score: ${Math.round(alert.risk_score)}/100` : undefined,
-      category: "system",
-      details: [
-        `Trigger source: ${triggerSource}`,
-      ],
-    },
-    {
-      id: "created",
-      title: "Alert record created",
-      description: `A ${getChannelLabel(alert.channel).toLowerCase()} record was created for ${alert.ward_name}.`,
-      timestamp: alert.created_at,
-      tone: "neutral",
-      category: "system",
-      details: [
-        `Recipient: ${alert.recipient}`,
-        `Channel: ${getChannelLabel(alert.channel)}`,
-      ],
-    },
-    {
-      id: "dispatch",
-      title: "Delivery attempt state",
-      description: `Latest delivery activity is tracked through ${alert.delivery_backend || "the recorded backend"}.`,
-      timestamp: alert.last_attempted_at ?? alert.sent_at ?? alert.created_at,
-      tone: alert.status === "FAILED" ? "danger" : alert.status === "DELIVERED" ? "success" : "progress",
-      category: "delivery",
-      details: [
-        `Attempt count: ${alert.attempt_count}/${alert.max_attempts}`,
-        `Backend: ${alert.delivery_backend || "Unspecified"}`,
-      ],
-    },
-    {
-      id: "delivery-status",
-      title: "Recorded delivery outcome",
-      description:
-        alert.status === "DELIVERED"
-          ? "This alert record is marked as delivered."
-          : alert.status === "FAILED"
-            ? "This alert record is marked as failed and needs operator review."
-            : alert.status === "RETRY_PENDING"
-              ? "This alert record is waiting for another delivery attempt."
-              : "This alert record is queued and awaiting delivery processing.",
-      timestamp: alert.sent_at ?? alert.last_attempted_at,
-      tone: alert.status === "DELIVERED" ? "success" : alert.status === "FAILED" ? "danger" : "warning",
-      category: "delivery",
-      details: [
-        `Status: ${getStatusLabel(alert.status)}`,
-        `Last attempted at: ${formatTimeStamp(alert.last_attempted_at)}`,
-        `Sent at: ${formatTimeStamp(alert.sent_at)}`,
-      ],
-    },
-  ];
-
-  if (alert.next_retry_at) {
-    items.push({
-      id: "retry",
-      title: "Next retry scheduled",
-      description: "The backend has recorded a future retry time for this alert record.",
-      timestamp: alert.next_retry_at,
-      tone: "warning",
-      category: "delivery",
-      details: [`Next retry at: ${formatTimeStamp(alert.next_retry_at)}`],
-    });
-  }
-
-  return items;
-}
-
 function exportAlertReport(alert: AlertRecord, wardDetail: WardDetailSummary | null) {
   const rows = [
     ["Field", "Value"],
     ["Alert ID", formatAlertPublicId(alert.id)],
     ["Ward", alert.ward_name],
-    ["Channel", getChannelLabel(alert.channel)],
-    ["Status", getStatusLabel(alert.status)],
+    ["Channel", alert.channel],
+    ["Status", alert.status],
     ["Created", alert.created_at],
     ["Sent", alert.sent_at ?? ""],
     ["Backend", alert.delivery_backend || ""],
@@ -357,7 +148,7 @@ function exportAlertReport(alert: AlertRecord, wardDetail: WardDetailSummary | n
   URL.revokeObjectURL(url);
 }
 
-function getToneSurface(tone: AlertTypeMeta["tone"]) {
+function getToneSurface(tone: "red" | "amber" | "orange" | "blue" | "slate") {
   switch (tone) {
     case "red":
       return "bg-[color-mix(in_srgb,var(--danger)_12%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]";
@@ -384,7 +175,14 @@ export default function AlertDetailPage() {
     enabled: Boolean(currentUser) && Number.isFinite(alertId),
   });
   const alert = alertDetailQuery.data?.alert ?? null;
-  const wardDetail = alertDetailQuery.data?.wardDetail ?? null;
+  const wardDetail = alertDetailQuery.data?.ward_detail ?? null;
+  const classification = alertDetailQuery.data?.classification ?? null;
+  const riskContext = alertDetailQuery.data?.risk_context ?? null;
+  const delivery = alertDetailQuery.data?.delivery ?? null;
+  const currentState = alertDetailQuery.data?.current_state ?? [];
+  const freshness = alertDetailQuery.data?.freshness ?? null;
+  const timeline = alertDetailQuery.data?.timeline ?? [];
+  const capabilities = alertDetailQuery.data?.capabilities ?? null;
   const isLoading = alertDetailQuery.isPending;
   const isRefreshing = alertDetailQuery.isFetching;
   const error =
@@ -393,50 +191,9 @@ export default function AlertDetailPage() {
       : !isLoading && alertDetailQuery.data && !alertDetailQuery.data.alert
         ? "Alert detail is not available in your current scope."
         : null;
-
-  const alertType = alert ? classifyAlertType(alert) : ALERT_TYPE_META.OPERATIONAL_ALERT;
-  const AlertTypeIcon = alertType.icon;
-  const timeline = alert ? buildTimeline(alert, alertType.triggerSource) : [];
   const filteredTimeline = timeline.filter((item) => timelineFilter === "all" || item.category === timelineFilter);
-  const riskMeaning = alert ? getRiskMeaning(alert.risk_score) : getRiskMeaning(null);
-  const lastUpdatedTimestamp = getLatestTimestamp([
-    alert?.sent_at,
-    alert?.last_attempted_at,
-    alert?.next_retry_at,
-    alert?.created_at,
-    wardDetail?.latest_generated_at,
-    wardDetail?.updated_at,
-  ]);
-  const freshness = describeFreshness(lastUpdatedTimestamp, 30);
-  const currentState: StateItem[] = alert
-    ? [
-        {
-          label:
-            alert.status === "DELIVERED"
-              ? "Alert delivered"
-              : alert.status === "FAILED"
-                ? "Delivery blocked"
-                : "Delivery still in progress",
-          tone: alert.status === "FAILED" ? "warning" : "success",
-        },
-        {
-          label:
-            alert.status === "FAILED"
-              ? "This alert record failed delivery"
-              : alert.status === "RETRY_PENDING"
-                ? "A retry is still pending"
-                : "No active delivery failure recorded",
-          tone: alert.status === "FAILED" || alert.status === "RETRY_PENDING" ? "warning" : "success",
-        },
-        {
-          label:
-            alert.risk_score !== null && alert.risk_score >= 75
-              ? "High ward risk accompanies this alert"
-              : "No high ward-risk threshold recorded",
-          tone: alert.risk_score !== null && alert.risk_score >= 75 ? "warning" : "neutral",
-        },
-      ]
-    : [];
+  const lastUpdatedTimestamp = freshness?.updated_at ?? null;
+  const AlertTypeIcon = classification ? getClassificationIcon(classification.icon_key) : ShieldAlert;
 
   if (!currentUser) {
     return null;
@@ -448,7 +205,7 @@ export default function AlertDetailPage() {
         title="Alerts"
         subtitle="Operational alert detail"
         lastUpdatedLabel={isRefreshing ? "Refreshing..." : formatRelativeShort(lastUpdatedTimestamp)}
-        lastUpdatedTone={freshness.isStale ? "stale" : "default"}
+        lastUpdatedTone={freshness?.is_stale ? "stale" : "default"}
         onRefresh={() => {
           void alertDetailQuery.refetch();
         }}
@@ -479,9 +236,9 @@ export default function AlertDetailPage() {
               <h1 className="text-[clamp(2rem,1.35rem+2vw,3rem)] font-semibold leading-tight text-panel-strong">
                 {alert ? `Alert ID: ${formatAlertPublicId(alert.id)}` : "Alert detail"}
               </h1>
-              {alert ? (
-                <StatusBadge tone={getStatusTone(alert.status)} className="rounded-full px-3 py-1.5 tracking-[0.14em]">
-                  {getStatusLabel(alert.status)}
+              {alert && delivery ? (
+                <StatusBadge tone={delivery.status_tone} className="rounded-full px-3 py-1.5 tracking-[0.14em]">
+                  {delivery.status_label}
                 </StatusBadge>
               ) : null}
             </div>
@@ -535,26 +292,28 @@ export default function AlertDetailPage() {
                 </div>
                 <div className="space-y-2">
                   <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Risk context</span>
-                  <strong className="block text-base text-panel-strong">{riskMeaning.level}</strong>
+                  <strong className="block text-base text-panel-strong">{riskContext?.level_label ?? "Risk unavailable"}</strong>
                   <small className="text-sm text-panel-muted">
-                    {alert.risk_score !== null ? `Score ${Math.round(alert.risk_score)}/100, threshold 75` : "Score unavailable"}
+                    {riskContext?.recorded_risk_score !== null && riskContext?.recorded_risk_score !== undefined
+                      ? `Score ${Math.round(riskContext.recorded_risk_score)}/100${riskContext.threshold ? `, threshold ${riskContext.threshold}` : ""}`
+                      : "Score unavailable"}
                   </small>
                 </div>
                 <div className="space-y-2">
                   <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Alert type</span>
                   <div className="flex flex-wrap items-center gap-3">
-                    <span className={cn("inline-flex size-10 items-center justify-center rounded-2xl", getToneSurface(alertType.tone))}>
+                    <span className={cn("inline-flex size-10 items-center justify-center rounded-2xl", getToneSurface(classification?.tone ?? "slate"))}>
                       <AlertTypeIcon className="size-5" aria-hidden="true" />
                     </span>
-                    <strong className="text-base text-panel-strong">{alertType.label}</strong>
+                    <strong className="text-base text-panel-strong">{classification?.label ?? "Alert record"}</strong>
                   </div>
                   <StatusBadge tone="info" className="tracking-[0.12em]">
-                    Backend record
+                    {classification?.mode === "derived_from_record_text" ? "Derived from record text" : "Backend record"}
                   </StatusBadge>
                 </div>
                 <div className="space-y-2">
                   <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Trigger source</span>
-                  <strong className="block text-base text-panel-strong">{alertType.triggerSource}</strong>
+                  <strong className="block text-base text-panel-strong">{classification?.trigger_source ?? "Not recorded"}</strong>
                 </div>
                 <div className="space-y-2">
                   <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Created timestamp</span>
@@ -595,10 +354,10 @@ export default function AlertDetailPage() {
                   </p>
                 </div>
                 <StatusBadge
-                  tone={alert.status === "FAILED" ? "danger" : alert.status === "DELIVERED" ? "success" : "warning"}
+                  tone={delivery?.status_tone ?? "warning"}
                   className="px-3 py-1.5 tracking-[0.14em]"
                 >
-                  {alert.status === "FAILED" ? "Needs review" : alert.status === "DELIVERED" ? "Delivered" : "Awaiting completion"}
+                  {delivery?.status_label ?? "Awaiting completion"}
                 </StatusBadge>
               </div>
 
@@ -606,7 +365,7 @@ export default function AlertDetailPage() {
                 <Card className="rounded-[1.4rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-4 shadow-none">
                   <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Recipient</p>
                   <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-panel-strong">
-                    1
+                    {delivery?.recipient_count ?? 1}
                   </p>
                 </Card>
                 <Card className="rounded-[1.4rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-4 shadow-none">
@@ -724,15 +483,13 @@ export default function AlertDetailPage() {
                 <div className="space-y-1">
                   <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Derived escalation posture</span>
                   <strong className="block text-base text-panel-strong">
-                    {alert.risk_score !== null && alert.risk_score >= 75 ? "Elevated review needed" : "Monitoring"}
+                    {riskContext?.trend_label ?? "Monitoring"}
                   </strong>
                 </div>
                 <div className="space-y-1">
                   <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Suggested review path</span>
                   <strong className="block text-base leading-6 text-panel-strong">
-                    {alert.risk_score !== null && alert.risk_score >= 75
-                      ? "Review ward detail and backend delivery state before escalating outside this page."
-                      : "Continue monitoring this record and use ward detail for recorded ward context."}
+                    {riskContext?.summary ?? "Continue monitoring this record and use ward detail for recorded ward context."}
                   </strong>
                 </div>
               </div>
@@ -741,13 +498,13 @@ export default function AlertDetailPage() {
                 <StatusBanner tone="warning" icon={<ShieldAlert aria-hidden="true" />}>
                   Escalation, facility notification, and follow-up messaging actions are not backend-wired from this alert detail page yet.
                 </StatusBanner>
-                <Button className="w-full justify-center" disabled>
+                <Button className="w-full justify-center" disabled={!capabilities || !capabilities.can_resend}>
                   Escalation Workflow Pending
                 </Button>
-                <Button variant="secondary" className="w-full justify-center" disabled>
+                <Button variant="secondary" className="w-full justify-center" disabled={!capabilities || !capabilities.can_notify_facilities}>
                   Notify Facilities
                 </Button>
-                <Button variant="secondary" className="w-full justify-center" disabled>
+                <Button variant="secondary" className="w-full justify-center" disabled={!capabilities || !capabilities.can_send_follow_up}>
                   Send Follow-up Message
                 </Button>
               </div>
@@ -760,8 +517,8 @@ export default function AlertDetailPage() {
 
               <dl className="mt-6 space-y-4 border-t border-panel-table-wrap pt-5 text-sm">
                 {[
-                  ["Channel", getChannelLabel(alert.channel)],
-                  ["Audience label", getChannelAudience(alert.channel)],
+                  ["Channel", delivery?.channel_label ?? alert.channel],
+                  ["Audience label", delivery?.audience_label ?? "Recorded recipient"],
                   ["Recipient", alert.recipient],
                   ["Attempt count", `${alert.attempt_count} of ${alert.max_attempts}`],
                   ["External ID", alert.external_id || "No external ID recorded"],
@@ -805,10 +562,10 @@ export default function AlertDetailPage() {
             </Card>
 
             <div className="flex flex-col gap-3">
-              <Button variant="danger" className="w-full justify-center" disabled>
+              <Button variant="danger" className="w-full justify-center" disabled={!capabilities || !capabilities.can_resend}>
                 Re-send Pending Backend Contract
               </Button>
-              <Button variant="secondary" className="w-full justify-center" disabled>
+              <Button variant="secondary" className="w-full justify-center" disabled={!capabilities || !capabilities.can_recall}>
                 Recall Alert Pending Backend Contract
               </Button>
             </div>

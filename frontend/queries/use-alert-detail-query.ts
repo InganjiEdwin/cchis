@@ -2,12 +2,19 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { fetchAlertByIdViaBff, type AlertRecord, type WardDetailSummary } from "@/lib/dashboard";
+import { fetchAlertByIdViaBff, type AlertIntelligenceCapabilities, type AlertIntelligenceClassification, type AlertIntelligenceDelivery, type AlertIntelligenceFreshness, type AlertIntelligenceRiskContext, type AlertIntelligenceStateItem, type AlertIntelligenceTimelineEntry, type AlertRecord, type WardDetailSummary } from "@/lib/dashboard";
 import { queryKeys } from "@/lib/query-keys";
 
 type AlertDetailData = {
   alert: AlertRecord | null;
-  wardDetail: WardDetailSummary | null;
+  ward_detail: WardDetailSummary | null;
+  classification: AlertIntelligenceClassification;
+  risk_context: AlertIntelligenceRiskContext;
+  delivery: AlertIntelligenceDelivery;
+  current_state: AlertIntelligenceStateItem[];
+  freshness: AlertIntelligenceFreshness;
+  timeline: AlertIntelligenceTimelineEntry[];
+  capabilities: AlertIntelligenceCapabilities;
 };
 
 type UseAlertDetailQueryParams = {
