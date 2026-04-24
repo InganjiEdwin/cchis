@@ -243,7 +243,7 @@ export default function AlertDetailPage() {
               ) : null}
             </div>
             <p className="max-w-3xl text-sm text-panel-muted">
-              Review recorded delivery status, linked ward context, and the available read-path details for this alert.
+              Recorded delivery status, linked ward context, and the available read-path details for this alert.
             </p>
           </div>
 
@@ -291,7 +291,7 @@ export default function AlertDetailPage() {
                   <strong className="block text-base text-panel-strong">{alert.ward_name}</strong>
                 </div>
                 <div className="space-y-2">
-                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Risk context</span>
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Recorded risk</span>
                   <strong className="block text-base text-panel-strong">{riskContext?.level_label ?? "Risk unavailable"}</strong>
                   <small className="text-sm text-panel-muted">
                     {riskContext?.recorded_risk_score !== null && riskContext?.recorded_risk_score !== undefined
@@ -477,7 +477,7 @@ export default function AlertDetailPage() {
 
           <div className="space-y-5">
             <Card className="rounded-[2rem] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--brand)_10%,var(--panel)),var(--panel))] px-5 py-5">
-              <h2 className="text-2xl font-semibold text-panel-strong">Review Guidance</h2>
+              <h2 className="text-2xl font-semibold text-panel-strong">Recorded Guidance</h2>
 
               <div className="mt-5 space-y-5">
                 <div className="space-y-1">

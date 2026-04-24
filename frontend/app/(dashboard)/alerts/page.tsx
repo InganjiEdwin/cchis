@@ -549,18 +549,18 @@ export default function AlertsPage() {
           <Card className="rounded-3xl bg-panel px-5 py-5">
             <h2 className="text-2xl font-semibold text-panel-strong">Alert Record In Focus</h2>
             <p className="mt-2 text-sm text-panel-muted">
-              Derived summary of the visible alert record that currently sorts highest by failure state, risk score, and recency.
+              Derived summary of the visible alert record that sorts highest by failure state, risk score, and recency.
             </p>
             <div className="mt-5 rounded-2xl bg-[color-mix(in_srgb,var(--brand)_8%,var(--panel))] p-4">
               <strong className="block text-base text-panel-strong">
                 {mostCriticalAlert
                   ? `${formatAlertPublicId(mostCriticalAlert.id)} - ${mostCriticalAlert.ward_name}`
-                  : "No priority alert record in the current filter."}
+                  : "No alert record stands out in the current filter."}
               </strong>
               <p className="mt-2 text-sm text-panel-muted">
                 {mostCriticalAlert
                   ? `${mostCriticalAlert.statusLabel} via ${mostCriticalAlert.channelLabel.toLowerCase()} with recorded risk score ${mostCriticalAlert.risk_score !== null ? Math.round(mostCriticalAlert.risk_score) : "unavailable"}, updated ${mostCriticalAlert.relativeLabel}.`
-                  : "No visible alert record currently stands out above the rest of the filtered scope."}
+                  : "No visible alert record stands out above the rest of the filtered scope."}
               </p>
             </div>
             {mostCriticalAlert ? (
@@ -809,7 +809,7 @@ export default function AlertsPage() {
                           tone={index === 0 ? "danger" : "warning"}
                           className="tracking-[0.12em]"
                         >
-                          {index === 0 ? "Highest visible pressure" : "Derived review"}
+                          {index === 0 ? "Top visible row" : "Derived row"}
                         </StatusBadge>
                         <strong className="truncate text-base text-panel-strong">{zone.wardName}</strong>
                       </div>
@@ -840,14 +840,14 @@ export default function AlertsPage() {
           <strong className="mt-3 block text-2xl leading-tight text-panel-strong">
             {mostCriticalAlert
               ? `${formatAlertPublicId(mostCriticalAlert.id)} in ${mostCriticalAlert.ward_name}`
-              : "No priority alert record in scope"}
+              : "No alert record in focus"}
           </strong>
           <p className="mt-3 text-sm text-panel-muted">
             {mostCriticalAlert
               ? `Latest recorded risk score: ${mostCriticalAlert.risk_score !== null ? Math.round(mostCriticalAlert.risk_score) : "Unavailable"}`
               : alertFreshness.isStale
-                ? "Review feed freshness before treating this panel as current."
-                : "No visible alert record currently stands out in the filtered scope."}
+                ? "Check feed freshness before treating this panel as current."
+                : "No visible alert record stands out in the filtered scope."}
           </p>
         </Card>
       </section>
