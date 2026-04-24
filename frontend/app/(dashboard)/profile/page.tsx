@@ -1,20 +1,6 @@
 "use client";
 
-import {
-  BellRing,
-  ChevronRight,
-  Clock3,
-  Globe,
-  KeyRound,
-  LogOut,
-  MapPinned,
-  MonitorCog,
-  RefreshCcw,
-  ShieldCheck,
-  Smartphone,
-  UserRound,
-  Waves,
-} from "lucide-react";
+import { ChevronRight, Clock3, Globe, KeyRound, LogOut, MapPinned, MonitorCog, RefreshCcw, ShieldCheck, Smartphone, UserRound, Waves } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
@@ -26,14 +12,6 @@ import { Card } from "@/components/ui/card";
 import { StatusBanner } from "@/components/ui/status-banner";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { cn } from "@/lib/cn";
-
-function formatDisplayDate(timestamp: Date) {
-  return timestamp.toLocaleDateString([], {
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  });
-}
 
 function getInitials(name: string) {
   return name
@@ -107,8 +85,6 @@ export default function ProfilePage() {
   const [isSavingAppearance, setIsSavingAppearance] = useState(false);
   const [appearanceError, setAppearanceError] = useState<string | null>(null);
 
-  const now = useMemo(() => new Date(), []);
-
   if (!currentUser) {
     return null;
   }
@@ -137,7 +113,6 @@ export default function ProfilePage() {
     { value: "DARK", label: "Dark" },
   ] as const;
   const capabilityCopy = buildCapabilityCopy(currentUser.role);
-  const accountCreatedLabel = formatDisplayDate(new Date(now.getFullYear(), 0, 12));
   const activityItems = [
     {
       title: "Triggered Flood Protocol - Sector B",
@@ -164,8 +139,8 @@ export default function ProfilePage() {
   const detailItems = [
     { label: "Email address", value: currentUser.email || "Not provided" },
     { label: "Phone number", value: currentUser.phone_number || "Not provided" },
-    { label: "Organization", value: "Migori County Government" },
-    { label: "Account created", value: accountCreatedLabel },
+    { label: "Organization", value: "No organization record exposed on this page" },
+    { label: "Account record", value: "No account-created timestamp exposed on this page" },
   ];
 
   async function handleSignOut() {
@@ -332,13 +307,14 @@ export default function ProfilePage() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <h2 className="text-[1.25rem] font-semibold tracking-[-0.04em] text-panel-strong">Account Details</h2>
-              <p className="mt-1 text-sm text-panel-muted">Primary identity and preference settings for this session.</p>
+              <p className="mt-1 text-sm text-panel-muted">Visible identity fields and session preferences on this page.</p>
             </div>
             <button
               type="button"
+              disabled
               className="inline-flex items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--dashboard-icon-button-ink-hover)]"
             >
-              Update
+              Update unavailable
             </button>
           </div>
 
@@ -359,12 +335,12 @@ export default function ProfilePage() {
           <div className="mt-6 border-t border-[var(--dashboard-table-line)] pt-6">
             <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-panel-subtle">Preferences</p>
             <div className="mt-4 grid gap-3 md:grid-cols-2">
-              <div className="flex items-center justify-between rounded-[1.25rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_24%,transparent)] px-4 py-3">
+              <div className="flex items-center justify-between rounded-[1.25rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_24%,transparent)] px-4 py-3 opacity-75">
                 <span className="flex items-center gap-3">
-                  <BellRing className="size-4 text-panel-muted" aria-hidden="true" />
+                  <Globe className="size-4 text-panel-muted" aria-hidden="true" />
                   <span className="text-sm font-medium text-panel-copy">Alert notifications</span>
                 </span>
-                <span className="inline-flex h-6 w-11 items-center rounded-full bg-brand px-1">
+                <span className="inline-flex h-6 w-11 items-center rounded-full bg-[color-mix(in_srgb,var(--dashboard-table-line)_65%,transparent)] px-1">
                   <span className="ml-auto size-4 rounded-full bg-white" />
                 </span>
               </div>
@@ -390,6 +366,10 @@ export default function ProfilePage() {
                 </select>
               </label>
             </div>
+
+            <p className="mt-3 text-sm text-panel-muted">
+              Alert-notification preferences are not exposed as a saved setting on this page yet.
+            </p>
 
             {isSavingAppearance ? (
               <p className="mt-3 text-sm text-panel-muted">Saving appearance preference...</p>
