@@ -147,7 +147,7 @@ export default function ProfilePage() {
       <DashboardTopbar
         title="Profile"
         subtitle="Identity, role, and access summary"
-        lastUpdatedLabel="Profile visible"
+        lastUpdatedLabel="Profile shown"
       />
 
       {appearanceError ? (
@@ -178,7 +178,7 @@ export default function ProfilePage() {
                     </StatusBadge>
                   </div>
                   <p className="mt-1 text-sm font-medium text-panel-muted">
-                    Role from session data
+                    Role from session
                   </p>
                 </div>
 
@@ -195,7 +195,7 @@ export default function ProfilePage() {
 
                 <div className="inline-flex items-center gap-2 rounded-pill border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_24%,transparent)] px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-panel-copy">
                   <Clock3 className="size-3.5" aria-hidden="true" />
-                  Profile loaded
+                  Profile shown
                 </div>
               </div>
             </div>
@@ -280,7 +280,7 @@ export default function ProfilePage() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <h2 className="text-[1.25rem] font-semibold tracking-[-0.04em] text-panel-strong">Account Details</h2>
-              <p className="mt-1 text-sm text-panel-muted">Identity fields and preferences shown on this page.</p>
+              <p className="mt-1 text-sm text-panel-muted">Identity fields and preferences shown here.</p>
             </div>
             <button
               type="button"
@@ -475,7 +475,7 @@ export default function ProfilePage() {
           <div className="mt-5 flex flex-wrap items-center gap-4 text-sm text-panel-muted">
             <span className="inline-flex items-center gap-2">
               <RefreshCcw className="size-4" aria-hidden="true" />
-              Profile data from session
+              Profile data shown here
             </span>
             <span className="inline-flex items-center gap-2">
               <ShieldCheck className="size-4" aria-hidden="true" />
