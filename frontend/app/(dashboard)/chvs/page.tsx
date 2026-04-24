@@ -340,7 +340,7 @@ export default function ChvsPage() {
     <div className="space-y-6">
       <DashboardTopbar
         title="Community Health Volunteers"
-        subtitle="Review CHV activity summaries, sync status, and ward-linked engagement data"
+        subtitle="CHV activity summaries, sync status, and ward-linked engagement data"
         lastUpdatedLabel={lastUpdatedLabel}
         lastUpdatedTone={freshness.isStale ? "stale" : "default"}
       />
@@ -386,7 +386,7 @@ export default function ChvsPage() {
             <div className="mt-3 flex items-center gap-3">
               <strong className="text-4xl font-semibold leading-none text-panel-strong">{acknowledgedRate.toFixed(1)}%</strong>
               <StatusBadge tone="warning" className="tracking-[0.12em]">
-                Derived
+                Calculated
               </StatusBadge>
             </div>
             <p className="mt-4 text-sm text-panel-muted">Calculated from visible alert delivery outcomes in this scope</p>
@@ -535,9 +535,9 @@ export default function ChvsPage() {
 
           <div className="space-y-5">
             <Card className="rounded-[2rem] px-5 py-5">
-              <h2 className="text-2xl font-semibold text-panel-strong">Derived Priorities</h2>
+              <h2 className="text-2xl font-semibold text-panel-strong">Planning Cues</h2>
               <p className="mt-3 text-sm text-panel-muted">
-                Assignment, alert scope, and training cues below are derived planning signals only. This page does not expose backend action routes for those actions.
+                Assignment, alert scope, and training cues below are calculated from visible records only. This page does not expose backend action routes for those actions.
               </p>
 
               <div className="mt-5 space-y-3">
@@ -597,13 +597,13 @@ export default function ChvsPage() {
                   <ShieldAlert className="size-4" aria-hidden="true" />
                 </span>
                 <h3 className="text-xl font-semibold text-panel-strong">
-                  {hasCriticalCoverageGap ? "Derived Coverage Signal" : "Coverage Summary"}
+                  {hasCriticalCoverageGap ? "Coverage Flag" : "Coverage Summary"}
                 </h3>
               </div>
               <p className="mt-4 text-sm leading-6 text-panel-copy">
                 {hasCriticalCoverageGap
                   ? `${criticalCoverageGap?.wardName} shows ${criticalCoverageGap?.activeCount} active CHV in visible records while the linked ward risk feed still shows ${criticalCoverageGap?.predictedCases} predicted cases.`
-                  : "No derived CHV coverage signal stands out in the visible ward set."}
+                  : "No CHV coverage gap stands out in the visible ward set."}
               </p>
               <Button className="mt-5 w-full justify-center" disabled>
                 Redeployment unavailable
