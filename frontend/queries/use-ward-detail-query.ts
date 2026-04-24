@@ -3,12 +3,14 @@
 import { useQuery } from "@tanstack/react-query";
 
 import {
+  fetchWardMapViaBff,
   fetchWardDetailViaBff,
   type AlertRecord,
   type RiskScoreRecord,
   type WardIntelligenceDriverItem,
   type WardIntelligenceFreshness,
   type WardIntelligenceGuidanceItem,
+  type WardMapFeature,
   type WardIntelligenceTrend,
 } from "@/lib/dashboard";
 import { queryKeys } from "@/lib/query-keys";
@@ -36,6 +38,7 @@ export type WardDetailState = {
   guidanceItems: WardIntelligenceGuidanceItem[];
   riskHistory: RiskScoreRecord[];
   relatedAlerts: AlertRecord[];
+  wardMapFeature: WardMapFeature | null;
 };
 
 type UseWardDetailQueryParams = {
@@ -47,9 +50,14 @@ export function useWardDetailQuery({ wardId, enabled = true }: UseWardDetailQuer
   return useQuery({
     queryKey: queryKeys.wards.detail(wardId),
     queryFn: async (): Promise<WardDetailState> => {
-      const response = await fetchWardDetailViaBff(wardId);
+      const [response, wardMap] = await Promise.all([
+        fetchWardDetailViaBff(wardId),
+        fetchWardMapViaBff(),
+      ]);
       const riskHistory = response.risk_history;
       const relatedAlerts = response.related_alerts;
+      const wardMapFeature =
+        wardMap.features.find((feature) => feature.properties.backend_ward_id === wardId) ?? null;
 
       return {
         wardId,
@@ -76,6 +84,7 @@ export function useWardDetailQuery({ wardId, enabled = true }: UseWardDetailQuer
         guidanceItems: response.guidance_summary.items,
         riskHistory,
         relatedAlerts,
+        wardMapFeature,
       };
     },
     enabled,

@@ -21,6 +21,7 @@ import { useMemo } from "react";
 
 import { useAuth } from "@/components/auth-provider";
 import { DashboardTopbar } from "@/components/dashboard-topbar";
+import { MigoriWardMap } from "@/components/migori-ward-map";
 import { TriggerAlertPanel } from "@/components/trigger-alert-panel";
 import { Card } from "@/components/ui/card";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -187,6 +188,7 @@ export default function WardDetailPage() {
   const drivers = detail?.driverItems ?? [];
   const recommendations = detail?.guidanceItems ?? [];
   const latestAlert = detail?.relatedAlerts[0] ?? null;
+  const wardMapFeatures = detail?.wardMapFeature ? [detail.wardMapFeature] : [];
 
   if (!currentUser) {
     return null;
@@ -414,7 +416,7 @@ export default function WardDetailPage() {
             )}
           </Card>
 
-          <section className="grid gap-6 lg:grid-cols-2">
+          <section className="grid gap-6 lg:grid-cols-3">
             <Card className="space-y-5 p-6">
               <div className="flex items-center gap-3">
                 <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand">
@@ -448,6 +450,47 @@ export default function WardDetailPage() {
               ) : (
                 <p className="text-sm text-panel-muted">No ward detail is available for this route.</p>
               )}
+            </Card>
+
+            <Card className="space-y-5 p-6">
+              <div className="flex items-center gap-3">
+                <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand">
+                  <MapPinned className="size-5" aria-hidden="true" />
+                </span>
+                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Ward geometry</h3>
+              </div>
+
+              <p className="text-sm leading-6 text-panel-muted">
+                This panel uses the shared Migori ward map contract. It shows recorded ward geometry only and does not add neighboring-ward analysis on this page yet.
+              </p>
+
+              <div className="overflow-hidden rounded-[1.5rem] border border-panel-table-wrap bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--brand)_10%,transparent),transparent_35%),radial-gradient(circle_at_bottom_right,color-mix(in_srgb,var(--warning)_10%,transparent),transparent_32%),linear-gradient(135deg,color-mix(in_srgb,var(--panel)_92%,white),var(--panel))] p-4">
+                <div className="flex h-full min-h-[14rem] flex-col gap-3 rounded-[1.1rem] border border-panel-table-wrap bg-panel/80 p-4">
+                  <div className="flex items-center justify-between text-xs uppercase tracking-[0.18em] text-panel-subtle">
+                    <span>Map context</span>
+                    <span>{detail?.wardMapFeature ? "Backend geometry" : "No ward geometry"}</span>
+                  </div>
+                  <div className="min-h-[13rem] rounded-[1rem] border border-panel-table-wrap bg-white/60 p-2 dark:bg-panel/70">
+                    {wardMapFeatures.length ? (
+                      <MigoriWardMap
+                        features={wardMapFeatures}
+                        selectedWardName={detail?.wardName ?? null}
+                        onSelectWard={() => undefined}
+                      />
+                    ) : (
+                      <div className="flex h-full items-center justify-center text-center text-sm text-panel-muted">
+                        Ward geometry is not available for this route yet.
+                      </div>
+                    )}
+                  </div>
+                  {detail?.wardMapFeature ? (
+                    <div className="inline-flex w-max items-center gap-2 rounded-full bg-[color-mix(in_srgb,var(--brand)_10%,white)] px-3 py-1.5 text-xs font-semibold text-panel-strong">
+                      <span className="size-2 rounded-full bg-brand" />
+                      {detail.wardName} boundary
+                    </div>
+                  ) : null}
+                </div>
+              </div>
             </Card>
 
             <Card className="space-y-5 p-6">
