@@ -375,7 +375,7 @@ export default function FacilityDetailPage() {
                       <span className="text-panel-muted">+</span>
                     </Button>
                     <Button variant="secondary" className="w-full justify-between" disabled>
-                      Notify CHVs Pending
+                      CHV notification unavailable
                       <span className="text-panel-muted">+</span>
                     </Button>
                     <Button variant="danger" className="w-full justify-between" disabled>
