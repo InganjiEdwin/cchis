@@ -332,6 +332,68 @@ class AlertIntelligenceSerializer(serializers.Serializer):
     capabilities = AlertIntelligenceCapabilitiesSerializer()
 
 
+class FacilityIntelligenceReadinessSerializer(serializers.Serializer):
+    facility_type_label = serializers.CharField()
+    surge_risk = serializers.ChoiceField(choices=["EXTREME", "MODERATE", "LOW"])
+    surge_risk_label = serializers.CharField()
+    status_banner_label = serializers.CharField()
+    projected_cases = serializers.IntegerField()
+    predicted_cases_per_day = serializers.IntegerField()
+    ors_estimate_percent = serializers.IntegerField()
+    ors_state = serializers.ChoiceField(choices=["CRITICAL", "STABLE", "READY"])
+    staffing_filled = serializers.IntegerField()
+    staffing_required = serializers.IntegerField()
+    staffing_percent = serializers.IntegerField()
+    staffing_state = serializers.ChoiceField(choices=["LIMITED", "OPTIMAL"])
+    last_reported_at = serializers.DateTimeField(allow_null=True)
+    freshness_state = serializers.ChoiceField(choices=["FRESH", "WARNING", "STALE"])
+    mode = serializers.CharField()
+
+
+class FacilityIntelligenceContextSerializer(serializers.Serializer):
+    summary = serializers.CharField()
+    ward_risk_score = serializers.FloatField(allow_null=True)
+    ward_alert_count = serializers.IntegerField()
+    map_mode = serializers.CharField()
+
+
+class FacilityIntelligenceFreshnessSerializer(serializers.Serializer):
+    updated_at = serializers.DateTimeField(allow_null=True)
+    is_stale = serializers.BooleanField()
+    stale_threshold_minutes = serializers.IntegerField()
+    mode = serializers.CharField()
+
+
+class FacilityIntelligenceTimelineEntrySerializer(serializers.Serializer):
+    id = serializers.CharField()
+    title = serializers.CharField()
+    description = serializers.CharField()
+    timestamp = serializers.DateTimeField(allow_null=True)
+    tone = serializers.ChoiceField(choices=["success", "warning", "danger", "info"])
+    category = serializers.ChoiceField(choices=["system", "alert"])
+    meta = serializers.CharField(allow_null=True, allow_blank=True)
+    details = serializers.ListField(child=serializers.CharField(), required=False)
+
+
+class FacilityIntelligenceCapabilitiesSerializer(serializers.Serializer):
+    can_dispatch = serializers.BooleanField()
+    can_open_chat = serializers.BooleanField()
+    can_notify_chvs = serializers.BooleanField()
+    can_escalate_county = serializers.BooleanField()
+    can_view_dispatch_history = serializers.BooleanField()
+    can_view_contacts = serializers.BooleanField()
+    mode = serializers.CharField()
+
+
+class FacilityIntelligenceSerializer(serializers.Serializer):
+    facility = HealthFacilitySerializer()
+    readiness = FacilityIntelligenceReadinessSerializer()
+    context = FacilityIntelligenceContextSerializer()
+    freshness = FacilityIntelligenceFreshnessSerializer()
+    timeline = FacilityIntelligenceTimelineEntrySerializer(many=True)
+    capabilities = FacilityIntelligenceCapabilitiesSerializer()
+
+
 class WardIntelligenceSerializer(serializers.Serializer):
     ward = WardDetailSerializer()
     current_risk = WardIntelligenceCurrentRiskSerializer()

@@ -3,21 +3,15 @@
 import { useQuery } from "@tanstack/react-query";
 
 import {
-  fetchAlertsDataViaBff,
   fetchFacilityByIdViaBff,
   fetchWardMapViaBff,
-  fetchWardRiskDataViaBff,
-  type AlertRecord,
-  type FacilityRecord,
-  type LatestWardRisk,
+  type FacilityIntelligenceRouteResponse,
   type WardMapResponse,
 } from "@/lib/dashboard";
 import { queryKeys } from "@/lib/query-keys";
 
 export type FacilityDetailSnapshot = {
-  facility: FacilityRecord | null;
-  risks: LatestWardRisk[];
-  alerts: AlertRecord[];
+  intelligence: FacilityIntelligenceRouteResponse | null;
   wardMap: WardMapResponse | null;
 };
 
@@ -26,20 +20,16 @@ export function useFacilityDetailQuery(facilityId: number | null, { enabled = tr
     queryKey: queryKeys.facilityReadiness.detail(facilityId ?? "unknown"),
     queryFn: async (): Promise<FacilityDetailSnapshot> => {
       if (!facilityId) {
-        return { facility: null, risks: [], alerts: [], wardMap: null };
+        return { intelligence: null, wardMap: null };
       }
 
-      const [facilityResponse, wardResponse, alertResponse, wardMap] = await Promise.all([
+      const [intelligence, wardMap] = await Promise.all([
         fetchFacilityByIdViaBff(facilityId),
-        fetchWardRiskDataViaBff({ county: "Migori", ordering: "-current_risk_score" }),
-        fetchAlertsDataViaBff(),
         fetchWardMapViaBff(),
       ]);
 
       return {
-        facility: facilityResponse.facility,
-        risks: wardResponse.latestRisks,
-        alerts: alertResponse.results,
+        intelligence,
         wardMap,
       };
     },

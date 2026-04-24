@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import type { FacilityRecord } from "@/lib/dashboard";
+import type { FacilityIntelligenceRouteResponse } from "@/lib/dashboard";
 import { ServerApiError, fetchBackendJson } from "@/lib/server-api";
 
 function parseFacilityId(value: string) {
@@ -18,11 +18,11 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   }
 
   try {
-    const facility = await fetchBackendJson<FacilityRecord>(`/facilities/${facilityId}/`, {
+    const facility = await fetchBackendJson<FacilityIntelligenceRouteResponse>(`/facilities/${facilityId}/intelligence/`, {
       cookieHeader,
     });
 
-    return NextResponse.json({ facility });
+    return NextResponse.json(facility);
   } catch (error) {
     if (error instanceof ServerApiError) {
       return NextResponse.json({ detail: error.message }, { status: error.status });

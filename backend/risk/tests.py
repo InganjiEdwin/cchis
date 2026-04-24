@@ -2549,6 +2549,45 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
         self.assertEqual(out_of_scope_detail_response.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_analyst_can_view_facility_intelligence(self):
+        Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="dashboard",
+            message="Facility-linked alert",
+            status=Alert.STATUS_DELIVERED,
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("facility-intelligence", args=[self.health_facility.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["facility"]["id"], self.health_facility.id)
+        self.assertEqual(response.data["readiness"]["mode"], "calculated_from_facility_identity_and_ward_risk")
+        self.assertEqual(response.data["context"]["map_mode"], "shared_ward_geometry_contract")
+        self.assertGreaterEqual(len(response.data["timeline"]), 2)
+        self.assertFalse(response.data["capabilities"]["can_dispatch"])
+
+    def test_supervisor_can_view_facility_intelligence_for_assigned_ward_only(self):
+        other_facility = HealthFacility.objects.create(
+            name="North Kadem Health Centre",
+            facility_code="TEST-HF-004",
+            ward=self.other_ward,
+            facility_type=HealthFacility.TYPE_HEALTH_CENTER,
+            ownership=HealthFacility.OWNERSHIP_PUBLIC,
+            level=HealthFacility.LEVEL_3,
+            is_active=True,
+        )
+
+        self.authenticate(self.supervisor_user.username)
+        in_scope_response = self.client.get(reverse("facility-intelligence", args=[other_facility.id]))
+        out_of_scope_response = self.client.get(reverse("facility-intelligence", args=[self.health_facility.id]))
+
+        self.assertEqual(in_scope_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(in_scope_response.data["facility"]["id"], other_facility.id)
+        self.assertEqual(out_of_scope_response.status_code, status.HTTP_404_NOT_FOUND)
+
     def test_risk_scores_require_authentication(self):
         response = self.client.get(reverse("risk-score-list"))
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)

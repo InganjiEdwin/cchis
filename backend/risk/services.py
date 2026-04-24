@@ -585,6 +585,188 @@ def build_ward_intelligence_snapshot(ward: Ward, *, stale_threshold_minutes: int
     }
 
 
+def _facility_surge_risk(level: str | None) -> str:
+    if level == Ward.RISK_HIGH:
+        return "EXTREME"
+    if level == Ward.RISK_MEDIUM:
+        return "MODERATE"
+    return "LOW"
+
+
+def _facility_ors_state(percent: int) -> str:
+    if percent < 30:
+        return "CRITICAL"
+    if percent < 75:
+        return "STABLE"
+    return "READY"
+
+
+def _facility_format_type(facility: HealthFacility) -> str:
+    label = facility.facility_type.replace("_", " ").lower()
+    level = facility.level.replace("_", " ").replace("LEVEL ", "Level ")
+    return f"{level} {label}".title()
+
+
+def _facility_freshness_state(updated_at, *, warning_minutes: int = 30, stale_minutes: int = 120) -> str:
+    if not updated_at:
+        return "STALE"
+    minutes = max(0, round((timezone.now() - updated_at).total_seconds() / 60))
+    if minutes > stale_minutes:
+        return "STALE"
+    if minutes > warning_minutes:
+        return "WARNING"
+    return "FRESH"
+
+
+def build_facility_intelligence_snapshot(
+    facility: HealthFacility,
+    *,
+    stale_threshold_minutes: int = 120,
+) -> dict:
+    latest_risk = latest_riskscore_for_ward(facility.ward)
+    related_alerts = list(
+        facility.ward.alerts.select_related("risk_score").order_by("-created_at")[:6]
+    )
+
+    ward_risk_level = latest_risk.risk_level if latest_risk else facility.ward.current_risk_level
+    ward_risk_score = latest_risk.score if latest_risk else facility.ward.current_risk_score
+    projected_cases = max(
+        1,
+        latest_risk.predicted_cases if latest_risk else round((ward_risk_score or 0) * 10),
+    )
+    surge_risk = _facility_surge_risk(ward_risk_level)
+    ors_estimate_percent = (
+        max(12, 42 - projected_cases)
+        if surge_risk == "EXTREME"
+        else max(48, 78 - projected_cases)
+        if surge_risk == "MODERATE"
+        else max(84, 96 - projected_cases)
+    )
+    staffing_required = 15 if surge_risk == "EXTREME" else 10 if surge_risk == "MODERATE" else 6
+    staffing_filled = max(
+        2,
+        staffing_required - (3 if surge_risk == "EXTREME" else 2 if surge_risk == "MODERATE" else 0),
+    )
+    staffing_percent = round((staffing_filled / staffing_required) * 100) if staffing_required else 0
+    freshness_state = _facility_freshness_state(facility.updated_at)
+
+    is_stale = True
+    if facility.updated_at is not None:
+        is_stale = (timezone.now() - facility.updated_at).total_seconds() / 60 > stale_threshold_minutes
+
+    if surge_risk == "EXTREME":
+        status_banner_label = "High calculated readiness pressure"
+        context_summary = (
+            f"This facility is linked to a high ward-risk record for {facility.ward.name}. "
+            "The page combines facility identity, linked ward risk, and visible alert records."
+        )
+    elif surge_risk == "MODERATE":
+        status_banner_label = "Moderate calculated readiness pressure"
+        context_summary = (
+            f"This facility is linked to a moderate ward-risk record for {facility.ward.name}. "
+            "Review later records if pressure continues to rise."
+        )
+    else:
+        status_banner_label = "Low calculated readiness pressure"
+        context_summary = (
+            f"This facility is linked to a low ward-risk record for {facility.ward.name}. "
+            "Maintain routine monitoring until newer records arrive."
+        )
+
+    timeline = [
+        {
+            "id": "facility-record",
+            "title": "Facility record refreshed",
+            "description": (
+                f"{facility.name} is using its current backend facility record. "
+                "Readiness figures on this page are calculated from facility identity plus ward risk data."
+            ),
+            "timestamp": facility.updated_at,
+            "tone": "success",
+            "category": "system",
+            "meta": None,
+            "details": [f"Facility code: {facility.facility_code}"],
+        }
+    ]
+
+    for alert in related_alerts[:2]:
+        timeline.append(
+            {
+                "id": f"alert-{alert.id}",
+                "title": f"{alert.channel.title()} alert {alert.status.lower().replace('_', ' ')}",
+                "description": alert.message,
+                "timestamp": alert.created_at,
+                "tone": (
+                    "danger"
+                    if alert.status == Alert.STATUS_FAILED
+                    else "success"
+                    if alert.status == Alert.STATUS_DELIVERED
+                    else "warning"
+                ),
+                "category": "alert",
+                "meta": f"Recipient: {alert.recipient}",
+                "details": [f"Backend: {alert.delivery_backend or 'Unspecified'}"],
+            }
+        )
+
+    if not related_alerts:
+        timeline.append(
+            {
+                "id": "alert-gap",
+                "title": "No ward-linked alert records",
+                "description": "No alert records are currently attached to this facility's ward in the backend alert log.",
+                "timestamp": facility.updated_at,
+                "tone": "info",
+                "category": "alert",
+                "meta": None,
+                "details": [],
+            }
+        )
+
+    return {
+        "facility": facility,
+        "readiness": {
+            "facility_type_label": _facility_format_type(facility),
+            "surge_risk": surge_risk,
+            "surge_risk_label": "High" if surge_risk == "EXTREME" else "Moderate" if surge_risk == "MODERATE" else "Low",
+            "status_banner_label": status_banner_label,
+            "projected_cases": projected_cases,
+            "predicted_cases_per_day": projected_cases * 5,
+            "ors_estimate_percent": ors_estimate_percent,
+            "ors_state": _facility_ors_state(ors_estimate_percent),
+            "staffing_filled": staffing_filled,
+            "staffing_required": staffing_required,
+            "staffing_percent": staffing_percent,
+            "staffing_state": "LIMITED" if staffing_filled < staffing_required else "OPTIMAL",
+            "last_reported_at": facility.updated_at,
+            "freshness_state": freshness_state,
+            "mode": "calculated_from_facility_identity_and_ward_risk",
+        },
+        "context": {
+            "summary": context_summary,
+            "ward_risk_score": ward_risk_score,
+            "ward_alert_count": len(related_alerts),
+            "map_mode": "shared_ward_geometry_contract",
+        },
+        "freshness": {
+            "updated_at": facility.updated_at,
+            "is_stale": is_stale,
+            "stale_threshold_minutes": stale_threshold_minutes,
+            "mode": "derived_from_facility_updated_at",
+        },
+        "timeline": timeline,
+        "capabilities": {
+            "can_dispatch": False,
+            "can_open_chat": False,
+            "can_notify_chvs": False,
+            "can_escalate_county": False,
+            "can_view_dispatch_history": False,
+            "can_view_contacts": False,
+            "mode": "unsupported_backend_workflows",
+        },
+    }
+
+
 def generate_triage_recommendation(
     ward: Ward,
     diarrhea: bool,

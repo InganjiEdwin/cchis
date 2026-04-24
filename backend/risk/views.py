@@ -20,6 +20,7 @@ from .serializers import (
     CHVSyncRequestSerializer,
     CHVTriageRequestSerializer,
     CHVTriageResponseSerializer,
+    FacilityIntelligenceSerializer,
     HealthFacilitySerializer,
     RiskScoreSerializer,
     TriggerAlertRequestSerializer,
@@ -31,6 +32,7 @@ from .serializers import (
 from .services import (
     build_alert_intelligence_snapshot,
     build_chv_operations_snapshot,
+    build_facility_intelligence_snapshot,
     build_ward_intelligence_snapshot,
     create_triage_session,
     latest_riskscore_for_ward,
@@ -180,6 +182,21 @@ class HealthFacilityDetailAPIView(generics.RetrieveAPIView):
     def get_queryset(self):
         queryset = HealthFacility.objects.filter(is_active=True).select_related("ward")
         return apply_ward_scope_or_none(queryset, self.request.user)
+
+
+class HealthFacilityIntelligenceAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request, pk: int):
+        queryset = HealthFacility.objects.filter(is_active=True).select_related("ward")
+        facility = apply_ward_scope_or_none(queryset, request.user).filter(pk=pk).first()
+
+        if facility is None:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        payload = build_facility_intelligence_snapshot(facility)
+        serializer = FacilityIntelligenceSerializer(payload)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class RiskScoreListAPIView(generics.ListAPIView):

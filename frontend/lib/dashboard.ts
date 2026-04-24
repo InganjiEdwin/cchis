@@ -280,6 +280,59 @@ export type AlertIntelligenceCapabilities = {
   mode: string;
 };
 
+export type FacilityIntelligenceReadiness = {
+  facility_type_label: string;
+  surge_risk: "EXTREME" | "MODERATE" | "LOW";
+  surge_risk_label: string;
+  status_banner_label: string;
+  projected_cases: number;
+  predicted_cases_per_day: number;
+  ors_estimate_percent: number;
+  ors_state: "CRITICAL" | "STABLE" | "READY";
+  staffing_filled: number;
+  staffing_required: number;
+  staffing_percent: number;
+  staffing_state: "LIMITED" | "OPTIMAL";
+  last_reported_at: string | null;
+  freshness_state: "FRESH" | "WARNING" | "STALE";
+  mode: string;
+};
+
+export type FacilityIntelligenceContext = {
+  summary: string;
+  ward_risk_score: number | null;
+  ward_alert_count: number;
+  map_mode: string;
+};
+
+export type FacilityIntelligenceFreshness = {
+  updated_at: string | null;
+  is_stale: boolean;
+  stale_threshold_minutes: number;
+  mode: string;
+};
+
+export type FacilityIntelligenceTimelineEntry = {
+  id: string;
+  title: string;
+  description: string;
+  timestamp: string | null;
+  tone: "success" | "warning" | "danger" | "info";
+  category: "system" | "alert";
+  meta: string | null;
+  details?: string[];
+};
+
+export type FacilityIntelligenceCapabilities = {
+  can_dispatch: boolean;
+  can_open_chat: boolean;
+  can_notify_chvs: boolean;
+  can_escalate_county: boolean;
+  can_view_dispatch_history: boolean;
+  can_view_contacts: boolean;
+  mode: string;
+};
+
 export type TriggerAlertRequest = {
   ward_id: number;
   send_sms: boolean;
@@ -347,8 +400,13 @@ type AlertDetailRouteResponse = {
   capabilities: AlertIntelligenceCapabilities;
 };
 
-type FacilityDetailRouteResponse = {
+export type FacilityIntelligenceRouteResponse = {
   facility: FacilityRecord | null;
+  readiness: FacilityIntelligenceReadiness;
+  context: FacilityIntelligenceContext;
+  freshness: FacilityIntelligenceFreshness;
+  timeline: FacilityIntelligenceTimelineEntry[];
+  capabilities: FacilityIntelligenceCapabilities;
 };
 
 type SystemRouteResponse = {
@@ -448,7 +506,7 @@ export async function fetchFacilityDataViaBff() {
 }
 
 export async function fetchFacilityByIdViaBff(facilityId: number) {
-  return requestDashboardRoute<FacilityDetailRouteResponse>(`/api/dashboard/facilities/${facilityId}`);
+  return requestDashboardRoute<FacilityIntelligenceRouteResponse>(`/api/dashboard/facilities/${facilityId}`);
 }
 
 export async function fetchWardMapViaBff() {

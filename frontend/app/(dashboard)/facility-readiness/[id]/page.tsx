@@ -24,26 +24,11 @@ import { Card } from "@/components/ui/card";
 import { StatusBanner } from "@/components/ui/status-banner";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { cn } from "@/lib/cn";
-import {
-  buildFacilityRows,
-  findFacilityAlerts,
-  riskTone,
-  stockTone,
-  type FacilityRow,
-} from "@/lib/facility-readiness";
-import { describeFreshness, formatRelativeTimestamp, getLatestTimestamp } from "@/lib/freshness";
-import type { AlertRecord } from "@/lib/dashboard";
+import { riskTone, stockTone } from "@/lib/facility-readiness";
+import { describeFreshness, formatRelativeTimestamp } from "@/lib/freshness";
 import { useFacilityDetailQuery } from "@/queries/use-facility-detail-query";
 
-type TimelineItem = {
-  id: string;
-  title: string;
-  body: string;
-  timestamp: string;
-  tone: "danger" | "warning" | "info" | "success";
-};
-
-function timelineToneClasses(tone: TimelineItem["tone"]) {
+function timelineToneClasses(tone: "danger" | "warning" | "info" | "success") {
   switch (tone) {
     case "danger":
       return "bg-[color-mix(in_srgb,var(--danger)_14%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]";
@@ -57,92 +42,36 @@ function timelineToneClasses(tone: TimelineItem["tone"]) {
   }
 }
 
-function readinessTone(value: number) {
-  if (value >= 90) return "danger";
-  if (value >= 75) return "warning";
-  return "info";
-}
-
-function buildTimeline(row: FacilityRow, alerts: AlertRecord[]): TimelineItem[] {
-  const items: TimelineItem[] = [
-    {
-      id: "facility-record",
-      title: "Facility Record Refreshed",
-      body: `${row.facilityName} is using its current backend facility record. Readiness figures on this page still derive from facility identity plus ward risk data.`,
-      timestamp: row.lastReported,
-      tone: "success",
-    },
-  ];
-
-  alerts.slice(0, 2).forEach((alert) => {
-    items.push({
-      id: `alert-${alert.id}`,
-      title: `${alert.channel} alert ${alert.status.toLowerCase().replaceAll("_", " ")}`,
-      body: alert.message,
-      timestamp: formatRelativeTimestamp(alert.created_at),
-      tone: alert.status === "FAILED" ? "danger" : alert.status === "DELIVERED" ? "success" : "warning",
-    });
-  });
-
-  if (!alerts.length) {
-    items.push({
-      id: "alert-gap",
-      title: "No ward-linked alert records",
-      body: "No alert events are currently attached to this facility's ward in the backend alert log.",
-      timestamp: row.lastReported,
-      tone: "info",
-    });
-  }
-
-  return items;
-}
-
 export default function FacilityDetailPage() {
   const params = useParams<{ id: string }>();
   const facilityId = Number(params.id);
   const { data, isPending: isLoading, error } = useFacilityDetailQuery(
     Number.isInteger(facilityId) && facilityId > 0 ? facilityId : null,
   );
-  const facilityRecord = data?.facility ?? null;
-  const risks = data?.risks ?? [];
-  const alerts = data?.alerts ?? [];
+  const intelligence = data?.intelligence ?? null;
+  const facilityRecord = intelligence?.facility ?? null;
+  const readiness = intelligence?.readiness ?? null;
+  const context = intelligence?.context ?? null;
+  const timeline = intelligence?.timeline ?? [];
+  const capabilities = intelligence?.capabilities ?? null;
   const wardMap = data?.wardMap ?? null;
-
-  const facility = useMemo(
-    () => (facilityRecord ? buildFacilityRows([facilityRecord], risks)[0] ?? null : null),
-    [facilityRecord, risks],
-  );
-
-  const facilityAlerts = useMemo(() => (facility ? findFacilityAlerts(facility, alerts) : []), [alerts, facility]);
   const selectedMapWard = useMemo(
     () => wardMap?.features.find((feature) => feature.properties.name === facilityRecord?.ward_name) ?? null,
     [facilityRecord?.ward_name, wardMap],
   );
-  const latestTimestamp = useMemo(
-    () =>
-      getLatestTimestamp([
-        ...(facilityRecord ? [facilityRecord.updated_at] : []),
-        ...risks.map((risk) => risk.generated_at),
-        ...alerts.map((alert) => alert.created_at),
-      ]),
-    [alerts, facilityRecord, risks],
-  );
+  const latestTimestamp = intelligence?.freshness.updated_at ?? null;
   const freshness = useMemo(() => describeFreshness(latestTimestamp, 120), [latestTimestamp]);
   const lastUpdatedLabel = latestTimestamp ? formatRelativeTimestamp(latestTimestamp) : freshness.label;
 
-  const timeline = useMemo(() => (facility ? buildTimeline(facility, facilityAlerts) : []), [facility, facilityAlerts]);
-
-  if (!isLoading && !facility) {
+  if (!isLoading && (!facilityRecord || !readiness || !context || !capabilities)) {
     notFound();
   }
-
-  const staffingPercent = facility ? Math.round((facility.staffingFilled / facility.staffingRequired) * 100) : 0;
 
   return (
     <div className="space-y-6">
       <DashboardTopbar
         title="Facility Detail"
-        subtitle="Facility identity is backend-backed; readiness posture remains partly derived until a dedicated backend readiness contract exists."
+        subtitle="Facility identity and calculated readiness summary are backend-backed for this page."
         lastUpdatedLabel={lastUpdatedLabel}
         lastUpdatedTone={freshness.isStale ? "stale" : "default"}
       />
@@ -158,7 +87,7 @@ export default function FacilityDetailPage() {
           </StatusBanner>
         ) : null}
 
-        {isLoading || !facility ? (
+        {isLoading || !facilityRecord || !readiness || !context || !capabilities ? (
           <Card className="rounded-[2rem] p-6 text-sm text-panel-muted">Loading facility detail...</Card>
         ) : (
           <>
@@ -174,22 +103,22 @@ export default function FacilityDetailPage() {
                   </Link>
                   <div className="space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
-                      <StatusBadge tone={riskTone(facility.surgeRisk)} className="tracking-[0.14em]">
-                        {facility.surgeRisk === "EXTREME" ? "Extreme Risk" : facility.surgeRisk === "MODERATE" ? "Moderate Risk" : "Low Risk"}
+                      <StatusBadge tone={riskTone(readiness.surge_risk)} className="tracking-[0.14em]">
+                        {readiness.surge_risk_label} Risk
                       </StatusBadge>
-                      <span className="text-sm text-panel-muted">Last reported: {facility.lastReported}</span>
+                      <span className="text-sm text-panel-muted">Last reported: {readiness.last_reported_at ? formatRelativeTimestamp(readiness.last_reported_at) : "No timestamp recorded"}</span>
                     </div>
                     <h1 className="text-[clamp(2.2rem,1.4rem+2vw,3.5rem)] font-semibold tracking-[-0.05em] text-panel-strong">
-                      {facility.facilityName}
+                      {facilityRecord.name}
                     </h1>
                     <p className="text-sm text-panel-muted">
-                      {facility.subCounty} Sub-County | {facility.facilityType} | {facility.wardName} Ward
+                      {facilityRecord.sub_county} Sub-County | {readiness.facility_type_label} | {facilityRecord.ward_name} Ward
                     </p>
                   </div>
                 </div>
 
                 <div className="rounded-[1.5rem] border border-[color:var(--danger)]/18 bg-[color-mix(in_srgb,var(--danger)_10%,white)] px-4 py-3 text-sm font-semibold text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_16%,transparent)]">
-                  {facility.surgeRisk === "EXTREME" ? "Extreme Surge Risk (Critical)" : "Facility Under Monitoring"}
+                  {readiness.status_banner_label}
                 </div>
               </div>
 
@@ -197,23 +126,23 @@ export default function FacilityDetailPage() {
                 <div className="border-l-2 border-[color:var(--danger)] px-4 py-2">
                   <span className="text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Surge risk</span>
                   <div className="mt-3 text-3xl font-semibold text-[color:var(--danger)]">
-                    {facility.surgeRisk === "EXTREME" ? "Extreme" : facility.surgeRisk === "MODERATE" ? "Moderate" : "Low"}
+                    {readiness.surge_risk_label}
                   </div>
                 </div>
                 <div className="border-l-2 border-panel-table-wrap px-4 py-2">
                   <span className="text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Predicted load</span>
-                  <div className="mt-3 text-3xl font-semibold text-panel-strong">~{facility.projectedCases * 5} <span className="text-base font-medium text-panel-muted">cases/day</span></div>
+                  <div className="mt-3 text-3xl font-semibold text-panel-strong">~{readiness.predicted_cases_per_day} <span className="text-base font-medium text-panel-muted">cases/day</span></div>
                 </div>
                 <div className="border-l-2 border-[color:var(--danger)] px-4 py-2">
-                  <span className="text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Derived ORS estimate</span>
+                  <span className="text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Calculated ORS estimate</span>
                   <div className="mt-3 text-3xl font-semibold text-[color:var(--danger)]">
-                    {facility.orsStockPercent}% <span className="text-sm font-semibold uppercase">{facility.orsState}</span>
+                    {readiness.ors_estimate_percent}% <span className="text-sm font-semibold uppercase">{readiness.ors_state}</span>
                   </div>
                 </div>
                 <div className="border-l-2 border-panel-table-wrap px-4 py-2">
-                  <span className="text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Derived staffing estimate</span>
+                  <span className="text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Calculated staffing estimate</span>
                   <div className="mt-3 text-3xl font-semibold text-panel-strong">
-                    {facility.staffingFilled}/{facility.staffingRequired} <span className="text-base font-medium text-panel-muted">Active</span>
+                    {readiness.staffing_filled}/{readiness.staffing_required} <span className="text-base font-medium text-panel-muted">Active</span>
                   </div>
                 </div>
               </div>
@@ -229,22 +158,18 @@ export default function FacilityDetailPage() {
 
                   <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
                     <div className="space-y-4">
-                      <p className="text-sm leading-7 text-panel-copy">
-                        This facility currently inherits a ward status of{" "}
-                        <strong>{facility.surgeRisk === "EXTREME" ? "Extreme" : facility.surgeRisk === "MODERATE" ? "Moderate" : "Low"}</strong>{" "}
-                        from the backend ward-risk feed for {facility.wardName}. The map below is real ward geometry, but this page does not yet have facility catchment, rainfall-series, or dispatch-log contracts.
-                      </p>
+                      <p className="text-sm leading-7 text-panel-copy">{context.summary}</p>
                       <div className="grid gap-3 sm:grid-cols-2">
                         <div className="rounded-[1.25rem] border border-panel-table-wrap px-4 py-3">
                           <div className="text-xs font-semibold uppercase tracking-[0.14em] text-panel-subtle">Ward risk score</div>
                           <div className="mt-2 text-sm font-semibold text-panel-strong">
-                            {facilityRecord?.ward_risk_score?.toFixed(2) ?? "--"}
+                            {context.ward_risk_score?.toFixed(2) ?? "--"}
                           </div>
                         </div>
                         <div className="rounded-[1.25rem] border border-panel-table-wrap px-4 py-3">
                           <div className="text-xs font-semibold uppercase tracking-[0.14em] text-panel-subtle">Ward-linked alerts</div>
                           <div className="mt-2 text-sm font-semibold text-panel-strong">
-                            {facilityAlerts.length}
+                            {context.ward_alert_count}
                           </div>
                         </div>
                       </div>
@@ -260,7 +185,7 @@ export default function FacilityDetailPage() {
                           {wardMap?.features.length ? (
                             <MigoriWardMap
                               features={wardMap.features}
-                              selectedWardName={facility.wardName}
+                              selectedWardName={facilityRecord.ward_name}
                               onSelectWard={() => undefined}
                             />
                           ) : (
@@ -271,7 +196,7 @@ export default function FacilityDetailPage() {
                         </div>
                         <div className="inline-flex w-max items-center gap-2 rounded-full bg-[color-mix(in_srgb,var(--brand)_10%,white)] px-3 py-1.5 text-xs font-semibold text-panel-strong">
                           <span className="size-2 rounded-full bg-brand" />
-                          {facility.wardName} ward context
+                          {facilityRecord.ward_name} ward context
                         </div>
                       </div>
                     </div>
@@ -286,13 +211,13 @@ export default function FacilityDetailPage() {
                         <span className="inline-flex size-10 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--danger)_12%,white)] text-[color:var(--danger)]">
                           <PackagePlus className="size-4" aria-hidden="true" />
                         </span>
-                        <span className="text-xs font-semibold text-[color:var(--danger)]">Declining</span>
+                        <span className="text-xs font-semibold text-[color:var(--danger)]">{readiness.ors_state}</span>
                       </div>
-                      <div className="mt-4 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Derived ORS estimate</div>
-                      <div className="mt-2 text-4xl font-semibold text-panel-strong">{facility.orsStockPercent}%</div>
+                      <div className="mt-4 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Calculated ORS estimate</div>
+                      <div className="mt-2 text-4xl font-semibold text-panel-strong">{readiness.ors_estimate_percent}%</div>
                       <div className="mt-1 text-sm text-panel-muted">Estimated from ward pressure</div>
                       <div className="mt-4 h-1.5 rounded-full bg-[color-mix(in_srgb,var(--danger)_12%,white)]">
-                        <div className="h-full rounded-full bg-[color:var(--danger)]" style={{ width: `${facility.orsStockPercent}%` }} />
+                        <div className="h-full rounded-full bg-[color:var(--danger)]" style={{ width: `${readiness.ors_estimate_percent}%` }} />
                       </div>
                     </Card>
 
@@ -301,13 +226,13 @@ export default function FacilityDetailPage() {
                         <span className="inline-flex size-10 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--brand)_12%,white)] text-brand">
                           <Users className="size-4" aria-hidden="true" />
                         </span>
-                        <span className="text-xs font-semibold text-brand">Stable</span>
+                        <span className="text-xs font-semibold text-brand">{readiness.staffing_state}</span>
                       </div>
-                      <div className="mt-4 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Derived staffing estimate</div>
-                      <div className="mt-2 text-4xl font-semibold text-panel-strong">{staffingPercent}%</div>
+                      <div className="mt-4 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Calculated staffing estimate</div>
+                      <div className="mt-2 text-4xl font-semibold text-panel-strong">{readiness.staffing_percent}%</div>
                       <div className="mt-1 text-sm text-panel-muted">Estimated from surge posture</div>
                       <div className="mt-4 h-1.5 rounded-full bg-[color-mix(in_srgb,var(--brand)_12%,white)]">
-                        <div className="h-full rounded-full bg-brand" style={{ width: `${staffingPercent}%` }} />
+                        <div className="h-full rounded-full bg-brand" style={{ width: `${readiness.staffing_percent}%` }} />
                       </div>
                     </Card>
 
@@ -316,13 +241,13 @@ export default function FacilityDetailPage() {
                         <span className="inline-flex size-10 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--warning)_12%,white)] text-[color:var(--warning)]">
                           <Building2 className="size-4" aria-hidden="true" />
                         </span>
-                        <span className="text-xs font-semibold text-[color:var(--warning)]">Near limit</span>
+                        <span className="text-xs font-semibold text-[color:var(--warning)]">{readiness.surge_risk_label}</span>
                       </div>
                       <div className="mt-4 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Demand outlook</div>
-                      <div className="mt-2 text-4xl font-semibold text-panel-strong">~{facility.projectedCases * 5}</div>
-                      <div className="mt-1 text-sm text-panel-muted">Derived cases/day estimate</div>
+                      <div className="mt-2 text-4xl font-semibold text-panel-strong">~{readiness.predicted_cases_per_day}</div>
+                      <div className="mt-1 text-sm text-panel-muted">Calculated cases/day estimate</div>
                       <div className="mt-4 h-1.5 rounded-full bg-[color-mix(in_srgb,var(--warning)_12%,white)]">
-                        <div className="h-full rounded-full bg-[color:var(--warning)]" style={{ width: `${Math.min(100, facility.projectedCases * 4)}%` }} />
+                        <div className="h-full rounded-full bg-[color:var(--warning)]" style={{ width: `${Math.min(100, readiness.projected_cases * 4)}%` }} />
                       </div>
                     </Card>
                   </div>
@@ -339,9 +264,9 @@ export default function FacilityDetailPage() {
                         <div className="min-w-0 flex-1 rounded-[1.35rem] border border-panel-table-wrap px-4 py-4">
                           <div className="flex flex-wrap items-center gap-2 text-sm">
                             <strong className="text-panel-strong">{item.title}</strong>
-                            <span className="text-panel-muted">{item.timestamp}</span>
+                            <span className="text-panel-muted">{item.timestamp ? formatRelativeTimestamp(item.timestamp) : "No timestamp recorded"}</span>
                           </div>
-                          <p className="mt-2 text-sm leading-6 text-panel-copy">{item.body}</p>
+                          <p className="mt-2 text-sm leading-6 text-panel-copy">{item.description}</p>
                         </div>
                       </div>
                     ))}
@@ -360,26 +285,26 @@ export default function FacilityDetailPage() {
                 <Card className="rounded-[2rem] px-5 py-5">
                   <div className="flex items-center gap-2 text-sm font-semibold text-panel-strong">
                     <ShieldAlert className="size-4 text-brand" aria-hidden="true" />
-                    Recommended Actions
+                    Action Availability
                   </div>
                   <p className="mt-4 rounded-[1.25rem] border border-[color:var(--danger)]/16 bg-[color-mix(in_srgb,var(--danger)_8%,white)] px-4 py-3 text-sm leading-6 text-panel-copy dark:bg-[color-mix(in_srgb,var(--danger)_14%,transparent)]">
-                    Derived context: ORS, staffing, and demand posture on this page are still calculated from facility identity plus ward risk data. Actual dispatch workflows remain pending backend implementation.
+                    Calculated context: ORS, staffing, and demand posture on this page are backend-backed summaries. Dispatch and communication workflows are still unavailable.
                   </p>
                   <div className="mt-5 space-y-3">
                     <Button className="w-full justify-center" disabled>
                       <Truck className="size-4" aria-hidden="true" />
-                      Dispatch Workflow Pending
+                      {capabilities.can_dispatch ? "Dispatch available" : "Dispatch unavailable"}
                     </Button>
                     <Button variant="secondary" className="w-full justify-between" disabled>
-                      Open Facility Chat Pending
+                      {capabilities.can_open_chat ? "Open facility chat" : "Facility chat unavailable"}
                       <span className="text-panel-muted">+</span>
                     </Button>
                     <Button variant="secondary" className="w-full justify-between" disabled>
-                      CHV notification unavailable
+                      {capabilities.can_notify_chvs ? "CHV notification available" : "CHV notification unavailable"}
                       <span className="text-panel-muted">+</span>
                     </Button>
                     <Button variant="danger" className="w-full justify-between" disabled>
-                      Escalate to County Pending
+                      {capabilities.can_escalate_county ? "Escalate to county" : "County escalation unavailable"}
                       <span>!</span>
                     </Button>
                   </div>
@@ -387,7 +312,7 @@ export default function FacilityDetailPage() {
 
                 <Card className="rounded-[2rem] px-5 py-5">
                   <div className="text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">
-                    Operational contacts
+                    Contact registry
                   </div>
                   <div className="mt-4 rounded-[1.25rem] border border-dashed border-panel-table-wrap px-4 py-4 text-sm text-panel-copy">
                     No backend contact registry is exposed to this page yet, so named operational contacts are intentionally hidden rather than hardcoded.
