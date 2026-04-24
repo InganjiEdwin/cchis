@@ -412,7 +412,7 @@ export default function ProfilePage() {
               <h2 className="text-[1.25rem] font-semibold tracking-[-0.04em] text-panel-strong">
                 Security & Authentication
               </h2>
-              <p className="mt-1 text-sm text-panel-muted">Credential, second-factor, and session readiness controls.</p>
+              <p className="mt-1 text-sm text-panel-muted">Credential, second-factor, and session summary details visible on this page.</p>
             </div>
           </div>
 
@@ -425,13 +425,14 @@ export default function ProfilePage() {
                 <strong className="text-base font-semibold text-panel-strong">Password</strong>
               </div>
               <p className="mt-4 min-h-[4.5rem] text-sm leading-6 text-panel-muted">
-                Last changed 4 months ago. We recommend updating your password every 6 months.
+                Password-change timing is not exposed on this page.
               </p>
               <button
                 type="button"
+                disabled
                 className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--dashboard-icon-button-ink-hover)]"
               >
-                Change Password
+                Password change unavailable
                 <ChevronRight className="size-4" aria-hidden="true" />
               </button>
             </Card>
@@ -460,16 +461,17 @@ export default function ProfilePage() {
                 <span className="inline-flex size-10 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--success)_14%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_20%,transparent)]">
                   <Smartphone className="size-4" aria-hidden="true" />
                 </span>
-                <strong className="text-base font-semibold text-panel-strong">Active Sessions</strong>
+                <strong className="text-base font-semibold text-panel-strong">Session Summary</strong>
               </div>
               <p className="mt-4 min-h-[4.5rem] text-sm leading-6 text-panel-muted">
-                2 devices currently logged in. Your current session is from Nairobi, Kenya.
+                Device count and session-location details are not exposed on this page.
               </p>
               <button
                 type="button"
+                disabled
                 className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--dashboard-icon-button-ink-hover)]"
               >
-                Review Sessions
+                Session review unavailable
                 <ChevronRight className="size-4" aria-hidden="true" />
               </button>
             </Card>
