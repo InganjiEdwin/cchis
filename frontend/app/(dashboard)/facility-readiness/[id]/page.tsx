@@ -312,10 +312,10 @@ export default function FacilityDetailPage() {
 
                 <Card className="rounded-[2rem] px-5 py-5">
                   <div className="text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">
-                    Contact registry
+                    Contact availability
                   </div>
                   <div className="mt-4 rounded-[1.25rem] border border-dashed border-panel-table-wrap px-4 py-4 text-sm text-panel-copy">
-                    No backend contact registry is exposed to this page yet, so named operational contacts are intentionally hidden rather than hardcoded.
+                    No backend contact data is exposed to this page yet, so named facility contacts are intentionally hidden rather than hardcoded.
                   </div>
                 </Card>
               </div>
