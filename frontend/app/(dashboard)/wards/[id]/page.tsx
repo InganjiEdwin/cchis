@@ -504,7 +504,7 @@ export default function WardDetailPage() {
               <dl className="grid gap-4">
                 {[
                   ["Freshness", isLoading ? "Loading..." : detail?.freshness.is_stale ? "Stale" : "In range"],
-                  ["History coverage", isLoading ? "Loading..." : detail ? `${detail.freshness.history_count} recent runs` : "Unavailable"],
+                  ["Recent runs", isLoading ? "Loading..." : detail ? `${detail.freshness.history_count} recent runs` : "Unavailable"],
                   [
                     "Alert linkage",
                     isLoading
@@ -529,7 +529,7 @@ export default function WardDetailPage() {
               <p className="text-sm leading-6 text-panel-muted">
                 {!isLoading && detail?.freshness.is_stale
                   ? `This ward summary is older than the ${detail.freshness.stale_threshold_minutes}-minute freshness window. Review with caution until the next update lands.`
-                  : "Derived from the current ward summary, recent history, and linked alert activity."}
+                  : "Derived from the linked ward summary, recent history, and linked alert activity."}
               </p>
             </Card>
           </section>
@@ -673,7 +673,7 @@ export default function WardDetailPage() {
                 </Link>
               </>
             ) : (
-              <p className="text-sm text-panel-muted">No alerts are currently visible for this ward.</p>
+              <p className="text-sm text-panel-muted">No alert records are currently visible for this ward.</p>
             )}
           </Card>
         </aside>
