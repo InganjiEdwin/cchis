@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import type { AlertRecord, PaginatedResponse, WardDetailSummary } from "@/lib/dashboard";
+import type { AlertRecord, WardDetailSummary } from "@/lib/dashboard";
 import { ServerApiError, fetchBackendJson } from "@/lib/server-api";
 
 export async function GET(
@@ -16,18 +16,9 @@ export async function GET(
   }
 
   try {
-    const alerts = await fetchBackendJson<PaginatedResponse<AlertRecord>>(
-      "/alerts/?page_size=200&ordering=-created_at",
-      {
-        cookieHeader,
-      },
-    );
-
-    const alert = alerts.results.find((item) => item.id === alertId) ?? null;
-
-    if (!alert) {
-      return NextResponse.json({ alert: null, wardDetail: null });
-    }
+    const alert = await fetchBackendJson<AlertRecord>(`/alerts/${alertId}/`, {
+      cookieHeader,
+    });
 
     let wardDetail: WardDetailSummary | null = null;
 

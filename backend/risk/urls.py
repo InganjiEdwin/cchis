@@ -1,5 +1,6 @@
 from django.urls import path
 from .views import (
+    AlertDetailAPIView,
     AlertListAPIView,
     CHVListAPIView,
     CHVSyncAPIView,
@@ -20,6 +21,7 @@ urlpatterns = [
     path("risk-scores/", RiskScoreListAPIView.as_view(), name="risk-score-list"),
     path("risk-score/latest/", LatestWardRiskAPIView.as_view(), name="latest-ward-risk"),
     path("alerts/", AlertListAPIView.as_view(), name="alert-list"),
+    path("alerts/<int:pk>/", AlertDetailAPIView.as_view(), name="alert-detail"),
     path("alerts/trigger/", TriggerAlertsAPIView.as_view(), name="trigger-alerts"),
     path("chv/triage/", CHVTriageAPIView.as_view(), name="chv-triage"),
     path("chv/sync/", CHVSyncAPIView.as_view(), name="chv-sync"),

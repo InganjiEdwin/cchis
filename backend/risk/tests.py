@@ -2447,6 +2447,50 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["ward"], self.other_ward.id)
 
+    def test_analyst_can_view_alert_detail(self):
+        alert = Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="dashboard",
+            message="Test alert detail",
+            status=Alert.STATUS_DELIVERED,
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("alert-detail", args=[alert.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["id"], alert.id)
+        self.assertEqual(response.data["ward"], self.ward.id)
+
+    def test_supervisor_can_view_alert_detail_for_assigned_ward_only(self):
+        in_scope_alert = Alert.objects.create(
+            ward=self.other_ward,
+            risk_score=self.other_risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="dashboard",
+            message="Ward two alert",
+            status=Alert.STATUS_DELIVERED,
+        )
+        out_of_scope_alert = Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="dashboard",
+            message="Ward one alert",
+            status=Alert.STATUS_DELIVERED,
+        )
+
+        self.authenticate(self.supervisor_user.username)
+
+        in_scope_response = self.client.get(reverse("alert-detail", args=[in_scope_alert.id]))
+        self.assertEqual(in_scope_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(in_scope_response.data["id"], in_scope_alert.id)
+
+        out_of_scope_response = self.client.get(reverse("alert-detail", args=[out_of_scope_alert.id]))
+        self.assertEqual(out_of_scope_response.status_code, status.HTTP_404_NOT_FOUND)
+
     @patch("risk.views.trigger_alerts_task.delay", return_value=SimpleNamespace(id="task-123"))
     def test_supervisor_can_queue_alert_trigger(self, mock_delay):
         self.authenticate(self.supervisor_user.username)

@@ -205,6 +205,15 @@ class AlertListAPIView(generics.ListAPIView):
         return queryset
 
 
+class AlertDetailAPIView(generics.RetrieveAPIView):
+    serializer_class = AlertSerializer
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get_queryset(self):
+        queryset = Alert.objects.select_related("ward", "risk_score").all()
+        return apply_ward_scope_or_none(queryset, self.request.user)
+
+
 class TriggerAlertsAPIView(APIView):
     permission_classes = [IsAdminOrSupervisor]
 
