@@ -248,7 +248,7 @@ export default function WardDetailPage() {
               ? "Preparing the latest ward risk context."
               : detail
                 ? `${detail.subCounty || "Unassigned sub-county"}, ${detail.county} County`
-                : "Ward-level operational risk monitoring."}
+                : "Ward-level risk monitoring."}
           </p>
         </div>
       </Card>
@@ -261,7 +261,7 @@ export default function WardDetailPage() {
                 <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--warning)_12%,white)] text-[color:var(--warning)]">
                   <ShieldAlert className="size-5" aria-hidden="true" />
                 </span>
-                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Primary risk drivers</h3>
+                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Observed signals</h3>
               </div>
               <div
                 className={cn(
@@ -329,7 +329,7 @@ export default function WardDetailPage() {
                 </span>
                 <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Recent risk history</h3>
               </div>
-              <p className="text-sm text-panel-muted">Latest model runs for this ward</p>
+              <p className="text-sm text-panel-muted">Latest recorded model runs for this ward</p>
             </div>
 
             {isHistoryLoading ? (
@@ -486,7 +486,7 @@ export default function WardDetailPage() {
               <p className="text-sm leading-6 text-panel-muted">
                 {!isLoading && detail?.freshness.is_stale
                   ? `This ward summary is older than the ${detail.freshness.stale_threshold_minutes}-minute freshness window. Review with caution until the next update lands.`
-                  : "Based on the current ward summary, recent history, and linked alert activity."}
+                  : "Derived from the current ward summary, recent history, and linked alert activity."}
               </p>
             </Card>
           </section>
@@ -498,7 +498,7 @@ export default function WardDetailPage() {
               <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand">
                 <Zap className="size-5" aria-hidden="true" />
               </span>
-              <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Recommended actions</h3>
+              <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Guidance for this risk tier</h3>
             </div>
 
             {isLoading ? (
@@ -521,10 +521,10 @@ export default function WardDetailPage() {
                       <strong className="block text-sm font-semibold text-panel-strong">{recommendation.text}</strong>
                       <span className="text-xs font-semibold uppercase tracking-[0.14em] text-panel-muted">
                         {index === 0 && canTriggerAlerts(currentUser.role)
-                          ? "Ready to trigger"
+                          ? "Trigger available"
                           : canTriggerAlerts(currentUser.role)
-                            ? "Pending"
-                            : "Review only"}
+                            ? "Guidance only"
+                            : "Read only"}
                       </span>
                     </div>
                   </article>
@@ -552,7 +552,7 @@ export default function WardDetailPage() {
               ) : (
                 <div className="rounded-2xl border border-[color-mix(in_srgb,var(--warning)_20%,white)] bg-[color-mix(in_srgb,var(--warning)_10%,white)] px-4 py-3 text-sm font-medium text-[color:var(--warning)]">
                   <AlertTriangle className="mr-2 inline-flex size-4" aria-hidden="true" />
-                  Recommended actions are visible, but this role cannot trigger alerts from this page.
+                  Guidance is visible, but this role cannot trigger alerts from this page.
                 </div>
               )
             ) : null}
