@@ -3,21 +3,15 @@
 import {
   AlertTriangle,
   BellRing,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
-  CircleAlert,
   CloudRain,
   Clock3,
   Download,
-  Droplets,
   ExternalLink,
   Info,
-  Radio,
   Search,
-  Siren,
   Smartphone,
-  Waves,
   X,
 } from "lucide-react";
 import Link from "next/link";
@@ -37,70 +31,14 @@ import { describeFreshness, formatRelativeTimestamp, getLatestTimestamp } from "
 import { useAlertsQuery } from "@/queries/use-alerts-query";
 
 type AlertStatusFilter = "ALL" | "SENT" | "PENDING" | "FAILED";
-type AlertTypeFilter =
-  | "ALL"
-  | "CHOLERA_RISK"
-  | "FLOOD_RISK"
-  | "WATER_CONTAMINATION"
-  | "HEAVY_RAINFALL"
-  | "OPERATIONAL_ALERT";
-
-type AlertTypeMeta = {
-  key: Exclude<AlertTypeFilter, "ALL">;
-  label: string;
-  shortLabel: string;
-  icon: typeof Droplets;
-  tone: "red" | "amber" | "orange" | "blue" | "slate";
-};
 
 type DecoratedAlert = AlertRecord & {
-  alertType: AlertTypeMeta;
   statusFilter: Exclude<AlertStatusFilter, "ALL">;
   statusLabel: string;
   channelLabel: string;
   timeLabel: string;
   relativeLabel: string;
   operationalLabel: string;
-  severity: "HIGH" | "MEDIUM" | "LOW";
-  severityLabel: string;
-};
-
-const ALERT_TYPE_META: Record<Exclude<AlertTypeFilter, "ALL">, AlertTypeMeta> = {
-  CHOLERA_RISK: {
-    key: "CHOLERA_RISK",
-    label: "Cholera Risk",
-    shortLabel: "Cholera",
-    icon: Droplets,
-    tone: "red",
-  },
-  FLOOD_RISK: {
-    key: "FLOOD_RISK",
-    label: "Flood Risk",
-    shortLabel: "Flood",
-    icon: Waves,
-    tone: "blue",
-  },
-  WATER_CONTAMINATION: {
-    key: "WATER_CONTAMINATION",
-    label: "Water Contamination",
-    shortLabel: "Water",
-    icon: CircleAlert,
-    tone: "red",
-  },
-  HEAVY_RAINFALL: {
-    key: "HEAVY_RAINFALL",
-    label: "Heavy Rainfall",
-    shortLabel: "Rainfall",
-    icon: CloudRain,
-    tone: "orange",
-  },
-  OPERATIONAL_ALERT: {
-    key: "OPERATIONAL_ALERT",
-    label: "Operational Alert",
-    shortLabel: "Operational",
-    icon: BellRing,
-    tone: "slate",
-  },
 };
 
 const STATUS_FILTER_OPTIONS: Array<{ value: AlertStatusFilter; label: string }> = [
@@ -110,35 +48,7 @@ const STATUS_FILTER_OPTIONS: Array<{ value: AlertStatusFilter; label: string }> 
   { value: "FAILED", label: "Failed" },
 ];
 
-const ALERT_TYPE_OPTIONS: Array<{ value: AlertTypeFilter; label: string }> = [
-  { value: "ALL", label: "All alerts" },
-  { value: "CHOLERA_RISK", label: "Cholera risk" },
-  { value: "FLOOD_RISK", label: "Flood risk" },
-  { value: "WATER_CONTAMINATION", label: "Water contamination" },
-  { value: "HEAVY_RAINFALL", label: "Heavy rainfall" },
-  { value: "OPERATIONAL_ALERT", label: "Operational alert" },
-];
-
 const ROWS_PER_PAGE = 5;
-
-function classifyAlertType(alert: AlertRecord): AlertTypeMeta {
-  const haystack = `${alert.message} ${alert.recipient} ${alert.ward_name}`.toLowerCase();
-
-  if (haystack.includes("cholera")) {
-    return ALERT_TYPE_META.CHOLERA_RISK;
-  }
-  if (haystack.includes("flood")) {
-    return ALERT_TYPE_META.FLOOD_RISK;
-  }
-  if (haystack.includes("water")) {
-    return ALERT_TYPE_META.WATER_CONTAMINATION;
-  }
-  if (haystack.includes("rain")) {
-    return ALERT_TYPE_META.HEAVY_RAINFALL;
-  }
-
-  return ALERT_TYPE_META.OPERATIONAL_ALERT;
-}
 
 function getStatusFilter(status: AlertRecord["status"]): Exclude<AlertStatusFilter, "ALL"> {
   if (status === "DELIVERED") {
@@ -167,12 +77,12 @@ function getStatusLabel(status: AlertRecord["status"]) {
 function getChannelLabel(channel: AlertRecord["channel"]) {
   switch (channel) {
     case "SMS":
-      return "SMS Notification";
+      return "SMS";
     case "WHATSAPP":
-      return "Radio Broadcast";
+      return "WhatsApp";
     case "DASHBOARD":
     default:
-      return "USSD Notification";
+      return "Dashboard";
   }
 }
 
@@ -180,11 +90,9 @@ function getChannelIcon(channel: AlertRecord["channel"]) {
   switch (channel) {
     case "SMS":
       return Smartphone;
-    case "WHATSAPP":
-      return Radio;
     case "DASHBOARD":
     default:
-      return Siren;
+      return CloudRain;
   }
 }
 
@@ -251,27 +159,8 @@ function formatExactTimestamp(timestamp: string | null) {
   });
 }
 
-function getAlertSeverity(riskScore: number | null): "HIGH" | "MEDIUM" | "LOW" {
-  const value = riskScore ?? 0;
-  if (value >= 75) {
-    return "HIGH";
-  }
-  if (value >= 40) {
-    return "MEDIUM";
-  }
-  return "LOW";
-}
-
-function getSeverityLabel(severity: "HIGH" | "MEDIUM" | "LOW") {
-  switch (severity) {
-    case "HIGH":
-      return "High severity";
-    case "MEDIUM":
-      return "Medium severity";
-    case "LOW":
-    default:
-      return "Low severity";
-  }
+function formatAlertPublicId(alertId: number) {
+  return `AL-${String(alertId).padStart(4, "0")}`;
 }
 
 function buildPaginationItems(currentPage: number, totalPages: number): Array<number | "..."> {
@@ -292,9 +181,9 @@ function buildPaginationItems(currentPage: number, totalPages: number): Array<nu
 
 function downloadAlertsCsv(alerts: DecoratedAlert[]) {
   const rows = [
-    ["Alert Type", "Ward", "Channel", "Status", "Created At", "Sent At", "Recipient", "Message"],
+    ["Alert ID", "Ward", "Channel", "Status", "Created At", "Sent At", "Recipient", "Message"],
     ...alerts.map((alert) => [
-      alert.alertType.label,
+      formatAlertPublicId(alert.id),
       alert.ward_name,
       alert.channelLabel,
       alert.statusLabel,
@@ -322,25 +211,9 @@ function downloadAlertsCsv(alerts: DecoratedAlert[]) {
   URL.revokeObjectURL(url);
 }
 
-function getToneSurface(tone: AlertTypeMeta["tone"]) {
-  switch (tone) {
-    case "red":
-      return "bg-[color-mix(in_srgb,var(--danger)_12%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]";
-    case "blue":
-      return "bg-[color-mix(in_srgb,var(--brand)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]";
-    case "orange":
-    case "amber":
-      return "bg-[color-mix(in_srgb,var(--warning)_14%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_18%,transparent)]";
-    case "slate":
-    default:
-      return "bg-[color-mix(in_srgb,var(--dashboard-table-line)_60%,transparent)] text-panel-copy";
-  }
-}
-
 export default function AlertsPage() {
   const { currentUser } = useAuth();
   const [search, setSearch] = useState("");
-  const [selectedType, setSelectedType] = useState<AlertTypeFilter>("ALL");
   const [selectedStatus, setSelectedStatus] = useState<AlertStatusFilter>("ALL");
   const [page, setPage] = useState(1);
   const [selectedAlertId, setSelectedAlertId] = useState<number | null>(null);
@@ -353,21 +226,16 @@ export default function AlertsPage() {
   const decoratedAlerts = useMemo<DecoratedAlert[]>(
     () =>
       alerts.map((alert) => {
-        const alertType = classifyAlertType(alert);
         const timestamp = alert.sent_at ?? alert.created_at;
-        const severity = getAlertSeverity(alert.risk_score);
 
         return {
           ...alert,
-          alertType,
           statusFilter: getStatusFilter(alert.status),
           statusLabel: getStatusLabel(alert.status),
           channelLabel: getChannelLabel(alert.channel),
           timeLabel: formatSentTime(timestamp),
           relativeLabel: formatRelativeShort(timestamp),
           operationalLabel: formatRelativeTimestamp(timestamp),
-          severity,
-          severityLabel: getSeverityLabel(severity),
         };
       }),
     [alerts],
@@ -377,10 +245,6 @@ export default function AlertsPage() {
     const normalizedSearch = search.trim().toLowerCase();
 
     return decoratedAlerts.filter((alert) => {
-      if (selectedType !== "ALL" && alert.alertType.key !== selectedType) {
-        return false;
-      }
-
       if (selectedStatus !== "ALL" && alert.statusFilter !== selectedStatus) {
         return false;
       }
@@ -390,17 +254,18 @@ export default function AlertsPage() {
       }
 
       return (
-        alert.alertType.label.toLowerCase().includes(normalizedSearch) ||
+        formatAlertPublicId(alert.id).toLowerCase().includes(normalizedSearch) ||
         alert.ward_name.toLowerCase().includes(normalizedSearch) ||
         alert.message.toLowerCase().includes(normalizedSearch) ||
-        alert.channelLabel.toLowerCase().includes(normalizedSearch)
+        alert.channelLabel.toLowerCase().includes(normalizedSearch) ||
+        alert.recipient.toLowerCase().includes(normalizedSearch)
       );
     });
-  }, [decoratedAlerts, search, selectedStatus, selectedType]);
+  }, [decoratedAlerts, search, selectedStatus]);
 
   useEffect(() => {
     setPage(1);
-  }, [search, selectedStatus, selectedType]);
+  }, [search, selectedStatus]);
 
   const alertsLast24Hours = useMemo(
     () =>
@@ -604,7 +469,7 @@ export default function AlertsPage() {
       <section className="space-y-5">
         <PageSectionHeader
           title="Alerts Monitoring"
-          description="Track delivery status, operational risk activity, and ward-level alert pressure across Migori County."
+          description="Track recorded alert status, delivery state, and visible ward alert counts across Migori County."
         />
 
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
@@ -613,7 +478,7 @@ export default function AlertsPage() {
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">
-                    Alerts sent (last 24 hours)
+                    Alert records (last 24 hours)
                   </p>
                   <div className="mt-3 text-4xl font-semibold leading-none text-panel-strong">
                     {isLoading ? "..." : alertsLast24Hours.toLocaleString()}
@@ -625,7 +490,7 @@ export default function AlertsPage() {
               </div>
               <p className="mt-4 text-sm text-panel-muted">
                 {isLoading
-                  ? "Checking recent delivery volume"
+                  ? "Checking recent alert records"
                   : `${sentTrend >= 0 ? "+" : ""}${sentTrend} vs previous 24h`}
               </p>
             </Card>
@@ -633,7 +498,7 @@ export default function AlertsPage() {
             <Card className="rounded-3xl border-[color:var(--warning)]/20 bg-panel px-5 py-5">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Active alerts</p>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Active alert records</p>
                   <div className="mt-3 text-4xl font-semibold leading-none text-panel-strong">
                     {isLoading ? "..." : activeAlertsCount}
                   </div>
@@ -643,7 +508,7 @@ export default function AlertsPage() {
                 </span>
               </div>
               <p className="mt-4 text-sm text-panel-muted">
-                Ongoing risk monitoring cycles still awaiting a clean resolution path.
+                Records still queued or retrying in the visible delivery state feed.
               </p>
             </Card>
 
@@ -684,17 +549,17 @@ export default function AlertsPage() {
           <Card className="rounded-3xl bg-panel px-5 py-5">
             <h2 className="text-2xl font-semibold text-panel-strong">Priority Alert Review</h2>
             <p className="mt-2 text-sm text-panel-muted">
-              Derived summary of the highest-pressure visible alert record in the current scope.
+              Derived summary of the visible alert record that currently sorts highest by failure state, risk score, and recency.
             </p>
             <div className="mt-5 rounded-2xl bg-[color-mix(in_srgb,var(--brand)_8%,var(--panel))] p-4">
               <strong className="block text-base text-panel-strong">
                 {mostCriticalAlert
-                  ? `${mostCriticalAlert.severity === "HIGH" ? "Highest priority alert" : "Review alert"} - ${mostCriticalAlert.ward_name}`
+                  ? `${formatAlertPublicId(mostCriticalAlert.id)} - ${mostCriticalAlert.ward_name}`
                   : "No priority alert in current scope."}
               </strong>
               <p className="mt-2 text-sm text-panel-muted">
                 {mostCriticalAlert
-                  ? `Priority signal: ${mostCriticalAlert.alertType.label} via ${mostCriticalAlert.channelLabel.toLowerCase()} triggered ${mostCriticalAlert.relativeLabel}.`
+                  ? `${mostCriticalAlert.statusLabel} via ${mostCriticalAlert.channelLabel.toLowerCase()} with recorded risk score ${mostCriticalAlert.risk_score !== null ? Math.round(mostCriticalAlert.risk_score) : "unavailable"}, updated ${mostCriticalAlert.relativeLabel}.`
                   : "No visible alert record currently stands out above the rest of the filtered scope."}
               </p>
             </div>
@@ -719,26 +584,8 @@ export default function AlertsPage() {
               icon={<Search className="size-4" aria-hidden="true" />}
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search ward, alert type, or channel..."
+              placeholder="Search alert ID, ward, recipient, or channel..."
             />
-
-            <label className="flex min-w-[11rem] flex-col gap-2">
-              <span className="text-sm font-medium text-panel-copy">Alert type</span>
-              <span className="relative flex h-11 items-center rounded-pill border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 shadow-sm">
-                <select
-                  value={selectedType}
-                  onChange={(event) => setSelectedType(event.target.value as AlertTypeFilter)}
-                  className="h-full w-full appearance-none bg-transparent pr-8 text-sm text-panel-strong outline-none"
-                >
-                  {ALERT_TYPE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-4 size-4 text-panel-muted" aria-hidden="true" />
-              </span>
-            </label>
 
             <div className="flex flex-wrap gap-2" role="tablist" aria-label="Alert status filters">
               {STATUS_FILTER_OPTIONS.map((option) => (
@@ -775,7 +622,7 @@ export default function AlertsPage() {
             <table className="min-w-full divide-y divide-panel-table-wrap text-sm">
               <thead className="bg-[color-mix(in_srgb,var(--dashboard-table-line)_30%,transparent)]">
                 <tr className="text-left">
-                  {["Alert type", "Administrative ward", "Channel", "Status", "Sent time", "Action"].map((label) => (
+                  {["Alert record", "Administrative ward", "Channel", "Status", "Sent time", "Action"].map((label) => (
                     <th
                       key={label}
                       className="px-5 py-4 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle"
@@ -796,7 +643,6 @@ export default function AlertsPage() {
                   ))
                 ) : visibleAlerts.length > 0 ? (
                   visibleAlerts.map((alert) => {
-                    const AlertIcon = alert.alertType.icon;
                     const ChannelIcon = getChannelIcon(alert.channel);
 
                     return (
@@ -813,34 +659,18 @@ export default function AlertsPage() {
                         tabIndex={0}
                       >
                         <td className="px-5 py-4 align-top">
-                          <div className="flex items-start gap-3">
-                            <span
-                              className={cn(
-                                "inline-flex size-11 shrink-0 items-center justify-center rounded-2xl",
-                                getToneSurface(alert.alertType.tone),
-                              )}
-                            >
-                              <AlertIcon className="size-5" aria-hidden="true" />
-                            </span>
-                            <div className="min-w-0 space-y-2">
-                              <div className="font-semibold text-panel-strong">{alert.alertType.label}</div>
-                              <div className="flex flex-wrap items-center gap-2">
-                                <StatusBadge tone="info" className="tracking-[0.12em]">
-                                  Backend record
-                                </StatusBadge>
-                                <StatusBadge
-                                  tone={
-                                    alert.severity === "HIGH"
-                                      ? "danger"
-                                      : alert.severity === "MEDIUM"
-                                        ? "warning"
-                                        : "success"
-                                  }
-                                  className="tracking-[0.12em]"
-                                >
-                                  {alert.severityLabel}
-                                </StatusBadge>
-                              </div>
+                          <div className="min-w-0 space-y-2">
+                            <div className="font-semibold text-panel-strong">{formatAlertPublicId(alert.id)}</div>
+                            <p className="line-clamp-2 text-sm text-panel-copy">{alert.message}</p>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <StatusBadge tone="info" className="tracking-[0.12em]">
+                                Backend record
+                              </StatusBadge>
+                              <span className="text-xs text-panel-muted">
+                                {alert.risk_score !== null
+                                  ? `Recorded risk score ${Math.round(alert.risk_score)}/100`
+                                  : "Risk score unavailable"}
+                              </span>
                             </div>
                           </div>
                         </td>
@@ -1006,10 +836,10 @@ export default function AlertsPage() {
         </Card>
 
         <Card className="rounded-[2rem] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--brand)_10%,var(--panel)),var(--panel))] px-5 py-5">
-          <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Current signal</span>
+          <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Current review target</span>
           <strong className="mt-3 block text-2xl leading-tight text-panel-strong">
             {mostCriticalAlert
-              ? `${mostCriticalAlert.severityLabel} in ${mostCriticalAlert.ward_name}`
+              ? `${formatAlertPublicId(mostCriticalAlert.id)} in ${mostCriticalAlert.ward_name}`
               : "No priority alert signal in scope"}
           </strong>
           <p className="mt-3 text-sm text-panel-muted">
@@ -1034,7 +864,7 @@ export default function AlertsPage() {
             <div className="flex items-start justify-between gap-4 border-b border-panel-table-wrap px-5 py-5 sm:px-6">
               <div>
                 <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Alert detail</span>
-                <h2 className="mt-2 text-2xl font-semibold text-panel-strong">{selectedAlert.alertType.label}</h2>
+                <h2 className="mt-2 text-2xl font-semibold text-panel-strong">{formatAlertPublicId(selectedAlert.id)}</h2>
                 <p className="mt-1 text-sm text-panel-muted">{selectedAlert.ward_name}</p>
               </div>
 
@@ -1053,8 +883,8 @@ export default function AlertsPage() {
               <div className="grid gap-3 sm:grid-cols-2">
                 {[
                   ["Status", selectedAlert.statusLabel],
-                  ["Severity", selectedAlert.severityLabel],
                   ["Channel", selectedAlert.channelLabel],
+                  ["Alert ID", formatAlertPublicId(selectedAlert.id)],
                   ["Sent time", selectedAlert.timeLabel],
                 ].map(([label, value]) => (
                   <Card key={label} className="rounded-2xl px-4 py-4 shadow-none">
@@ -1065,7 +895,7 @@ export default function AlertsPage() {
               </div>
 
               <Card className="rounded-2xl px-4 py-4 shadow-none">
-                <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-panel-subtle">Operational message</h3>
+                <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-panel-subtle">Alert message</h3>
                 <p className="mt-3 text-sm leading-6 text-panel-copy">{selectedAlert.message}</p>
               </Card>
 
