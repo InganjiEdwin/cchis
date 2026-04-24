@@ -19,6 +19,7 @@ type DashboardTopbarProps = {
   lastUpdatedLabel?: string;
   lastUpdatedTone?: "default" | "stale";
   onRefresh?: () => void;
+  showNotifications?: boolean;
   children?: React.ReactNode;
 };
 
@@ -92,6 +93,7 @@ export function DashboardTopbar({
   lastUpdatedLabel,
   lastUpdatedTone = "default",
   onRefresh,
+  showNotifications = true,
   children,
 }: DashboardTopbarProps) {
   const { currentUser, updateAppearance } = useAuth();
@@ -341,24 +343,25 @@ export function DashboardTopbar({
           ) : null}
         </div>
 
-        <div className="relative">
-          <Button
-            variant="secondary"
-            size="icon"
-            className="relative size-9 rounded-[0.8rem] border-[var(--dashboard-icon-button-border)] bg-[var(--dashboard-icon-button-surface)] text-[var(--dashboard-icon-button-ink)] hover:text-[var(--dashboard-icon-button-ink-hover)]"
-            aria-label="Open notifications"
-            onClick={() => setOpenPanel((currentValue) => (currentValue === "notifications" ? null : "notifications"))}
-          >
-            <Bell className="size-4" aria-hidden="true" />
-            {unreadCount > 0 ? (
-              <span className="absolute -right-1 -top-1 inline-flex min-w-[1.1rem] items-center justify-center rounded-full bg-[color:var(--danger)] px-1 text-[0.62rem] font-semibold leading-4 text-white">
-                {unreadCount}
-              </span>
-            ) : null}
-          </Button>
+        {showNotifications ? (
+          <div className="relative">
+            <Button
+              variant="secondary"
+              size="icon"
+              className="relative size-9 rounded-[0.8rem] border-[var(--dashboard-icon-button-border)] bg-[var(--dashboard-icon-button-surface)] text-[var(--dashboard-icon-button-ink)] hover:text-[var(--dashboard-icon-button-ink-hover)]"
+              aria-label="Open notifications"
+              onClick={() => setOpenPanel((currentValue) => (currentValue === "notifications" ? null : "notifications"))}
+            >
+              <Bell className="size-4" aria-hidden="true" />
+              {unreadCount > 0 ? (
+                <span className="absolute -right-1 -top-1 inline-flex min-w-[1.1rem] items-center justify-center rounded-full bg-[color:var(--danger)] px-1 text-[0.62rem] font-semibold leading-4 text-white">
+                  {unreadCount}
+                </span>
+              ) : null}
+            </Button>
 
-          {openPanel === "notifications" ? (
-            <Card className="absolute right-0 top-[calc(100%+0.75rem)] z-20 w-[24rem] rounded-[1.5rem] px-5 py-5 shadow-panel">
+            {openPanel === "notifications" ? (
+              <Card className="absolute right-0 top-[calc(100%+0.75rem)] z-20 w-[24rem] rounded-[1.5rem] px-5 py-5 shadow-panel">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-lg font-semibold text-panel-strong">Notifications</h3>
@@ -471,9 +474,10 @@ export function DashboardTopbar({
                   </div>
                 ) : null}
               </div>
-            </Card>
-          ) : null}
-        </div>
+              </Card>
+            ) : null}
+          </div>
+        ) : null}
 
         {children}
       </div>

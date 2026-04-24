@@ -143,6 +143,7 @@ export default function OverviewPage() {
         title="Overview"
         subtitle="Climate Health Risk Monitoring"
         lastUpdatedLabel={isRefreshing ? "Refreshing..." : formatOperationalTime(overview?.latestTimestamp ?? null)}
+        showNotifications={false}
         onRefresh={() => {
           void overviewQuery.refetch();
         }}
@@ -211,7 +212,7 @@ export default function OverviewPage() {
           </div>
           <div className="space-y-1">
             <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">
-              {overview?.deliveredAlertRate ?? 0}% delivered
+              {overview?.deliveredAlertRate ?? 0}% delivered from visible alerts
             </span>
             <strong className="block text-4xl font-semibold tracking-[-0.05em] text-panel-strong">
               {isLoading ? "..." : overview?.alertsTodayCount ?? 0}
@@ -254,7 +255,12 @@ export default function OverviewPage() {
                     overview.recentAlerts.map((alert) => (
                       <tr key={alert.id}>
                         <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm last:border-b-0">
-                          <strong className="font-semibold text-panel-strong">{alert.ward_name}</strong>
+                          <Link
+                            href={`/alerts/${alert.id}`}
+                            className="font-semibold text-panel-strong transition hover:text-brand"
+                          >
+                            {alert.ward_name}
+                          </Link>
                         </td>
                         <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm text-panel-copy last:border-b-0">
                           {formatChannelLabel(alert.channel)}
@@ -304,8 +310,8 @@ export default function OverviewPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-panel-muted">
-            <span>Model confidence: derived from current risk feed</span>
-            <span>Data quality: live API-backed</span>
+            <span>Risk prioritization is derived from the current visible ward risk feed.</span>
+            <span>Alert activity is sourced from the current visible alerts feed.</span>
           </div>
         </Card>
 
