@@ -597,16 +597,16 @@ export default function ChvsPage() {
                   <ShieldAlert className="size-4" aria-hidden="true" />
                 </span>
                 <h3 className="text-xl font-semibold text-panel-strong">
-                  {hasCriticalCoverageGap ? "Critical Coverage Gap" : "Coverage Status"}
+                  {hasCriticalCoverageGap ? "Derived Coverage Signal" : "Coverage Summary"}
                 </h3>
               </div>
               <p className="mt-4 text-sm leading-6 text-panel-copy">
                 {hasCriticalCoverageGap
-                  ? `${criticalCoverageGap?.wardName} has only ${criticalCoverageGap?.activeCount} active CHV on duty while ${criticalCoverageGap?.predictedCases} predicted cases remain in play.`
-                  : "No urgent CHV coverage gaps detected in visible wards."}
+                  ? `${criticalCoverageGap?.wardName} shows ${criticalCoverageGap?.activeCount} active CHV in visible records while the linked ward risk feed still shows ${criticalCoverageGap?.predictedCases} predicted cases.`
+                  : "No derived CHV coverage signal stands out in the visible ward set."}
               </p>
               <Button className="mt-5 w-full justify-center" disabled>
-                Re-deploy workflow pending
+                Redeployment unavailable
               </Button>
             </Card>
           </div>
