@@ -98,11 +98,11 @@ export default function FacilityReadinessPage() {
   const forecastCases = facilityRows.reduce((sum, row) => sum + row.projectedCases, 0);
   const overloadedFacilities = facilityRows.filter((row) => row.surgeRisk === "EXTREME").length;
   const surgeCardIsCalm = criticalFacilities === 0;
-  const immediateAlertsTitle = immediateAlerts.length ? "Readiness Rows In Focus" : "No Facility Rows In Focus";
+  const immediateAlertsTitle = immediateAlerts.length ? "Facility Rows To Note" : "No Facility Rows To Note";
   const immediateAlertsSubtitle = isLoading
     ? "Checking readiness..."
     : immediateAlerts.length
-      ? `${immediateAlerts.length} calculated rows in view`
+      ? `${immediateAlerts.length} calculated rows are visible`
       : "No high calculated readiness pressure visible";
   const forecastActionGuidance = overloadedFacilities
     ? `Summary note: calculated resupply readiness stands out for ${overloadedFacilities} facilities.`
@@ -419,7 +419,7 @@ export default function FacilityReadinessPage() {
                         </StatusBadge>
                       </div>
                       <p className="mt-3 text-sm leading-6 text-panel-copy">
-                        Calculated readiness pressure is rising in {row.wardName}. Estimated ORS readiness is {row.orsStockPercent}% with projected
+                        Calculated readiness is elevated in {row.wardName}. Estimated ORS readiness is {row.orsStockPercent}% with projected
                         case activity at {row.projectedCases}.
                       </p>
                       <button
@@ -437,7 +437,7 @@ export default function FacilityReadinessPage() {
                       <ShieldCheck className="size-4" aria-hidden="true" />
                     </span>
                     <div>
-                      <strong className="block text-base text-panel-strong">No facility rows in focus</strong>
+                      <strong className="block text-base text-panel-strong">No facility rows to note</strong>
                       <span className="mt-1 block text-sm text-panel-muted">
                         No high calculated readiness pressure is visible across the facility view.
                       </span>
