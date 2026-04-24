@@ -70,8 +70,8 @@ function formatEventTime(timestamp: string | null) {
 function describeFreshness(timestamp: string | null, thresholdMinutes: number) {
   if (!timestamp) {
     return {
-      label: "No current timestamp available",
-      detail: "Awaiting fresh upstream records",
+      label: "No visible timestamp available",
+      detail: "Awaiting visible upstream records",
       isStale: true,
       tone: "danger" as const,
     };
@@ -82,7 +82,7 @@ function describeFreshness(timestamp: string | null, thresholdMinutes: number) {
   if (ageMinutes > thresholdMinutes * 2) {
     return {
       label: `${formatRelativeLabel(timestamp)} update`,
-      detail: "Stale data",
+      detail: "Older visible data",
       isStale: true,
       tone: "danger" as const,
     };
@@ -91,7 +91,7 @@ function describeFreshness(timestamp: string | null, thresholdMinutes: number) {
   if (ageMinutes > thresholdMinutes) {
     return {
       label: `${formatRelativeLabel(timestamp)} update`,
-      detail: "Watching closely",
+      detail: "Older than target window",
       isStale: true,
       tone: "warning" as const,
     };
@@ -99,7 +99,7 @@ function describeFreshness(timestamp: string | null, thresholdMinutes: number) {
 
   return {
     label: `${formatRelativeLabel(timestamp)} update`,
-    detail: "Up to date",
+    detail: "Within target window",
     isStale: false,
     tone: "success" as const,
   };
@@ -201,7 +201,7 @@ export default function SystemPage() {
     () => [
       {
         title: "Risk Scoring Feed",
-        subtitle: `${snapshot?.wardsWithFreshRisk ?? 0}/${snapshot?.visibleWards ?? 0} wards currently expose generated risk timestamps`,
+        subtitle: `${snapshot?.wardsWithFreshRisk ?? 0}/${snapshot?.visibleWards ?? 0} wards expose generated risk timestamps`,
         status: riskFreshness.label,
         detail: riskFreshness.detail,
         tone: riskFreshness.tone,
@@ -217,7 +217,7 @@ export default function SystemPage() {
       },
       {
         title: "Facility Registry",
-        subtitle: `${snapshot?.visibleFacilities ?? 0} facilities in visible scope`,
+        subtitle: `${snapshot?.visibleFacilities ?? 0} facility records are visible`,
         status: facilityFreshness.label,
         detail: facilityFreshness.detail,
         tone: facilityFreshness.tone,
