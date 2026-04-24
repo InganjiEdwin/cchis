@@ -178,7 +178,7 @@ export default function ProfilePage() {
                     </StatusBadge>
                   </div>
                   <p className="mt-1 text-sm font-medium text-panel-muted">
-                    Session-backed role summary
+                    Role summary from session data
                   </p>
                 </div>
 
@@ -203,7 +203,7 @@ export default function ProfilePage() {
             <div className="flex w-full flex-col gap-3 md:w-auto md:min-w-[15rem]">
               <div className="rounded-[1.35rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-4">
                 <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">
-                  Account readiness
+                  Two-factor summary
                 </p>
                 <div className="mt-2 flex items-center justify-between gap-3">
                   <span className="text-sm font-medium text-panel-copy">Two-factor</span>
@@ -254,7 +254,7 @@ export default function ProfilePage() {
                 <p className="text-[0.72rem] font-semibold uppercase tracking-[0.18em] text-white/68">
                   Role Summary
                 </p>
-              <p className="mt-2 text-sm text-white/80">This card summarizes role-facing copy only. It does not expose live approval or reporting routes.</p>
+              <p className="mt-2 text-sm text-white/80">This card summarizes role-facing copy only. Approval and report routes are unavailable here.</p>
               </div>
 
               <div className="rounded-[1.25rem] border border-white/12 bg-white/10 px-4 py-4">
@@ -418,7 +418,7 @@ export default function ProfilePage() {
                 <strong className="text-base font-semibold text-panel-strong">Two-Factor (2FA)</strong>
               </div>
               <p className="mt-4 min-h-[4.5rem] text-sm leading-6 text-panel-muted">
-                Secure your account with TOTP authenticator access. Current state: {twoFactorLabel}.
+                Secure your account with TOTP authenticator access. Visible state: {twoFactorLabel}.
               </p>
               <Link
                 href="/setup-2fa"
@@ -475,7 +475,7 @@ export default function ProfilePage() {
           <div className="mt-5 flex flex-wrap items-center gap-4 text-sm text-panel-muted">
             <span className="inline-flex items-center gap-2">
               <RefreshCcw className="size-4" aria-hidden="true" />
-              Session-backed profile data
+              Visible session profile data
             </span>
             <span className="inline-flex items-center gap-2">
               <ShieldCheck className="size-4" aria-hidden="true" />
