@@ -203,7 +203,7 @@ export default function AlertDetailPage() {
     <div className="space-y-6">
       <DashboardTopbar
         title="Alerts"
-        subtitle="Operational alert detail"
+        subtitle="Alert record detail"
         lastUpdatedLabel={isRefreshing ? "Refreshing..." : formatRelativeShort(lastUpdatedTimestamp)}
         lastUpdatedTone={freshness?.is_stale ? "stale" : "default"}
         onRefresh={() => {
@@ -243,7 +243,7 @@ export default function AlertDetailPage() {
               ) : null}
             </div>
             <p className="max-w-3xl text-sm text-panel-muted">
-              Review delivery status, ward risk context, and the available read-path context for this alert.
+              Review recorded delivery status, linked ward context, and the available read-path details for this alert.
             </p>
           </div>
 
@@ -350,14 +350,14 @@ export default function AlertDetailPage() {
                 <div>
                   <h2 className="text-2xl font-semibold text-panel-strong">Alert Execution Timeline</h2>
                   <p className="mt-2 text-sm text-panel-muted">
-                    Record-based lifecycle from trigger through the actual backend delivery state changes we can verify today.
+                    Record-based lifecycle from creation through the backend delivery state changes visible on this record.
                   </p>
                 </div>
                 <StatusBadge
                   tone={delivery?.status_tone ?? "warning"}
                   className="px-3 py-1.5 tracking-[0.14em]"
                 >
-                  {delivery?.status_label ?? "Awaiting completion"}
+                  {delivery?.status_label ?? "Delivery state unavailable"}
                 </StatusBadge>
               </div>
 
@@ -477,17 +477,17 @@ export default function AlertDetailPage() {
 
           <div className="space-y-5">
             <Card className="rounded-[2rem] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--brand)_10%,var(--panel)),var(--panel))] px-5 py-5">
-              <h2 className="text-2xl font-semibold text-panel-strong">Response Actions</h2>
+              <h2 className="text-2xl font-semibold text-panel-strong">Review Guidance</h2>
 
               <div className="mt-5 space-y-5">
                 <div className="space-y-1">
-                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Derived escalation posture</span>
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Derived review posture</span>
                   <strong className="block text-base text-panel-strong">
                     {riskContext?.trend_label ?? "Monitoring"}
                   </strong>
                 </div>
                 <div className="space-y-1">
-                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Suggested review path</span>
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Recorded review summary</span>
                   <strong className="block text-base leading-6 text-panel-strong">
                     {riskContext?.summary ?? "Continue monitoring this record and use ward detail for recorded ward context."}
                   </strong>
@@ -496,16 +496,16 @@ export default function AlertDetailPage() {
 
               <div className="mt-6 flex flex-col gap-3">
                 <StatusBanner tone="warning" icon={<ShieldAlert aria-hidden="true" />}>
-                  Escalation, facility notification, and follow-up messaging actions are not backend-wired from this alert detail page yet.
+                  Escalation, facility notification, follow-up messaging, resend, and recall actions are not backend-wired from this alert detail page.
                 </StatusBanner>
                 <Button className="w-full justify-center" disabled={!capabilities || !capabilities.can_resend}>
-                  Escalation Workflow Pending
+                  Escalation Action Unavailable
                 </Button>
                 <Button variant="secondary" className="w-full justify-center" disabled={!capabilities || !capabilities.can_notify_facilities}>
-                  Notify Facilities
+                  Facility Notification Unavailable
                 </Button>
                 <Button variant="secondary" className="w-full justify-center" disabled={!capabilities || !capabilities.can_send_follow_up}>
-                  Send Follow-up Message
+                  Follow-up Message Unavailable
                 </Button>
               </div>
             </Card>
@@ -543,10 +543,10 @@ export default function AlertDetailPage() {
               </div>
 
               <div className="space-y-4 px-5 py-5">
-                <h3 className="text-xl font-semibold text-panel-strong">Ward Risk Detail</h3>
+                <h3 className="text-xl font-semibold text-panel-strong">Ward Context</h3>
                 <p className="text-sm leading-6 text-panel-copy">
                   {wardDetail
-                    ? `${wardDetail.name} currently shows ${wardDetail.current_risk_level.toLowerCase()} recorded ward risk in the linked ward summary.`
+                    ? `${wardDetail.name} is the linked ward summary for this alert and currently shows ${wardDetail.current_risk_level.toLowerCase()} recorded ward risk.`
                     : `${alert.ward_name} remains the ward linked to this alert record.`}
                 </p>
                 <div className="flex flex-col gap-3">
@@ -563,10 +563,10 @@ export default function AlertDetailPage() {
 
             <div className="flex flex-col gap-3">
               <Button variant="danger" className="w-full justify-center" disabled={!capabilities || !capabilities.can_resend}>
-                Re-send Pending Backend Contract
+                Resend Unavailable
               </Button>
               <Button variant="secondary" className="w-full justify-center" disabled={!capabilities || !capabilities.can_recall}>
-                Recall Alert Pending Backend Contract
+                Recall Unavailable
               </Button>
             </div>
           </div>
