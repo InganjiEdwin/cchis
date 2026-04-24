@@ -6,16 +6,12 @@ import {
   CheckCircle2,
   ChevronRight,
   CircleAlert,
-  ClipboardCheck,
   CloudRain,
   Download,
   Droplets,
-  Hospital,
-  MessageSquareWarning,
   Radio,
   Share2,
   ShieldAlert,
-  Siren,
   Smartphone,
   Waves,
   XCircle,
@@ -230,29 +226,6 @@ function formatAlertPublicId(alertId: number) {
   return `AL-${String(alertId).padStart(4, "0")}`;
 }
 
-function estimateSuccessRate(alert: AlertRecord) {
-  if (alert.status === "DELIVERED") {
-    return 98;
-  }
-  if (alert.status === "RETRY_PENDING") {
-    return 74;
-  }
-  if (alert.status === "QUEUED") {
-    return 52;
-  }
-  return 18;
-}
-
-function estimateFailureCount(alert: AlertRecord) {
-  if (alert.status === "FAILED") {
-    return Math.max(1, alert.max_attempts);
-  }
-  if (alert.status === "RETRY_PENDING") {
-    return Math.max(1, alert.attempt_count);
-  }
-  return 0;
-}
-
 function getRiskMeaning(score: number | null) {
   const value = score ?? 0;
 
@@ -280,14 +253,6 @@ function getRiskMeaning(score: number | null) {
 }
 
 function buildTimeline(alert: AlertRecord, triggerSource: string): TimelineEntry[] {
-  const isDelivered = alert.status === "DELIVERED";
-  const isRetrying = alert.status === "RETRY_PENDING" || alert.status === "QUEUED";
-  const isFailed = alert.status === "FAILED";
-  const acknowledgementRate = isDelivered ? 65 : isRetrying ? 28 : isFailed ? 12 : 34;
-  const recipientCount = alert.channel === "SMS" ? 32 : alert.channel === "WHATSAPP" ? 18 : 24;
-  const deliveredCount = Math.max(0, Math.round((estimateSuccessRate(alert) / 100) * recipientCount));
-  const failedCount = Math.max(0, recipientCount - deliveredCount);
-
   const items: TimelineEntry[] = [
     {
       id: "triggered",
@@ -304,108 +269,61 @@ function buildTimeline(alert: AlertRecord, triggerSource: string): TimelineEntry
     },
     {
       id: "created",
-      title: "Alert created",
-      description: `Operational alert configured for ${alert.ward_name} and prepared for ${getChannelLabel(alert.channel).toLowerCase()}.`,
+      title: "Alert record created",
+      description: `A ${getChannelLabel(alert.channel).toLowerCase()} record was created for ${alert.ward_name}.`,
       timestamp: alert.created_at,
       tone: "neutral",
       category: "system",
       details: [
-        `Target group: ${recipientCount} recipients in visible scope`,
+        `Recipient: ${alert.recipient}`,
         `Channel: ${getChannelLabel(alert.channel)}`,
       ],
     },
     {
       id: "dispatch",
-      title: "Dispatch initiated",
-      description: `Outbound delivery started through ${alert.delivery_backend || "primary delivery backend"}.`,
+      title: "Delivery attempt state",
+      description: `Latest delivery activity is tracked through ${alert.delivery_backend || "the recorded backend"}.`,
       timestamp: alert.last_attempted_at ?? alert.sent_at ?? alert.created_at,
-      tone: isFailed ? "warning" : "progress",
+      tone: alert.status === "FAILED" ? "danger" : alert.status === "DELIVERED" ? "success" : "progress",
       category: "delivery",
       details: [
-        `Estimated recipients: ${recipientCount}`,
-        `Priority path: ${alert.status === "FAILED" ? "Escalated retry path" : "Standard alert pipeline"}`,
+        `Attempt count: ${alert.attempt_count}/${alert.max_attempts}`,
+        `Backend: ${alert.delivery_backend || "Unspecified"}`,
       ],
     },
     {
       id: "delivery-status",
-      title: "Delivery status",
+      title: "Recorded delivery outcome",
       description:
-        isDelivered
-          ? `${deliveredCount} of ${recipientCount} recipients reached successfully.`
-          : isFailed
-            ? `Delivery degraded. ${failedCount} recipient failures need review.`
-            : `${deliveredCount} of ${recipientCount} visible deliveries confirmed so far.`,
+        alert.status === "DELIVERED"
+          ? "This alert record is marked as delivered."
+          : alert.status === "FAILED"
+            ? "This alert record is marked as failed and needs operator review."
+            : alert.status === "RETRY_PENDING"
+              ? "This alert record is waiting for another delivery attempt."
+              : "This alert record is queued and awaiting delivery processing.",
       timestamp: alert.sent_at ?? alert.last_attempted_at,
-      tone: isDelivered ? "success" : isFailed ? "danger" : "warning",
+      tone: alert.status === "DELIVERED" ? "success" : alert.status === "FAILED" ? "danger" : "warning",
       category: "delivery",
       details: [
-        `SMS delivered: ${alert.channel === "SMS" ? deliveredCount : Math.max(0, deliveredCount - 2)}/${recipientCount}`,
-        `App or dashboard delivered: ${Math.max(0, deliveredCount - 1)}/${recipientCount}`,
-        `Failed deliveries: ${failedCount}`,
-      ],
-    },
-    {
-      id: "acknowledgement",
-      title: "Acknowledgement and engagement",
-      description:
-        acknowledgementRate >= 60
-          ? `${acknowledgementRate}% of recipients acknowledged within 30 minutes.`
-          : "Field acknowledgement is still building across the target audience.",
-      timestamp: alert.sent_at ?? alert.last_attempted_at,
-      tone: acknowledgementRate >= 60 ? "success" : acknowledgementRate >= 25 ? "warning" : "danger",
-      category: "responses",
-      details: [
-        `${Math.round((acknowledgementRate / 100) * recipientCount)} acknowledgements recorded`,
-        `Median response time: ${acknowledgementRate >= 60 ? "14 minutes" : "31 minutes"}`,
-      ],
-    },
-    {
-      id: "field-response",
-      title: "Field response initiated",
-      description:
-        alert.risk_score !== null && alert.risk_score >= 75
-          ? "Facilities and ward coordinators have been prompted to begin protocol response."
-          : "CHV and facility teams are monitoring locally with no escalation confirmed yet.",
-      timestamp: alert.sent_at ?? alert.created_at,
-      tone: alert.risk_score !== null && alert.risk_score >= 75 ? "warning" : "neutral",
-      category: "responses",
-      details: [
-        alert.risk_score !== null && alert.risk_score >= 75
-          ? "Escalation recommendation issued to county operations desk"
-          : "Awaiting additional field confirmation from ward teams",
-      ],
-    },
-    {
-      id: "follow-up",
-      title: "Follow-up actions",
-      description:
-        isDelivered && alert.risk_score !== null && alert.risk_score >= 75
-          ? "Dispatch review and facility follow-up have been recommended."
-          : "No secondary dispatch has been triggered yet.",
-      timestamp: alert.next_retry_at ?? alert.sent_at ?? alert.created_at,
-      tone: isDelivered ? "primary" : isFailed ? "danger" : "neutral",
-      category: "responses",
-      details: [
-        isDelivered ? "Facility review path is available from this alert" : "Awaiting operator review for follow-up",
-      ],
-    },
-    {
-      id: "resolution",
-      title: isDelivered ? "Alert active and being monitored" : isRetrying ? "Alert still in progress" : "Alert requires intervention",
-      description:
-        isDelivered
-          ? "Timeline remains open while monitoring continues and responses are tracked."
-          : isRetrying
-            ? "System is still attempting delivery and awaiting additional receipts."
-            : "Delivery path failed and needs operator review before closure.",
-      timestamp: alert.next_retry_at ?? alert.sent_at ?? alert.last_attempted_at,
-      tone: isDelivered ? "success" : isRetrying ? "warning" : "danger",
-      category: "all",
-      details: [
-        isDelivered ? "Last event currently highlighted as active" : "Current resolution state is incomplete",
+        `Status: ${getStatusLabel(alert.status)}`,
+        `Last attempted at: ${formatTimeStamp(alert.last_attempted_at)}`,
+        `Sent at: ${formatTimeStamp(alert.sent_at)}`,
       ],
     },
   ];
+
+  if (alert.next_retry_at) {
+    items.push({
+      id: "retry",
+      title: "Next retry scheduled",
+      description: "The backend has recorded a future retry time for this alert record.",
+      timestamp: alert.next_retry_at,
+      tone: "warning",
+      category: "delivery",
+      details: [`Next retry at: ${formatTimeStamp(alert.next_retry_at)}`],
+    });
+  }
 
   return items;
 }
@@ -479,8 +397,6 @@ export default function AlertDetailPage() {
 
   const alertType = alert ? classifyAlertType(alert) : ALERT_TYPE_META.OPERATIONAL_ALERT;
   const AlertTypeIcon = alertType.icon;
-  const performance = alert ? estimateSuccessRate(alert) : 0;
-  const failureCount = alert ? estimateFailureCount(alert) : 0;
   const timeline = alert ? buildTimeline(alert, alertType.triggerSource) : [];
   const filteredTimeline = timeline.filter((item) => timelineFilter === "all" || item.category === timelineFilter);
   const riskMeaning = alert ? getRiskMeaning(alert.risk_score) : getRiskMeaning(null);
@@ -505,8 +421,13 @@ export default function AlertDetailPage() {
           tone: alert.status === "FAILED" ? "warning" : "success",
         },
         {
-          label: failureCount > 0 ? `${failureCount} failures pending review` : "No failures pending",
-          tone: failureCount > 0 ? "warning" : "success",
+          label:
+            alert.status === "FAILED"
+              ? "This alert record failed delivery"
+              : alert.status === "RETRY_PENDING"
+                ? "A retry is still pending"
+                : "No active delivery failure recorded",
+          tone: alert.status === "FAILED" || alert.status === "RETRY_PENDING" ? "warning" : "success",
         },
         {
           label:
@@ -515,22 +436,6 @@ export default function AlertDetailPage() {
         },
       ]
     : [];
-  const recipientSummary = alert
-    ? {
-        totalRecipients: alert.channel === "SMS" ? 32 : alert.channel === "WHATSAPP" ? 18 : 24,
-        acknowledgementRate: alert.status === "DELIVERED" ? 65 : alert.status === "FAILED" ? 12 : 34,
-        responseStatus:
-          alert.risk_score !== null && alert.risk_score >= 75
-            ? "Escalation likely"
-            : alert.status === "DELIVERED"
-              ? "Monitoring active"
-              : "Awaiting confirmation",
-      }
-    : {
-        totalRecipients: 0,
-        acknowledgementRate: 0,
-        responseStatus: "Unknown",
-      };
 
   if (!currentUser) {
     return null;
@@ -685,40 +590,38 @@ export default function AlertDetailPage() {
                 <div>
                   <h2 className="text-2xl font-semibold text-panel-strong">Alert Execution Timeline</h2>
                   <p className="mt-2 text-sm text-panel-muted">
-                    Full lifecycle from trigger to delivery, engagement, and follow-up action.
+                    Record-based lifecycle from trigger through the actual backend delivery state changes we can verify today.
                   </p>
                 </div>
                 <StatusBadge
                   tone={alert.status === "FAILED" ? "danger" : alert.status === "DELIVERED" ? "success" : "warning"}
                   className="px-3 py-1.5 tracking-[0.14em]"
                 >
-                  {alert.status === "FAILED" ? "Needs review" : alert.status === "DELIVERED" ? "In progress" : "Awaiting completion"}
+                  {alert.status === "FAILED" ? "Needs review" : alert.status === "DELIVERED" ? "Delivered" : "Awaiting completion"}
                 </StatusBadge>
               </div>
 
               <div className="mt-6 grid gap-4 md:grid-cols-4">
                 <Card className="rounded-[1.4rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-4 shadow-none">
-                  <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Total recipients</p>
+                  <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Recipient</p>
                   <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-panel-strong">
-                    {recipientSummary.totalRecipients}
+                    1
                   </p>
                 </Card>
                 <Card className="rounded-[1.4rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-4 shadow-none">
-                  <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Delivery rate</p>
-                  <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-panel-strong">{performance}%</p>
-                </Card>
-                <Card className="rounded-[1.4rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-4 shadow-none">
-                  <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">
-                    Acknowledgement
-                  </p>
+                  <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Attempt count</p>
                   <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-panel-strong">
-                    {recipientSummary.acknowledgementRate}%
+                    {alert.attempt_count}/{alert.max_attempts}
                   </p>
                 </Card>
                 <Card className="rounded-[1.4rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-4 shadow-none">
-                  <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Response status</p>
+                  <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Backend</p>
+                  <p className="mt-2 text-lg font-semibold tracking-[-0.04em] text-panel-strong">{alert.delivery_backend || "Unspecified"}</p>
+                </Card>
+                <Card className="rounded-[1.4rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-4 shadow-none">
+                  <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Next retry</p>
                   <p className="mt-2 text-lg font-semibold tracking-[-0.04em] text-panel-strong">
-                    {recipientSummary.responseStatus}
+                    {alert.next_retry_at ? formatTimeOnly(alert.next_retry_at) : "None"}
                   </p>
                 </Card>
               </div>
@@ -834,16 +737,16 @@ export default function AlertDetailPage() {
               </div>
 
               <div className="mt-6 flex flex-col gap-3">
-                <Button className="w-full justify-center">
-                  <ClipboardCheck className="size-4" aria-hidden="true" />
+                <StatusBanner tone="warning" icon={<ShieldAlert aria-hidden="true" />}>
+                  Escalation, facility notification, and follow-up messaging actions are not backend-wired from this alert detail page yet.
+                </StatusBanner>
+                <Button className="w-full justify-center" disabled>
                   Start Escalation Protocol
                 </Button>
-                <Button variant="secondary" className="w-full justify-center">
-                  <Hospital className="size-4" aria-hidden="true" />
+                <Button variant="secondary" className="w-full justify-center" disabled>
                   Notify Facilities
                 </Button>
-                <Button variant="secondary" className="w-full justify-center">
-                  <MessageSquareWarning className="size-4" aria-hidden="true" />
+                <Button variant="secondary" className="w-full justify-center" disabled>
                   Send Follow-up Message
                 </Button>
               </div>
@@ -851,55 +754,16 @@ export default function AlertDetailPage() {
 
             <Card className="rounded-[2rem] px-5 py-5">
               <div className="flex items-start justify-between gap-4">
-                <h2 className="text-2xl font-semibold text-panel-strong">Delivery Performance</h2>
-                <div className="flex items-end gap-2 opacity-60" aria-hidden="true">
-                  <span className="h-14 w-5 rounded-t-md bg-[color-mix(in_srgb,var(--dashboard-table-line)_70%,transparent)]" />
-                  <span className="h-20 w-5 rounded-t-md bg-[color-mix(in_srgb,var(--dashboard-table-line)_70%,transparent)]" />
-                  <span className="h-10 w-5 rounded-t-md bg-[color-mix(in_srgb,var(--dashboard-table-line)_70%,transparent)]" />
-                </div>
-              </div>
-
-              <div className="relative mt-6 flex items-center justify-center">
-                <div className="relative flex size-48 items-center justify-center">
-                  <svg viewBox="0 0 120 120" className="size-full -rotate-90" aria-hidden="true">
-                    <circle
-                      cx="60"
-                      cy="60"
-                      r="46"
-                      className="fill-none stroke-[color-mix(in_srgb,var(--dashboard-table-line)_70%,transparent)]"
-                      strokeWidth="8"
-                    />
-                    <circle
-                      cx="60"
-                      cy="60"
-                      r="46"
-                      className="fill-none stroke-brand transition-[stroke-dashoffset]"
-                      strokeWidth="8"
-                      strokeLinecap="round"
-                      style={{
-                        strokeDasharray: `${2 * Math.PI * 46}`,
-                        strokeDashoffset: `${2 * Math.PI * 46 * (1 - performance / 100)}`,
-                      }}
-                    />
-                  </svg>
-                  <div className="absolute inset-0 flex flex-col items-center justify-center">
-                    <strong className="text-5xl font-semibold tracking-tight text-panel-strong">{performance}%</strong>
-                    <span className="mt-1 text-sm font-semibold uppercase tracking-[0.16em] text-panel-subtle">
-                      {alert.status === "DELIVERED" ? "Success" : alert.status === "FAILED" ? "Blocked" : "Active"}
-                    </span>
-                  </div>
-                </div>
+                <h2 className="text-2xl font-semibold text-panel-strong">Delivery Record</h2>
               </div>
 
               <dl className="mt-6 space-y-4 border-t border-panel-table-wrap pt-5 text-sm">
                 {[
-                  ["Channel", alert.channel === "SMS" ? "SMS Bulk (Global)" : getChannelLabel(alert.channel)],
-                  ["Total recipients", alert.channel === "SMS" ? "1,240 CHVs & Officials" : getChannelAudience(alert.channel)],
-                  [
-                    "Retry attempts",
-                    alert.max_attempts > 1 ? `${alert.max_attempts} Automated` : `${alert.attempt_count} of ${alert.max_attempts}`,
-                  ],
-                  ["Failed deliveries", failureCount > 0 ? `${failureCount} recipient${failureCount > 1 ? "s" : ""}` : "None"],
+                  ["Channel", getChannelLabel(alert.channel)],
+                  ["Audience label", getChannelAudience(alert.channel)],
+                  ["Recipient", alert.recipient],
+                  ["Attempt count", `${alert.attempt_count} of ${alert.max_attempts}`],
+                  ["External ID", alert.external_id || "No external ID recorded"],
                   ["Failure reason", alert.error_message || "No active failure reason"],
                 ].map(([label, value]) => (
                   <div key={label} className="flex items-start justify-between gap-4">
@@ -937,22 +801,21 @@ export default function AlertDetailPage() {
                   </Link>
                   <button
                     type="button"
+                    disabled
                     className="inline-flex items-center justify-center rounded-pill border border-panel-table-wrap px-4 py-3 text-sm font-semibold text-panel-copy transition hover:border-[var(--dashboard-icon-button-border)] hover:text-panel-strong"
                   >
-                    Compare Neighboring Wards
+                    Compare Neighboring Wards Pending
                   </button>
                 </div>
               </div>
             </Card>
 
             <div className="flex flex-col gap-3">
-              <Button variant="danger" className="w-full justify-center" disabled={failureCount === 0}>
-                <AlertTriangle className="size-4" aria-hidden="true" />
-                Re-send to failures {failureCount > 0 ? `(${failureCount})` : ""}
+              <Button variant="danger" className="w-full justify-center" disabled>
+                Re-send Pending Backend Contract
               </Button>
               <Button variant="secondary" className="w-full justify-center" disabled>
-                <XCircle className="size-4" aria-hidden="true" />
-                Recall Alert
+                Recall Alert Pending Backend Contract
               </Button>
             </div>
           </div>

@@ -313,7 +313,6 @@ export default function ChvsPage() {
   };
 
   const coverageShare = totalChvs ? Math.max(8, Math.round((activeChvs / totalChvs) * 100)) : 0;
-  const acknowledgedDelta = Math.max(0.4, Number(((100 - acknowledgedRate) / 10).toFixed(1)));
   const totalVisibleLabel = isLoading ? "..." : totalChvs.toLocaleString();
   const activeVisibleLabel = isLoading ? "..." : activeChvs.toLocaleString();
   const casesVisibleLabel = isLoading ? "..." : highUrgencyCases.toLocaleString();
@@ -386,11 +385,11 @@ export default function ChvsPage() {
             </span>
             <div className="mt-3 flex items-center gap-3">
               <strong className="text-4xl font-semibold leading-none text-panel-strong">{acknowledgedRate.toFixed(1)}%</strong>
-              <StatusBadge tone="danger" className="tracking-[0.12em]">
-                -{acknowledgedDelta}% 
+              <StatusBadge tone="warning" className="tracking-[0.12em]">
+                Derived
               </StatusBadge>
             </div>
-            <p className="mt-4 text-sm text-panel-muted">vs yesterday</p>
+            <p className="mt-4 text-sm text-panel-muted">Calculated from visible alert delivery outcomes in the current scope</p>
           </Card>
 
           <Card className="rounded-[2rem] px-5 py-5">
@@ -885,17 +884,20 @@ export default function ChvsPage() {
               </div>
 
               <div className="flex flex-col gap-3 border-t border-panel-table-wrap px-5 py-5 sm:px-6">
-                <Button className="w-full justify-center">
+                <p className="text-sm text-panel-muted">
+                  Messaging, reassignment, and detailed history actions are still pending backend workflow support from this screen.
+                </p>
+                <Button className="w-full justify-center" disabled>
                   <BellRing className="size-4" aria-hidden="true" />
-                  Send message
+                  Send message pending
                 </Button>
-                <Button variant="secondary" className="w-full justify-center">
+                <Button variant="secondary" className="w-full justify-center" disabled>
                   <Users2 className="size-4" aria-hidden="true" />
-                  Reassign ward
+                  Reassign ward pending
                 </Button>
-                <Button variant="secondary" className="w-full justify-center">
+                <Button variant="secondary" className="w-full justify-center" disabled>
                   <Activity className="size-4" aria-hidden="true" />
-                  View activity history
+                  View activity history pending
                 </Button>
               </div>
             </aside>
