@@ -307,8 +307,8 @@ export default function ChvsPage() {
       ? `${criticalCoverageGap?.wardName} stands out in the visible coverage summary`
       : "No visible wards stand out in the coverage summary",
     broadcast: alerts.length
-      ? `${alerts.length} visible alert records are in this scope`
-      : "No visible alert records are in this scope",
+      ? `${alerts.length} visible alert records are in this view`
+      : "No visible alert records are in this view",
     training: `${registryRows.filter((row) => row.syncHealth !== "ONLINE").length} CHVs show delayed sync or offline status`,
   };
 
@@ -389,7 +389,7 @@ export default function ChvsPage() {
                 Calculated
               </StatusBadge>
             </div>
-            <p className="mt-4 text-sm text-panel-muted">Calculated from visible alert delivery outcomes in this scope</p>
+            <p className="mt-4 text-sm text-panel-muted">Calculated from visible alert delivery outcomes in this view</p>
           </Card>
 
           <Card className="rounded-[2rem] px-5 py-5">
@@ -535,9 +535,9 @@ export default function ChvsPage() {
 
           <div className="space-y-5">
             <Card className="rounded-[2rem] px-5 py-5">
-              <h2 className="text-2xl font-semibold text-panel-strong">Planning Cues</h2>
+              <h2 className="text-2xl font-semibold text-panel-strong">Planning Summary</h2>
               <p className="mt-3 text-sm text-panel-muted">
-                Assignment, alert scope, and training cues below are calculated from visible records only. This page does not expose backend action routes for those actions.
+                Assignment, alert count, and training notes below are calculated from visible records only. This page does not expose backend action routes for those actions.
               </p>
 
               <div className="mt-5 space-y-3">
@@ -549,7 +549,7 @@ export default function ChvsPage() {
                   },
                   {
                     icon: Megaphone,
-                    title: "Alert scope summary",
+                    title: "Alert count summary",
                     detail: commandStatus.broadcast,
                   },
                   {
@@ -603,7 +603,7 @@ export default function ChvsPage() {
               <p className="mt-4 text-sm leading-6 text-panel-copy">
                 {hasCriticalCoverageGap
                   ? `${criticalCoverageGap?.wardName} shows ${criticalCoverageGap?.activeCount} active CHV in visible records while the linked ward risk feed still shows ${criticalCoverageGap?.predictedCases} predicted cases.`
-                  : "No CHV coverage gap stands out in the visible ward set."}
+                  : "No CHV coverage difference stands out in the visible ward set."}
               </p>
               <Button className="mt-5 w-full justify-center" disabled>
                 Redeployment unavailable
