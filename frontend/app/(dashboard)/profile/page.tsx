@@ -25,12 +25,12 @@ function getInitials(name: string) {
 function buildCapabilityCopy(role: string) {
   if (role === "ADMIN") {
     return {
-      heading: "This section summarizes role-facing dashboard access in broad terms only.",
+      heading: "This section offers broad role notes only.",
       items: [
         "View alert, ward, CHV, facility, and system summary pages available to your role.",
         "Access on-page actions only where a real route is exposed in the dashboard.",
         "Use linked pages to review recorded or calculated operational context.",
-        "Treat this card as role summary copy, not a full permission registry.",
+        "Treat this card as role notes, not a full route list.",
       ],
       note: "Role summary copy only",
     };
@@ -38,12 +38,12 @@ function buildCapabilityCopy(role: string) {
 
   if (role === "ANALYST") {
     return {
-      heading: "This section summarizes role-facing dashboard access in broad terms only.",
+      heading: "This section offers broad role notes only.",
       items: [
         "View alert, ward, CHV, facility, and system summary pages available to your role.",
         "Access on-page actions only where a real route is exposed in the dashboard.",
         "Use linked pages to review recorded or calculated operational context.",
-        "Treat this card as role summary copy, not a full permission registry.",
+        "Treat this card as role notes, not a full route list.",
       ],
       note: "Role summary copy only",
     };
@@ -51,24 +51,24 @@ function buildCapabilityCopy(role: string) {
 
   if (role === "SUPERVISOR") {
     return {
-      heading: "This section summarizes role-facing dashboard access in broad terms only.",
+      heading: "This section offers broad role notes only.",
       items: [
         "View alert, ward, CHV, facility, and system summary pages available to your role.",
         "Access on-page actions only where a real route is exposed in the dashboard.",
         "Use linked pages to review recorded or calculated operational context.",
-        "Treat this card as role summary copy, not a full permission registry.",
+        "Treat this card as role notes, not a full route list.",
       ],
       note: "Role summary copy only",
     };
   }
 
   return {
-    heading: "This section summarizes role-facing dashboard access in broad terms only.",
+    heading: "This section offers broad role notes only.",
     items: [
       "View alert, ward, CHV, facility, and system summary pages available to your role.",
       "Access on-page actions only where a real route is exposed in the dashboard.",
       "Use linked pages to review recorded or calculated operational context.",
-      "Treat this card as role summary copy, not a full permission registry.",
+      "Treat this card as role notes, not a full route list.",
     ],
     note: "Role summary copy only",
   };
@@ -147,7 +147,7 @@ export default function ProfilePage() {
       <DashboardTopbar
         title="Profile"
         subtitle="Session identity, role, and access summary"
-        lastUpdatedLabel="Session profile visible"
+        lastUpdatedLabel="Profile visible"
       />
 
       {appearanceError ? (
@@ -189,13 +189,13 @@ export default function ProfilePage() {
                   </div>
                   <div className="flex items-center gap-2">
                     <ShieldCheck className="size-4 text-brand" aria-hidden="true" />
-                    <span>Dashboard account session</span>
+                    <span>Dashboard profile page</span>
                   </div>
                 </div>
 
                 <div className="inline-flex items-center gap-2 rounded-pill border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_24%,transparent)] px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-panel-copy">
                   <Clock3 className="size-3.5" aria-hidden="true" />
-                  Session profile loaded
+                  Profile loaded
                 </div>
               </div>
             </div>
@@ -265,7 +265,7 @@ export default function ProfilePage() {
               </div>
 
               <div className="rounded-[1.1rem] border border-white/10 bg-black/10 px-4 py-3 text-sm text-white/78">
-              Summary text on this page is based on the visible session profile.
+              Text on this page comes from visible session data.
               </div>
 
             <Button className="w-full bg-white/18 text-white shadow-none hover:bg-white/18" disabled>
@@ -280,7 +280,7 @@ export default function ProfilePage() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <h2 className="text-[1.25rem] font-semibold tracking-[-0.04em] text-panel-strong">Account Details</h2>
-              <p className="mt-1 text-sm text-panel-muted">Visible identity fields and session preferences on this page.</p>
+              <p className="mt-1 text-sm text-panel-muted">Identity fields and preferences shown on this page.</p>
             </div>
             <button
               type="button"
@@ -457,7 +457,7 @@ export default function ProfilePage() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <h2 className="text-[1.25rem] font-semibold tracking-[-0.04em] text-panel-strong">Recent Activity Log</h2>
-              <p className="mt-1 text-sm text-panel-muted">Visible account activity is not exposed on this page yet.</p>
+              <p className="mt-1 text-sm text-panel-muted">Account activity is not exposed on this page yet.</p>
             </div>
             <button
               type="button"
