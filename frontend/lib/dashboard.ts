@@ -196,6 +196,33 @@ export type RiskScoreRecord = {
   generated_at: string;
 };
 
+export type WardIntelligenceTrend = {
+  label: string;
+  direction: "up" | "down" | "flat";
+  delta_points: number | null;
+  mode: string;
+};
+
+export type WardIntelligenceDriverItem = {
+  text: string;
+  tone: "critical" | "warning" | "info";
+  source_field: string | null;
+};
+
+export type WardIntelligenceGuidanceItem = {
+  text: string;
+  urgency: "primary" | "review_only";
+};
+
+export type WardIntelligenceFreshness = {
+  generated_at: string | null;
+  is_stale: boolean;
+  stale_threshold_minutes: number;
+  history_count: number;
+  alert_count: number;
+  mode: string;
+};
+
 export type TriggerAlertRequest = {
   ward_id: number;
   send_sms: boolean;
@@ -226,10 +253,29 @@ type WardsRouteResponse = {
   latestRisks: LatestWardRisk[];
 };
 
-type WardDetailRouteResponse = {
+export type WardIntelligenceRouteResponse = {
   ward: WardDetailSummary;
-  riskHistory: PaginatedResponse<RiskScoreRecord>;
-  alerts: PaginatedResponse<AlertRecord>;
+  current_risk: {
+    risk_level: "LOW" | "MEDIUM" | "HIGH" | null;
+    risk_score: number | null;
+    predicted_cases: number;
+    generated_at: string | null;
+    source: string | null;
+    model_version: string | null;
+    model_run_status: string | null;
+  };
+  trend: WardIntelligenceTrend;
+  driver_summary: {
+    mode: string;
+    items: WardIntelligenceDriverItem[];
+  };
+  guidance_summary: {
+    mode: string;
+    items: WardIntelligenceGuidanceItem[];
+  };
+  freshness: WardIntelligenceFreshness;
+  risk_history: RiskScoreRecord[];
+  related_alerts: AlertRecord[];
 };
 
 type AlertDetailRouteResponse = {
@@ -307,7 +353,7 @@ export async function fetchWardRiskDataViaBff(params: FetchWardRiskDataParams = 
 }
 
 export async function fetchWardDetailViaBff(wardId: number) {
-  return requestDashboardRoute<WardDetailRouteResponse>(`/api/dashboard/wards/${wardId}`);
+  return requestDashboardRoute<WardIntelligenceRouteResponse>(`/api/dashboard/wards/${wardId}`);
 }
 
 export async function fetchAlertsDataViaBff() {

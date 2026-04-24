@@ -1,10 +1,7 @@
 import { NextResponse } from "next/server";
 
 import type {
-  AlertRecord,
-  PaginatedResponse,
-  RiskScoreRecord,
-  WardDetailSummary,
+  WardIntelligenceRouteResponse,
 } from "@/lib/dashboard";
 import { ServerApiError, fetchBackendJson } from "@/lib/server-api";
 
@@ -21,25 +18,14 @@ export async function GET(
   }
 
   try {
-    const [ward, riskHistory, alerts] = await Promise.all([
-      fetchBackendJson<WardDetailSummary>(`/wards/${wardId}/`, {
+    const intelligence = await fetchBackendJson<WardIntelligenceRouteResponse>(
+      `/wards/${wardId}/intelligence/`,
+      {
         cookieHeader,
-      }),
-      fetchBackendJson<PaginatedResponse<RiskScoreRecord>>(
-        `/risk-scores/?page_size=20&ordering=-generated_at&ward_id=${wardId}`,
-        {
-          cookieHeader,
-        },
-      ),
-      fetchBackendJson<PaginatedResponse<AlertRecord>>(
-        `/alerts/?page_size=50&ordering=-created_at&ward_id=${wardId}`,
-        {
-          cookieHeader,
-        },
-      ),
-    ]);
+      },
+    );
 
-    return NextResponse.json({ ward, riskHistory, alerts });
+    return NextResponse.json(intelligence);
   } catch (error) {
     if (error instanceof ServerApiError) {
       return NextResponse.json({ detail: error.message }, { status: error.status });

@@ -25,21 +25,12 @@ import { TriggerAlertPanel } from "@/components/trigger-alert-panel";
 import { Card } from "@/components/ui/card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { cn } from "@/lib/cn";
-import type { AlertRecord, RiskScoreRecord } from "@/lib/dashboard";
+import type { AlertRecord, RiskScoreRecord, WardIntelligenceDriverItem } from "@/lib/dashboard";
 import { canTriggerAlerts } from "@/lib/roles";
 import {
   type WardDetailState,
-  type WardRiskLevel,
   useWardDetailQuery,
 } from "@/queries/use-ward-detail-query";
-
-type DriverTone = "critical" | "warning" | "watch";
-
-type RiskDriver = {
-  icon: "rainfall" | "flood" | "outbreak" | "status";
-  text: string;
-  tone: DriverTone;
-};
 
 const STALE_THRESHOLD_MINUTES = 120;
 
@@ -97,7 +88,7 @@ function isStaleTimestamp(timestamp: string | null) {
   return (Date.now() - date.getTime()) / 60000 > STALE_THRESHOLD_MINUTES;
 }
 
-function formatRiskLevel(riskLevel: WardRiskLevel) {
+function formatRiskLevel(riskLevel: WardDetailState["riskLevel"]) {
   switch (riskLevel) {
     case "HIGH":
       return "High risk";
@@ -126,129 +117,18 @@ function getAlertHeadline(alert: AlertRecord) {
   return `${toTitleCase(alert.channel)} alert`;
 }
 
-function buildOperationalRecommendations(riskLevel: WardRiskLevel) {
-  switch (riskLevel) {
-    case "HIGH":
-      return [
-        "Send CHV alert and confirm the escalation channel is active.",
-        "Activate hygiene and safe-water messaging for this ward immediately.",
-        "Review ORS and dehydration-response readiness with field teams.",
-        "Monitor flood, water contamination, and outbreak signals closely over the next cycle.",
-      ];
-    case "MEDIUM":
-      return [
-        "Increase surveillance cadence and review the next risk update promptly.",
-        "Prepare CHV messaging in case the ward escalates to high risk.",
-        "Check field reporting continuity and local readiness for rapid response.",
-      ];
-    case "LOW":
-      return [
-        "Continue routine surveillance and keep this ward in the standard monitoring queue.",
-        "Verify reporting continuity so trend changes are detected early.",
-        "Watch for rapid movement in rainfall, flood proxy, or predicted case signals.",
-      ];
-    default:
-      return [
-        "Keep this ward under observation until fresher risk data is available.",
-        "Review reporting continuity and confirm the next model run lands as expected.",
-      ];
-  }
-}
-
-function buildRiskDrivers(detail: WardDetailState | null): RiskDriver[] {
-  if (!detail || detail.riskHistory.length === 0) {
-    return [
-      {
-        icon: "status",
-        text: "Recent driver detail is not yet available from the backend feed.",
-        tone: "watch",
-      },
-    ];
-  }
-
-  const latestRisk = detail.riskHistory[0];
-  const drivers: RiskDriver[] = [];
-
-  if (latestRisk.rainfall_mm > 80) {
-    drivers.push({
-      icon: "rainfall",
-      text: `Rainfall threshold is elevated at ${latestRisk.rainfall_mm.toFixed(0)} mm.`,
-      tone: "critical",
-    });
-  }
-  if (latestRisk.flood_indicator > 0) {
-    drivers.push({
-      icon: "flood",
-      text: "Flood proxy is elevated in the latest model run.",
-      tone: "warning",
-    });
-  }
-  if (latestRisk.predicted_cases > 0) {
-    drivers.push({
-      icon: "outbreak",
-      text: `Predicted cases remain elevated at ${latestRisk.predicted_cases}.`,
-      tone: "watch",
-    });
-  }
-  if (latestRisk.model_run_status) {
-    drivers.push({
-      icon: "status",
-      text: `Latest model run status: ${latestRisk.model_run_status.toLowerCase()}.`,
-      tone: latestRisk.model_run_status.toLowerCase() === "success" ? "critical" : "watch",
-    });
-  }
-
-  return drivers.length > 0
-    ? drivers
-    : [
-        {
-          icon: "status",
-          text: "Current monitoring is based on the latest available model run for this ward.",
-          tone: "watch",
-        },
-      ];
-}
-
-function getRiskDriverIcon(driver: RiskDriver) {
-  switch (driver.icon) {
-    case "rainfall":
+function getRiskDriverIcon(driver: WardIntelligenceDriverItem) {
+  switch (driver.source_field) {
+    case "rainfall_mm":
       return <Droplets className="size-4" aria-hidden="true" />;
-    case "flood":
+    case "flood_indicator":
       return <Waves className="size-4" aria-hidden="true" />;
-    case "outbreak":
+    case "predicted_cases":
       return <History className="size-4" aria-hidden="true" />;
-    case "status":
+    case "model_run.status":
     default:
       return <Clock3 className="size-4" aria-hidden="true" />;
   }
-}
-
-function getTrend(detail: WardDetailState | null) {
-  if (!detail || detail.riskHistory.length < 2) {
-    return {
-      label: "No previous run available",
-      tone: "neutral" as const,
-      value: null as number | null,
-    };
-  }
-
-  const currentScore = normalizeRiskScore(detail.riskHistory[0].score);
-  const previousScore = normalizeRiskScore(detail.riskHistory[1].score);
-  const delta = currentScore - previousScore;
-
-  if (Math.abs(delta) < 1) {
-    return {
-      label: "Stable versus previous run",
-      tone: "neutral" as const,
-      value: 0,
-    };
-  }
-
-  return {
-    label: `${delta > 0 ? "+" : ""}${Math.round(delta)} points vs previous run`,
-    tone: delta > 0 ? ("up" as const) : ("down" as const),
-    value: delta,
-  };
 }
 
 function getSafeReturnTo(value: string | null) {
@@ -268,7 +148,7 @@ function getHistoryTrendIcon(index: number, history: RiskScoreRecord[]) {
   return "flat" as const;
 }
 
-function getRiskBadgeTone(level: WardRiskLevel) {
+function getRiskBadgeTone(level: WardDetailState["riskLevel"]) {
   if (level === "HIGH") return "danger" as const;
   if (level === "MEDIUM") return "warning" as const;
   if (level === "LOW") return "success" as const;
@@ -298,12 +178,15 @@ export default function WardDetailPage() {
   const topbarTimestampLabel = isRefreshing
     ? "Refreshing..."
     : `${formatOperationalTime(detail?.updatedAt ?? null)}${isStale ? " · Stale" : ""}`;
-  const trend = getTrend(detail);
-  const drivers = buildRiskDrivers(detail);
-  const recommendations = buildOperationalRecommendations(detail?.riskLevel ?? "UNKNOWN");
+  const trend = detail?.trend ?? {
+    label: "No previous run available",
+    direction: "flat" as const,
+    delta_points: null,
+    mode: "derived_from_recent_history",
+  };
+  const drivers = detail?.driverItems ?? [];
+  const recommendations = detail?.guidanceItems ?? [];
   const latestAlert = detail?.relatedAlerts[0] ?? null;
-  const dataCoverageScore =
-    (detail ? 25 : 0) + (!isStale ? 25 : 0) + (!historyError ? 25 : 0) + (!alertsError ? 25 : 0);
 
   if (!currentUser) {
     return null;
@@ -313,7 +196,7 @@ export default function WardDetailPage() {
     <div className="space-y-6">
       <DashboardTopbar
         title="Ward Detail"
-        subtitle={detail ? `${detail.county} County operational view` : "Migori County operational view"}
+        subtitle={detail ? `${detail.county} County ward view` : "Migori County ward view"}
         lastUpdatedLabel={topbarTimestampLabel}
         lastUpdatedTone={isStale ? "stale" : "default"}
         onRefresh={() => {
@@ -383,14 +266,14 @@ export default function WardDetailPage() {
               <div
                 className={cn(
                   "inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold",
-                  trend.tone === "up"
+                  trend.direction === "up"
                     ? "bg-[color-mix(in_srgb,var(--danger)_10%,white)] text-[color:var(--danger)]"
-                    : trend.tone === "down"
+                    : trend.direction === "down"
                       ? "bg-[color-mix(in_srgb,var(--success)_10%,white)] text-[color:var(--success)]"
                       : "bg-[color-mix(in_srgb,var(--dashboard-table-line)_40%,transparent)] text-panel-copy",
                 )}
               >
-                <ArrowUpRight className={cn("size-4", trend.tone === "down" && "rotate-90")} aria-hidden="true" />
+                <ArrowUpRight className={cn("size-4", trend.direction === "down" && "rotate-90")} aria-hidden="true" />
                 <span>{isLoading ? "Loading trend..." : trend.label}</span>
               </div>
             </div>
@@ -426,7 +309,7 @@ export default function WardDetailPage() {
                           ? "bg-[color-mix(in_srgb,var(--danger)_10%,white)] text-[color:var(--danger)]"
                           : driver.tone === "warning"
                             ? "bg-[color-mix(in_srgb,var(--warning)_10%,white)] text-[color:var(--warning)]"
-                            : "bg-[color-mix(in_srgb,var(--success)_10%,white)] text-[color:var(--success)]",
+                            : "bg-[color-mix(in_srgb,var(--dashboard-table-line)_40%,transparent)] text-panel-copy",
                       )}
                     >
                       {getRiskDriverIcon(driver)}
@@ -572,23 +455,13 @@ export default function WardDetailPage() {
                 <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand">
                   <Clock3 className="size-5" aria-hidden="true" />
                 </span>
-                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Data reliability</h3>
-              </div>
-
-              <div className="space-y-2">
-                <div className="h-2 w-full rounded-full bg-[color-mix(in_srgb,var(--dashboard-table-line)_70%,transparent)]">
-                  <span
-                    className="block h-full rounded-full bg-[linear-gradient(90deg,var(--login-submit-start),var(--login-submit-end))]"
-                    style={{ width: `${dataCoverageScore}%` }}
-                  />
-                </div>
-                <p className="text-sm font-semibold text-brand">{dataCoverageScore}% operational data coverage</p>
+                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Freshness and availability</h3>
               </div>
 
               <dl className="grid gap-4">
                 {[
-                  ["Freshness", isLoading ? "Loading..." : isStale ? "Stale" : "Current"],
-                  ["History coverage", isLoading ? "Loading..." : detail ? `${detail.riskHistory.length} recent runs` : "Unavailable"],
+                  ["Freshness", isLoading ? "Loading..." : detail?.freshness.is_stale ? "Stale" : "In range"],
+                  ["History coverage", isLoading ? "Loading..." : detail ? `${detail.freshness.history_count} recent runs` : "Unavailable"],
                   [
                     "Alert linkage",
                     isLoading
@@ -596,7 +469,7 @@ export default function WardDetailPage() {
                       : alertsError
                         ? "Temporarily unavailable"
                         : detail
-                          ? `${detail.relatedAlerts.length} recent alerts`
+                          ? `${detail.freshness.alert_count} recent alerts`
                           : "Unavailable",
                   ],
                 ].map(([label, value]) => (
@@ -611,8 +484,8 @@ export default function WardDetailPage() {
               </dl>
 
               <p className="text-sm leading-6 text-panel-muted">
-                {!isLoading && isStale
-                  ? "This ward summary is older than the expected freshness window. Review with caution until the next update lands."
+                {!isLoading && detail?.freshness.is_stale
+                  ? `This ward summary is older than the ${detail.freshness.stale_threshold_minutes}-minute freshness window. Review with caution until the next update lands.`
                   : "Based on the current ward summary, recent history, and linked alert activity."}
               </p>
             </Card>
@@ -638,14 +511,14 @@ export default function WardDetailPage() {
               <div className="space-y-3">
                 {recommendations.map((recommendation, index) => (
                   <article
-                    key={recommendation}
+                    key={recommendation.text}
                     className="flex gap-3 rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_28%,transparent)] px-4 py-4"
                   >
                     <div className="inline-flex size-9 shrink-0 items-center justify-center rounded-full bg-brand text-sm font-semibold text-white">
                       {String(index + 1).padStart(2, "0")}
                     </div>
                     <div className="space-y-1">
-                      <strong className="block text-sm font-semibold text-panel-strong">{recommendation}</strong>
+                      <strong className="block text-sm font-semibold text-panel-strong">{recommendation.text}</strong>
                       <span className="text-xs font-semibold uppercase tracking-[0.14em] text-panel-muted">
                         {index === 0 && canTriggerAlerts(currentUser.role)
                           ? "Ready to trigger"

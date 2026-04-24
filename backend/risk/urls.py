@@ -15,12 +15,14 @@ from .views import (
     USSDMenuAPIView,
     UssdSessionLogListAPIView,
     WardDetailAPIView,
+    WardIntelligenceAPIView,
     WardListAPIView,
 )
 
 urlpatterns = [
     path("wards/", WardListAPIView.as_view(), name="ward-list"),
     path("wards/<int:pk>/", WardDetailAPIView.as_view(), name="ward-detail"),
+    path("wards/<int:pk>/intelligence/", WardIntelligenceAPIView.as_view(), name="ward-intelligence"),
     path("chvs/", CHVListAPIView.as_view(), name="chv-list"),
     path("chvs/operations/", CHVOperationsAPIView.as_view(), name="chv-operations"),
     path("facilities/", HealthFacilityListAPIView.as_view(), name="facility-list"),

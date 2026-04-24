@@ -2326,6 +2326,46 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.data["id"], self.other_ward.id)
         self.assertEqual(response.data["name"], "North Kadem")
 
+    def test_analyst_can_view_ward_intelligence_summary(self):
+        Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="dashboard",
+            message="Ward intelligence alert",
+            status=Alert.STATUS_DELIVERED,
+        )
+        RiskScore.objects.create(
+            ward=self.ward,
+            model_run=self.model_run,
+            score=0.72,
+            risk_level=Ward.RISK_MEDIUM,
+            rainfall_mm=78.0,
+            flood_indicator=0.3,
+            predicted_cases=11,
+            source=RiskScore.SOURCE_MODEL,
+            model_version="v0-test",
+            generated_at=timezone.now() - timedelta(hours=6),
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("ward-intelligence", kwargs={"pk": self.ward.id}))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["ward"]["id"], self.ward.id)
+        self.assertEqual(response.data["current_risk"]["risk_level"], Ward.RISK_HIGH)
+        self.assertEqual(response.data["trend"]["mode"], "derived_from_recent_history")
+        self.assertEqual(response.data["driver_summary"]["mode"], "derived_from_latest_record")
+        self.assertEqual(response.data["guidance_summary"]["mode"], "static_risk_playbook")
+        self.assertGreaterEqual(len(response.data["risk_history"]), 2)
+        self.assertEqual(response.data["freshness"]["alert_count"], 1)
+
+    def test_supervisor_cannot_view_out_of_scope_ward_intelligence(self):
+        self.authenticate(self.supervisor_user.username)
+        response = self.client.get(reverse("ward-intelligence", kwargs={"pk": self.ward.id}))
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
     def test_latest_ward_risk_supports_search_and_sub_county_filters(self):
         self.authenticate(self.analyst_user.username)
         response = self.client.get(reverse("latest-ward-risk"), {"q": "kadem", "sub_county": "Nyatike"})

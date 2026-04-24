@@ -147,6 +147,157 @@ def latest_riskscore_for_ward(ward: Ward) -> RiskScore | None:
     return ward.risk_scores.order_by("-generated_at").first()
 
 
+def build_ward_intelligence_snapshot(ward: Ward, *, stale_threshold_minutes: int = 120) -> dict:
+    risk_history = list(
+        ward.risk_scores.select_related("model_run").order_by("-generated_at")[:6]
+    )
+    related_alerts = list(
+        ward.alerts.select_related("risk_score").order_by("-created_at")[:6]
+    )
+    latest_risk = risk_history[0] if risk_history else latest_riskscore_for_ward(ward)
+    previous_risk = risk_history[1] if len(risk_history) > 1 else None
+
+    generated_at = latest_risk.generated_at if latest_risk else None
+    is_stale = True
+    if generated_at is not None:
+        is_stale = (timezone.now() - generated_at).total_seconds() / 60 > stale_threshold_minutes
+
+    current_risk = {
+        "risk_level": latest_risk.risk_level if latest_risk else ward.current_risk_level,
+        "risk_score": latest_risk.score if latest_risk else ward.current_risk_score,
+        "predicted_cases": latest_risk.predicted_cases if latest_risk else 0,
+        "generated_at": generated_at,
+        "source": latest_risk.source if latest_risk else None,
+        "model_version": latest_risk.model_version if latest_risk else None,
+        "model_run_status": latest_risk.model_run.status if latest_risk and latest_risk.model_run else None,
+    }
+
+    if latest_risk and previous_risk:
+        delta_points = round((latest_risk.score - previous_risk.score) * 100)
+        if abs(delta_points) < 1:
+            trend = {
+                "label": "Stable versus previous run",
+                "direction": "flat",
+                "delta_points": 0,
+                "mode": "derived_from_recent_history",
+            }
+        else:
+            trend = {
+                "label": f"{delta_points:+d} points vs previous run",
+                "direction": "up" if delta_points > 0 else "down",
+                "delta_points": delta_points,
+                "mode": "derived_from_recent_history",
+            }
+    else:
+        trend = {
+            "label": "No previous run available",
+            "direction": "flat",
+            "delta_points": None,
+            "mode": "derived_from_recent_history",
+        }
+
+    driver_items: list[dict] = []
+    if latest_risk:
+        if latest_risk.rainfall_mm > 80:
+            driver_items.append(
+                {
+                    "text": f"Rainfall is elevated at {latest_risk.rainfall_mm:.0f} mm in the latest record.",
+                    "tone": "critical",
+                    "source_field": "rainfall_mm",
+                }
+            )
+        if latest_risk.flood_indicator > 0:
+            driver_items.append(
+                {
+                    "text": "Flood indicator is elevated in the latest risk record.",
+                    "tone": "warning",
+                    "source_field": "flood_indicator",
+                }
+            )
+        if latest_risk.predicted_cases > 0:
+            driver_items.append(
+                {
+                    "text": f"Predicted cases are recorded at {latest_risk.predicted_cases} in the latest run.",
+                    "tone": "info",
+                    "source_field": "predicted_cases",
+                }
+            )
+        if latest_risk.model_run:
+            driver_items.append(
+                {
+                    "text": f"Latest model run status is {latest_risk.model_run.status.lower()}.",
+                    "tone": "info",
+                    "source_field": "model_run.status",
+                }
+            )
+
+    driver_summary = {
+        "mode": "derived_from_latest_record" if latest_risk else "unavailable",
+        "items": driver_items
+        or [
+            {
+                "text": "No recent driver summary is available from the latest ward record yet.",
+                "tone": "info",
+                "source_field": None,
+            }
+        ],
+    }
+
+    current_risk_level = current_risk["risk_level"] or "UNKNOWN"
+    if current_risk_level == Ward.RISK_HIGH:
+        guidance_items = [
+            "Send CHV alert using the supported trigger flow.",
+            "Review hygiene and safe-water messaging readiness for this ward.",
+            "Check ORS and dehydration-response readiness before case pressure rises.",
+            "Watch the next model run and linked alerts closely for escalation.",
+        ]
+    elif current_risk_level == Ward.RISK_MEDIUM:
+        guidance_items = [
+            "Increase review cadence for the next ward update.",
+            "Prepare outreach messaging in case this ward escalates.",
+            "Confirm local readiness for rapid response if alert volume rises.",
+        ]
+    elif current_risk_level == Ward.RISK_LOW:
+        guidance_items = [
+            "Continue routine surveillance for this ward.",
+            "Monitor for score movement in the next model run.",
+            "Keep reporting continuity in place so risk changes are visible early.",
+        ]
+    else:
+        guidance_items = [
+            "Continue monitoring until a fresher ward record is available.",
+            "Review the next model run before taking new action from this page.",
+        ]
+
+    guidance_summary = {
+        "mode": "static_risk_playbook",
+        "items": [
+            {"text": text, "urgency": "review_only" if index else "primary"}
+            for index, text in enumerate(guidance_items)
+        ],
+    }
+
+    freshness = {
+        "generated_at": generated_at,
+        "is_stale": is_stale,
+        "stale_threshold_minutes": stale_threshold_minutes,
+        "history_count": len(risk_history),
+        "alert_count": len(related_alerts),
+        "mode": "timestamp_and_record_availability",
+    }
+
+    return {
+        "ward": ward,
+        "current_risk": current_risk,
+        "trend": trend,
+        "driver_summary": driver_summary,
+        "guidance_summary": guidance_summary,
+        "freshness": freshness,
+        "risk_history": risk_history,
+        "related_alerts": related_alerts,
+    }
+
+
 def generate_triage_recommendation(
     ward: Ward,
     diarrhea: bool,

@@ -24,10 +24,12 @@ from .serializers import (
     TriggerAlertRequestSerializer,
     UssdSessionLogSerializer,
     WardDetailSerializer,
+    WardIntelligenceSerializer,
     WardSerializer,
 )
 from .services import (
     build_chv_operations_snapshot,
+    build_ward_intelligence_snapshot,
     create_triage_session,
     latest_riskscore_for_ward,
     process_sync_payload,
@@ -99,6 +101,21 @@ class WardDetailAPIView(generics.RetrieveAPIView):
     def get_queryset(self):
         queryset = Ward.objects.filter(is_active=True).prefetch_related("risk_scores")
         return apply_ward_scope_or_none(queryset, self.request.user, field_name="id")
+
+
+class WardIntelligenceAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request, pk: int):
+        queryset = Ward.objects.filter(is_active=True).prefetch_related("risk_scores", "alerts")
+        ward = apply_ward_scope_or_none(queryset, request.user, field_name="id").filter(pk=pk).first()
+
+        if ward is None:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        payload = build_ward_intelligence_snapshot(ward)
+        serializer = WardIntelligenceSerializer(payload)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class CHVListAPIView(generics.ListAPIView):

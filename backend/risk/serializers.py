@@ -65,6 +65,53 @@ class WardDetailSerializer(serializers.ModelSerializer):
         return latest.model_version if latest else None
 
 
+class WardIntelligenceCurrentRiskSerializer(serializers.Serializer):
+    risk_level = serializers.CharField(allow_null=True)
+    risk_score = serializers.FloatField(allow_null=True)
+    predicted_cases = serializers.IntegerField()
+    generated_at = serializers.DateTimeField(allow_null=True)
+    source = serializers.CharField(allow_null=True)
+    model_version = serializers.CharField(allow_null=True)
+    model_run_status = serializers.CharField(allow_null=True)
+
+
+class WardIntelligenceTrendSerializer(serializers.Serializer):
+    label = serializers.CharField()
+    direction = serializers.ChoiceField(choices=["up", "down", "flat"])
+    delta_points = serializers.IntegerField(allow_null=True)
+    mode = serializers.CharField()
+
+
+class WardIntelligenceDriverItemSerializer(serializers.Serializer):
+    text = serializers.CharField()
+    tone = serializers.ChoiceField(choices=["critical", "warning", "info"])
+    source_field = serializers.CharField(allow_null=True)
+
+
+class WardIntelligenceDriverSummarySerializer(serializers.Serializer):
+    mode = serializers.CharField()
+    items = WardIntelligenceDriverItemSerializer(many=True)
+
+
+class WardIntelligenceGuidanceItemSerializer(serializers.Serializer):
+    text = serializers.CharField()
+    urgency = serializers.ChoiceField(choices=["primary", "review_only"])
+
+
+class WardIntelligenceGuidanceSummarySerializer(serializers.Serializer):
+    mode = serializers.CharField()
+    items = WardIntelligenceGuidanceItemSerializer(many=True)
+
+
+class WardIntelligenceFreshnessSerializer(serializers.Serializer):
+    generated_at = serializers.DateTimeField(allow_null=True)
+    is_stale = serializers.BooleanField()
+    stale_threshold_minutes = serializers.IntegerField()
+    history_count = serializers.IntegerField()
+    alert_count = serializers.IntegerField()
+    mode = serializers.CharField()
+
+
 class CHVSerializer(serializers.ModelSerializer):
     ward_name = serializers.CharField(source="ward.name", read_only=True)
 
@@ -214,6 +261,17 @@ class AlertSerializer(serializers.ModelSerializer):
             "created_at",
             "error_message",
         ]
+
+
+class WardIntelligenceSerializer(serializers.Serializer):
+    ward = WardDetailSerializer()
+    current_risk = WardIntelligenceCurrentRiskSerializer()
+    trend = WardIntelligenceTrendSerializer()
+    driver_summary = WardIntelligenceDriverSummarySerializer()
+    guidance_summary = WardIntelligenceGuidanceSummarySerializer()
+    freshness = WardIntelligenceFreshnessSerializer()
+    risk_history = RiskScoreSerializer(many=True)
+    related_alerts = AlertSerializer(many=True)
 
 
 class TriggerAlertRequestSerializer(serializers.Serializer):
