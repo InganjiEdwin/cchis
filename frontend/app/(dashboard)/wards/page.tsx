@@ -162,18 +162,6 @@ function isStaleTimestamp(timestamp: string | null) {
   return (Date.now() - date.getTime()) / 60000 > STALE_THRESHOLD_MINUTES;
 }
 
-function getRiskDeltaLabel(score: number | null) {
-  const normalizedScore = normalizeRiskScore(score);
-  if (normalizedScore >= 80) return "+12%";
-  if (normalizedScore >= 65) return "+5%";
-  if (normalizedScore >= 45) return "-4%";
-  return "-15%";
-}
-
-function getRiskDeltaTone(score: number | null) {
-  return getRiskDeltaLabel(score).startsWith("+") ? "positive" : "negative";
-}
-
 function getCoverageLabel(totalVisible: number, totalAll: number) {
   if (!totalAll) {
     return "0/0 wards reporting";
@@ -368,13 +356,13 @@ export default function WardsPage() {
             Ward Risk Monitoring
           </h1>
           <p className="max-w-3xl text-sm text-panel-muted">
-            Monitor climate health risk across administrative wards in Migori County.
+            Review the latest recorded ward risk across administrative wards in Migori County.
           </p>
         </div>
 
         <div className="inline-flex items-center gap-2 rounded-full border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_30%,transparent)] px-4 py-2 text-sm font-medium text-panel-copy">
           <ArrowUpRight className="size-4" aria-hidden="true" />
-          <span>Last sync: {isLoading ? "Refreshing..." : formatCompactRelativeMinutes(latestWardTimestamp)}</span>
+          <span>Latest visible record: {isLoading ? "Refreshing..." : formatCompactRelativeMinutes(latestWardTimestamp)}</span>
         </div>
       </Card>
 
@@ -460,15 +448,15 @@ export default function WardsPage() {
             ) : null}
           </div>
           <StatusBadge tone={isStale ? "warning" : "success"} className="rounded-full px-3 py-1.5 tracking-[0.14em]">
-            {isStale ? "Data freshness warning" : "Live ward feed"}
+            {isStale ? "Data freshness warning" : "Feed timestamps in range"}
           </StatusBadge>
         </div>
       </Card>
 
       <Card className="space-y-5 p-6">
         <PageSectionHeader
-          title="Ward Risk Surveillance List"
-          description="Continuously updated ward intelligence feed"
+          title="Ward Risk List"
+          description="Latest ward records merged from ward and risk feeds"
           actions={
             <label className="grid gap-2">
               <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Sort by</span>
@@ -596,16 +584,6 @@ export default function WardsPage() {
                                 className="block h-full rounded-full bg-[linear-gradient(90deg,var(--login-submit-start),var(--login-submit-end))]"
                                 style={{ width: `${normalizeRiskScore(item.riskScore)}%` }}
                               />
-                            </div>
-                            <div
-                              className={cn(
-                                "text-xs font-semibold uppercase tracking-[0.14em]",
-                                getRiskDeltaTone(item.riskScore) === "positive"
-                                  ? "text-[color:var(--danger)]"
-                                  : "text-[color:var(--success)]",
-                              )}
-                            >
-                              {getRiskDeltaLabel(item.riskScore)}
                             </div>
                           </div>
                         </td>
