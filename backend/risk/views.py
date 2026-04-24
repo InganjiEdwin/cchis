@@ -11,6 +11,7 @@ from accounts.permissions import IsAdminOrSupervisor, IsAdminSupervisorOrAnalyst
 from .tasks import trigger_alerts_task
 
 from .models import Alert, CHV, RiskScore, UssdSessionLog, Ward
+from .map_data import build_migori_ward_map_summary
 from .serializers import (
     AlertSerializer,
     CHVSerializer,
@@ -212,6 +213,19 @@ class AlertDetailAPIView(generics.RetrieveAPIView):
     def get_queryset(self):
         queryset = Alert.objects.select_related("ward", "risk_score").all()
         return apply_ward_scope_or_none(queryset, self.request.user)
+
+
+class MigoriWardMapAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request):
+        wards = Ward.objects.filter(is_active=True, county__iexact="Migori").order_by("name")
+        scoped_wards = apply_ward_scope_or_none(wards, request.user, field_name="id")
+        payload = build_migori_ward_map_summary(
+            scoped_wards,
+            limit_to_backend_wards=not user_has_broad_dashboard_scope(request.user),
+        )
+        return Response(payload, status=status.HTTP_200_OK)
 
 
 class TriggerAlertsAPIView(APIView):

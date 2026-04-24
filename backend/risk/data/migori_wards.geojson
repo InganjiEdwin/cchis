@@ -1,0 +1,1543 @@
+{
+  "type": "FeatureCollection",
+  "metadata": {
+    "county": "Migori",
+    "source": "https://ckan.sabasi.io/dataset/34803543-569a-4c58-8a57-6b4db31d7f33",
+    "selection_rule": "ward_code range 1261-1300 with duplicate ward names removed",
+    "geometry_feature_count": 39,
+    "expected_ward_count": 40,
+    "missing_source_wards": [
+      "Kanyasa"
+    ],
+    "excluded_source_duplicates": [
+      {
+        "ward_code": "1283",
+        "name": "Kachien'G",
+        "ward_source_id": "5c71985b-3de9-410f-aa62-c55e51887056"
+      }
+    ]
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.574356,
+              -0.720684
+            ],
+            [
+              34.641872,
+              -0.720684
+            ],
+            [
+              34.641872,
+              -0.645144
+            ],
+            [
+              34.574356,
+              -0.645144
+            ],
+            [
+              34.574356,
+              -0.720684
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "North Kamagambo",
+        "ward_code": "1261",
+        "ward_source_id": "63ace548-27ce-45b7-ad96-1e8690d47822",
+        "centroid": [
+          34.609298,
+          -0.680268
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.575012,
+              -0.788417
+            ],
+            [
+              34.630314,
+              -0.788417
+            ],
+            [
+              34.630314,
+              -0.722791
+            ],
+            [
+              34.575012,
+              -0.722791
+            ],
+            [
+              34.575012,
+              -0.788417
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Central Kamagambo",
+        "ward_code": "1262",
+        "ward_source_id": "6538c59d-0be1-4067-8e98-7cd5789c577c",
+        "centroid": [
+          34.603957,
+          -0.751889
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.530716,
+              -0.828199
+            ],
+            [
+              34.630718,
+              -0.828199
+            ],
+            [
+              34.630718,
+              -0.656076
+            ],
+            [
+              34.530716,
+              -0.656076
+            ],
+            [
+              34.530716,
+              -0.828199
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "East Kamagambo",
+        "ward_code": "1263",
+        "ward_source_id": "56278150-128e-48be-b051-ca6e79ee4d68",
+        "centroid": [
+          34.570358,
+          -0.72742
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.571037,
+              -0.981975
+            ],
+            [
+              34.641979,
+              -0.981975
+            ],
+            [
+              34.641979,
+              -0.780875
+            ],
+            [
+              34.571037,
+              -0.780875
+            ],
+            [
+              34.571037,
+              -0.981975
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "South Kamagambo",
+        "ward_code": "1264",
+        "ward_source_id": "4ab2ca9b-9ca6-4531-9bf7-3a78bdc95820",
+        "centroid": [
+          34.60367,
+          -0.874144
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.483372,
+              -0.86535
+            ],
+            [
+              34.586533,
+              -0.86535
+            ],
+            [
+              34.586533,
+              -0.723785
+            ],
+            [
+              34.483372,
+              -0.723785
+            ],
+            [
+              34.483372,
+              -0.86535
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "North Sakwa",
+        "ward_code": "1265",
+        "ward_source_id": "aaf48f62-62b0-47fe-9c7b-2bd4d6570e35",
+        "centroid": [
+          34.541793,
+          -0.784615
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.521336,
+              -1.012545
+            ],
+            [
+              34.622223,
+              -1.012545
+            ],
+            [
+              34.622223,
+              -0.849502
+            ],
+            [
+              34.521336,
+              -0.849502
+            ],
+            [
+              34.521336,
+              -1.012545
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "South Sakwa",
+        "ward_code": "1266",
+        "ward_source_id": "adc093a1-c3da-495b-b434-e5beb0f4764d",
+        "centroid": [
+          34.569625,
+          -0.937371
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.463554,
+              -0.893635
+            ],
+            [
+              34.545635,
+              -0.893635
+            ],
+            [
+              34.545635,
+              -0.776907
+            ],
+            [
+              34.463554,
+              -0.776907
+            ],
+            [
+              34.463554,
+              -0.893635
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "West Sakwa",
+        "ward_code": "1267",
+        "ward_source_id": "c6e5bf03-927e-4261-973a-beddae062c41",
+        "centroid": [
+          34.501202,
+          -0.830832
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.499981,
+              -0.920591
+            ],
+            [
+              34.560478,
+              -0.920591
+            ],
+            [
+              34.560478,
+              -0.78956
+            ],
+            [
+              34.499981,
+              -0.78956
+            ],
+            [
+              34.499981,
+              -0.920591
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Central Sakwa",
+        "ward_code": "1268",
+        "ward_source_id": "019b0631-5a50-484b-9bf9-0dcda34ac88d",
+        "centroid": [
+          34.533221,
+          -0.858261
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.484123,
+              -1.091098
+            ],
+            [
+              34.571377,
+              -1.091098
+            ],
+            [
+              34.571377,
+              -1.016057
+            ],
+            [
+              34.484123,
+              -1.016057
+            ],
+            [
+              34.484123,
+              -1.091098
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "God Jope",
+        "ward_code": "1269",
+        "ward_source_id": "568d766a-c907-413a-8d4a-30eefec84cd0",
+        "centroid": [
+          34.526504,
+          -1.05761
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.463402,
+              -1.103639
+            ],
+            [
+              34.549057,
+              -1.103639
+            ],
+            [
+              34.549057,
+              -1.034426
+            ],
+            [
+              34.463402,
+              -1.034426
+            ],
+            [
+              34.463402,
+              -1.103639
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Suna Central",
+        "ward_code": "1270",
+        "ward_source_id": "ed9a06d8-6b47-4da7-9ecf-b4fca983d289",
+        "centroid": [
+          34.496474,
+          -1.076194
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.333073,
+              -1.078306
+            ],
+            [
+              34.506866,
+              -1.078306
+            ],
+            [
+              34.506866,
+              -0.973449
+            ],
+            [
+              34.333073,
+              -0.973449
+            ],
+            [
+              34.333073,
+              -1.078306
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Kakrao",
+        "ward_code": "1271",
+        "ward_source_id": "502bc96a-5665-447f-9791-eeaead1cfd95",
+        "centroid": [
+          34.424259,
+          -1.022496
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.548077,
+              -1.151662
+            ],
+            [
+              34.632954,
+              -1.151662
+            ],
+            [
+              34.632954,
+              -1.044914
+            ],
+            [
+              34.548077,
+              -1.044914
+            ],
+            [
+              34.548077,
+              -1.151662
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Kwa",
+        "ward_code": "1272",
+        "ward_source_id": "d8c6c118-5044-4574-811d-eb5c833c7f05",
+        "centroid": [
+          34.59701,
+          -1.094253
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.269531,
+              -1.103544
+            ],
+            [
+              34.384499,
+              -1.103544
+            ],
+            [
+              34.384499,
+              -0.992751
+            ],
+            [
+              34.269531,
+              -0.992751
+            ],
+            [
+              34.269531,
+              -1.103544
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Wiga",
+        "ward_code": "1273",
+        "ward_source_id": "b19aac68-a58d-4a2d-bfb5-535bd5851d22",
+        "centroid": [
+          34.330918,
+          -1.046287
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.371418,
+              -1.128123
+            ],
+            [
+              34.454254,
+              -1.128123
+            ],
+            [
+              34.454254,
+              -1.043761
+            ],
+            [
+              34.371418,
+              -1.043761
+            ],
+            [
+              34.371418,
+              -1.128123
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Wasweta II",
+        "ward_code": "1274",
+        "ward_source_id": "c368cfa8-6873-4143-aecd-c3fb9e3f171d",
+        "centroid": [
+          34.408231,
+          -1.093445
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.439751,
+              -1.124957
+            ],
+            [
+              34.508183,
+              -1.124957
+            ],
+            [
+              34.508183,
+              -1.042476
+            ],
+            [
+              34.439751,
+              -1.042476
+            ],
+            [
+              34.439751,
+              -1.124957
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Ragana-Oruba",
+        "ward_code": "1275",
+        "ward_source_id": "2b216f8e-7f8e-4056-a852-ae80142f893f",
+        "centroid": [
+          34.465243,
+          -1.088225
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.24876,
+              -1.181741
+            ],
+            [
+              34.409447,
+              -1.181741
+            ],
+            [
+              34.409447,
+              -1.073318
+            ],
+            [
+              34.24876,
+              -1.073318
+            ],
+            [
+              34.24876,
+              -1.181741
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Wasimbete",
+        "ward_code": "1276",
+        "ward_source_id": "ab2480a4-ff51-40fd-96a6-6a61bbb833cf",
+        "centroid": [
+          34.328923,
+          -1.122689
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.334808,
+              -1.000142
+            ],
+            [
+              34.471909,
+              -1.000142
+            ],
+            [
+              34.471909,
+              -0.875131
+            ],
+            [
+              34.334808,
+              -0.875131
+            ],
+            [
+              34.334808,
+              -1.000142
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "West Kanyamkago",
+        "ward_code": "1277",
+        "ward_source_id": "4a7d72d2-2e0c-42e8-8de2-b48d0bb5554b",
+        "centroid": [
+          34.395789,
+          -0.948412
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.324421,
+              -0.916933
+            ],
+            [
+              34.512272,
+              -0.916933
+            ],
+            [
+              34.512272,
+              -0.810743
+            ],
+            [
+              34.324421,
+              -0.810743
+            ],
+            [
+              34.324421,
+              -0.916933
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "North Kanyamkago",
+        "ward_code": "1278",
+        "ward_source_id": "31cf87e2-b8c9-40e6-aaa9-388a71e2b129",
+        "centroid": [
+          34.417229,
+          -0.870373
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.363892,
+              -0.979395
+            ],
+            [
+              34.517586,
+              -0.979395
+            ],
+            [
+              34.517586,
+              -0.890021
+            ],
+            [
+              34.363892,
+              -0.890021
+            ],
+            [
+              34.363892,
+              -0.979395
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Central Kanyamkago",
+        "ward_code": "1279",
+        "ward_source_id": "abcd3429-b919-45a2-86c9-bd1bff9ba855",
+        "centroid": [
+          34.455761,
+          -0.92781
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.465565,
+              -1.037061
+            ],
+            [
+              34.556183,
+              -1.037061
+            ],
+            [
+              34.556183,
+              -0.902558
+            ],
+            [
+              34.465565,
+              -0.902558
+            ],
+            [
+              34.465565,
+              -1.037061
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "South Kanyamkago",
+        "ward_code": "1280",
+        "ward_source_id": "b2204bbc-1d76-4ed9-a3b8-53c4f98b528f",
+        "centroid": [
+          34.514607,
+          -0.979744
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.540955,
+              -1.069019
+            ],
+            [
+              34.598827,
+              -1.069019
+            ],
+            [
+              34.598827,
+              -0.978624
+            ],
+            [
+              34.540955,
+              -0.978624
+            ],
+            [
+              34.540955,
+              -1.069019
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "East Kanyamkago",
+        "ward_code": "1281",
+        "ward_source_id": "9df92f94-f193-4863-8de1-fc1f3d506088",
+        "centroid": [
+          34.569096,
+          -1.02603
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              33.925907,
+              -0.855292
+            ],
+            [
+              34.193409,
+              -0.855292
+            ],
+            [
+              34.193409,
+              -0.750491
+            ],
+            [
+              33.925907,
+              -0.750491
+            ],
+            [
+              33.925907,
+              -0.855292
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Kachien'G",
+        "ward_code": "1282",
+        "ward_source_id": "08fd3d5f-160e-424d-98d3-654599e28398",
+        "centroid": [
+          34.06712,
+          -0.820312
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              33.928654,
+              -0.985576
+            ],
+            [
+              34.343895,
+              -0.985576
+            ],
+            [
+              34.343895,
+              -0.819848
+            ],
+            [
+              33.928654,
+              -0.819848
+            ],
+            [
+              33.928654,
+              -0.985576
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "North Kadem",
+        "ward_code": "1284",
+        "ward_source_id": "af640adb-db21-4803-9d8d-57c6bd9dec59",
+        "centroid": [
+          34.168356,
+          -0.897049
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.173748,
+              -1.022545
+            ],
+            [
+              34.357151,
+              -1.022545
+            ],
+            [
+              34.357151,
+              -0.911745
+            ],
+            [
+              34.173748,
+              -0.911745
+            ],
+            [
+              34.173748,
+              -1.022545
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Macalder/Kanyarwanda",
+        "ward_code": "1285",
+        "ward_source_id": "7d4b8859-28e1-4f55-985c-4b9ecd93dbd9",
+        "centroid": [
+          34.265007,
+          -0.97426
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.19141,
+              -1.110378
+            ],
+            [
+              34.281204,
+              -1.110378
+            ],
+            [
+              34.281204,
+              -1.030582
+            ],
+            [
+              34.19141,
+              -1.030582
+            ],
+            [
+              34.19141,
+              -1.110378
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Kaler",
+        "ward_code": "1286",
+        "ward_source_id": "ce0759d8-ed33-431c-bff1-4d3159cec2f7",
+        "centroid": [
+          34.23584,
+          -1.06776
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.078632,
+              -1.078142
+            ],
+            [
+              34.279449,
+              -1.078142
+            ],
+            [
+              34.279449,
+              -0.913465
+            ],
+            [
+              34.078632,
+              -0.913465
+            ],
+            [
+              34.078632,
+              -1.078142
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Got Kachola",
+        "ward_code": "1287",
+        "ward_source_id": "6601b074-d94b-4e73-bc2d-0db0d267d435",
+        "centroid": [
+          34.168495,
+          -0.987988
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              33.930553,
+              -1.068882
+            ],
+            [
+              34.175636,
+              -1.068882
+            ],
+            [
+              34.175636,
+              -0.913266
+            ],
+            [
+              33.930553,
+              -0.913266
+            ],
+            [
+              33.930553,
+              -1.068882
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Muhuru",
+        "ward_code": "1288",
+        "ward_source_id": "7b6f5107-95f0-4bea-98b4-3808684bb66e",
+        "centroid": [
+          34.041085,
+          -0.973306
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.590889,
+              -1.25187
+            ],
+            [
+              34.639507,
+              -1.25187
+            ],
+            [
+              34.639507,
+              -1.141916
+            ],
+            [
+              34.590889,
+              -1.141916
+            ],
+            [
+              34.590889,
+              -1.25187
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Bukira East",
+        "ward_code": "1289",
+        "ward_source_id": "b403743e-6a60-4b2d-97ac-cdb62cd1f949",
+        "centroid": [
+          34.61227,
+          -1.190485
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.516453,
+              -1.234543
+            ],
+            [
+              34.608162,
+              -1.234543
+            ],
+            [
+              34.608162,
+              -1.135641
+            ],
+            [
+              34.516453,
+              -1.135641
+            ],
+            [
+              34.516453,
+              -1.234543
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Bukira Centrl/Ikerege",
+        "ward_code": "1290",
+        "ward_source_id": "c1d3cabc-f44f-4a43-8972-f5df02e692e9",
+        "centroid": [
+          34.561202,
+          -1.188179
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.456837,
+              -1.245317
+            ],
+            [
+              34.498978,
+              -1.245317
+            ],
+            [
+              34.498978,
+              -1.219248
+            ],
+            [
+              34.456837,
+              -1.219248
+            ],
+            [
+              34.456837,
+              -1.245317
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Isibania",
+        "ward_code": "1291",
+        "ward_source_id": "60661e3c-c77e-4ac6-9e98-67260edec56d",
+        "centroid": [
+          34.479481,
+          -1.231132
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.47736,
+              -1.260607
+            ],
+            [
+              34.52964,
+              -1.260607
+            ],
+            [
+              34.52964,
+              -1.184025
+            ],
+            [
+              34.47736,
+              -1.184025
+            ],
+            [
+              34.47736,
+              -1.260607
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Makerero",
+        "ward_code": "1292",
+        "ward_source_id": "3da36a85-8c29-4252-8567-5bb6bd66d8db",
+        "centroid": [
+          34.506423,
+          -1.222384
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.471905,
+              -1.188244
+            ],
+            [
+              34.606182,
+              -1.188244
+            ],
+            [
+              34.606182,
+              -1.091476
+            ],
+            [
+              34.471905,
+              -1.091476
+            ],
+            [
+              34.471905,
+              -1.188244
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Masaba",
+        "ward_code": "1293",
+        "ward_source_id": "5b3d2292-61cc-47cf-81b8-f722551ea8fe",
+        "centroid": [
+          34.544303,
+          -1.130219
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.424606,
+              -1.202173
+            ],
+            [
+              34.518116,
+              -1.202173
+            ],
+            [
+              34.518116,
+              -1.118288
+            ],
+            [
+              34.424606,
+              -1.118288
+            ],
+            [
+              34.424606,
+              -1.202173
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Tagare",
+        "ward_code": "1294",
+        "ward_source_id": "964ddabb-9a64-408c-b9a3-e72879eed30a",
+        "centroid": [
+          34.468704,
+          -1.160159
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.375256,
+              -1.228359
+            ],
+            [
+              34.480358,
+              -1.228359
+            ],
+            [
+              34.480358,
+              -1.121062
+            ],
+            [
+              34.375256,
+              -1.121062
+            ],
+            [
+              34.375256,
+              -1.228359
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Nyamosense/Komosoko",
+        "ward_code": "1295",
+        "ward_source_id": "1dba3178-0f53-4212-bac7-3f3e62a27ef2",
+        "centroid": [
+          34.424613,
+          -1.178379
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.514202,
+              -1.29887
+            ],
+            [
+              34.602829,
+              -1.29887
+            ],
+            [
+              34.602829,
+              -1.21254
+            ],
+            [
+              34.514202,
+              -1.21254
+            ],
+            [
+              34.514202,
+              -1.29887
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Gokeharaka/Getambwega",
+        "ward_code": "1296",
+        "ward_source_id": "b9e75984-284d-417b-bb98-d7f9c4b95b6c",
+        "centroid": [
+          34.561966,
+          -1.253889
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.639019,
+              -1.38291
+            ],
+            [
+              34.730846,
+              -1.38291
+            ],
+            [
+              34.730846,
+              -1.2938
+            ],
+            [
+              34.639019,
+              -1.2938
+            ],
+            [
+              34.639019,
+              -1.38291
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Ntimaru West",
+        "ward_code": "1297",
+        "ward_source_id": "d55d5d0f-fde3-4a11-92e8-c4c39c1abecf",
+        "centroid": [
+          34.685631,
+          -1.339343
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.673656,
+              -1.347117
+            ],
+            [
+              34.719734,
+              -1.347117
+            ],
+            [
+              34.719734,
+              -1.263754
+            ],
+            [
+              34.673656,
+              -1.263754
+            ],
+            [
+              34.673656,
+              -1.347117
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Ntimaru East",
+        "ward_code": "1298",
+        "ward_source_id": "0d52936c-df2b-4f5f-95e2-d66f9aa04b56",
+        "centroid": [
+          34.697492,
+          -1.306427
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.628849,
+              -1.325133
+            ],
+            [
+              34.70039,
+              -1.325133
+            ],
+            [
+              34.70039,
+              -1.188415
+            ],
+            [
+              34.628849,
+              -1.188415
+            ],
+            [
+              34.628849,
+              -1.325133
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Nyabasi East",
+        "ward_code": "1299",
+        "ward_source_id": "8c57eaed-0b02-4a3f-8db3-2b496c9375e3",
+        "centroid": [
+          34.666224,
+          -1.257085
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              34.581768,
+              -1.330959
+            ],
+            [
+              34.667789,
+              -1.330959
+            ],
+            [
+              34.667789,
+              -1.157073
+            ],
+            [
+              34.581768,
+              -1.157073
+            ],
+            [
+              34.581768,
+              -1.330959
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "Nyabasi West",
+        "ward_code": "1300",
+        "ward_source_id": "b57d86c8-87eb-4b07-a309-2a0db05313b6",
+        "centroid": [
+          34.627617,
+          -1.252889
+        ]
+      }
+    }
+  ]
+}

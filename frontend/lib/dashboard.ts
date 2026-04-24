@@ -75,6 +75,47 @@ export type ChvRecord = {
   created_at: string;
 };
 
+export type WardMapGeometry = {
+  type: "Polygon" | "MultiPolygon";
+  coordinates: number[][][] | number[][][][];
+};
+
+export type WardMapFeature = {
+  type: "Feature";
+  geometry: WardMapGeometry;
+  properties: {
+    name: string;
+    ward_code: string;
+    centroid: [number, number] | null;
+    backend_ward_id: number | null;
+    backend_public_id: string | null;
+    has_backend_ward: boolean;
+    risk_level: "LOW" | "MEDIUM" | "HIGH" | null;
+    risk_score: number | null;
+    predicted_cases: number;
+    risk_generated_at: string | null;
+    chv_count: number;
+    active_chv_count: number;
+    alert_count: number;
+    facility_count: number;
+  };
+};
+
+export type WardMapResponse = {
+  type: "FeatureCollection";
+  metadata: {
+    county: string;
+    geometry_source: string;
+    geometry_feature_count: number;
+    expected_ward_count: number;
+    missing_source_wards: string[];
+    backend_ward_match_count: number;
+    returned_feature_count: number;
+    backend_wards_without_geometry: string[];
+  };
+  features: WardMapFeature[];
+};
+
 export type RiskScoreRecord = {
   id: number;
   ward: number;
@@ -208,6 +249,10 @@ export async function triggerAlertViaBff(payload: TriggerAlertRequest) {
 
 export async function fetchChvDataViaBff() {
   return requestDashboardRoute<PaginatedResponse<ChvRecord>>("/api/dashboard/chvs");
+}
+
+export async function fetchWardMapViaBff() {
+  return requestDashboardRoute<WardMapResponse>("/api/dashboard/maps/wards");
 }
 
 export async function fetchSystemDataViaBff() {

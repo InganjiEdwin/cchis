@@ -20,6 +20,9 @@ export const queryKeys = {
   chvs: {
     root: () => ["chvs"] as const,
   },
+  maps: {
+    wards: () => ["maps", "wards"] as const,
+  },
   facilityReadiness: {
     root: () => ["facility-readiness"] as const,
   },

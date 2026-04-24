@@ -2334,6 +2334,59 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]["ward_name"], "North Kadem")
 
+    def test_admin_can_view_migori_ward_map_with_backend_counts_and_source_gap_note(self):
+        Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="dashboard",
+            message="Map alert",
+            status=Alert.STATUS_DELIVERED,
+        )
+        HealthFacility.objects.create(
+            name="North Kadem Dispensary",
+            facility_code="TEST-HF-002",
+            ward=self.other_ward,
+            facility_type=HealthFacility.TYPE_DISPENSARY,
+            ownership=HealthFacility.OWNERSHIP_PUBLIC,
+            level=HealthFacility.LEVEL_2,
+            is_active=True,
+        )
+        CHV.objects.create(
+            name="Kadem CHV",
+            phone_number="+254700000002",
+            ward=self.other_ward,
+            is_active=True,
+            language="sw",
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.get(reverse("migori-ward-map"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["type"], "FeatureCollection")
+        self.assertIn("Kanyasa", response.data["metadata"]["missing_source_wards"])
+        self.assertGreaterEqual(response.data["metadata"]["returned_feature_count"], 39)
+
+        north_kamagambo = next(
+            feature for feature in response.data["features"] if feature["properties"]["name"] == self.ward.name
+        )
+        self.assertEqual(north_kamagambo["properties"]["backend_ward_id"], self.ward.id)
+        self.assertEqual(north_kamagambo["properties"]["chv_count"], 1)
+        self.assertEqual(north_kamagambo["properties"]["active_chv_count"], 1)
+        self.assertEqual(north_kamagambo["properties"]["alert_count"], 1)
+        self.assertEqual(north_kamagambo["properties"]["facility_count"], 1)
+        self.assertEqual(north_kamagambo["properties"]["risk_level"], Ward.RISK_HIGH)
+
+    def test_supervisor_map_scope_is_limited_to_assigned_ward_geometry(self):
+        self.authenticate(self.supervisor_user.username)
+        response = self.client.get(reverse("migori-ward-map"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["metadata"]["returned_feature_count"], 1)
+        self.assertEqual(response.data["features"][0]["properties"]["name"], self.other_ward.name)
+        self.assertEqual(response.data["features"][0]["properties"]["backend_ward_id"], self.other_ward.id)
+
     def test_chv_list_requires_admin_or_supervisor(self):
         self.authenticate(self.chv_user.username)
         response = self.client.get(reverse("chv-list"))

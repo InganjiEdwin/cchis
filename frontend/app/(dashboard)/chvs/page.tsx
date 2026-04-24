@@ -24,6 +24,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { useAuth } from "@/components/auth-provider";
 import { DashboardTopbar } from "@/components/dashboard-topbar";
+import { MigoriWardMap } from "@/components/migori-ward-map";
 import { RoleGate } from "@/components/role-gate";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -31,7 +32,7 @@ import { InputShell } from "@/components/ui/input-shell";
 import { StatusBanner } from "@/components/ui/status-banner";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { cn } from "@/lib/cn";
-import type { AlertRecord, ChvRecord, LatestWardRisk } from "@/lib/dashboard";
+import type { AlertRecord, ChvRecord, LatestWardRisk, WardMapFeature } from "@/lib/dashboard";
 import { describeFreshness, formatRelativeTimestamp, getLatestTimestamp } from "@/lib/freshness";
 import { useChvOperationsQuery } from "@/queries/use-chv-operations-query";
 
@@ -40,16 +41,6 @@ type RegistryStatus = "ACTIVE" | "IDLE" | "OFFLINE";
 type RegistryRiskZone = "HIGH" | "MODERATE" | "SAFE";
 type SyncHealth = "ONLINE" | "DELAYED" | "OFFLINE";
 type QuickFilter = "ALL" | "ACTIVE" | "IDLE" | "OFFLINE" | "HIGH_RISK";
-
-type DeploymentDot = {
-  wardName: string;
-  chvCount: number;
-  left: string;
-  top: string;
-  riskTone: RegistryRiskZone;
-  activeCount: number;
-  riskLabel: string;
-};
 
 type RegistryRow = {
   id: number;
@@ -70,17 +61,6 @@ type RegistryRow = {
 
 const ROWS_PER_PAGE = 5;
 const STALE_THRESHOLD_MINUTES = 120;
-
-const DEPLOYMENT_COORDINATES: Array<{ left: string; top: string }> = [
-  { left: "20%", top: "26%" },
-  { left: "34%", top: "54%" },
-  { left: "48%", top: "38%" },
-  { left: "63%", top: "62%" },
-  { left: "76%", top: "31%" },
-  { left: "28%", top: "74%" },
-  { left: "55%", top: "21%" },
-  { left: "82%", top: "57%" },
-];
 
 function getInitials(name: string) {
   return name
@@ -219,6 +199,8 @@ export default function ChvsPage() {
   const chvs = data?.chvs ?? [];
   const latestRisks = data?.latestRisks ?? [];
   const alerts = data?.alerts ?? [];
+  const wardMap = data?.wardMap ?? null;
+  const mapFeatures = wardMap?.features ?? [];
 
   const latestTimestamp = useMemo(
     () =>
@@ -255,8 +237,13 @@ export default function ChvsPage() {
   }, [alerts]);
 
   const wardsForFilter = useMemo(
-    () => ["ALL", ...new Set(chvs.map((item) => item.ward_name).filter(Boolean).sort((a, b) => a.localeCompare(b)))],
-    [chvs],
+    () => [
+      "ALL",
+      ...Array.from(new Set([...mapFeatures.map((item) => item.properties.name), ...chvs.map((item) => item.ward_name)]))
+        .filter(Boolean)
+        .sort((a, b) => a.localeCompare(b)),
+    ],
+    [chvs, mapFeatures],
   );
 
   const filteredChvs = useMemo(() => {
@@ -300,25 +287,6 @@ export default function ChvsPage() {
     ? (alerts.filter((item) => item.status === "DELIVERED").length / alerts.length) * 100
     : 0;
   const highUrgencyCases = latestRisks.reduce((sum, item) => sum + (item.predicted_cases || 0), 0);
-
-  const deploymentDots = useMemo<DeploymentDot[]>(() => {
-    const wardGroups = Array.from(
-      filteredChvs.reduce((map, chv) => {
-        map.set(chv.ward_name, (map.get(chv.ward_name) ?? 0) + 1);
-        return map;
-      }, new Map<string, number>()),
-    );
-
-    return wardGroups.slice(0, DEPLOYMENT_COORDINATES.length).map(([wardName, chvCount], index) => ({
-      wardName,
-      chvCount,
-      left: DEPLOYMENT_COORDINATES[index]?.left ?? "50%",
-      top: DEPLOYMENT_COORDINATES[index]?.top ?? "50%",
-      riskTone: resolveRiskZone(riskByWard.get(wardName)?.risk_level),
-      activeCount: filteredChvs.filter((chv) => chv.ward_name === wardName && chv.is_active).length,
-      riskLabel: toRiskZoneLabel(resolveRiskZone(riskByWard.get(wardName)?.risk_level)),
-    }));
-  }, [filteredChvs, riskByWard]);
 
   const registryRows = useMemo<RegistryRow[]>(() => {
     return filteredChvs.map((chv) => {
@@ -399,6 +367,21 @@ export default function ChvsPage() {
   const totalVisibleLabel = isLoading ? "..." : totalChvs.toLocaleString();
   const activeVisibleLabel = isLoading ? "..." : activeChvs.toLocaleString();
   const casesVisibleLabel = isLoading ? "..." : highUrgencyCases.toLocaleString();
+  const selectedMapWard = useMemo<WardMapFeature | null>(() => {
+    if (!mapFeatures.length) {
+      return null;
+    }
+
+    if (selectedWard !== "ALL") {
+      return mapFeatures.find((feature) => feature.properties.name === selectedWard) ?? null;
+    }
+
+    const highestPriority = mapFeatures
+      .filter((feature) => feature.properties.risk_level === "HIGH")
+      .sort((left, right) => right.properties.predicted_cases - left.properties.predicted_cases)[0];
+
+    return highestPriority ?? mapFeatures[0];
+  }, [mapFeatures, selectedWard]);
 
   if (!currentUser) {
     return null;
@@ -476,7 +459,17 @@ export default function ChvsPage() {
                 <h2 className="text-[clamp(1.6rem,1rem+1vw,2.35rem)] font-semibold leading-tight text-panel-strong">
                   CHV Coverage &amp; Deployment
                 </h2>
-                <p className="mt-2 text-sm text-panel-muted">Real-time distribution across Migori wards</p>
+                <p className="mt-2 text-sm text-panel-muted">
+                  Backend-backed Migori ward geometry with current risk, CHV, alert, and facility counts
+                </p>
+                {wardMap ? (
+                  <p className="mt-2 text-xs text-panel-subtle">
+                    Geometry coverage: {wardMap.metadata.geometry_feature_count}/{wardMap.metadata.expected_ward_count} wards.
+                    {wardMap.metadata.missing_source_wards.length
+                      ? ` Source still lacks ${wardMap.metadata.missing_source_wards.join(", ")}.`
+                      : ""}
+                  </p>
+                ) : null}
               </div>
 
               <div className="flex items-center gap-2">
@@ -509,45 +502,85 @@ export default function ChvsPage() {
 
             <div className="relative mt-6 min-h-[30rem] overflow-hidden rounded-[1.75rem] border border-panel-table-wrap bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--brand)_10%,transparent),transparent_35%),radial-gradient(circle_at_bottom_right,color-mix(in_srgb,var(--warning)_10%,transparent),transparent_32%),linear-gradient(135deg,color-mix(in_srgb,var(--panel)_92%,white),var(--panel))] p-5">
               <div className="absolute inset-0 bg-[linear-gradient(90deg,color-mix(in_srgb,var(--dashboard-table-line)_32%,transparent)_1px,transparent_1px),linear-gradient(color-mix(in_srgb,var(--dashboard-table-line)_32%,transparent)_1px,transparent_1px)] bg-[size:6rem_6rem] opacity-60" />
-
-              {deploymentDots.map((dot) => (
-                <button
-                  key={dot.wardName}
-                  type="button"
-                  className="absolute z-10"
-                  style={{ left: dot.left, top: dot.top }}
-                  title={`${dot.wardName}: ${dot.chvCount} CHVs`}
-                >
-                  <span
-                    className={cn(
-                      "inline-flex size-4 rounded-full border-4 border-white shadow-[0_0_0_12px_color-mix(in_srgb,var(--brand)_12%,transparent)]",
-                      dot.riskTone === "HIGH" && "bg-[color:var(--danger)] shadow-[0_0_0_12px_color-mix(in_srgb,var(--danger)_16%,transparent)]",
-                      dot.riskTone === "MODERATE" && "bg-[color:var(--warning)] shadow-[0_0_0_12px_color-mix(in_srgb,var(--warning)_16%,transparent)]",
-                      dot.riskTone === "SAFE" && "bg-brand",
-                    )}
-                  />
-                  <span className="mt-3 block rounded-2xl bg-panel/95 px-3 py-2 text-left shadow-sm backdrop-blur">
-                    <strong className="block text-sm text-panel-strong">{dot.wardName}</strong>
-                    <small className="block text-xs text-panel-muted">
-                      {dot.activeCount}/{dot.chvCount} active · {dot.riskLabel}
-                    </small>
-                  </span>
-                </button>
-              ))}
-
-              <Card className="absolute bottom-5 left-5 z-10 rounded-[1.5rem] px-4 py-4 shadow-none">
-                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Coverage density</span>
-                <div className="mt-4 space-y-3 text-sm text-panel-copy">
-                  <div className="flex items-center gap-2">
-                    <span className="size-3 rounded-full bg-brand" />
-                    <span>Optimal deployment</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="size-3 rounded-full bg-[color:var(--danger)]" />
-                    <span>Underserved areas (urgent)</span>
-                  </div>
+              <div className="relative z-10 grid h-full gap-4 lg:grid-cols-[minmax(0,1fr)_17rem]">
+                <div className="min-h-[26rem] rounded-[1.5rem] border border-white/50 bg-white/65 p-3 backdrop-blur dark:bg-panel/75">
+                  {mapFeatures.length ? (
+                    <MigoriWardMap
+                      features={mapFeatures}
+                      selectedWardName={selectedMapWard?.properties.name ?? null}
+                      focusHighRisk={focusFilter === "HIGH_RISK"}
+                      onSelectWard={(wardName) => setSelectedWard(wardName)}
+                    />
+                  ) : (
+                    <div className="flex h-full items-center justify-center rounded-[1.25rem] border border-dashed border-panel-table-wrap px-6 text-center text-sm text-panel-muted">
+                      Ward geometry is not available for this scope yet.
+                    </div>
+                  )}
                 </div>
-              </Card>
+
+                <Card className="rounded-[1.5rem] px-4 py-4 shadow-none">
+                  <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Selected ward</span>
+                  {selectedMapWard ? (
+                    <div className="mt-4 space-y-4">
+                      <div>
+                        <h3 className="text-lg font-semibold text-panel-strong">{selectedMapWard.properties.name}</h3>
+                        <p className="mt-1 text-sm text-panel-muted">
+                          {selectedMapWard.properties.has_backend_ward
+                            ? `${selectedMapWard.properties.active_chv_count}/${selectedMapWard.properties.chv_count} active CHVs`
+                            : "Geometry present but no backend ward record yet"}
+                        </p>
+                      </div>
+                      <div className="grid gap-3 text-sm text-panel-copy">
+                        <div className="flex items-center justify-between gap-3">
+                          <span>Risk state</span>
+                          {selectedMapWard.properties.risk_level ? (
+                            <StatusBadge tone={riskTone(resolveRiskZone(selectedMapWard.properties.risk_level))}>
+                              {toRiskZoneLabel(resolveRiskZone(selectedMapWard.properties.risk_level))}
+                            </StatusBadge>
+                          ) : (
+                            <StatusBadge tone="default">No backend risk</StatusBadge>
+                          )}
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span>Predicted cases</span>
+                          <strong className="text-panel-strong">{selectedMapWard.properties.predicted_cases}</strong>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span>Open alert records</span>
+                          <strong className="text-panel-strong">{selectedMapWard.properties.alert_count}</strong>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span>Active facilities</span>
+                          <strong className="text-panel-strong">{selectedMapWard.properties.facility_count}</strong>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span>Ward code</span>
+                          <strong className="text-panel-strong">{selectedMapWard.properties.ward_code}</strong>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3 border-t border-panel-table-wrap pt-4 text-sm text-panel-copy">
+                        <div className="flex items-center gap-2">
+                          <span className="size-3 rounded-full bg-brand" />
+                          <span>Backend-matched ward</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="size-3 rounded-full bg-[color:var(--warning)]" />
+                          <span>Watch / medium risk</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="size-3 rounded-full bg-[color:var(--danger)]" />
+                          <span>High-risk ward</span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="mt-4 text-sm text-panel-muted">
+                      Select a ward on the map to inspect its backend-backed coverage summary.
+                    </p>
+                  )}
+                </Card>
+              </div>
             </div>
           </Card>
 
