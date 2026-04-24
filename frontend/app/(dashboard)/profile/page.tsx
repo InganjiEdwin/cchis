@@ -146,7 +146,7 @@ export default function ProfilePage() {
     <div className="space-y-6">
       <DashboardTopbar
         title="Profile"
-        subtitle="Identity, role, and access summary"
+        subtitle="Identity, role, and access"
         lastUpdatedLabel="Profile shown"
       />
 
@@ -252,7 +252,7 @@ export default function ProfilePage() {
             <div className="space-y-4">
               <div>
                 <p className="text-[0.72rem] font-semibold uppercase tracking-[0.18em] text-white/68">
-                  Role Notes
+                  Role
                 </p>
               <p className="mt-2 text-sm text-white/80">This card shows role notes only. Approval and report routes are unavailable.</p>
               </div>
@@ -352,7 +352,7 @@ export default function ProfilePage() {
 
         <Card className="rounded-[2rem] px-5 py-6">
           <div>
-            <h2 className="text-[1.25rem] font-semibold tracking-[-0.04em] text-panel-strong">Role Notes</h2>
+            <h2 className="text-[1.25rem] font-semibold tracking-[-0.04em] text-panel-strong">Role</h2>
             <p className="mt-2 text-sm leading-6 text-panel-muted">{capabilityCopy.heading}</p>
           </div>
 
@@ -434,7 +434,7 @@ export default function ProfilePage() {
                 <span className="inline-flex size-10 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--success)_14%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_20%,transparent)]">
                   <Smartphone className="size-4" aria-hidden="true" />
                 </span>
-                <strong className="text-base font-semibold text-panel-strong">Session Summary</strong>
+                <strong className="text-base font-semibold text-panel-strong">Session</strong>
               </div>
               <p className="mt-4 min-h-[4.5rem] text-sm leading-6 text-panel-muted">
                 Device count and session-location details are not exposed on this page.
