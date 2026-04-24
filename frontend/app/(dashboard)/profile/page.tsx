@@ -32,7 +32,7 @@ function buildCapabilityCopy(role: string) {
         "Use linked pages to review recorded or calculated operational context.",
         "Treat this card as role notes, not a full route list.",
       ],
-      note: "Role summary copy only",
+      note: "Role notes only",
     };
   }
 
@@ -45,7 +45,7 @@ function buildCapabilityCopy(role: string) {
         "Use linked pages to review recorded or calculated operational context.",
         "Treat this card as role notes, not a full route list.",
       ],
-      note: "Role summary copy only",
+      note: "Role notes only",
     };
   }
 
@@ -58,7 +58,7 @@ function buildCapabilityCopy(role: string) {
         "Use linked pages to review recorded or calculated operational context.",
         "Treat this card as role notes, not a full route list.",
       ],
-      note: "Role summary copy only",
+      note: "Role notes only",
     };
   }
 
@@ -70,7 +70,7 @@ function buildCapabilityCopy(role: string) {
       "Use linked pages to review recorded or calculated operational context.",
       "Treat this card as role notes, not a full route list.",
     ],
-    note: "Role summary copy only",
+    note: "Role notes only",
   };
 }
 
@@ -146,7 +146,7 @@ export default function ProfilePage() {
     <div className="space-y-6">
       <DashboardTopbar
         title="Profile"
-        subtitle="Session identity, role, and access summary"
+        subtitle="Identity, role, and access summary"
         lastUpdatedLabel="Profile visible"
       />
 
@@ -178,7 +178,7 @@ export default function ProfilePage() {
                     </StatusBadge>
                   </div>
                   <p className="mt-1 text-sm font-medium text-panel-muted">
-                    Role summary from session data
+                    Role from session data
                   </p>
                 </div>
 
@@ -254,7 +254,7 @@ export default function ProfilePage() {
                 <p className="text-[0.72rem] font-semibold uppercase tracking-[0.18em] text-white/68">
                   Role Summary
                 </p>
-              <p className="mt-2 text-sm text-white/80">This card summarizes role-facing copy only. Approval and report routes are unavailable here.</p>
+              <p className="mt-2 text-sm text-white/80">This card shows role notes only. Approval and report routes are unavailable here.</p>
               </div>
 
               <div className="rounded-[1.25rem] border border-white/12 bg-white/10 px-4 py-4">
@@ -385,7 +385,7 @@ export default function ProfilePage() {
               <h2 className="text-[1.25rem] font-semibold tracking-[-0.04em] text-panel-strong">
                 Security & Authentication
               </h2>
-              <p className="mt-1 text-sm text-panel-muted">Credential, second-factor, and session summary details visible on this page.</p>
+              <p className="mt-1 text-sm text-panel-muted">Credential, second-factor, and session details shown on this page.</p>
             </div>
           </div>
 
@@ -418,7 +418,7 @@ export default function ProfilePage() {
                 <strong className="text-base font-semibold text-panel-strong">Two-Factor (2FA)</strong>
               </div>
               <p className="mt-4 min-h-[4.5rem] text-sm leading-6 text-panel-muted">
-                Secure your account with TOTP authenticator access. Visible state: {twoFactorLabel}.
+                TOTP setup is available on this page. Visible state: {twoFactorLabel}.
               </p>
               <Link
                 href="/setup-2fa"
@@ -475,7 +475,7 @@ export default function ProfilePage() {
           <div className="mt-5 flex flex-wrap items-center gap-4 text-sm text-panel-muted">
             <span className="inline-flex items-center gap-2">
               <RefreshCcw className="size-4" aria-hidden="true" />
-              Visible session profile data
+              Profile data from session
             </span>
             <span className="inline-flex items-center gap-2">
               <ShieldCheck className="size-4" aria-hidden="true" />
