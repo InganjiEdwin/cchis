@@ -304,11 +304,11 @@ export default function ChvsPage() {
   const activeReportingRate = totalChvs ? Math.round((activeChvs / totalChvs) * 100) : 0;
   const commandStatus = {
     assign: hasCriticalCoverageGap
-      ? `${criticalCoverageGap?.wardName} shows the strongest reinforcement signal`
-      : "No visible wards currently show a reinforcement signal",
+      ? `${criticalCoverageGap?.wardName} shows the strongest visible coverage signal`
+      : "No visible wards currently show a coverage signal",
     broadcast: alerts.length
-      ? `${alerts.length} visible alert records are in the current scope`
-      : "No visible alert records are in the current scope",
+      ? `${alerts.length} visible alert records are in this scope`
+      : "No visible alert records are in this scope",
     training: `${registryRows.filter((row) => row.syncHealth !== "ONLINE").length} CHVs show delayed sync or offline status`,
   };
 
@@ -348,7 +348,7 @@ export default function ChvsPage() {
       <RoleGate
         allowedRoles={["ADMIN", "SUPERVISOR"]}
         title="CHV operations are role-restricted"
-        message="Only Admin and Supervisor roles should use the field operations surface."
+        message="Only Admin and Supervisor roles should use the CHV operations page."
       >
         {error ? (
           <StatusBanner tone="danger" icon={<AlertTriangle aria-hidden="true" />}>
@@ -360,7 +360,7 @@ export default function ChvsPage() {
           <Card className="rounded-[2rem] px-5 py-5">
             <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Visible CHVs</span>
             <div className="mt-3 text-4xl font-semibold leading-none text-panel-strong">{totalVisibleLabel}</div>
-            <p className="mt-4 text-sm text-panel-muted">Visible in the current ward filter</p>
+            <p className="mt-4 text-sm text-panel-muted">Visible in the selected ward filter</p>
           </Card>
 
           <Card className="rounded-[2rem] px-5 py-5">
@@ -376,7 +376,7 @@ export default function ChvsPage() {
                 aria-hidden="true"
               />
             </div>
-            <p className="mt-3 text-sm text-panel-muted">{activeReportingRate}% active in the current filter</p>
+            <p className="mt-3 text-sm text-panel-muted">{activeReportingRate}% active in the selected filter</p>
           </Card>
 
           <Card className="rounded-[2rem] px-5 py-5">
