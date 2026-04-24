@@ -38,7 +38,7 @@ type DecoratedAlert = AlertRecord & {
   channelLabel: string;
   timeLabel: string;
   relativeLabel: string;
-  operationalLabel: string;
+  createdRelativeLabel: string;
 };
 
 const STATUS_FILTER_OPTIONS: Array<{ value: AlertStatusFilter; label: string }> = [
@@ -235,7 +235,7 @@ export default function AlertsPage() {
           channelLabel: getChannelLabel(alert.channel),
           timeLabel: formatSentTime(timestamp),
           relativeLabel: formatRelativeShort(timestamp),
-          operationalLabel: formatRelativeTimestamp(timestamp),
+          createdRelativeLabel: formatRelativeTimestamp(timestamp),
         };
       }),
     [alerts],
@@ -541,7 +541,7 @@ export default function AlertsPage() {
                 </span>
               </div>
               <p className="mt-4 text-sm text-panel-muted">
-                {lastFailure ? `Last failure ${formatRelativeShort(lastFailure.created_at)}` : "Delivery reliability currently stable."}
+                {lastFailure ? `Last failure ${formatRelativeShort(lastFailure.created_at)}` : "No visible delivery failures in scope."}
               </p>
             </Card>
           </div>
@@ -840,7 +840,7 @@ export default function AlertsPage() {
           <strong className="mt-3 block text-2xl leading-tight text-panel-strong">
             {mostCriticalAlert
               ? `${formatAlertPublicId(mostCriticalAlert.id)} in ${mostCriticalAlert.ward_name}`
-              : "No priority alert signal in scope"}
+              : "No priority alert record in scope"}
           </strong>
           <p className="mt-3 text-sm text-panel-muted">
             {mostCriticalAlert
@@ -904,7 +904,7 @@ export default function AlertsPage() {
                 <ul className="mt-4 space-y-3 text-sm text-panel-copy">
                   <li className="flex items-center gap-3">
                     <Clock3 className="size-4 text-panel-muted" aria-hidden="true" />
-                    <span>Created {selectedAlert.operationalLabel}</span>
+                    <span>Created {selectedAlert.createdRelativeLabel}</span>
                   </li>
                   <li className="flex items-center gap-3">
                     <Info className="size-4 text-panel-muted" aria-hidden="true" />
@@ -930,7 +930,7 @@ export default function AlertsPage() {
             <div className="flex flex-col gap-3 border-t border-panel-table-wrap px-5 py-5 sm:px-6">
               {(selectedAlert.statusFilter === "FAILED" || selectedAlert.status === "RETRY_PENDING") && (
                 <Button className="w-full justify-center" disabled>
-                  Retry workflow pending
+                  Retry unavailable
                 </Button>
               )}
               <Link
