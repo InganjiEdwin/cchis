@@ -672,7 +672,7 @@ export default function WardsPage() {
       <section className="grid gap-6 xl:grid-cols-3">
         <Card className="space-y-4 p-6">
           <div className="flex items-center justify-between gap-3">
-            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Critical alert wards</span>
+            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">High-risk wards</span>
             <ShieldAlert className="size-5 text-[color:var(--danger)]" aria-hidden="true" />
           </div>
           <strong className="block text-4xl font-semibold tracking-[-0.05em] text-panel-strong">
@@ -685,14 +685,14 @@ export default function WardsPage() {
 
         <Card className="space-y-4 p-6">
           <div className="flex items-center justify-between gap-3">
-            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Avg. county risk score</span>
+            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Average visible risk score</span>
             <MapPinned className="size-5 text-brand" aria-hidden="true" />
           </div>
           <strong className="block text-4xl font-semibold tracking-[-0.05em] text-panel-strong">
             {isLoading ? "..." : `${averageCountyRisk.toFixed(1)}/100`}
           </strong>
           <p className="text-sm text-panel-muted">
-            {averageCountyRisk >= 70 ? "Elevated county risk profile" : "Stable county risk trend"}
+            {averageCountyRisk >= 70 ? "Elevated risk across the current ward list" : "Lower risk across the current ward list"}
           </p>
         </Card>
 
