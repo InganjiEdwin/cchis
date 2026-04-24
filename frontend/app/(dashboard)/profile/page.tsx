@@ -198,8 +198,8 @@ export default function ProfilePage() {
     <div className="space-y-6">
       <DashboardTopbar
         title="Profile"
-        subtitle="Account identity, permissions, and security overview"
-        lastUpdatedLabel="Profile sync active"
+        subtitle="Session identity, role, and access summary"
+        lastUpdatedLabel="Session profile visible"
       />
 
       {appearanceError ? (
@@ -230,7 +230,7 @@ export default function ProfilePage() {
                     </StatusBadge>
                   </div>
                   <p className="mt-1 text-sm font-medium text-panel-muted">
-                    Lead Epidemiologist & Health Informatics Officer
+                    Session-backed role summary
                   </p>
                 </div>
 
@@ -241,13 +241,13 @@ export default function ProfilePage() {
                   </div>
                   <div className="flex items-center gap-2">
                     <ShieldCheck className="size-4 text-brand" aria-hidden="true" />
-                    <span>Migori County Health Directorate</span>
+                    <span>Dashboard account session</span>
                   </div>
                 </div>
 
                 <div className="inline-flex items-center gap-2 rounded-pill border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_24%,transparent)] px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-panel-copy">
                   <Clock3 className="size-3.5" aria-hidden="true" />
-                  Profile synced to active session
+                  Session profile loaded
                 </div>
               </div>
             </div>
