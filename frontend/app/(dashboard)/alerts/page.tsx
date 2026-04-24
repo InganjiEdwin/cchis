@@ -439,7 +439,7 @@ export default function AlertsPage() {
                   {formatExactTimestamp(latestAlertTimestamp)} ({formatRelativeShort(latestAlertTimestamp)})
                 </div>
                 <p className="max-w-3xl text-sm text-panel-copy">
-                  Operators should verify ingestion health before treating these alert counts as current field
+                  Operators should verify ingestion health before treating these alert counts as recent field
                   conditions.
                 </p>
               </div>
@@ -555,7 +555,7 @@ export default function AlertsPage() {
               <strong className="block text-base text-panel-strong">
                 {mostCriticalAlert
                   ? `${formatAlertPublicId(mostCriticalAlert.id)} - ${mostCriticalAlert.ward_name}`
-                  : "No alert record stands out in the current filter."}
+                  : "No alert record stands out in this filter."}
               </strong>
               <p className="mt-2 text-sm text-panel-muted">
                 {mostCriticalAlert
@@ -829,7 +829,7 @@ export default function AlertsPage() {
               </div>
             ) : (
               <div className="rounded-[1.3rem] border border-dashed border-panel-table-wrap px-4 py-8 text-sm text-panel-muted">
-                No visible ward alert ranking is available in the current scope yet.
+                No visible ward alert ranking is available in this scope yet.
               </div>
             )}
           </div>
@@ -846,7 +846,7 @@ export default function AlertsPage() {
             {mostCriticalAlert
               ? `Latest recorded risk score: ${mostCriticalAlert.risk_score !== null ? Math.round(mostCriticalAlert.risk_score) : "Unavailable"}`
               : alertFreshness.isStale
-                ? "Check feed freshness before treating this panel as current."
+                ? "Check feed freshness before treating this panel as recent."
                 : "No visible alert record stands out in the filtered scope."}
           </p>
         </Card>

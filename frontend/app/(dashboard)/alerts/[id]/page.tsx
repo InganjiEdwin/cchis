@@ -312,7 +312,7 @@ export default function AlertDetailPage() {
                   </StatusBadge>
                 </div>
                 <div className="space-y-2">
-                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Trigger source</span>
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Recorded source</span>
                   <strong className="block text-base text-panel-strong">{classification?.trigger_source ?? "Not recorded"}</strong>
                 </div>
                 <div className="space-y-2">
@@ -481,15 +481,15 @@ export default function AlertDetailPage() {
 
               <div className="mt-5 space-y-5">
                 <div className="space-y-1">
-                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Review posture</span>
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Posture</span>
                   <strong className="block text-base text-panel-strong">
                     {riskContext?.trend_label ?? "Monitoring"}
                   </strong>
                 </div>
                 <div className="space-y-1">
-                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Recorded review summary</span>
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Recorded summary</span>
                   <strong className="block text-base leading-6 text-panel-strong">
-                    {riskContext?.summary ?? "Continue monitoring this record and use ward detail for recorded ward context."}
+                    {riskContext?.summary ?? "Continue monitoring this record and use ward detail for linked ward data."}
                   </strong>
                 </div>
               </div>
@@ -537,7 +537,7 @@ export default function AlertDetailPage() {
                 <div className="absolute inset-0 bg-[linear-gradient(90deg,color-mix(in_srgb,var(--dashboard-table-line)_28%,transparent)_1px,transparent_1px),linear-gradient(color-mix(in_srgb,var(--dashboard-table-line)_28%,transparent)_1px,transparent_1px)] bg-[size:3.5rem_3.5rem] opacity-60" />
                 <div className="absolute inset-x-6 bottom-5">
                   <div className="inline-flex rounded-full bg-panel/90 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-panel-strong shadow-sm backdrop-blur">
-                    Ward risk context
+                    Ward risk data
                   </div>
                 </div>
               </div>
@@ -546,7 +546,7 @@ export default function AlertDetailPage() {
                 <h3 className="text-xl font-semibold text-panel-strong">Ward Context</h3>
                 <p className="text-sm leading-6 text-panel-copy">
                   {wardDetail
-                    ? `${wardDetail.name} is the linked ward summary for this alert and currently shows ${wardDetail.current_risk_level.toLowerCase()} recorded ward risk.`
+                    ? `${wardDetail.name} is the linked ward summary for this alert and shows ${wardDetail.current_risk_level.toLowerCase()} recorded ward risk.`
                     : `${alert.ward_name} remains the ward linked to this alert record.`}
                 </p>
                 <div className="flex flex-col gap-3">
