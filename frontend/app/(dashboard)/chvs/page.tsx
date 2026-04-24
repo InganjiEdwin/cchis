@@ -618,7 +618,7 @@ export default function ChvsPage() {
               <h2 className="text-[clamp(1.6rem,1rem+1vw,2.3rem)] font-semibold leading-tight text-panel-strong">
                 CHV Personnel Registry
               </h2>
-              <p className="mt-2 text-sm text-panel-muted">Detailed performance and activity tracking</p>
+              <p className="mt-2 text-sm text-panel-muted">Recorded CHV identity, sync, alert, and ward-linked status fields</p>
             </div>
 
             <div className="flex min-w-0 flex-1 flex-col gap-4 xl:max-w-3xl xl:flex-row xl:flex-wrap xl:justify-end">
@@ -692,7 +692,7 @@ export default function ChvsPage() {
                   "Sync health",
                   "Last sync",
                   "Ward risk",
-                      "Action",
+                      "Record",
                     ].map((label) => (
                       <th
                         key={label}
@@ -753,12 +753,12 @@ export default function ChvsPage() {
                         <td className="px-5 py-4 align-top">
                           <div className="flex items-center gap-2" onClick={(event) => event.stopPropagation()}>
                             <Button variant="ghost" className="h-9 rounded-pill px-3 text-sm" onClick={() => setSelectedChvId(row.id)}>
-                              View
+                              Open
                             </Button>
-                            <Button variant="secondary" size="icon" className="size-9" aria-label={`Message ${row.name}`}>
+                            <Button variant="secondary" size="icon" className="size-9" aria-label={`Messaging unavailable for ${row.name}`} disabled>
                               <BellRing className="size-4" aria-hidden="true" />
                             </Button>
-                            <Button variant="secondary" size="icon" className="size-9" aria-label={`More actions for ${row.name}`}>
+                            <Button variant="secondary" size="icon" className="size-9" aria-label={`Additional actions unavailable for ${row.name}`} disabled>
                               <MoreHorizontal className="size-4" aria-hidden="true" />
                             </Button>
                           </div>
