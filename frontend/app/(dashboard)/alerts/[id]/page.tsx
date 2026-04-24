@@ -732,7 +732,7 @@ export default function AlertDetailPage() {
                   <strong className="block text-base leading-6 text-panel-strong">
                     {alert.risk_score !== null && alert.risk_score >= 75
                       ? "Review ward detail and backend delivery state before escalating outside this page."
-                      : "Continue monitoring this record and use ward detail for deeper context."}
+                      : "Continue monitoring this record and use ward detail for recorded ward context."}
                   </strong>
                 </div>
               </div>
@@ -789,8 +789,8 @@ export default function AlertDetailPage() {
                 <h3 className="text-xl font-semibold text-panel-strong">Ward Risk Detail</h3>
                 <p className="text-sm leading-6 text-panel-copy">
                   {wardDetail
-                    ? `${wardDetail.name} currently shows ${wardDetail.current_risk_level.toLowerCase()} recorded ward risk with a ${riskMeaning.trend.toLowerCase()} trend in the latest visible data.`
-                    : `${alert.ward_name} remains the ward currently linked to this alert record.`}
+                    ? `${wardDetail.name} currently shows ${wardDetail.current_risk_level.toLowerCase()} recorded ward risk in the linked ward summary.`
+                    : `${alert.ward_name} remains the ward linked to this alert record.`}
                 </p>
                 <div className="flex flex-col gap-3">
                   <Link
@@ -800,13 +800,6 @@ export default function AlertDetailPage() {
                     Open Ward Detail
                     <ChevronRight className="size-4" aria-hidden="true" />
                   </Link>
-                  <button
-                    type="button"
-                    disabled
-                    className="inline-flex items-center justify-center rounded-pill border border-panel-table-wrap px-4 py-3 text-sm font-semibold text-panel-copy transition hover:border-[var(--dashboard-icon-button-border)] hover:text-panel-strong"
-                  >
-                    Compare Neighboring Wards Pending
-                  </button>
                 </div>
               </div>
             </Card>
