@@ -544,7 +544,7 @@ export default function ChvsPage() {
                 {[
                   {
                     icon: Users2,
-                    title: "Ward reinforcement signal",
+                    title: "Ward coverage signal",
                     detail: commandStatus.assign,
                   },
                   {
@@ -768,7 +768,7 @@ export default function ChvsPage() {
                   ) : (
                     <tr>
                       <td colSpan={8} className="px-5 py-10 text-center text-sm text-panel-muted">
-                        No CHVs match the current filters.
+                        No CHVs match the selected filters.
                       </td>
                     </tr>
                   )}
@@ -889,7 +889,7 @@ export default function ChvsPage() {
 
               <div className="flex flex-col gap-3 border-t border-panel-table-wrap px-5 py-5 sm:px-6">
                 <p className="text-sm text-panel-muted">
-                  Messaging, reassignment, and detailed history actions are unavailable from this screen because the corresponding backend workflows are not exposed here.
+                  Messaging, reassignment, and detailed history actions are unavailable from this screen because the corresponding backend routes are not exposed here.
                 </p>
                 <Button className="w-full justify-center" disabled>
                   <BellRing className="size-4" aria-hidden="true" />
