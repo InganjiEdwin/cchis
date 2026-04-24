@@ -71,7 +71,7 @@ export default function FacilityDetailPage() {
     <div className="space-y-6">
       <DashboardTopbar
         title="Facility Detail"
-        subtitle="Facility identity and calculated readiness summary are backend-backed for this page."
+        subtitle="Facility identity and calculated facility summary are backend-backed for this page."
         lastUpdatedLabel={lastUpdatedLabel}
         lastUpdatedTone={freshness.isStale ? "stale" : "default"}
       />
@@ -124,13 +124,13 @@ export default function FacilityDetailPage() {
 
               <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                 <div className="border-l-2 border-[color:var(--danger)] px-4 py-2">
-                  <span className="text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Surge risk</span>
+                  <span className="text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Derived risk</span>
                   <div className="mt-3 text-3xl font-semibold text-[color:var(--danger)]">
                     {readiness.surge_risk_label}
                   </div>
                 </div>
                 <div className="border-l-2 border-panel-table-wrap px-4 py-2">
-                  <span className="text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Predicted load</span>
+                  <span className="text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Calculated load</span>
                   <div className="mt-3 text-3xl font-semibold text-panel-strong">~{readiness.predicted_cases_per_day} <span className="text-base font-medium text-panel-muted">cases/day</span></div>
                 </div>
                 <div className="border-l-2 border-[color:var(--danger)] px-4 py-2">
@@ -153,7 +153,7 @@ export default function FacilityDetailPage() {
                 <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
                   <div className="flex items-center gap-2 text-sm font-semibold text-panel-strong">
                     <MapPinned className="size-4 text-brand" aria-hidden="true" />
-                    Surge & Risk Context
+                    Risk Context
                   </div>
 
                   <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
@@ -190,7 +190,7 @@ export default function FacilityDetailPage() {
                             />
                           ) : (
                             <div className="flex h-full items-center justify-center text-center text-sm text-panel-muted">
-                              Ward geometry is not available for this facility scope yet.
+                              Ward geometry is not available for this facility view yet.
                             </div>
                           )}
                         </div>
