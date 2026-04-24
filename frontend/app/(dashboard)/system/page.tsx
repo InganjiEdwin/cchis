@@ -164,7 +164,7 @@ export default function SystemPage() {
       {
         title: "High-Risk Wards",
         value: isLoading ? "..." : `${snapshot?.highRiskWards ?? 0}`,
-        detail: "From latest visible ward risk classifications",
+        detail: "From visible ward risk classifications",
         tone: (snapshot?.highRiskWards ?? 0) > 0 ? ("warning" as const) : ("success" as const),
         icon: <Siren className="size-5" aria-hidden="true" />,
       },
@@ -375,7 +375,7 @@ export default function SystemPage() {
         ? makeEvent({
             time: snapshot.latestRiskTimestamp,
             level: "INFO",
-            message: `Latest ward risk record is ${formatRelativeLabel(snapshot.latestRiskTimestamp)} and covers ${snapshot.wardsWithFreshRisk}/${snapshot.visibleWards} visible wards.`,
+            message: `Ward risk record is ${formatRelativeLabel(snapshot.latestRiskTimestamp)} and covers ${snapshot.wardsWithFreshRisk}/${snapshot.visibleWards} visible wards.`,
             tone: "success" as const,
           })
         : null,
@@ -399,7 +399,7 @@ export default function SystemPage() {
         ? makeEvent({
             time: snapshot.latestChvTimestamp,
             level: "INFO",
-            message: `Latest CHV record landed ${formatRelativeLabel(snapshot.latestChvTimestamp)} across sync, triage, and USSD traces.`,
+            message: `CHV record landed ${formatRelativeLabel(snapshot.latestChvTimestamp)} across sync, triage, and USSD traces.`,
             tone: chvFreshness.isStale ? ("warning" as const) : ("success" as const),
           })
         : null,
@@ -779,7 +779,7 @@ export default function SystemPage() {
                   </div>
                 ))
               ) : (
-                <div className="px-4 py-6 text-sm text-panel-muted">No derived events are available for this view yet.</div>
+                <div className="px-4 py-6 text-sm text-panel-muted">No events are available for this view yet.</div>
               )}
             </div>
           </div>
@@ -787,7 +787,7 @@ export default function SystemPage() {
           <div className="mt-5 flex flex-wrap items-center gap-4 text-sm text-panel-muted">
             <span className="inline-flex items-center gap-2">
               <Logs className="size-4" aria-hidden="true" />
-              Event summaries are assembled from dashboard records.
+              Event summaries come from dashboard records.
             </span>
             <span className="inline-flex items-center gap-2">
               <Clock3 className="size-4" aria-hidden="true" />
@@ -795,7 +795,7 @@ export default function SystemPage() {
             </span>
             <span className="inline-flex items-center gap-2">
               <ShieldAlert className="size-4" aria-hidden="true" />
-              Unsupported infra probes remain intentionally out of scope until backend contracts exist.
+              Unsupported infra probes remain unavailable until backend contracts exist.
             </span>
           </div>
         </Card>
