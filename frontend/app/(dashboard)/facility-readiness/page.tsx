@@ -105,8 +105,8 @@ export default function FacilityReadinessPage() {
       ? `${immediateAlerts.length} calculated rows in view`
       : "No high calculated readiness pressure visible";
   const forecastActionGuidance = overloadedFacilities
-    ? `Suggested follow-up: check calculated resupply readiness for ${overloadedFacilities} facilities.`
-    : "Suggested follow-up: continue monitoring calculated readiness summaries.";
+    ? `Summary note: calculated resupply readiness stands out for ${overloadedFacilities} facilities.`
+    : "Summary note: continue monitoring calculated readiness summaries.";
 
   return (
     <div className="space-y-6">
@@ -139,7 +139,7 @@ export default function FacilityReadinessPage() {
                 <strong className="mt-2 block text-4xl font-semibold leading-none text-panel-strong">
                   {isLoading ? "..." : activeFacilities}
                 </strong>
-                <small className="mt-3 block text-sm text-panel-muted">Facility records in the current view</small>
+                <small className="mt-3 block text-sm text-panel-muted">Facility records in the selected view</small>
               </div>
             </div>
           </Card>
@@ -260,7 +260,7 @@ export default function FacilityReadinessPage() {
                       {[
                         "Facility name",
                         "Ward",
-                        "Derived risk",
+                        "Calculated risk",
                         "Calculated ORS",
                         "Calculated staffing",
                         "Last reported",
@@ -352,7 +352,7 @@ export default function FacilityReadinessPage() {
                     ) : (
                       <tr>
                         <td colSpan={7} className="px-5 py-10 text-center text-sm text-panel-muted">
-                          No facilities match the current filters.
+                          No facilities match the selected filters.
                         </td>
                       </tr>
                     )}

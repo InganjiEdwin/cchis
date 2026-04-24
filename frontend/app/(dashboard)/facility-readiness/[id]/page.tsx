@@ -104,7 +104,7 @@ export default function FacilityDetailPage() {
                   <div className="space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <StatusBadge tone={riskTone(readiness.surge_risk)} className="tracking-[0.14em]">
-                        {readiness.surge_risk_label} Risk
+                        {readiness.surge_risk_label} calculated risk
                       </StatusBadge>
                       <span className="text-sm text-panel-muted">Last reported: {readiness.last_reported_at ? formatRelativeTimestamp(readiness.last_reported_at) : "No timestamp recorded"}</span>
                     </div>
@@ -124,7 +124,7 @@ export default function FacilityDetailPage() {
 
               <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                 <div className="border-l-2 border-[color:var(--danger)] px-4 py-2">
-                  <span className="text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Derived risk</span>
+                  <span className="text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Calculated risk</span>
                   <div className="mt-3 text-3xl font-semibold text-[color:var(--danger)]">
                     {readiness.surge_risk_label}
                   </div>
