@@ -71,7 +71,7 @@ export default function FacilityDetailPage() {
     <div className="space-y-6">
       <DashboardTopbar
         title="Facility Detail"
-        subtitle="Facility identity and calculated facility summary are available on this page."
+        subtitle="Facility identity and calculated facility summary are shown on this page."
         lastUpdatedLabel={lastUpdatedLabel}
         lastUpdatedTone={freshness.isStale ? "stale" : "default"}
       />
@@ -288,7 +288,7 @@ export default function FacilityDetailPage() {
                     Unavailable Actions
                   </div>
                   <p className="mt-4 rounded-[1.25rem] border border-[color:var(--danger)]/16 bg-[color-mix(in_srgb,var(--danger)_8%,white)] px-4 py-3 text-sm leading-6 text-panel-copy dark:bg-[color-mix(in_srgb,var(--danger)_14%,transparent)]">
-                    Calculated context: ORS, staffing, and demand summaries are available on this page. Dispatch and communication actions are unavailable here.
+                    Calculated context: ORS, staffing, and demand summaries are shown on this page. Dispatch and communication actions are unavailable here.
                   </p>
                   <div className="mt-5 space-y-3">
                     <Button className="w-full justify-center" disabled>
