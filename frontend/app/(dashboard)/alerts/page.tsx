@@ -547,7 +547,7 @@ export default function AlertsPage() {
           </div>
 
           <Card className="rounded-3xl bg-panel px-5 py-5">
-            <h2 className="text-2xl font-semibold text-panel-strong">Priority Alert Review</h2>
+            <h2 className="text-2xl font-semibold text-panel-strong">Priority Alert Record</h2>
             <p className="mt-2 text-sm text-panel-muted">
               Derived summary of the visible alert record that currently sorts highest by failure state, risk score, and recency.
             </p>
@@ -821,7 +821,7 @@ export default function AlertsPage() {
                       href={`/wards?search=${encodeURIComponent(zone.wardName)}`}
                       className="inline-flex shrink-0 items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--dashboard-icon-button-ink-hover)]"
                     >
-                      Review ward
+                      Open ward list
                       <ChevronRight className="size-4" aria-hidden="true" />
                     </Link>
                   </div>
@@ -829,7 +829,7 @@ export default function AlertsPage() {
               </div>
             ) : (
               <div className="rounded-[1.3rem] border border-dashed border-panel-table-wrap px-4 py-8 text-sm text-panel-muted">
-                No visible ward alert pressure is available for ranking in the current scope yet.
+                No visible ward alert ranking is available in the current scope yet.
               </div>
             )}
           </div>
