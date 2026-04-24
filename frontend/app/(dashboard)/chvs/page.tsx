@@ -305,7 +305,7 @@ export default function ChvsPage() {
   const commandStatus = {
     assign: hasCriticalCoverageGap
       ? `${criticalCoverageGap?.wardName} shows the strongest visible coverage signal`
-      : "No visible wards currently show a coverage signal",
+      : "No visible wards show a coverage signal",
     broadcast: alerts.length
       ? `${alerts.length} visible alert records are in this scope`
       : "No visible alert records are in this scope",
@@ -537,7 +537,7 @@ export default function ChvsPage() {
             <Card className="rounded-[2rem] px-5 py-5">
               <h2 className="text-2xl font-semibold text-panel-strong">Derived Priorities</h2>
               <p className="mt-3 text-sm text-panel-muted">
-                Assignment, alert scope, and training cues below are derived planning signals only. This page does not own backend command workflows for those actions.
+                Assignment, alert scope, and training cues below are derived planning signals only. This page does not expose backend action routes for those actions.
               </p>
 
               <div className="mt-5 space-y-3">
@@ -554,7 +554,7 @@ export default function ChvsPage() {
                   },
                   {
                     icon: BriefcaseMedical,
-                    title: "Training review signal",
+                    title: "Training status signal",
                     detail: commandStatus.training,
                   },
                 ].map((item) => (
@@ -881,7 +881,7 @@ export default function ChvsPage() {
                   <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-panel-subtle">Recorded activity</h3>
                   <p className="mt-3 text-sm leading-6 text-panel-copy">
                     Recent activity for {selectedChv.wardName} is derived from backend sync, triage, and USSD traces. Last activity was{" "}
-                    {selectedChv.lastProtocolUpdate}, and this CHV is currently marked as{" "}
+                    {selectedChv.lastProtocolUpdate}, and this CHV is marked as{" "}
                     {selectedChv.status === "ACTIVE" ? "active in visible records." : selectedChv.status === "IDLE" ? "idle in visible records." : "offline in visible records."}
                   </p>
                 </Card>
