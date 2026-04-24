@@ -1,0 +1,33 @@
+import { NextResponse } from "next/server";
+
+import type { FacilityRecord } from "@/lib/dashboard";
+import { ServerApiError, fetchBackendJson } from "@/lib/server-api";
+
+function parseFacilityId(value: string) {
+  const facilityId = Number(value);
+  return Number.isInteger(facilityId) && facilityId > 0 ? facilityId : null;
+}
+
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
+  const cookieHeader = request.headers.get("cookie") ?? "";
+  const { id } = await context.params;
+  const facilityId = parseFacilityId(id);
+
+  if (!facilityId) {
+    return NextResponse.json({ detail: "Facility id must be a positive integer." }, { status: 400 });
+  }
+
+  try {
+    const facility = await fetchBackendJson<FacilityRecord>(`/facilities/${facilityId}/`, {
+      cookieHeader,
+    });
+
+    return NextResponse.json({ facility });
+  } catch (error) {
+    if (error instanceof ServerApiError) {
+      return NextResponse.json({ detail: error.message }, { status: error.status });
+    }
+
+    return NextResponse.json({ detail: "Unable to load facility detail." }, { status: 500 });
+  }
+}

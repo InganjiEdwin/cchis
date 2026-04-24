@@ -2409,6 +2409,39 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["ward"], self.other_ward.id)
 
+    def test_analyst_can_list_facilities(self):
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("facility-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = get_results(response)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["id"], self.health_facility.id)
+        self.assertEqual(results[0]["ward_name"], self.ward.name)
+
+    def test_supervisor_only_sees_facilities_for_assigned_ward(self):
+        other_facility = HealthFacility.objects.create(
+            name="North Kadem Health Centre",
+            facility_code="TEST-HF-003",
+            ward=self.other_ward,
+            facility_type=HealthFacility.TYPE_HEALTH_CENTER,
+            ownership=HealthFacility.OWNERSHIP_PUBLIC,
+            level=HealthFacility.LEVEL_3,
+            is_active=True,
+        )
+
+        self.authenticate(self.supervisor_user.username)
+        list_response = self.client.get(reverse("facility-list"))
+        detail_response = self.client.get(reverse("facility-detail", args=[other_facility.id]))
+        out_of_scope_detail_response = self.client.get(reverse("facility-detail", args=[self.health_facility.id]))
+
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        results = get_results(list_response)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["id"], other_facility.id)
+        self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(out_of_scope_detail_response.status_code, status.HTTP_404_NOT_FOUND)
+
     def test_risk_scores_require_authentication(self):
         response = self.client.get(reverse("risk-score-list"))
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)

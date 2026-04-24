@@ -25,6 +25,7 @@ export const queryKeys = {
   },
   facilityReadiness: {
     root: () => ["facility-readiness"] as const,
+    detail: (facilityId: string | number) => ["facility-readiness", facilityId] as const,
   },
   system: {
     root: () => ["system"] as const,

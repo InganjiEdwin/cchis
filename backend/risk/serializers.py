@@ -84,6 +84,10 @@ class CHVSerializer(serializers.ModelSerializer):
 
 class HealthFacilitySerializer(serializers.ModelSerializer):
     ward_name = serializers.CharField(source="ward.name", read_only=True)
+    sub_county = serializers.CharField(source="ward.sub_county", read_only=True)
+    ward_risk_level = serializers.CharField(source="ward.current_risk_level", read_only=True)
+    ward_risk_score = serializers.FloatField(source="ward.current_risk_score", read_only=True)
+    point = serializers.SerializerMethodField()
 
     class Meta:
         model = HealthFacility
@@ -94,13 +98,22 @@ class HealthFacilitySerializer(serializers.ModelSerializer):
             "facility_code",
             "ward",
             "ward_name",
+            "sub_county",
             "facility_type",
             "ownership",
             "level",
+            "ward_risk_level",
+            "ward_risk_score",
             "is_active",
+            "point",
             "contact_phone",
             "updated_at",
         ]
+
+    def get_point(self, obj: HealthFacility):
+        if not obj.point:
+            return None
+        return [obj.point.x, obj.point.y]
 
 
 class RiskScoreSerializer(serializers.ModelSerializer):

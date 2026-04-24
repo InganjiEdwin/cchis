@@ -34,7 +34,7 @@ import {
   type FacilityRow,
 } from "@/lib/facility-readiness";
 import { describeFreshness, formatRelativeTimestamp, getLatestTimestamp } from "@/lib/freshness";
-import { useFacilityReadinessQuery } from "@/queries/use-facility-readiness-query";
+import { useFacilityDetailQuery } from "@/queries/use-facility-detail-query";
 
 type TimelineItem = {
   id: string;
@@ -296,23 +296,28 @@ function priorityTone(priority: DispatchPriority) {
 
 export default function FacilityDetailPage() {
   const params = useParams<{ id: string }>();
-  const { data, isPending: isLoading, error } = useFacilityReadinessQuery();
-  const wards = data?.wards ?? [];
+  const facilityId = Number(params.id);
+  const { data, isPending: isLoading, error } = useFacilityDetailQuery(
+    Number.isInteger(facilityId) && facilityId > 0 ? facilityId : null,
+  );
+  const facilityRecord = data?.facility ?? null;
   const risks = data?.risks ?? [];
   const alerts = data?.alerts ?? [];
 
-  const facilityRows = useMemo(() => buildFacilityRows(wards, risks), [risks, wards]);
-  const facility = useMemo(() => facilityRows.find((item) => item.id === params.id), [facilityRows, params.id]);
+  const facility = useMemo(
+    () => (facilityRecord ? buildFacilityRows([facilityRecord], risks)[0] ?? null : null),
+    [facilityRecord, risks],
+  );
 
   const facilityAlerts = useMemo(() => (facility ? findFacilityAlerts(facility, alerts) : []), [alerts, facility]);
   const latestTimestamp = useMemo(
     () =>
       getLatestTimestamp([
-        ...wards.map((ward) => ward.updated_at),
+        ...(facilityRecord ? [facilityRecord.updated_at] : []),
         ...risks.map((risk) => risk.generated_at),
         ...alerts.map((alert) => alert.created_at),
       ]),
-    [alerts, risks, wards],
+    [alerts, facilityRecord, risks],
   );
   const freshness = useMemo(() => describeFreshness(latestTimestamp, 120), [latestTimestamp]);
   const lastUpdatedLabel = latestTimestamp ? formatRelativeTimestamp(latestTimestamp) : freshness.label;
@@ -416,7 +421,7 @@ export default function FacilityDetailPage() {
                       {facility.facilityName}
                     </h1>
                     <p className="text-sm text-panel-muted">
-                      {facility.subCounty} Sub-County Level {facility.facilityType.replace(/\D/g, "") || "4"} | {facility.wardName} Ward
+                      {facility.subCounty} Sub-County | {facility.facilityType} | {facility.wardName} Ward
                     </p>
                   </div>
                 </div>

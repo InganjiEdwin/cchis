@@ -75,6 +75,25 @@ export type ChvRecord = {
   created_at: string;
 };
 
+export type FacilityRecord = {
+  id: number;
+  public_id: string;
+  name: string;
+  facility_code: string;
+  ward: number;
+  ward_name: string;
+  sub_county: string;
+  facility_type: string;
+  ownership: string;
+  level: string;
+  ward_risk_level: "LOW" | "MEDIUM" | "HIGH";
+  ward_risk_score: number;
+  is_active: boolean;
+  point: [number, number] | null;
+  contact_phone: string;
+  updated_at: string;
+};
+
 export type WardMapGeometry = {
   type: "Polygon" | "MultiPolygon";
   coordinates: number[][][] | number[][][][];
@@ -175,6 +194,10 @@ type AlertDetailRouteResponse = {
   wardDetail: WardDetailSummary | null;
 };
 
+type FacilityDetailRouteResponse = {
+  facility: FacilityRecord | null;
+};
+
 async function requestDashboardRoute<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -249,6 +272,14 @@ export async function triggerAlertViaBff(payload: TriggerAlertRequest) {
 
 export async function fetchChvDataViaBff() {
   return requestDashboardRoute<PaginatedResponse<ChvRecord>>("/api/dashboard/chvs");
+}
+
+export async function fetchFacilityDataViaBff() {
+  return requestDashboardRoute<PaginatedResponse<FacilityRecord>>("/api/dashboard/facilities");
+}
+
+export async function fetchFacilityByIdViaBff(facilityId: number) {
+  return requestDashboardRoute<FacilityDetailRouteResponse>(`/api/dashboard/facilities/${facilityId}`);
 }
 
 export async function fetchWardMapViaBff() {

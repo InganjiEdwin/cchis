@@ -4,15 +4,16 @@ import { useQuery } from "@tanstack/react-query";
 
 import {
   fetchAlertsDataViaBff,
+  fetchFacilityDataViaBff,
   fetchWardRiskDataViaBff,
   type AlertRecord,
+  type FacilityRecord,
   type LatestWardRisk,
-  type WardSummary,
 } from "@/lib/dashboard";
 import { queryKeys } from "@/lib/query-keys";
 
 export type FacilityReadinessSnapshot = {
-  wards: WardSummary[];
+  facilities: FacilityRecord[];
   risks: LatestWardRisk[];
   alerts: AlertRecord[];
 };
@@ -21,13 +22,14 @@ export function useFacilityReadinessQuery({ enabled = true }: { enabled?: boolea
   return useQuery({
     queryKey: queryKeys.facilityReadiness.root(),
     queryFn: async (): Promise<FacilityReadinessSnapshot> => {
-      const [wardData, alertData] = await Promise.all([
+      const [facilityData, wardData, alertData] = await Promise.all([
+        fetchFacilityDataViaBff(),
         fetchWardRiskDataViaBff({ county: "Migori", ordering: "-current_risk_score" }),
         fetchAlertsDataViaBff(),
       ]);
 
       return {
-        wards: wardData.wards.results,
+        facilities: facilityData.results,
         risks: wardData.latestRisks,
         alerts: alertData.results,
       };

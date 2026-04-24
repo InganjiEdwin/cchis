@@ -10,7 +10,7 @@ from accounts.permissions import IsAdminOrSupervisor, IsAdminSupervisorOrAnalyst
 
 from .tasks import trigger_alerts_task
 
-from .models import Alert, CHV, RiskScore, UssdSessionLog, Ward
+from .models import Alert, CHV, HealthFacility, RiskScore, UssdSessionLog, Ward
 from .map_data import build_migori_ward_map_summary
 from .serializers import (
     AlertSerializer,
@@ -18,6 +18,7 @@ from .serializers import (
     CHVSyncRequestSerializer,
     CHVTriageRequestSerializer,
     CHVTriageResponseSerializer,
+    HealthFacilitySerializer,
     RiskScoreSerializer,
     TriggerAlertRequestSerializer,
     UssdSessionLogSerializer,
@@ -117,6 +118,36 @@ class CHVListAPIView(generics.ListAPIView):
         if is_active is not None:
             queryset = queryset.filter(is_active=is_active)
         return queryset
+
+
+class HealthFacilityListAPIView(generics.ListAPIView):
+    serializer_class = HealthFacilitySerializer
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+    filter_backends = [OrderingFilter]
+    ordering_fields = ["name", "updated_at", "ward__name", "facility_type", "level"]
+    ordering = ["ward__name", "name"]
+
+    def get_queryset(self):
+        queryset = HealthFacility.objects.filter(is_active=True).select_related("ward").order_by("ward__name", "name")
+        user = self.request.user
+        ward_id = self.request.query_params.get("ward_id")
+        facility_type = self.request.query_params.get("facility_type")
+        queryset = apply_ward_scope_or_none(queryset, user)
+
+        if ward_id:
+            queryset = queryset.filter(ward_id=ward_id)
+        if facility_type:
+            queryset = queryset.filter(facility_type=facility_type.upper())
+        return queryset
+
+
+class HealthFacilityDetailAPIView(generics.RetrieveAPIView):
+    serializer_class = HealthFacilitySerializer
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get_queryset(self):
+        queryset = HealthFacility.objects.filter(is_active=True).select_related("ward")
+        return apply_ward_scope_or_none(queryset, self.request.user)
 
 
 class RiskScoreListAPIView(generics.ListAPIView):

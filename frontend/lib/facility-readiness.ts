@@ -1,8 +1,9 @@
-import type { AlertRecord, LatestWardRisk, WardSummary } from "@/lib/dashboard";
+import type { AlertRecord, FacilityRecord, LatestWardRisk } from "@/lib/dashboard";
 import { formatRelativeTimestamp } from "@/lib/freshness";
 
 export type FacilityRow = {
   id: string;
+  facilityId: number;
   facilityName: string;
   facilityType: string;
   wardId: number;
@@ -20,16 +21,7 @@ export type FacilityRow = {
   freshnessState: "FRESH" | "WARNING" | "STALE";
 };
 
-export function deriveFacilityName(ward: WardSummary, index: number) {
-  const variants = ["Hospital", "Clinic", "Health Centre", "Dispensary"];
-  return `${ward.name} ${variants[index % variants.length]}`;
-}
-
-export function deriveFacilityType(index: number) {
-  return ["Level 4", "Primary Health Centre", "Sub-County Unit", "Dispensary"][index % 4];
-}
-
-export function toSurgeRisk(level: WardSummary["current_risk_level"]): FacilityRow["surgeRisk"] {
+export function toSurgeRisk(level: FacilityRecord["ward_risk_level"]): FacilityRow["surgeRisk"] {
   if (level === "HIGH") {
     return "EXTREME";
   }
@@ -47,6 +39,12 @@ export function toOrsState(percent: number): FacilityRow["orsState"] {
     return "STABLE";
   }
   return "READY";
+}
+
+export function formatFacilityType(facility: FacilityRecord) {
+  const label = facility.facility_type.replaceAll("_", " ").toLowerCase();
+  const level = facility.level.replaceAll("_", " ").replace("LEVEL ", "Level ");
+  return `${level} ${label}`.replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
 export function getMinutesSince(timestamp: string) {
@@ -76,17 +74,17 @@ export function formatFacilityLastReported(timestamp: string) {
   };
 }
 
-export function buildFacilityRows(wards: WardSummary[], risks: LatestWardRisk[]): FacilityRow[] {
+export function buildFacilityRows(facilities: FacilityRecord[], risks: LatestWardRisk[]): FacilityRow[] {
   const riskMap = new Map<number, LatestWardRisk>();
   risks.forEach((risk) => {
     riskMap.set(risk.ward_id, risk);
   });
 
-  return wards.slice(0, 10).map((ward, index) => {
-    const risk = riskMap.get(ward.id);
-    const lastReported = formatFacilityLastReported(ward.updated_at);
-    const projectedCases = Math.max(1, risk?.predicted_cases ?? Math.round(ward.current_risk_score / 8));
-    const surgeRisk = toSurgeRisk(ward.current_risk_level);
+  return facilities.map((facility) => {
+    const risk = riskMap.get(facility.ward);
+    const lastReported = formatFacilityLastReported(facility.updated_at);
+    const projectedCases = Math.max(1, risk?.predicted_cases ?? Math.round(facility.ward_risk_score * 10));
+    const surgeRisk = toSurgeRisk(facility.ward_risk_level);
     const orsStockPercent =
       surgeRisk === "EXTREME"
         ? Math.max(12, 42 - projectedCases)
@@ -100,12 +98,13 @@ export function buildFacilityRows(wards: WardSummary[], risks: LatestWardRisk[])
     );
 
     return {
-      id: `${ward.id}`,
-      facilityName: deriveFacilityName(ward, index),
-      facilityType: deriveFacilityType(index),
-      wardId: ward.id,
-      wardName: ward.name,
-      subCounty: ward.sub_county,
+      id: `${facility.id}`,
+      facilityId: facility.id,
+      facilityName: facility.name,
+      facilityType: formatFacilityType(facility),
+      wardId: facility.ward,
+      wardName: facility.ward_name,
+      subCounty: facility.sub_county,
       surgeRisk,
       projectedCases,
       orsStockPercent,

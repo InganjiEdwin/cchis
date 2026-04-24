@@ -41,23 +41,23 @@ export default function FacilityReadinessPage() {
   const [selectedWard, setSelectedWard] = useState("ALL");
   const [page, setPage] = useState(1);
   const { data, isPending: isLoading, error } = useFacilityReadinessQuery();
-  const wards = data?.wards ?? [];
+  const facilities = data?.facilities ?? [];
   const risks = data?.risks ?? [];
   const alerts = data?.alerts ?? [];
 
   const latestTimestamp = useMemo(
     () =>
       getLatestTimestamp([
-        ...wards.map((ward) => ward.updated_at),
+        ...facilities.map((facility) => facility.updated_at),
         ...risks.map((risk) => risk.generated_at),
         ...alerts.map((alert) => alert.created_at),
       ]),
-    [alerts, risks, wards],
+    [alerts, facilities, risks],
   );
   const freshness = useMemo(() => describeFreshness(latestTimestamp, STALE_THRESHOLD_MINUTES), [latestTimestamp]);
   const lastUpdatedLabel = latestTimestamp ? formatRelativeTimestamp(latestTimestamp) : freshness.label;
 
-  const facilityRows = useMemo(() => buildFacilityRows(wards, risks), [risks, wards]);
+  const facilityRows = useMemo(() => buildFacilityRows(facilities, risks), [facilities, risks]);
 
   const wardFilterOptions = useMemo(
     () => ["ALL", ...new Set(facilityRows.map((row) => row.wardName).sort((a, b) => a.localeCompare(b)))],
@@ -201,7 +201,7 @@ export default function FacilityReadinessPage() {
                   Facility Preparedness Matrix
                 </h2>
                 <p className="mt-2 text-sm text-panel-muted">
-                  Operational readiness derived from visible ward risk and alert activity
+                  Real facility records with readiness indicators still derived from ward risk and alert activity
                 </p>
               </div>
 
