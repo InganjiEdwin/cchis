@@ -17,6 +17,9 @@ export const queryKeys = {
   overview: {
     root: () => ["overview"] as const,
   },
+  topbar: {
+    root: () => ["topbar"] as const,
+  },
   chvs: {
     root: () => ["chvs"] as const,
   },

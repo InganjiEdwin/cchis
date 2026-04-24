@@ -94,6 +94,28 @@ export type FacilityRecord = {
   updated_at: string;
 };
 
+export type TopbarNotification = {
+  id: string;
+  level: "critical" | "warning" | "info";
+  title: string;
+  context: string;
+  action: string;
+  href: string;
+  timestamp: string;
+};
+
+export type TopbarFeedStatus = {
+  id: "risks" | "alerts" | "facilities";
+  label: string;
+  latest_timestamp: string | null;
+  stale: boolean;
+};
+
+export type TopbarData = {
+  notifications: TopbarNotification[];
+  feeds: TopbarFeedStatus[];
+};
+
 export type WardMapGeometry = {
   type: "Polygon" | "MultiPolygon";
   coordinates: number[][][] | number[][][][];
@@ -284,6 +306,10 @@ export async function fetchFacilityByIdViaBff(facilityId: number) {
 
 export async function fetchWardMapViaBff() {
   return requestDashboardRoute<WardMapResponse>("/api/dashboard/maps/wards");
+}
+
+export async function fetchTopbarDataViaBff() {
+  return requestDashboardRoute<TopbarData>("/api/dashboard/topbar");
 }
 
 export async function fetchSystemDataViaBff() {

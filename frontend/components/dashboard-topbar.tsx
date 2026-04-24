@@ -1,9 +1,11 @@
 "use client";
 
-import { Bell, Moon, RefreshCcw, Siren, Sun, Waves } from "lucide-react";
+import { Bell, Moon, RefreshCcw, Sun, Waves } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
@@ -11,6 +13,9 @@ import { Card } from "@/components/ui/card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import type { ThemePreference } from "@/lib/auth";
 import { cn } from "@/lib/cn";
+import { fetchTopbarDataViaBff } from "@/lib/dashboard";
+import { formatRelativeTimestamp } from "@/lib/freshness";
+import { queryKeys } from "@/lib/query-keys";
 import { applyThemePreference, persistThemePreference } from "@/lib/theme-preference";
 
 type DashboardTopbarProps = {
@@ -36,57 +41,6 @@ type DocumentWithViewTransition = Document & {
   startViewTransition?: (updateCallback: () => void) => ViewTransitionLike;
 };
 
-const MOCK_NOTIFICATIONS = {
-  critical: [
-    {
-      title: "Nyatike Hospital: ORS stock critical (14%)",
-      context: "Dispatch review recommended immediately.",
-      time: "5m ago",
-      href: "/facility-readiness/1572",
-      action: "View Facility",
-    },
-    {
-      title: "Flood risk HIGH in North Kamagambo",
-      context: "Ward threshold exceeded during latest rainfall update.",
-      time: "11m ago",
-      href: "/wards",
-      action: "Open Alert",
-    },
-  ],
-  warning: [
-    {
-      title: "Facility data stale (>6 hours)",
-      context: "DHIS2 sync needs attention from operations.",
-      time: "24m ago",
-      href: "/system",
-      action: "View System",
-    },
-    {
-      title: "CHV inactivity detected in Got Kachola",
-      context: "No field submissions from assigned CHVs today.",
-      time: "39m ago",
-      href: "/chvs",
-      action: "Review CHVs",
-    },
-  ],
-  info: [
-    {
-      title: "Dispatch completed to Suna Clinic",
-      context: "Supplies confirmed received at facility.",
-      time: "1h ago",
-      href: "/facility-readiness/1572",
-      action: "View Timeline",
-    },
-    {
-      title: "Alert delivered successfully",
-      context: "Operational alert reached 92% of recipients.",
-      time: "2h ago",
-      href: "/alerts",
-      action: "Open Alert",
-    },
-  ],
-};
-
 export function DashboardTopbar({
   title,
   subtitle,
@@ -97,6 +51,8 @@ export function DashboardTopbar({
   children,
 }: DashboardTopbarProps) {
   const { currentUser, updateAppearance } = useAuth();
+  const router = useRouter();
+  const queryClient = useQueryClient();
   const [effectiveTheme, setEffectiveTheme] = useState<ThemeMode>("LIGHT");
   const [isUpdatingTheme, setIsUpdatingTheme] = useState(false);
   const [isRefreshingUi, setIsRefreshingUi] = useState(false);
@@ -106,6 +62,12 @@ export function DashboardTopbar({
     "all",
   );
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const topbarQuery = useQuery({
+    queryKey: queryKeys.topbar.root(),
+    queryFn: fetchTopbarDataViaBff,
+    enabled: Boolean(currentUser),
+    staleTime: 60_000,
+  });
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -212,6 +174,10 @@ export function DashboardTopbar({
 
     try {
       await Promise.resolve(onRefresh?.());
+      await queryClient.invalidateQueries({
+        predicate: (query) => Array.isArray(query.queryKey) && query.queryKey[0] !== "auth",
+      });
+      router.refresh();
       setRefreshFeedback("Data refreshed just now");
       setOpenPanel(null);
       window.setTimeout(() => {
@@ -224,18 +190,16 @@ export function DashboardTopbar({
 
   const themeToggleLabel = effectiveTheme === "DARK" ? "Switch to light mode" : "Switch to dark mode";
   const ThemeToggleIcon = effectiveTheme === "DARK" ? Sun : Moon;
-  const unreadCount =
-    MOCK_NOTIFICATIONS.critical.length + MOCK_NOTIFICATIONS.warning.length + MOCK_NOTIFICATIONS.info.length;
+  const notifications = topbarQuery.data?.notifications ?? [];
+  const unreadCount = notifications.length;
+  const feedStatuses = topbarQuery.data?.feeds ?? [];
   const visibleNotifications = useMemo(() => {
-    if (activeNotificationFilter === "critical") return MOCK_NOTIFICATIONS.critical;
-    if (activeNotificationFilter === "warning") return MOCK_NOTIFICATIONS.warning;
-    if (activeNotificationFilter === "info") return MOCK_NOTIFICATIONS.info;
-    return [
-      ...MOCK_NOTIFICATIONS.critical,
-      ...MOCK_NOTIFICATIONS.warning,
-      ...MOCK_NOTIFICATIONS.info,
-    ];
-  }, [activeNotificationFilter]);
+    if (activeNotificationFilter === "all") {
+      return notifications;
+    }
+
+    return notifications.filter((item) => item.level === activeNotificationFilter);
+  }, [activeNotificationFilter, notifications]);
 
   return (
     <header className="sticky top-0 z-30 -mx-[1.4rem] mb-5 flex w-[calc(100%+2.8rem)] min-w-0 max-w-none flex-wrap items-center justify-between gap-4 border-b border-[var(--dashboard-topbar-border)] bg-[var(--dashboard-topbar-surface)] px-[1.4rem] py-4 backdrop-blur max-[960px]:flex-col max-[960px]:items-start max-[640px]:-mx-4 max-[640px]:mb-[1.2rem] max-[640px]:w-[calc(100%+2rem)] max-[640px]:px-4">
@@ -321,23 +285,24 @@ export function DashboardTopbar({
                 >
                   <span>
                     <strong className="block text-sm font-semibold text-panel-strong">Refresh dashboard</strong>
-                    <span className="mt-1 block text-xs text-panel-muted">Refetch alerts, facility data, and CHV activity.</span>
+                    <span className="mt-1 block text-xs text-panel-muted">Invalidate dashboard queries and refetch visible data.</span>
                   </span>
                   <RefreshCcw className={cn("size-4 text-brand", isRefreshingUi && "animate-spin")} aria-hidden="true" />
                 </button>
 
-                {currentUser?.role === "ADMIN" ? (
-                  <button
-                    type="button"
-                    className="flex w-full items-center justify-between rounded-[1rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-3 text-left transition hover:border-[var(--dashboard-icon-button-border)]"
-                  >
-                    <span>
-                      <strong className="block text-sm font-semibold text-panel-strong">Re-run risk scoring</strong>
-                      <span className="mt-1 block text-xs text-panel-muted">Backend job wiring will be added next.</span>
-                    </span>
-                    <Siren className="size-4 text-[color:var(--warning)]" aria-hidden="true" />
-                  </button>
-                ) : null}
+                <div className="rounded-[1rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-3">
+                  <strong className="block text-sm font-semibold text-panel-strong">Feed freshness</strong>
+                  <div className="mt-3 space-y-2">
+                    {feedStatuses.map((feed) => (
+                      <div key={feed.id} className="flex items-center justify-between gap-3 text-xs">
+                        <span className="text-panel-copy">{feed.label}</span>
+                        <StatusBadge tone={feed.stale ? "warning" : "success"}>
+                          {feed.latest_timestamp ? formatRelativeTimestamp(feed.latest_timestamp) : "No data"}
+                        </StatusBadge>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             </Card>
           ) : null}
@@ -365,11 +330,9 @@ export function DashboardTopbar({
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-lg font-semibold text-panel-strong">Notifications</h3>
-                  <p className="mt-1 text-xs text-panel-muted">Cross-system operational awareness</p>
+                  <p className="mt-1 text-xs text-panel-muted">Derived from live alerts, ward risk, and feed freshness</p>
                 </div>
-                <button type="button" className="text-xs font-semibold uppercase tracking-[0.14em] text-brand">
-                  Mark all read
-                </button>
+                <StatusBadge tone={unreadCount ? "info" : "default"}>{unreadCount} visible</StatusBadge>
               </div>
 
               <div className="mt-4 flex flex-wrap gap-2">
@@ -396,83 +359,47 @@ export function DashboardTopbar({
               </div>
 
               <div className="mt-5 max-h-[26rem] space-y-5 overflow-y-auto pr-1">
-                {activeNotificationFilter === "all" || activeNotificationFilter === "critical" ? (
+                {topbarQuery.isPending ? (
+                  <p className="text-sm text-panel-muted">Loading notifications...</p>
+                ) : visibleNotifications.length ? (
                   <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-[color:var(--danger)]">
-                        Critical
-                      </p>
-                    </div>
-                    {MOCK_NOTIFICATIONS.critical.map((item) => (
+                    {visibleNotifications.map((item) => (
                       <Link
-                        key={item.title}
+                        key={item.id}
                         href={item.href}
-                        className="block rounded-[1.2rem] border border-[color-mix(in_srgb,var(--danger)_18%,white)] bg-[color-mix(in_srgb,var(--danger)_8%,white)] px-4 py-4 transition hover:border-[color:var(--danger)]/35 dark:border-[color-mix(in_srgb,var(--danger)_26%,transparent)] dark:bg-[color-mix(in_srgb,var(--danger)_12%,transparent)]"
+                        className={cn(
+                          "block rounded-[1.2rem] border px-4 py-4 transition",
+                          item.level === "critical" &&
+                            "border-[color-mix(in_srgb,var(--danger)_18%,white)] bg-[color-mix(in_srgb,var(--danger)_8%,white)] hover:border-[color:var(--danger)]/35 dark:border-[color-mix(in_srgb,var(--danger)_26%,transparent)] dark:bg-[color-mix(in_srgb,var(--danger)_12%,transparent)]",
+                          item.level === "warning" &&
+                            "border-[color-mix(in_srgb,var(--warning)_18%,white)] bg-[color-mix(in_srgb,var(--warning)_8%,white)] hover:border-[color:var(--warning)]/35 dark:border-[color-mix(in_srgb,var(--warning)_26%,transparent)] dark:bg-[color-mix(in_srgb,var(--warning)_12%,transparent)]",
+                          item.level === "info" &&
+                            "border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] hover:border-[var(--dashboard-icon-button-border)]",
+                        )}
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div>
                             <strong className="block text-sm font-semibold text-panel-strong">{item.title}</strong>
                             <p className="mt-1 text-xs leading-5 text-panel-copy">{item.context}</p>
                           </div>
-                          <span className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-[color:var(--danger)]">
-                            {item.time}
+                          <span
+                            className={cn(
+                              "text-[0.68rem] font-semibold uppercase tracking-[0.14em]",
+                              item.level === "critical" && "text-[color:var(--danger)]",
+                              item.level === "warning" && "text-[color:var(--warning)]",
+                              item.level === "info" && "text-panel-subtle",
+                            )}
+                          >
+                            {formatRelativeTimestamp(item.timestamp)}
                           </span>
                         </div>
                         <p className="mt-3 text-xs font-semibold uppercase tracking-[0.14em] text-brand">{item.action}</p>
                       </Link>
                     ))}
                   </div>
-                ) : null}
-
-                {activeNotificationFilter === "all" || activeNotificationFilter === "warning" ? (
-                  <div className="space-y-3">
-                    <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-[color:var(--warning)]">
-                      Warnings
-                    </p>
-                    {MOCK_NOTIFICATIONS.warning.map((item) => (
-                      <Link
-                        key={item.title}
-                        href={item.href}
-                        className="block rounded-[1.2rem] border border-[color-mix(in_srgb,var(--warning)_18%,white)] bg-[color-mix(in_srgb,var(--warning)_8%,white)] px-4 py-4 transition hover:border-[color:var(--warning)]/35 dark:border-[color-mix(in_srgb,var(--warning)_26%,transparent)] dark:bg-[color-mix(in_srgb,var(--warning)_12%,transparent)]"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <strong className="block text-sm font-semibold text-panel-strong">{item.title}</strong>
-                            <p className="mt-1 text-xs leading-5 text-panel-copy">{item.context}</p>
-                          </div>
-                          <span className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-[color:var(--warning)]">
-                            {item.time}
-                          </span>
-                        </div>
-                        <p className="mt-3 text-xs font-semibold uppercase tracking-[0.14em] text-brand">{item.action}</p>
-                      </Link>
-                    ))}
-                  </div>
-                ) : null}
-
-                {activeNotificationFilter === "all" || activeNotificationFilter === "info" ? (
-                  <div className="space-y-3">
-                    <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Info</p>
-                    {MOCK_NOTIFICATIONS.info.map((item) => (
-                      <Link
-                        key={item.title}
-                        href={item.href}
-                        className="block rounded-[1.2rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-4 transition hover:border-[var(--dashboard-icon-button-border)]"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <strong className="block text-sm font-semibold text-panel-strong">{item.title}</strong>
-                            <p className="mt-1 text-xs leading-5 text-panel-copy">{item.context}</p>
-                          </div>
-                          <span className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-panel-subtle">
-                            {item.time}
-                          </span>
-                        </div>
-                        <p className="mt-3 text-xs font-semibold uppercase tracking-[0.14em] text-brand">{item.action}</p>
-                      </Link>
-                    ))}
-                  </div>
-                ) : null}
+                ) : (
+                  <p className="text-sm text-panel-muted">No live notifications available for the current dashboard scope.</p>
+                )}
               </div>
               </Card>
             ) : null}

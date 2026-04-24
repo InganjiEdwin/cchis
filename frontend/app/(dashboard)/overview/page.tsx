@@ -143,7 +143,6 @@ export default function OverviewPage() {
         title="Overview"
         subtitle="Climate Health Risk Monitoring"
         lastUpdatedLabel={isRefreshing ? "Refreshing..." : formatOperationalTime(overview?.latestTimestamp ?? null)}
-        showNotifications={false}
         onRefresh={() => {
           void overviewQuery.refetch();
         }}
