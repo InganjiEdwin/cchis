@@ -107,13 +107,13 @@ function describeFreshness(timestamp: string | null, thresholdMinutes: number) {
 
 function toPipelineState(tone: "success" | "warning" | "danger" | "default") {
   if (tone === "success") {
-    return "Healthy";
+    return "Within window";
   }
   if (tone === "warning") {
-    return "Watching";
+    return "Review";
   }
   if (tone === "danger") {
-    return "Attention needed";
+    return "Outside window";
   }
   return "Pending";
 }
@@ -641,8 +641,8 @@ export default function SystemPage() {
           <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
             <PageSectionHeader
               className="gap-1"
-              title="Operational Pipelines"
-              description="State derived from current records, not synthetic scheduler telemetry."
+              title="Pipeline Summary"
+              description="Status derived from visible records, not scheduler telemetry."
             />
 
             <div className="mt-5 space-y-3">
