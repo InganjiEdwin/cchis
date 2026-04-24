@@ -260,11 +260,11 @@ export default function FacilityReadinessPage() {
                       {[
                         "Facility name",
                         "Ward",
-                        "Surge risk",
-                        "Derived ORS",
-                        "Derived staffing",
+                        "Derived risk",
+                        "Calculated ORS",
+                        "Calculated staffing",
                         "Last reported",
-                        "Action",
+                        "Record",
                       ].map((label) => (
                         <th
                           key={label}
@@ -308,16 +308,16 @@ export default function FacilityReadinessPage() {
                           <td className="px-5 py-4 align-top">
                             <div className="space-y-2">
                               <StatusBadge tone={riskTone(row.surgeRisk)} className="tracking-[0.12em]">
-                                {row.surgeRisk === "EXTREME" ? "Extreme" : row.surgeRisk === "MODERATE" ? "Moderate" : "Low"}
+                                {row.surgeRisk === "EXTREME" ? "High" : row.surgeRisk === "MODERATE" ? "Moderate" : "Low"}
                               </StatusBadge>
-                              <small className="block text-sm text-panel-muted">+{row.projectedCases} projected cases</small>
+                              <small className="block text-sm text-panel-muted">+{row.projectedCases} calculated cases</small>
                             </div>
                           </td>
                           <td className="px-5 py-4 align-top">
                             <div className="space-y-2">
                               <strong className="block text-base text-panel-strong">{row.orsStockPercent}%</strong>
                               <StatusBadge tone={stockTone(row.orsState)} className="tracking-[0.12em]">
-                                {row.orsState}
+                                {row.orsState} estimate
                               </StatusBadge>
                             </div>
                           </td>
@@ -327,7 +327,7 @@ export default function FacilityReadinessPage() {
                                 {row.staffingFilled}/{row.staffingRequired}
                               </span>
                               <StatusBadge tone={staffingTone(row.staffingState)} className="tracking-[0.12em]">
-                                {row.staffingState}
+                                {row.staffingState} estimate
                               </StatusBadge>
                             </div>
                           </td>
@@ -335,7 +335,7 @@ export default function FacilityReadinessPage() {
                             <div className="space-y-2">
                               <span className="block text-panel-copy">{row.lastReported}</span>
                               <StatusBadge tone={freshnessTone(row.freshnessState)} className="tracking-[0.12em]">
-                                {row.freshnessState === "FRESH" ? "Current" : row.freshnessState === "WARNING" ? "Warning" : "Stale"}
+                                {row.freshnessState === "FRESH" ? "Recent" : row.freshnessState === "WARNING" ? "Warning" : "Stale"}
                               </StatusBadge>
                             </div>
                           </td>
@@ -344,7 +344,7 @@ export default function FacilityReadinessPage() {
                               href={`/facility-readiness/${row.id}`}
                               className="inline-flex h-9 items-center rounded-pill px-3 text-sm font-medium text-panel-copy transition hover:bg-[color-mix(in_srgb,var(--dashboard-nav-hover)_72%,transparent)] hover:text-panel-strong"
                             >
-                              View
+                              Open
                             </Link>
                           </td>
                         </tr>
