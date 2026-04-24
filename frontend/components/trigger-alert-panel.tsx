@@ -61,8 +61,8 @@ function formatRiskLabel(risk: TriggerableWard["latestRisk"]) {
 }
 
 export function TriggerAlertPanel({
-  buttonLabel = "Trigger Alert",
-  closeLabel = "Close Alert Builder",
+  buttonLabel = "Open Trigger Flow",
+  closeLabel = "Close Trigger Flow",
   buttonClassName,
   fixedWard = null,
 }: TriggerAlertPanelProps) {
@@ -238,7 +238,7 @@ export function TriggerAlertPanel({
               <button
                 type="button"
                 className="fixed inset-0 z-40 bg-[rgba(3,8,22,0.48)] backdrop-blur-[2px]"
-                aria-label="Close alert builder"
+                aria-label="Close trigger flow"
                 onClick={() => {
                   setIsOpen(false);
                   resetPanel();
@@ -253,10 +253,10 @@ export function TriggerAlertPanel({
                   <div className="flex items-start justify-between gap-4">
                     <div>
                       <p className="text-[0.72rem] font-semibold uppercase tracking-[0.18em] text-panel-subtle">
-                        Trigger Alert
+                        Trigger flow
                       </p>
                       <h3 className="mt-1 text-[1.65rem] font-semibold tracking-[-0.04em] text-panel-strong">
-                        Queue a real alert trigger
+                        Queue a backend trigger request
                       </h3>
                       <p className="mt-2 max-w-2xl text-sm text-panel-muted">
                         This workflow now matches the backend contract: select one ward and decide whether CHV SMS delivery should also be queued.
@@ -270,7 +270,7 @@ export function TriggerAlertPanel({
                         setIsOpen(false);
                         resetPanel();
                       }}
-                      aria-label="Close alert workflow"
+                      aria-label="Close trigger flow"
                     >
                       <X className="size-4" aria-hidden="true" />
                     </Button>
@@ -286,7 +286,7 @@ export function TriggerAlertPanel({
                             <CheckCircle2 className="size-5" aria-hidden="true" />
                           </span>
                           <div>
-                            <strong className="block text-lg font-semibold text-panel-strong">Alert trigger queued</strong>
+                            <strong className="block text-lg font-semibold text-panel-strong">Trigger request queued</strong>
                             <p className="mt-1 text-sm text-panel-copy">
                               The backend accepted the request and queued alert generation for {selectedWard?.name ?? "the selected ward"}.
                             </p>
@@ -337,7 +337,7 @@ export function TriggerAlertPanel({
                       ) : null}
 
                       <StatusBanner tone="warning" icon={<ShieldAlert aria-hidden="true" />}>
-                        The richer alert-builder flow has been collapsed to the current backend-owned contract. Unsupported features like templates, scheduling, and approval timelines are no longer simulated here.
+                        This trigger flow is limited to the current backend-owned contract. Templates, scheduling, approval steps, and multi-target orchestration are intentionally not simulated here.
                       </StatusBanner>
 
                       {!fixedWard ? (
@@ -509,12 +509,12 @@ export function TriggerAlertPanel({
                         {triggerMutation.isPending ? (
                           <>
                             <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
-                            Queueing...
+                            Queueing request...
                           </>
                         ) : (
                           <>
                             <BellRing className="size-4" aria-hidden="true" />
-                            Queue Alert
+                            Queue Request
                           </>
                         )}
                       </Button>
