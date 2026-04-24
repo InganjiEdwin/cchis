@@ -203,7 +203,7 @@ export default function ProfilePage() {
             <div className="flex w-full flex-col gap-3 md:w-auto md:min-w-[15rem]">
               <div className="rounded-[1.35rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-4">
                 <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">
-                  Two-factor summary
+                  Two-factor
                 </p>
                 <div className="mt-2 flex items-center justify-between gap-3">
                   <span className="text-sm font-medium text-panel-copy">Two-factor</span>
@@ -252,9 +252,9 @@ export default function ProfilePage() {
             <div className="space-y-4">
               <div>
                 <p className="text-[0.72rem] font-semibold uppercase tracking-[0.18em] text-white/68">
-                  Role Summary
+                  Role Notes
                 </p>
-              <p className="mt-2 text-sm text-white/80">This card shows role notes only. Approval and report routes are unavailable here.</p>
+              <p className="mt-2 text-sm text-white/80">This card shows role notes only. Approval and report routes are unavailable.</p>
               </div>
 
               <div className="rounded-[1.25rem] border border-white/12 bg-white/10 px-4 py-4">
@@ -352,7 +352,7 @@ export default function ProfilePage() {
 
         <Card className="rounded-[2rem] px-5 py-6">
           <div>
-            <h2 className="text-[1.25rem] font-semibold tracking-[-0.04em] text-panel-strong">Role Summary</h2>
+            <h2 className="text-[1.25rem] font-semibold tracking-[-0.04em] text-panel-strong">Role Notes</h2>
             <p className="mt-2 text-sm leading-6 text-panel-muted">{capabilityCopy.heading}</p>
           </div>
 
@@ -385,7 +385,7 @@ export default function ProfilePage() {
               <h2 className="text-[1.25rem] font-semibold tracking-[-0.04em] text-panel-strong">
                 Security & Authentication
               </h2>
-              <p className="mt-1 text-sm text-panel-muted">Credential, second-factor, and session details shown on this page.</p>
+              <p className="mt-1 text-sm text-panel-muted">Credential, second-factor, and session details shown here.</p>
             </div>
           </div>
 
