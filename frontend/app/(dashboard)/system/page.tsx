@@ -155,30 +155,30 @@ export default function SystemPage() {
   const statusCards = useMemo(
     () => [
       {
-        title: "Wards In Scope",
+        title: "Visible Wards",
         value: isLoading ? "..." : `${snapshot?.visibleWards ?? 0}`,
-        detail: `${snapshot?.wardsWithFreshRisk ?? 0} wards with current risk timestamps`,
+        detail: `${snapshot?.wardsWithFreshRisk ?? 0} wards with visible risk timestamps`,
         tone: "info" as const,
         icon: <CloudRain className="size-5" aria-hidden="true" />,
       },
       {
         title: "High-Risk Wards",
         value: isLoading ? "..." : `${snapshot?.highRiskWards ?? 0}`,
-        detail: "Derived from latest ward risk classifications",
+        detail: "From latest visible ward risk classifications",
         tone: (snapshot?.highRiskWards ?? 0) > 0 ? ("warning" as const) : ("success" as const),
         icon: <Siren className="size-5" aria-hidden="true" />,
       },
       {
         title: "Alert Backlog",
         value: isLoading ? "..." : `${alertBacklog}`,
-        detail: `${snapshot?.failedAlerts ?? 0} failed deliveries in current scope`,
+        detail: `${snapshot?.failedAlerts ?? 0} failed deliveries in visible records`,
         tone: (snapshot?.failedAlerts ?? 0) > 0 ? ("danger" as const) : alertBacklog > 0 ? ("warning" as const) : ("success" as const),
         icon: <BellRing className="size-5" aria-hidden="true" />,
       },
       {
-        title: "CHV Sync Health",
+        title: "CHV Sync Summary",
         value: isLoading ? "..." : `${snapshot?.onlineChvs ?? 0}/${snapshot?.activeChvs ?? 0}`,
-        detail: `${snapshot?.delayedChvs ?? 0} delayed, ${snapshot?.offlineChvs ?? 0} offline`,
+        detail: `${snapshot?.delayedChvs ?? 0} delayed, ${snapshot?.offlineChvs ?? 0} offline in visible CHV records`,
         tone: (snapshot?.offlineChvs ?? 0) > 0 ? ("warning" as const) : ("success" as const),
         icon: <ShieldCheck className="size-5" aria-hidden="true" />,
       },
@@ -453,8 +453,8 @@ export default function SystemPage() {
   return (
     <div className="space-y-6">
       <DashboardTopbar
-        title="System Status"
-        subtitle="Read-only operational health derived from dashboard feeds"
+        title="System Settings"
+        subtitle="Read-only system summary derived from dashboard records"
         lastUpdatedLabel={lastUpdatedLabel}
         lastUpdatedTone={
           riskFreshness.isStale || alertFreshness.isStale || facilityFreshness.isStale || chvFreshness.isStale
@@ -468,8 +468,8 @@ export default function SystemPage() {
 
       <RoleGate
         allowedRoles={["ADMIN", "ANALYST"]}
-        title="System view is role-restricted"
-        message="Only Admin and Analyst roles should access the operational system-status workspace."
+        title="System page is role-restricted"
+        message="Only Admin and Analyst roles should access this read-only system summary page."
       >
         {error ? (
           <StatusBanner tone="danger" icon={<AlertTriangle aria-hidden="true" />}>
