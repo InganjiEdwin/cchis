@@ -407,7 +407,7 @@ export default function FacilityReadinessPage() {
               <div className="mt-5 space-y-3">
                 {isLoading ? (
                   <div className="rounded-[1.5rem] border border-panel-table-wrap px-4 py-5 text-sm text-panel-muted">
-                    Loading facility alerts...
+                    Loading derived facility readiness...
                   </div>
                 ) : immediateAlerts.length ? (
                   immediateAlerts.map((row) => (

@@ -454,7 +454,7 @@ export default function SystemPage() {
     <div className="space-y-6">
       <DashboardTopbar
         title="System Status"
-        subtitle="Read-only operational health derived from live dashboard feeds"
+        subtitle="Read-only operational health derived from dashboard feeds"
         lastUpdatedLabel={lastUpdatedLabel}
         lastUpdatedTone={
           riskFreshness.isStale || alertFreshness.isStale || facilityFreshness.isStale || chvFreshness.isStale
@@ -787,7 +787,7 @@ export default function SystemPage() {
           <div className="mt-5 flex flex-wrap items-center gap-4 text-sm text-panel-muted">
             <span className="inline-flex items-center gap-2">
               <Logs className="size-4" aria-hidden="true" />
-              Event summaries are synthesized from live dashboard records.
+              Event summaries are synthesized from dashboard records.
             </span>
             <span className="inline-flex items-center gap-2">
               <Clock3 className="size-4" aria-hidden="true" />
