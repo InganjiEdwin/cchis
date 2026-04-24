@@ -247,7 +247,7 @@ export default function OverviewPage() {
                   {isLoading ? (
                     <tr>
                       <td colSpan={5} className="px-4 py-8 text-sm text-panel-muted">
-                        Loading operational alerts...
+                        Loading alert records...
                       </td>
                     </tr>
                   ) : overview && overview.recentAlerts.length > 0 ? (
