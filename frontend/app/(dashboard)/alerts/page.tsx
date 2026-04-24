@@ -866,7 +866,7 @@ export default function AlertsPage() {
                               {alert.statusLabel}
                             </StatusBadge>
                             {alert.status === "RETRY_PENDING" ? (
-                              <p className="text-xs font-medium text-[color:var(--warning)]">Retry queue active</p>
+                              <p className="text-xs font-medium text-[color:var(--warning)]">Retry pending in backend</p>
                             ) : null}
                           </div>
                         </td>
@@ -880,7 +880,7 @@ export default function AlertsPage() {
                               setSelectedAlertId(alert.id);
                             }}
                           >
-                            {alert.statusFilter === "FAILED" || alert.status === "RETRY_PENDING" ? "Retry review" : "Open"}
+                            {alert.statusFilter === "FAILED" || alert.status === "RETRY_PENDING" ? "Open review" : "Open"}
                           </Button>
                         </td>
                       </tr>

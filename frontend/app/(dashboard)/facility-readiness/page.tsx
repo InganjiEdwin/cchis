@@ -171,7 +171,7 @@ export default function FacilityReadinessPage() {
                   {isLoading ? "..." : criticalFacilities}
                 </strong>
                 <small className="mt-3 block text-sm text-panel-muted">
-                  {surgeCardIsCalm ? "No active surge escalation in scope" : "Require active resupply review"}
+                  {surgeCardIsCalm ? "No extreme derived readiness pressure in scope" : "Derived resupply review suggested"}
                 </small>
               </div>
             </div>
@@ -437,7 +437,7 @@ export default function FacilityReadinessPage() {
                       <ShieldCheck className="size-4" aria-hidden="true" />
                     </span>
                     <div>
-                      <strong className="block text-base text-panel-strong">No active facility alerts</strong>
+                      <strong className="block text-base text-panel-strong">No priority facility reviews</strong>
                       <span className="mt-1 block text-sm text-panel-muted">
                         No high derived readiness pressure is visible across the current facility scope.
                       </span>

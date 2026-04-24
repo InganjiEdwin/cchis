@@ -196,7 +196,7 @@ export default function OverviewPage() {
           </div>
           <div className="space-y-1">
             <StatusBadge tone="warning" className="rounded-full px-3 py-1 tracking-[0.14em]">
-              Stable monitoring
+              Derived review
             </StatusBadge>
             <strong className="block text-4xl font-semibold tracking-[-0.05em] text-panel-strong">
               {isLoading ? "..." : overview?.mediumRiskWards.length ?? 0}
@@ -225,7 +225,7 @@ export default function OverviewPage() {
         <Card className="space-y-5 p-6">
           <PageSectionHeader
             title="Recent Alerts"
-            description={`${overview?.primaryCountyLabel ?? "Current scope"} operational activity`}
+            description={`${overview?.primaryCountyLabel ?? "Current scope"} visible alert activity`}
           />
 
           <div className="overflow-hidden rounded-[1.5rem] border border-[var(--dashboard-table-line)]">
