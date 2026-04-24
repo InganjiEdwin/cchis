@@ -301,27 +301,27 @@ export default function ProfilePage() {
         </Card>
 
         <Card className="rounded-[2rem] border-none bg-[linear-gradient(180deg,#165fbe_0%,#0f56b0_100%)] px-5 py-5 text-white shadow-[0_20px_40px_rgba(15,86,176,0.28)]">
-          <div className="space-y-4">
-            <div>
-              <p className="text-[0.72rem] font-semibold uppercase tracking-[0.18em] text-white/68">
-                System Health Status
-              </p>
-              <p className="mt-2 text-sm text-white/80">Your administrative oversight is active.</p>
-            </div>
-
-            <div className="rounded-[1.25rem] border border-white/12 bg-white/10 px-4 py-4">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-sm font-medium text-white/84">Pending approvals</span>
-                <span className="text-xl font-semibold">{capabilityCopy.approvals}</span>
+            <div className="space-y-4">
+              <div>
+                <p className="text-[0.72rem] font-semibold uppercase tracking-[0.18em] text-white/68">
+                  Role Summary
+                </p>
+              <p className="mt-2 text-sm text-white/80">This card summarizes role-facing copy only. It does not expose live approval or reporting routes.</p>
               </div>
-            </div>
 
-            <div className="rounded-[1.1rem] border border-white/10 bg-black/10 px-4 py-3 text-sm text-white/78">
-              Trust posture verified for current administrative session.
-            </div>
+              <div className="rounded-[1.25rem] border border-white/12 bg-white/10 px-4 py-4">
+                <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-medium text-white/84">Role</span>
+                <span className="text-xl font-semibold">{currentUser.role.replaceAll("_", " ")}</span>
+                </div>
+              </div>
 
-            <Button className="w-full bg-white text-[#175fc2] shadow-none hover:bg-white/92">
-              Generate Report
+              <div className="rounded-[1.1rem] border border-white/10 bg-black/10 px-4 py-3 text-sm text-white/78">
+              Summary text on this page is based on the visible session profile.
+              </div>
+
+            <Button className="w-full bg-white/18 text-white shadow-none hover:bg-white/18" disabled>
+              Report generation unavailable
             </Button>
           </div>
         </Card>
