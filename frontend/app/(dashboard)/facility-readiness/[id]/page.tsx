@@ -204,18 +204,18 @@ export default function FacilityDetailPage() {
                 </Card>
 
                 <div className="space-y-3">
-                  <h2 className="text-2xl font-semibold text-panel-strong">Resource Availability</h2>
+                  <h2 className="text-2xl font-semibold text-panel-strong">Resource Estimates</h2>
                   <div className="grid gap-4 md:grid-cols-3">
                     <Card className="rounded-[1.6rem] bg-panel px-5 py-4">
                       <div className="flex items-center justify-between">
                         <span className="inline-flex size-10 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--danger)_12%,white)] text-[color:var(--danger)]">
                           <PackagePlus className="size-4" aria-hidden="true" />
                         </span>
-                        <span className="text-xs font-semibold text-[color:var(--danger)]">{readiness.ors_state}</span>
+                        <span className="text-xs font-semibold text-[color:var(--danger)]">{readiness.ors_state} estimate</span>
                       </div>
                       <div className="mt-4 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Calculated ORS estimate</div>
                       <div className="mt-2 text-4xl font-semibold text-panel-strong">{readiness.ors_estimate_percent}%</div>
-                      <div className="mt-1 text-sm text-panel-muted">Estimated from ward pressure</div>
+                      <div className="mt-1 text-sm text-panel-muted">Calculated from ward pressure</div>
                       <div className="mt-4 h-1.5 rounded-full bg-[color-mix(in_srgb,var(--danger)_12%,white)]">
                         <div className="h-full rounded-full bg-[color:var(--danger)]" style={{ width: `${readiness.ors_estimate_percent}%` }} />
                       </div>
@@ -226,11 +226,11 @@ export default function FacilityDetailPage() {
                         <span className="inline-flex size-10 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--brand)_12%,white)] text-brand">
                           <Users className="size-4" aria-hidden="true" />
                         </span>
-                        <span className="text-xs font-semibold text-brand">{readiness.staffing_state}</span>
+                        <span className="text-xs font-semibold text-brand">{readiness.staffing_state} estimate</span>
                       </div>
                       <div className="mt-4 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Calculated staffing estimate</div>
                       <div className="mt-2 text-4xl font-semibold text-panel-strong">{readiness.staffing_percent}%</div>
-                      <div className="mt-1 text-sm text-panel-muted">Estimated from surge posture</div>
+                      <div className="mt-1 text-sm text-panel-muted">Calculated from ward pressure</div>
                       <div className="mt-4 h-1.5 rounded-full bg-[color-mix(in_srgb,var(--brand)_12%,white)]">
                         <div className="h-full rounded-full bg-brand" style={{ width: `${readiness.staffing_percent}%` }} />
                       </div>
@@ -243,7 +243,7 @@ export default function FacilityDetailPage() {
                         </span>
                         <span className="text-xs font-semibold text-[color:var(--warning)]">{readiness.surge_risk_label}</span>
                       </div>
-                      <div className="mt-4 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Demand outlook</div>
+                      <div className="mt-4 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Calculated demand</div>
                       <div className="mt-2 text-4xl font-semibold text-panel-strong">~{readiness.predicted_cases_per_day}</div>
                       <div className="mt-1 text-sm text-panel-muted">Calculated cases/day estimate</div>
                       <div className="mt-4 h-1.5 rounded-full bg-[color-mix(in_srgb,var(--warning)_12%,white)]">
@@ -254,7 +254,7 @@ export default function FacilityDetailPage() {
                 </div>
 
                 <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
-                  <h2 className="text-2xl font-semibold text-panel-strong">Facility Activity Summary</h2>
+                  <h2 className="text-2xl font-semibold text-panel-strong">Facility Record Timeline</h2>
                   <div className="mt-5 space-y-4">
                     {timeline.map((item) => (
                       <div key={item.id} className="flex gap-4">
