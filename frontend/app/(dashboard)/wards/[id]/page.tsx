@@ -544,6 +544,10 @@ export default function WardDetailPage() {
               <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Guidance for this risk tier</h3>
             </div>
 
+            <p className="text-sm leading-6 text-panel-muted">
+              This section is read-first. The only executable action on this page is the supported alert-trigger flow below.
+            </p>
+
             {isLoading ? (
               <div className="space-y-3" aria-hidden="true">
                 <div className="h-16 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
@@ -564,10 +568,8 @@ export default function WardDetailPage() {
                       <strong className="block text-sm font-semibold text-panel-strong">{recommendation.text}</strong>
                       <span className="text-xs font-semibold uppercase tracking-[0.14em] text-panel-muted">
                         {index === 0 && canTriggerAlerts(currentUser.role)
-                          ? "Trigger available"
-                          : canTriggerAlerts(currentUser.role)
-                            ? "Guidance only"
-                            : "Read only"}
+                          ? "Trigger flow available"
+                          : "Read only guidance"}
                       </span>
                     </div>
                   </article>
@@ -578,8 +580,8 @@ export default function WardDetailPage() {
             {detail ? (
               canTriggerAlerts(currentUser.role) ? (
                 <TriggerAlertPanel
-                  buttonLabel="Trigger Alert"
-                  closeLabel="Close action panel"
+                  buttonLabel="Open Trigger Flow"
+                  closeLabel="Close trigger flow"
                   buttonClassName="inline-flex h-12 w-full items-center justify-center gap-2 rounded-pill bg-[var(--login-submit-start)] px-5 text-base font-semibold text-white shadow-[var(--login-submit-shadow)] transition hover:bg-[var(--login-submit-end)] hover:shadow-[var(--login-submit-shadow-hover)]"
                   fixedWard={{
                     id: detail.wardId,
