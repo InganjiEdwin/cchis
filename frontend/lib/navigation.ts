@@ -26,7 +26,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Alerts", href: "/alerts", roles: ["ADMIN", "SUPERVISOR", "ANALYST"], icon: Bell },
   { label: "CHV Operations", href: "/chvs", roles: ["ADMIN", "SUPERVISOR"], icon: Stethoscope },
   { label: "Facility Readiness", href: "/facility-readiness", roles: ["ADMIN", "SUPERVISOR", "ANALYST"], icon: Building2 },
-  { label: "System Settings", href: "/system", roles: ["ADMIN", "ANALYST"], icon: ShieldCheck },
+  { label: "System Summary", href: "/system", roles: ["ADMIN", "ANALYST"], icon: ShieldCheck },
   { label: "Profile", href: "/profile", roles: ["ADMIN", "SUPERVISOR", "ANALYST"], icon: UserCircle2 },
 ];
 

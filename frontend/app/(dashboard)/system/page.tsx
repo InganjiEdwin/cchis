@@ -453,7 +453,7 @@ export default function SystemPage() {
   return (
     <div className="space-y-6">
       <DashboardTopbar
-        title="System Settings"
+        title="System Summary"
         subtitle="Read-only system summary derived from dashboard records"
         lastUpdatedLabel={lastUpdatedLabel}
         lastUpdatedTone={

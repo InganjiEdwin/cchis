@@ -260,7 +260,7 @@ export function DashboardTopbar({
             size="icon"
             className="size-9 rounded-[0.8rem] border-[var(--dashboard-icon-button-border)] bg-[var(--dashboard-icon-button-surface)] text-[var(--dashboard-icon-button-ink)] hover:text-[var(--dashboard-icon-button-ink-hover)]"
             onClick={() => setOpenPanel((currentValue) => (currentValue === "sync" ? null : "sync"))}
-            aria-label="Open sync controls"
+            aria-label="Open sync summary"
           >
             <RefreshCcw className={cn("size-4", isRefreshingUi && "animate-spin")} aria-hidden="true" />
           </Button>
