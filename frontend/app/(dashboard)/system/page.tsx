@@ -34,7 +34,7 @@ import { useSystemQuery } from "@/queries/use-system-query";
 
 function formatRelativeLabel(timestamp: string | null) {
   if (!timestamp) {
-    return "No recent update";
+    return "No visible update";
   }
 
   const date = new Date(timestamp);
@@ -323,10 +323,10 @@ export default function SystemPage() {
                 .slice(0, 2)
                 .map((item) => item.name)
                 .join(", ")
-            : "No recent alert backend observed",
+            : "No alert backend observed",
         note: snapshot?.deliveryBackends.length
-          ? `${snapshot.deliveryBackends.reduce((sum, item) => sum + item.count, 0)} recent alerts sampled through delivery metadata`
-          : "Awaiting recent alert activity",
+          ? `${snapshot.deliveryBackends.reduce((sum, item) => sum + item.count, 0)} alerts sampled through delivery metadata`
+          : "Awaiting alert activity",
         tone: snapshot?.deliveryBackends.length ? ("success" as const) : ("default" as const),
         icon: <Waypoints className="size-4" aria-hidden="true" />,
       },
@@ -683,7 +683,7 @@ export default function SystemPage() {
             <PageSectionHeader
               className="gap-1"
               title="Observed Channels"
-              description="Activity is surfaced only where a backend source already exists."
+              description="Activity appears only where a backend source already exists."
             />
 
             <div className="mt-5 grid gap-3 sm:grid-cols-2">
@@ -741,14 +741,14 @@ export default function SystemPage() {
             <PageSectionHeader
               className="gap-1"
               title="Observed Record Stream"
-              description="This is a derived record summary, not a raw infrastructure log sink."
+              description="This is a record summary, not a raw infrastructure log sink."
             />
             <div className="flex flex-wrap items-center gap-2">
               <StatusBadge tone="default" className="px-3 py-1 tracking-[0.14em]">
                 Read-only
               </StatusBadge>
               <StatusBadge tone="default" className="px-3 py-1 tracking-[0.14em]">
-                Record-derived
+                Record summary
               </StatusBadge>
             </div>
           </div>
