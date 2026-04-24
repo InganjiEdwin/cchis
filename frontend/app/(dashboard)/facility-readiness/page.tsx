@@ -103,10 +103,10 @@ export default function FacilityReadinessPage() {
     ? "Checking readiness..."
     : immediateAlerts.length
       ? `${immediateAlerts.length} calculated rows are visible`
-      : "No high calculated readiness pressure visible";
+      : "No high calculated readiness difference visible";
   const forecastActionGuidance = overloadedFacilities
     ? `Summary: calculated resupply readiness is higher for ${overloadedFacilities} facilities.`
-    : "Summary note: continue monitoring calculated readiness summaries.";
+    : "Summary: continue monitoring calculated readiness summaries.";
 
   return (
     <div className="space-y-6">
@@ -139,7 +139,7 @@ export default function FacilityReadinessPage() {
                 <strong className="mt-2 block text-4xl font-semibold leading-none text-panel-strong">
                   {isLoading ? "..." : activeFacilities}
                 </strong>
-                <small className="mt-3 block text-sm text-panel-muted">Facility records in the selected view</small>
+                <small className="mt-3 block text-sm text-panel-muted">Facility records in view</small>
               </div>
             </div>
           </Card>
@@ -171,7 +171,7 @@ export default function FacilityReadinessPage() {
                   {isLoading ? "..." : criticalFacilities}
                 </strong>
                 <small className="mt-3 block text-sm text-panel-muted">
-                  {surgeCardIsCalm ? "No high calculated readiness pressure in view" : "Calculated readiness rows are visible"}
+                  {surgeCardIsCalm ? "No high calculated readiness difference in view" : "Calculated readiness rows are visible"}
                 </small>
               </div>
             </div>
@@ -439,7 +439,7 @@ export default function FacilityReadinessPage() {
                     <div>
                       <strong className="block text-base text-panel-strong">No facility rows visible</strong>
                       <span className="mt-1 block text-sm text-panel-muted">
-                        No high calculated readiness pressure is visible across the facility view.
+                        No high calculated readiness difference is visible across the facility view.
                       </span>
                     </div>
                   </div>
@@ -459,7 +459,7 @@ export default function FacilityReadinessPage() {
                   +{isLoading ? "..." : forecastCases} cases
                 </strong>
                 <span className="mt-3 block text-sm text-panel-copy">
-                  {isLoading ? "Loading..." : `${overloadedFacilities} facilities in high calculated readiness pressure`}
+                  {isLoading ? "Loading..." : `${overloadedFacilities} facilities in high calculated readiness difference`}
                 </span>
               </div>
 
