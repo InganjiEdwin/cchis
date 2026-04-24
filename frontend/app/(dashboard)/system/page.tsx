@@ -34,7 +34,7 @@ import { useSystemQuery } from "@/queries/use-system-query";
 
 function formatRelativeLabel(timestamp: string | null) {
   if (!timestamp) {
-    return "No visible update";
+    return "No timestamp visible";
   }
 
   const date = new Date(timestamp);
@@ -340,7 +340,7 @@ export default function SystemPage() {
       {
         group: "USSD traffic (24h)",
         name: `${snapshot?.ussdSessions24h ?? 0} sessions`,
-        note: "Derived from backend USSD session logs",
+        note: "From backend USSD session logs",
         tone: (snapshot?.ussdSessions24h ?? 0) > 0 ? ("success" as const) : ("default" as const),
         icon: <BellRing className="size-4" aria-hidden="true" />,
       },
@@ -454,7 +454,7 @@ export default function SystemPage() {
     <div className="space-y-6">
       <DashboardTopbar
         title="System Summary"
-        subtitle="Read-only system summary derived from dashboard records"
+        subtitle="Read-only system summary from dashboard records"
         lastUpdatedLabel={lastUpdatedLabel}
         lastUpdatedTone={
           riskFreshness.isStale || alertFreshness.isStale || facilityFreshness.isStale || chvFreshness.isStale
@@ -527,7 +527,7 @@ export default function SystemPage() {
               <PageSectionHeader
                 className="gap-1"
                 title="Data Freshness"
-                description="These signals are derived from backend timestamps, not infrastructure probe data."
+                description="These signals are based on backend timestamps, not infrastructure probe data."
               />
               <Button
                 variant="secondary"
@@ -631,7 +631,7 @@ export default function SystemPage() {
               <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-white/60">Limitation</p>
               <p className="mt-2 text-sm font-semibold">Read-only system page</p>
               <p className="mt-1 text-xs text-white/64">
-                This page shows system summaries from backend records only. Manual control actions remain unavailable until owned by real APIs.
+                This page shows system summaries from backend records. Manual control actions remain unavailable until owned by real APIs.
               </p>
             </div>
           </Card>
@@ -642,7 +642,7 @@ export default function SystemPage() {
             <PageSectionHeader
               className="gap-1"
               title="Pipeline Summary"
-              description="Status derived from visible records, not scheduler telemetry."
+              description="Status comes from visible records, not scheduler telemetry."
             />
 
             <div className="mt-5 space-y-3">

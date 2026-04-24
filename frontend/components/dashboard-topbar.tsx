@@ -330,7 +330,7 @@ export function DashboardTopbar({
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-lg font-semibold text-panel-strong">Notifications</h3>
-                  <p className="mt-1 text-xs text-panel-muted">Derived from visible alerts, ward risk, and feed freshness</p>
+                  <p className="mt-1 text-xs text-panel-muted">From visible alerts, ward risk, and feed freshness</p>
                 </div>
                 <StatusBadge tone={unreadCount ? "info" : "default"}>{unreadCount} visible</StatusBadge>
               </div>
