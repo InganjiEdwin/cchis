@@ -271,7 +271,7 @@ export function DashboardTopbar({
                 <Waves className="size-4 text-brand" aria-hidden="true" />
                 <div>
                   <strong className="block text-sm font-semibold text-panel-strong">System sync</strong>
-                  <p className="mt-1 text-xs text-panel-muted">Refresh live operational data, not the browser tab.</p>
+                  <p className="mt-1 text-xs text-panel-muted">Refresh dashboard data feeds, not the browser tab.</p>
                 </div>
               </div>
 

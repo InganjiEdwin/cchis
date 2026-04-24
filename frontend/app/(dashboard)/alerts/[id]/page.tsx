@@ -780,7 +780,7 @@ export default function AlertDetailPage() {
                 <div className="absolute inset-0 bg-[linear-gradient(90deg,color-mix(in_srgb,var(--dashboard-table-line)_28%,transparent)_1px,transparent_1px),linear-gradient(color-mix(in_srgb,var(--dashboard-table-line)_28%,transparent)_1px,transparent_1px)] bg-[size:3.5rem_3.5rem] opacity-60" />
                 <div className="absolute inset-x-6 bottom-5">
                   <div className="inline-flex rounded-full bg-panel/90 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-panel-strong shadow-sm backdrop-blur">
-                    View Ward Risk Map
+                    Ward risk context
                   </div>
                 </div>
               </div>
@@ -789,15 +789,15 @@ export default function AlertDetailPage() {
                 <h3 className="text-xl font-semibold text-panel-strong">Ward Risk Detail</h3>
                 <p className="text-sm leading-6 text-panel-copy">
                   {wardDetail
-                    ? `${wardDetail.name} is currently ${wardDetail.current_risk_level === "HIGH" ? "under elevated watch" : "within routine watch"} with ${wardDetail.current_risk_level.toLowerCase()} risk and ${riskMeaning.trend.toLowerCase()} trend.`
-                    : `${alert.ward_name} remains the current operational ward linked to this alert.`}
+                    ? `${wardDetail.name} currently shows ${wardDetail.current_risk_level.toLowerCase()} recorded ward risk with a ${riskMeaning.trend.toLowerCase()} trend in the latest visible data.`
+                    : `${alert.ward_name} remains the ward currently linked to this alert record.`}
                 </p>
                 <div className="flex flex-col gap-3">
                   <Link
                     href={`/wards/${alert.ward}`}
                     className="inline-flex items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--dashboard-sidebar-title)]"
                   >
-                    View Full Ward Analysis
+                    Open Ward Detail
                     <ChevronRight className="size-4" aria-hidden="true" />
                   </Link>
                   <button
