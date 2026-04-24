@@ -599,16 +599,16 @@ export default function SystemPage() {
                 <ServerCog className="size-5" aria-hidden="true" />
               </span>
               <div>
-                <h2 className="text-xl font-semibold tracking-[-0.03em]">Admin Controls</h2>
-                <p className="mt-1 text-sm text-white/74">Visible controls stay disabled until backend job-control contracts exist.</p>
+                <h2 className="text-xl font-semibold tracking-[-0.03em]">Unavailable Controls</h2>
+                <p className="mt-1 text-sm text-white/74">These controls remain unavailable until backend job-control routes exist.</p>
               </div>
             </div>
 
             <div className="mt-5 space-y-3">
               {[
-                { label: "Retry Failed Jobs", icon: <RotateCcw className="size-4" aria-hidden="true" /> },
-                { label: "Trigger Manual Risk Scoring", icon: <Gauge className="size-4" aria-hidden="true" /> },
-                { label: "Pause Alert System", icon: <PauseCircle className="size-4" aria-hidden="true" /> },
+                { label: "Retry jobs unavailable", icon: <RotateCcw className="size-4" aria-hidden="true" /> },
+                { label: "Manual risk scoring unavailable", icon: <Gauge className="size-4" aria-hidden="true" /> },
+                { label: "Alert pause unavailable", icon: <PauseCircle className="size-4" aria-hidden="true" /> },
               ].map((action) => (
                 <button
                   key={action.label}
@@ -629,9 +629,9 @@ export default function SystemPage() {
 
             <div className="mt-5 rounded-[1.25rem] border border-white/10 bg-black/10 px-4 py-4">
               <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-white/60">Current limitation</p>
-              <p className="mt-2 text-sm font-semibold">Read-only system view</p>
+              <p className="mt-2 text-sm font-semibold">Read-only system page</p>
               <p className="mt-1 text-xs text-white/64">
-                This page now shows backend-derived health signals only. Manual control actions are intentionally disabled until owned by real APIs.
+                This page shows backend-derived system summaries only. Manual control actions remain unavailable until owned by real APIs.
               </p>
             </div>
           </Card>
