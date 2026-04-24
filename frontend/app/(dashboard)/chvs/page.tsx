@@ -304,12 +304,12 @@ export default function ChvsPage() {
   const activeReportingRate = totalChvs ? Math.round((activeChvs / totalChvs) * 100) : 0;
   const commandStatus = {
     assign: hasCriticalCoverageGap
-      ? `${criticalCoverageGap?.wardName} needs reinforcement`
-      : "No wards currently require emergency reassignment",
+      ? `${criticalCoverageGap?.wardName} shows the strongest reinforcement signal`
+      : "No visible wards currently show a reinforcement signal",
     broadcast: alerts.length
-      ? `${alerts.length} visible alert records are currently in scope`
-      : "No visible alert records are in scope for this cycle",
-    training: `${registryRows.filter((row) => row.syncHealth !== "ONLINE").length} CHVs pending protocol refresh`,
+      ? `${alerts.length} visible alert records are in the current scope`
+      : "No visible alert records are in the current scope",
+    training: `${registryRows.filter((row) => row.syncHealth !== "ONLINE").length} CHVs show delayed sync or offline status`,
   };
 
   const coverageShare = totalChvs ? Math.max(8, Math.round((activeChvs / totalChvs) * 100)) : 0;
@@ -535,26 +535,26 @@ export default function ChvsPage() {
 
           <div className="space-y-5">
             <Card className="rounded-[2rem] px-5 py-5">
-              <h2 className="text-2xl font-semibold text-panel-strong">Operations Command</h2>
+              <h2 className="text-2xl font-semibold text-panel-strong">Derived Priorities</h2>
               <p className="mt-3 text-sm text-panel-muted">
-                Assignment, broadcast, and training actions are shown as derived operational priorities only. This page does not yet own the corresponding backend command workflows.
+                Assignment, alert scope, and training cues below are derived planning signals only. This page does not own backend command workflows for those actions.
               </p>
 
               <div className="mt-5 space-y-3">
                 {[
                   {
                     icon: Users2,
-                    title: "Assign to Ward",
+                    title: "Ward reinforcement signal",
                     detail: commandStatus.assign,
                   },
                   {
                     icon: Megaphone,
-                    title: "Broadcast Message",
+                    title: "Alert scope summary",
                     detail: commandStatus.broadcast,
                   },
                   {
                     icon: BriefcaseMedical,
-                    title: "Trigger Training",
+                    title: "Training review signal",
                     detail: commandStatus.training,
                   },
                 ].map((item) => (
@@ -571,7 +571,7 @@ export default function ChvsPage() {
                       <strong className="block text-base text-panel-strong">{item.title}</strong>
                       <small className="mt-1 block text-sm text-panel-muted">{item.detail}</small>
                     </span>
-                    <span className="text-sm font-semibold text-panel-muted">Pending</span>
+                    <span className="text-sm font-semibold text-panel-muted">Read only</span>
                   </button>
                 ))}
               </div>
