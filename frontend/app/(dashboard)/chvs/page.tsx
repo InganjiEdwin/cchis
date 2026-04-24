@@ -340,7 +340,7 @@ export default function ChvsPage() {
     <div className="space-y-6">
       <DashboardTopbar
         title="Community Health Volunteers"
-        subtitle="Monitor field activity, response readiness, and community-level engagement"
+        subtitle="Review CHV activity summaries, sync status, and ward-linked engagement data"
         lastUpdatedLabel={lastUpdatedLabel}
         lastUpdatedTone={freshness.isStale ? "stale" : "default"}
       />
@@ -358,13 +358,13 @@ export default function ChvsPage() {
 
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <Card className="rounded-[2rem] px-5 py-5">
-            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Total CHVs</span>
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Visible CHVs</span>
             <div className="mt-3 text-4xl font-semibold leading-none text-panel-strong">{totalVisibleLabel}</div>
-            <p className="mt-4 text-sm text-panel-muted">Visible in current ward scope</p>
+            <p className="mt-4 text-sm text-panel-muted">Visible in the current ward filter</p>
           </Card>
 
           <Card className="rounded-[2rem] px-5 py-5">
-            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Active today</span>
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Visible active CHVs</span>
             <div className="mt-3 flex items-end gap-2">
               <strong className="text-4xl font-semibold leading-none text-panel-strong">{activeVisibleLabel}</strong>
               <span className="pb-1 text-sm font-medium text-panel-muted">/ {totalVisibleLabel}</span>
@@ -376,12 +376,12 @@ export default function ChvsPage() {
                 aria-hidden="true"
               />
             </div>
-            <p className="mt-3 text-sm text-panel-muted">{activeReportingRate}% reporting in current scope</p>
+            <p className="mt-3 text-sm text-panel-muted">{activeReportingRate}% active in the current filter</p>
           </Card>
 
           <Card className="rounded-[2rem] px-5 py-5">
             <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">
-              Alert acknowledged rate
+              Alert delivery rate
             </span>
             <div className="mt-3 flex items-center gap-3">
               <strong className="text-4xl font-semibold leading-none text-panel-strong">{acknowledgedRate.toFixed(1)}%</strong>
@@ -389,15 +389,15 @@ export default function ChvsPage() {
                 Derived
               </StatusBadge>
             </div>
-            <p className="mt-4 text-sm text-panel-muted">Calculated from visible alert delivery outcomes in the current scope</p>
+            <p className="mt-4 text-sm text-panel-muted">Calculated from visible alert delivery outcomes in this scope</p>
           </Card>
 
           <Card className="rounded-[2rem] px-5 py-5">
             <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">
-              Cases reported (24h)
+              Recorded triage sessions (24h)
             </span>
             <div className="mt-3 text-4xl font-semibold leading-none text-panel-strong">{casesVisibleLabel}</div>
-            <p className="mt-4 text-sm text-panel-muted">{highPriorityReferrals.toLocaleString()} high-priority referrals</p>
+            <p className="mt-4 text-sm text-panel-muted">{highPriorityReferrals.toLocaleString()} referrals in high-risk wards (derived)</p>
           </Card>
         </section>
 
