@@ -112,7 +112,7 @@ export default function FacilityReadinessPage() {
     <div className="space-y-6">
       <DashboardTopbar
         title="Facility Readiness"
-        subtitle="Facility registry records with calculated readiness estimates for Migori County."
+        subtitle="Facility records with calculated readiness estimates for Migori County."
         lastUpdatedLabel={lastUpdatedLabel}
         lastUpdatedTone={freshness.isStale ? "stale" : "default"}
       />
@@ -165,13 +165,13 @@ export default function FacilityReadinessPage() {
               </span>
               <div>
                 <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">
-                  {surgeCardIsCalm ? "No facilities in high derived risk" : "Facilities in high derived risk"}
+                  {surgeCardIsCalm ? "No facilities in high calculated risk" : "Facilities in high calculated risk"}
                 </span>
                 <strong className="mt-2 block text-4xl font-semibold leading-none text-panel-strong">
                   {isLoading ? "..." : criticalFacilities}
                 </strong>
                 <small className="mt-3 block text-sm text-panel-muted">
-                  {surgeCardIsCalm ? "No extreme derived readiness pressure in view" : "Calculated readiness review suggested"}
+                  {surgeCardIsCalm ? "No high calculated readiness pressure in view" : "Calculated readiness rows are visible"}
                 </small>
               </div>
             </div>
@@ -183,7 +183,7 @@ export default function FacilityReadinessPage() {
                 <PackagePlus className="size-5" aria-hidden="true" />
               </span>
               <div>
-                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Derived ORS readiness</span>
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Calculated ORS estimate</span>
                 <strong className="mt-2 block text-4xl font-semibold leading-none text-panel-strong">
                   {isLoading ? "..." : `${averageOrs}%`}
                 </strong>
@@ -407,7 +407,7 @@ export default function FacilityReadinessPage() {
               <div className="mt-5 space-y-3">
                 {isLoading ? (
                   <div className="rounded-[1.5rem] border border-panel-table-wrap px-4 py-5 text-sm text-panel-muted">
-                    Loading derived facility readiness...
+                    Loading facility readiness rows...
                   </div>
                 ) : immediateAlerts.length ? (
                   immediateAlerts.map((row) => (
@@ -415,7 +415,7 @@ export default function FacilityReadinessPage() {
                       <div className="flex items-start justify-between gap-3">
                         <strong className="text-base text-panel-strong">{row.facilityName}</strong>
                         <StatusBadge tone="danger" className="tracking-[0.12em]">
-                          High derived risk
+                          High calculated risk
                         </StatusBadge>
                       </div>
                       <p className="mt-3 text-sm leading-6 text-panel-copy">
@@ -427,7 +427,7 @@ export default function FacilityReadinessPage() {
                         className="mt-4 text-sm font-semibold text-panel-muted"
                         disabled
                       >
-                        {row.orsStockPercent < 30 ? "Derived dispatch review only" : "Facility notification unavailable"}
+                        {row.orsStockPercent < 30 ? "Dispatch unavailable" : "Facility notification unavailable"}
                       </button>
                     </article>
                   ))
@@ -439,7 +439,7 @@ export default function FacilityReadinessPage() {
                     <div>
                       <strong className="block text-base text-panel-strong">No facility rows in focus</strong>
                       <span className="mt-1 block text-sm text-panel-muted">
-                        No high calculated readiness pressure is visible across the current facility view.
+                        No high calculated readiness pressure is visible across the facility view.
                       </span>
                     </div>
                   </div>
@@ -454,17 +454,17 @@ export default function FacilityReadinessPage() {
               </div>
 
               <div className="mt-5 rounded-[1.5rem] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] px-4 py-4">
-                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">7-day derived outlook</span>
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">7-day calculated outlook</span>
                 <strong className="mt-3 block text-4xl font-semibold leading-none text-[color:var(--warning)]">
                   +{isLoading ? "..." : forecastCases} cases
                 </strong>
                 <span className="mt-3 block text-sm text-panel-copy">
-                  {isLoading ? "Loading..." : `${overloadedFacilities} facilities flagged for readiness review`}
+                  {isLoading ? "Loading..." : `${overloadedFacilities} facilities in high calculated readiness pressure`}
                 </span>
               </div>
 
               <p className="mt-4 text-sm font-medium text-panel-copy">
-                {isLoading ? "Assessing recommended action..." : forecastActionGuidance}
+                {isLoading ? "Calculating summary..." : forecastActionGuidance}
               </p>
 
               <div className="mt-5 space-y-3">
@@ -479,7 +479,7 @@ export default function FacilityReadinessPage() {
               <Card className="mt-5 rounded-[1.5rem] bg-[color-mix(in_srgb,var(--brand)_8%,var(--panel))] px-4 py-4 shadow-none">
                 <span className="text-xs font-semibold uppercase tracking-[0.18em] text-brand">Important limitation</span>
                 <p className="mt-2 text-sm text-panel-copy">
-                  This page does not yet have live facility inventory, staffing roster, or bed occupancy feeds. These readiness figures remain derived estimates.
+                  This page does not yet have live facility inventory, staffing roster, or bed occupancy feeds. These readiness figures remain calculated estimates.
                 </p>
               </Card>
             </Card>

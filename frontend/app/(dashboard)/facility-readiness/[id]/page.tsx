@@ -288,23 +288,23 @@ export default function FacilityDetailPage() {
                     Unavailable Actions
                   </div>
                   <p className="mt-4 rounded-[1.25rem] border border-[color:var(--danger)]/16 bg-[color-mix(in_srgb,var(--danger)_8%,white)] px-4 py-3 text-sm leading-6 text-panel-copy dark:bg-[color-mix(in_srgb,var(--danger)_14%,transparent)]">
-                    Calculated context: ORS, staffing, and demand posture on this page are backend-backed summaries. Dispatch and communication routes are not exposed on this page.
+                    Calculated context: ORS, staffing, and demand summaries on this page are backend-backed. Dispatch and communication actions are unavailable on this page.
                   </p>
                   <div className="mt-5 space-y-3">
                     <Button className="w-full justify-center" disabled>
                       <Truck className="size-4" aria-hidden="true" />
-                      {capabilities.can_dispatch ? "Dispatch route exposed" : "Dispatch unavailable"}
+                      Dispatch unavailable on this page
                     </Button>
                     <Button variant="secondary" className="w-full justify-between" disabled>
-                      {capabilities.can_open_chat ? "Facility chat route exposed" : "Facility chat unavailable"}
+                      Facility chat unavailable on this page
                       <span className="text-panel-muted">+</span>
                     </Button>
                     <Button variant="secondary" className="w-full justify-between" disabled>
-                      {capabilities.can_notify_chvs ? "CHV notification route exposed" : "CHV notification unavailable"}
+                      CHV notification unavailable on this page
                       <span className="text-panel-muted">+</span>
                     </Button>
                     <Button variant="danger" className="w-full justify-between" disabled>
-                      {capabilities.can_escalate_county ? "County escalation route exposed" : "County escalation unavailable"}
+                      County escalation unavailable on this page
                       <span>!</span>
                     </Button>
                   </div>
