@@ -7,6 +7,8 @@ import { TriggerAlertPanel } from "@/components/trigger-alert-panel";
 
 const mockUseAuth = vi.fn();
 const mockUseWardsQuery = vi.fn();
+const mockUseTriggerAlertMutation = vi.fn();
+const mockMutateAsync = vi.fn();
 
 vi.mock("@/components/auth-provider", () => ({
   useAuth: () => mockUseAuth(),
@@ -14,6 +16,10 @@ vi.mock("@/components/auth-provider", () => ({
 
 vi.mock("@/queries/use-wards-query", () => ({
   useWardsQuery: (...args: unknown[]) => mockUseWardsQuery(...args),
+}));
+
+vi.mock("@/queries/use-trigger-alert-mutation", () => ({
+  useTriggerAlertMutation: () => mockUseTriggerAlertMutation(),
 }));
 
 describe("TriggerAlertPanel", () => {
@@ -91,9 +97,22 @@ describe("TriggerAlertPanel", () => {
       isPending: false,
       error: null,
     });
+
+    mockUseTriggerAlertMutation.mockReturnValue({
+      mutateAsync: mockMutateAsync,
+      isPending: false,
+      error: null,
+      reset: vi.fn(),
+    });
+
+    mockMutateAsync.mockResolvedValue({
+      message: "Alert task queued successfully.",
+      risk_score_id: 42,
+      task_id: "task-123",
+    });
   });
 
-  it("opens a structured multi-step workflow and completes the UI-only success state", async () => {
+  it("queues a real backend alert trigger and shows the queued response", async () => {
     const user = userEvent.setup();
 
     render(React.createElement(TriggerAlertPanel));
@@ -104,27 +123,25 @@ describe("TriggerAlertPanel", () => {
       expect(mockUseWardsQuery).toHaveBeenCalled();
     });
 
-    expect(screen.getByText("Structured alert workflow")).toBeInTheDocument();
-    expect(screen.getByText("Step 1")).toBeInTheDocument();
-    expect(screen.getByText("Select Target")).toBeInTheDocument();
+    expect(screen.getByText("Queue a real alert trigger")).toBeInTheDocument();
+    expect(screen.getByText("Select one ward")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Continue" }));
-    expect(screen.getByText("Define Alert")).toBeInTheDocument();
+    await user.click(screen.getByText("Alpha Ward").closest("button") as HTMLButtonElement);
+    await user.click(screen.getByRole("button", { name: "Queue Alert" }));
 
-    await user.click(screen.getByRole("button", { name: "Continue" }));
-    expect(screen.getByText("Delivery")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(mockMutateAsync).toHaveBeenCalledWith({
+        ward_id: 1,
+        send_sms: false,
+      });
+    });
 
-    await user.click(screen.getByRole("button", { name: "Continue" }));
-    expect(screen.getByText("Review")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Send Alert" }));
-
-    expect(screen.getByText("Alert sent successfully")).toBeInTheDocument();
-    expect(screen.getByText("ALT-0042")).toBeInTheDocument();
-    expect(screen.getByText("Dispatch Timeline")).toBeInTheDocument();
+    expect(screen.getByText("Alert trigger queued")).toBeInTheDocument();
+    expect(screen.getByText("task-123")).toBeInTheDocument();
+    expect(screen.getByText("42")).toBeInTheDocument();
   });
 
-  it("marks county-wide targeting as restricted for non-admin users", async () => {
+  it("shows the narrowed contract instead of the old county-wide targeting flow", async () => {
     const user = userEvent.setup();
 
     render(React.createElement(TriggerAlertPanel));
@@ -135,8 +152,7 @@ describe("TriggerAlertPanel", () => {
       expect(mockUseWardsQuery).toHaveBeenCalled();
     });
 
-    const countyOption = screen.getByRole("button", { name: /Entire county/i });
-    expect(countyOption.className).toContain("cursor-not-allowed");
-    expect(countyOption.className).toContain("opacity-60");
+    expect(screen.getByText(/richer alert-builder flow has been collapsed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Entire county/i)).not.toBeInTheDocument();
   });
 });
