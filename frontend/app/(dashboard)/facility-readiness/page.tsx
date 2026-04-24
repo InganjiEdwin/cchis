@@ -98,21 +98,21 @@ export default function FacilityReadinessPage() {
   const forecastCases = facilityRows.reduce((sum, row) => sum + row.projectedCases, 0);
   const overloadedFacilities = facilityRows.filter((row) => row.surgeRisk === "EXTREME").length;
   const surgeCardIsCalm = criticalFacilities === 0;
-  const immediateAlertsTitle = immediateAlerts.length ? "Priority Readiness Reviews" : "No Priority Facility Reviews";
+  const immediateAlertsTitle = immediateAlerts.length ? "Readiness Rows In Focus" : "No Facility Rows In Focus";
   const immediateAlertsSubtitle = isLoading
     ? "Checking readiness..."
     : immediateAlerts.length
-      ? `${immediateAlerts.length} derived reviews`
-      : "No high derived readiness pressure visible";
+      ? `${immediateAlerts.length} calculated rows in view`
+      : "No high calculated readiness pressure visible";
   const forecastActionGuidance = overloadedFacilities
-    ? `Action: review derived resupply readiness for ${overloadedFacilities} facilities.`
-    : "Action: continue monitoring derived readiness signals.";
+    ? `Suggested follow-up: check calculated resupply readiness for ${overloadedFacilities} facilities.`
+    : "Suggested follow-up: continue monitoring calculated readiness summaries.";
 
   return (
     <div className="space-y-6">
       <DashboardTopbar
         title="Facility Readiness"
-        subtitle="Real facility registry records with derived readiness estimates for Migori County."
+        subtitle="Facility registry records with calculated readiness estimates for Migori County."
         lastUpdatedLabel={lastUpdatedLabel}
         lastUpdatedTone={freshness.isStale ? "stale" : "default"}
       />
@@ -135,11 +135,11 @@ export default function FacilityReadinessPage() {
                 <Building2 className="size-5" aria-hidden="true" />
               </span>
               <div>
-                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Facilities in scope</span>
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Visible facilities</span>
                 <strong className="mt-2 block text-4xl font-semibold leading-none text-panel-strong">
                   {isLoading ? "..." : activeFacilities}
                 </strong>
-                <small className="mt-3 block text-sm text-panel-muted">Active facilities in view</small>
+                <small className="mt-3 block text-sm text-panel-muted">Facility records in the current view</small>
               </div>
             </div>
           </Card>
@@ -165,13 +165,13 @@ export default function FacilityReadinessPage() {
               </span>
               <div>
                 <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">
-                  {surgeCardIsCalm ? "No facilities at risk" : "Facilities at surge risk"}
+                  {surgeCardIsCalm ? "No facilities in high derived risk" : "Facilities in high derived risk"}
                 </span>
                 <strong className="mt-2 block text-4xl font-semibold leading-none text-panel-strong">
                   {isLoading ? "..." : criticalFacilities}
                 </strong>
                 <small className="mt-3 block text-sm text-panel-muted">
-                  {surgeCardIsCalm ? "No extreme derived readiness pressure in scope" : "Derived resupply review suggested"}
+                  {surgeCardIsCalm ? "No extreme derived readiness pressure in view" : "Calculated readiness review suggested"}
                 </small>
               </div>
             </div>
@@ -201,7 +201,7 @@ export default function FacilityReadinessPage() {
                   Facility Preparedness Matrix
                 </h2>
                 <p className="mt-2 text-sm text-panel-muted">
-                  Real facility records with readiness estimates derived from ward risk and alert activity
+                  Facility records with readiness estimates calculated from ward risk and alert activity
                 </p>
               </div>
 
@@ -415,11 +415,11 @@ export default function FacilityReadinessPage() {
                       <div className="flex items-start justify-between gap-3">
                         <strong className="text-base text-panel-strong">{row.facilityName}</strong>
                         <StatusBadge tone="danger" className="tracking-[0.12em]">
-                          High risk
+                          High derived risk
                         </StatusBadge>
                       </div>
                       <p className="mt-3 text-sm leading-6 text-panel-copy">
-                        Derived readiness pressure is rising in {row.wardName}. Estimated ORS readiness is {row.orsStockPercent}% with projected
+                        Calculated readiness pressure is rising in {row.wardName}. Estimated ORS readiness is {row.orsStockPercent}% with projected
                         case activity at {row.projectedCases}.
                       </p>
                       <button
@@ -437,9 +437,9 @@ export default function FacilityReadinessPage() {
                       <ShieldCheck className="size-4" aria-hidden="true" />
                     </span>
                     <div>
-                      <strong className="block text-base text-panel-strong">No priority facility reviews</strong>
+                      <strong className="block text-base text-panel-strong">No facility rows in focus</strong>
                       <span className="mt-1 block text-sm text-panel-muted">
-                        No high derived readiness pressure is visible across the current facility scope.
+                        No high calculated readiness pressure is visible across the current facility view.
                       </span>
                     </div>
                   </div>
@@ -450,7 +450,7 @@ export default function FacilityReadinessPage() {
             <Card className="rounded-[2rem] px-5 py-5">
               <div>
                 <h2 className="text-2xl font-semibold text-panel-strong">Surge Forecast</h2>
-                <p className="mt-2 text-sm text-panel-muted">Derived 14-day projection from ward risk and recent alert activity</p>
+                <p className="mt-2 text-sm text-panel-muted">Calculated 14-day projection from ward risk and recent alert activity</p>
               </div>
 
               <div className="mt-5 rounded-[1.5rem] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] px-4 py-4">
