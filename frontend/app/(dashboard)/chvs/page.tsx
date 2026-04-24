@@ -307,8 +307,8 @@ export default function ChvsPage() {
       ? `${criticalCoverageGap?.wardName} needs reinforcement`
       : "No wards currently require emergency reassignment",
     broadcast: alerts.length
-      ? `Last broadcast aligned to ${alerts.length} alert records`
-      : "No county-wide broadcast sent in this cycle",
+      ? `${alerts.length} visible alert records are currently in scope`
+      : "No visible alert records are in scope for this cycle",
     training: `${registryRows.filter((row) => row.syncHealth !== "ONLINE").length} CHVs pending protocol refresh`,
   };
 

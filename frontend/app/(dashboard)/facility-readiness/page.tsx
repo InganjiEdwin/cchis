@@ -105,7 +105,7 @@ export default function FacilityReadinessPage() {
       ? `${immediateAlerts.length} derived reviews`
       : "No high derived readiness pressure visible";
   const forecastActionGuidance = overloadedFacilities
-    ? `Action: review dispatch and resupply readiness for ${overloadedFacilities} facilities.`
+    ? `Action: review derived resupply readiness for ${overloadedFacilities} facilities.`
     : "Action: continue monitoring derived readiness signals.";
 
   return (
@@ -427,7 +427,7 @@ export default function FacilityReadinessPage() {
                         className="mt-4 text-sm font-semibold text-panel-muted"
                         disabled
                       >
-                        {row.orsStockPercent < 30 ? "Dispatch workflow pending" : "Facility notify workflow pending"}
+                        {row.orsStockPercent < 30 ? "Derived dispatch review only" : "Facility notification unavailable"}
                       </button>
                     </article>
                   ))

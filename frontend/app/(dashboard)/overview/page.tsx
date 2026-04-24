@@ -148,8 +148,8 @@ export default function OverviewPage() {
         }}
       >
         <TriggerAlertPanel
-          buttonLabel="Trigger Alert"
-          closeLabel="Close Alert Builder"
+          buttonLabel="Open Trigger Flow"
+          closeLabel="Close Trigger Flow"
           buttonClassName="inline-flex h-11 items-center justify-center gap-2 rounded-[0.8rem] bg-[linear-gradient(180deg,#1d6fda_0%,#175fc2_100%)] px-4 text-sm font-semibold text-white shadow-[0_16px_32px_rgba(23,95,194,0.22)] transition hover:-translate-y-px"
         />
       </DashboardTopbar>
