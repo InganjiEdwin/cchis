@@ -416,13 +416,13 @@ export default function WardDetailPage() {
             )}
           </Card>
 
-          <section className="grid gap-6 lg:grid-cols-3">
+          <section className="grid gap-6 lg:grid-cols-2 2xl:grid-cols-3">
             <Card className="space-y-5 p-6">
-              <div className="flex items-center gap-3">
-                <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+              <div className="flex items-start gap-3">
+                <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
                   <MapPinned className="size-5" aria-hidden="true" />
                 </span>
-                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Ward context</h3>
+                <h3 className="pt-1 text-xl font-semibold tracking-[-0.03em] text-panel-strong">Ward context</h3>
               </div>
 
               {isLoading ? (
@@ -453,11 +453,11 @@ export default function WardDetailPage() {
             </Card>
 
             <Card className="space-y-5 p-6">
-              <div className="flex items-center gap-3">
-                <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+              <div className="flex items-start gap-3">
+                <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
                   <MapPinned className="size-5" aria-hidden="true" />
                 </span>
-                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Ward geometry</h3>
+                <h3 className="pt-1 text-xl font-semibold tracking-[-0.03em] text-panel-strong">Ward geometry</h3>
               </div>
 
               <p className="text-sm leading-6 text-panel-muted">
@@ -494,11 +494,11 @@ export default function WardDetailPage() {
             </Card>
 
             <Card className="space-y-5 p-6">
-              <div className="flex items-center gap-3">
-                <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+              <div className="flex items-start gap-3">
+                <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
                   <Clock3 className="size-5" aria-hidden="true" />
                 </span>
-                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Freshness and availability</h3>
+                <h3 className="pt-1 text-xl font-semibold tracking-[-0.03em] text-panel-strong">Freshness and availability</h3>
               </div>
 
               <dl className="grid gap-4">
