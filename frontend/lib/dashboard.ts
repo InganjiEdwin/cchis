@@ -75,6 +75,27 @@ export type ChvRecord = {
   created_at: string;
 };
 
+export type ChvOperationsRecord = {
+  id: number;
+  name: string;
+  phone_number: string;
+  language: string;
+  is_active: boolean;
+  ward: number;
+  ward_name: string;
+  created_at: string;
+  last_sync_at: string | null;
+  last_activity_at: string | null;
+  operational_status: "ACTIVE" | "IDLE" | "OFFLINE";
+  sync_health: "ONLINE" | "DELAYED" | "OFFLINE";
+  triage_sessions_24h: number;
+  referrals_24h: number;
+  sync_payloads_24h: number;
+  ussd_sessions_24h: number;
+  ward_alerts_total: number;
+  ward_alerts_delivered: number;
+};
+
 export type FacilityRecord = {
   id: number;
   public_id: string;
@@ -294,6 +315,10 @@ export async function triggerAlertViaBff(payload: TriggerAlertRequest) {
 
 export async function fetchChvDataViaBff() {
   return requestDashboardRoute<PaginatedResponse<ChvRecord>>("/api/dashboard/chvs");
+}
+
+export async function fetchChvOperationsDataViaBff() {
+  return requestDashboardRoute<ChvOperationsRecord[]>("/api/dashboard/chvs/operations");
 }
 
 export async function fetchFacilityDataViaBff() {

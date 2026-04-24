@@ -32,7 +32,7 @@ import { InputShell } from "@/components/ui/input-shell";
 import { StatusBanner } from "@/components/ui/status-banner";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { cn } from "@/lib/cn";
-import type { AlertRecord, ChvRecord, LatestWardRisk, WardMapFeature } from "@/lib/dashboard";
+import type { LatestWardRisk, WardMapFeature } from "@/lib/dashboard";
 import { describeFreshness, formatRelativeTimestamp, getLatestTimestamp } from "@/lib/freshness";
 import { useChvOperationsQuery } from "@/queries/use-chv-operations-query";
 
@@ -95,19 +95,6 @@ function toRiskZoneLabel(zone: RegistryRiskZone) {
   }
 }
 
-function resolveRegistryStatus(chv: ChvRecord): RegistryStatus {
-  if (!chv.is_active) {
-    return "OFFLINE";
-  }
-
-  const minuteSeed = (chv.id * 17) % 10;
-  if (minuteSeed < 7) {
-    return "ACTIVE";
-  }
-
-  return "IDLE";
-}
-
 function resolveRiskZone(level: string | null | undefined): RegistryRiskZone {
   if (level === "HIGH") {
     return "HIGH";
@@ -128,25 +115,6 @@ function toSyncHealthLabel(syncHealth: SyncHealth) {
     default:
       return "Offline";
   }
-}
-
-function resolveSyncHealth(status: RegistryStatus): SyncHealth {
-  if (status === "ACTIVE") {
-    return "ONLINE";
-  }
-  if (status === "IDLE") {
-    return "DELAYED";
-  }
-  return "OFFLINE";
-}
-
-function formatOperationalTime(timestamp: string) {
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) {
-    return "No sync";
-  }
-
-  return formatRelativeTimestamp(date.toISOString());
 }
 
 function statusTone(status: RegistryStatus) {
@@ -205,7 +173,7 @@ export default function ChvsPage() {
   const latestTimestamp = useMemo(
     () =>
       getLatestTimestamp([
-        ...chvs.map((item) => item.created_at),
+        ...chvs.flatMap((item) => [item.created_at, item.last_activity_at, item.last_sync_at].filter(Boolean)),
         ...latestRisks.map((item) => item.generated_at),
         ...alerts.map((item) => item.created_at),
       ]),
@@ -225,16 +193,6 @@ export default function ChvsPage() {
     });
     return map;
   }, [latestRisks]);
-
-  const alertsByWard = useMemo(() => {
-    const map = new Map<string, AlertRecord[]>();
-    alerts.forEach((alert) => {
-      const existing = map.get(alert.ward_name) ?? [];
-      existing.push(alert);
-      map.set(alert.ward_name, existing);
-    });
-    return map;
-  }, [alerts]);
 
   const wardsForFilter = useMemo(
     () => [
@@ -259,7 +217,7 @@ export default function ChvsPage() {
         return false;
       }
 
-      const status = resolveRegistryStatus(chv);
+      const status = chv.operational_status;
       if (quickFilter === "ACTIVE" && status !== "ACTIVE") return false;
       if (quickFilter === "IDLE" && status !== "IDLE") return false;
       if (quickFilter === "OFFLINE" && status !== "OFFLINE") return false;
@@ -282,40 +240,32 @@ export default function ChvsPage() {
   }, [focusFilter, quickFilter, search, selectedWard]);
 
   const totalChvs = chvs.length;
-  const activeChvs = filteredChvs.filter((item) => item.is_active).length;
+  const activeChvs = filteredChvs.filter((item) => item.operational_status === "ACTIVE").length;
   const acknowledgedRate = alerts.length
     ? (alerts.filter((item) => item.status === "DELIVERED").length / alerts.length) * 100
     : 0;
-  const highUrgencyCases = latestRisks.reduce((sum, item) => sum + (item.predicted_cases || 0), 0);
+  const highUrgencyCases = filteredChvs.reduce((sum, item) => sum + item.triage_sessions_24h, 0);
 
   const registryRows = useMemo<RegistryRow[]>(() => {
     return filteredChvs.map((chv) => {
-      const wardAlerts = alertsByWard.get(chv.ward_name) ?? [];
-      const status = resolveRegistryStatus(chv);
-
       return {
         id: chv.id,
         initials: getInitials(chv.name),
         name: chv.name,
-        rosterId: `ID: ${String(4200 + chv.id).padStart(4, "0")}-MGR`,
+        rosterId: `Phone ${chv.phone_number}`,
         wardName: chv.ward_name,
-        status,
-        alertsRaised: wardAlerts.length,
-        alertsAcknowledged: wardAlerts.filter((item) => item.status === "DELIVERED").length,
-        lastSync:
-          status === "ACTIVE"
-            ? `${((chv.id * 2) % 9) + 2} mins ago`
-            : status === "IDLE"
-              ? `${((chv.id * 7) % 20) + 10} mins ago`
-              : formatOperationalTime(chv.created_at),
+        status: chv.operational_status,
+        alertsRaised: chv.ward_alerts_total,
+        alertsAcknowledged: chv.ward_alerts_delivered,
+        lastSync: chv.last_sync_at ? formatRelativeTimestamp(chv.last_sync_at) : "No sync recorded",
         riskZone: resolveRiskZone(riskByWard.get(chv.ward_name)?.risk_level),
-        syncHealth: resolveSyncHealth(status),
+        syncHealth: chv.sync_health,
         phoneNumber: chv.phone_number,
         language: chv.language,
-        lastProtocolUpdate: `${((chv.id * 3) % 6) + 1} days ago`,
+        lastProtocolUpdate: chv.last_activity_at ? formatRelativeTimestamp(chv.last_activity_at) : "No recent activity",
       };
     });
-  }, [alertsByWard, filteredChvs, riskByWard]);
+  }, [filteredChvs, riskByWard]);
 
   const selectedChv = useMemo(
     () => registryRows.find((row) => row.id === selectedChvId) ?? null,
@@ -328,7 +278,7 @@ export default function ChvsPage() {
 
   const criticalCoverageGap = useMemo(() => {
     const wardCounts = chvs.reduce((map, chv) => {
-      map.set(chv.ward_name, (map.get(chv.ward_name) ?? 0) + (chv.is_active ? 1 : 0));
+      map.set(chv.ward_name, (map.get(chv.ward_name) ?? 0) + (chv.operational_status === "ACTIVE" ? 1 : 0));
       return map;
     }, new Map<string, number>());
 
@@ -350,7 +300,7 @@ export default function ChvsPage() {
   const hasCriticalCoverageGap = Boolean(criticalCoverageGap);
   const highPriorityReferrals = latestRisks
     .filter((item) => item.risk_level === "HIGH")
-    .reduce((sum, item) => sum + Math.max(1, Math.ceil(item.predicted_cases / 2)), 0);
+    .reduce((sum, item) => sum + filteredChvs.filter((chv) => chv.ward_name === item.ward_name).reduce((chvSum, chv) => chvSum + chv.referrals_24h, 0), 0);
   const activeReportingRate = totalChvs ? Math.round((activeChvs / totalChvs) * 100) : 0;
   const commandStatus = {
     assign: hasCriticalCoverageGap
@@ -731,14 +681,14 @@ export default function ChvsPage() {
               <table className="min-w-full divide-y divide-panel-table-wrap text-sm">
                 <thead className="bg-[color-mix(in_srgb,var(--dashboard-table-line)_30%,transparent)]">
                   <tr className="text-left">
-                    {[
-                      "Volunteer name",
-                      "Ward",
-                      "Status",
-                      "Alerts (Received/Ack)",
-                      "Sync health",
-                      "Last sync",
-                      "Ward risk",
+              {[
+                  "Volunteer name",
+                  "Ward",
+                  "Status",
+                  "Ward alerts (Total/Delivered)",
+                  "Sync health",
+                  "Last sync",
+                  "Ward risk",
                       "Action",
                     ].map((label) => (
                       <th
@@ -888,7 +838,7 @@ export default function ChvsPage() {
                   {[
                     ["Status", toTitleStatus(selectedChv.status)],
                     ["Sync health", toSyncHealthLabel(selectedChv.syncHealth)],
-                    ["Alerts", `${selectedChv.alertsRaised} received / ${selectedChv.alertsAcknowledged} acknowledged`],
+                    ["Ward alerts", `${selectedChv.alertsRaised} total / ${selectedChv.alertsAcknowledged} delivered`],
                     ["Ward risk", toRiskZoneLabel(selectedChv.riskZone)],
                   ].map(([label, value]) => (
                     <Card key={label} className="rounded-2xl px-4 py-4 shadow-none">
@@ -927,11 +877,9 @@ export default function ChvsPage() {
                 <Card className="rounded-2xl px-4 py-4 shadow-none">
                   <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-panel-subtle">Operational activity</h3>
                   <p className="mt-3 text-sm leading-6 text-panel-copy">
-                    Recent case reports remain tied to {selectedChv.wardName}. Last protocol update was{" "}
-                    {selectedChv.lastProtocolUpdate}, and this CHV is currently
-                    {selectedChv.status === "ACTIVE"
-                      ? " available for immediate field engagement."
-                      : " not yet at immediate field readiness."}
+                    Recent activity for {selectedChv.wardName} now comes from backend sync, triage, and USSD traces. Last activity was{" "}
+                    {selectedChv.lastProtocolUpdate}, and this CHV is currently{" "}
+                    {selectedChv.status === "ACTIVE" ? "showing current operational activity." : "not showing current operational activity."}
                   </p>
                 </Card>
               </div>

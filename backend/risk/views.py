@@ -15,6 +15,7 @@ from .map_data import build_migori_ward_map_summary
 from .serializers import (
     AlertSerializer,
     CHVSerializer,
+    CHVOperationsSerializer,
     CHVSyncRequestSerializer,
     CHVTriageRequestSerializer,
     CHVTriageResponseSerializer,
@@ -26,6 +27,7 @@ from .serializers import (
     WardSerializer,
 )
 from .services import (
+    build_chv_operations_snapshot,
     create_triage_session,
     latest_riskscore_for_ward,
     process_sync_payload,
@@ -118,6 +120,17 @@ class CHVListAPIView(generics.ListAPIView):
         if is_active is not None:
             queryset = queryset.filter(is_active=is_active)
         return queryset
+
+
+class CHVOperationsAPIView(APIView):
+    permission_classes = [IsAdminOrSupervisor]
+
+    def get(self, request):
+        queryset = CHV.objects.select_related("ward").order_by("name")
+        scoped_queryset = apply_ward_scope_or_none(queryset, request.user)
+        payload = build_chv_operations_snapshot(scoped_queryset)
+        serializer = CHVOperationsSerializer(payload, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class HealthFacilityListAPIView(generics.ListAPIView):

@@ -82,6 +82,27 @@ class CHVSerializer(serializers.ModelSerializer):
         ]
 
 
+class CHVOperationsSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    phone_number = serializers.CharField()
+    language = serializers.CharField()
+    is_active = serializers.BooleanField()
+    ward = serializers.IntegerField()
+    ward_name = serializers.CharField()
+    created_at = serializers.DateTimeField()
+    last_sync_at = serializers.DateTimeField(allow_null=True)
+    last_activity_at = serializers.DateTimeField(allow_null=True)
+    operational_status = serializers.ChoiceField(choices=["ACTIVE", "IDLE", "OFFLINE"])
+    sync_health = serializers.ChoiceField(choices=["ONLINE", "DELAYED", "OFFLINE"])
+    triage_sessions_24h = serializers.IntegerField()
+    referrals_24h = serializers.IntegerField()
+    sync_payloads_24h = serializers.IntegerField()
+    ussd_sessions_24h = serializers.IntegerField()
+    ward_alerts_total = serializers.IntegerField()
+    ward_alerts_delivered = serializers.IntegerField()
+
+
 class HealthFacilitySerializer(serializers.ModelSerializer):
     ward_name = serializers.CharField(source="ward.name", read_only=True)
     sub_county = serializers.CharField(source="ward.sub_county", read_only=True)

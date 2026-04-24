@@ -2,9 +2,10 @@ import logging
 from datetime import timedelta
 
 from decouple import config
+from django.db.models import Count, Max, Q
 from django.utils import timezone
 
-from .models import Alert, CHV, HealthFacility, RiskScore, SyncQueue, TriageSession, Ward
+from .models import Alert, CHV, HealthFacility, RiskScore, SyncQueue, TriageSession, UssdSessionLog, Ward
 from .providers import DeliveryResult, get_sms_provider
 
 
@@ -297,3 +298,106 @@ def process_sync_payload(
         sync_item.processed_at = timezone.now()
         sync_item.save(update_fields=["status", "error_message", "processed_at"])
         raise
+
+
+def _derive_operational_status(is_active: bool, last_activity_at):
+    if not is_active:
+        return "OFFLINE"
+    if not last_activity_at:
+        return "IDLE"
+
+    age = timezone.now() - last_activity_at
+    if age <= timedelta(hours=1):
+        return "ACTIVE"
+    if age <= timedelta(hours=24):
+        return "IDLE"
+    return "OFFLINE"
+
+
+def _derive_sync_health(last_sync_at):
+    if not last_sync_at:
+        return "OFFLINE"
+
+    age = timezone.now() - last_sync_at
+    if age <= timedelta(minutes=30):
+        return "ONLINE"
+    if age <= timedelta(hours=6):
+        return "DELAYED"
+    return "OFFLINE"
+
+
+def build_chv_operations_snapshot(chv_queryset) -> list[dict]:
+    now = timezone.now()
+    since_24h = now - timedelta(hours=24)
+    chvs = list(chv_queryset.select_related("ward"))
+    phone_numbers = [chv.phone_number for chv in chvs if chv.phone_number]
+    ward_ids = [chv.ward_id for chv in chvs]
+
+    sync_rows = SyncQueue.objects.filter(phone_number__in=phone_numbers).values("phone_number").annotate(
+        latest_activity=Max("created_at"),
+        latest_sync=Max("processed_at"),
+        sync_payloads_24h=Count("id", filter=Q(created_at__gte=since_24h)),
+    )
+    triage_rows = TriageSession.objects.filter(phone_number__in=phone_numbers).values("phone_number").annotate(
+        latest_activity=Max("created_at"),
+        triage_sessions_24h=Count("id", filter=Q(created_at__gte=since_24h)),
+        referrals_24h=Count("id", filter=Q(created_at__gte=since_24h, referral_needed=True)),
+    )
+    ussd_rows = UssdSessionLog.objects.filter(phone_number__in=phone_numbers).values("phone_number").annotate(
+        latest_activity=Max("created_at"),
+        ussd_sessions_24h=Count("id", filter=Q(created_at__gte=since_24h)),
+    )
+    alert_rows = Alert.objects.filter(ward_id__in=ward_ids).values("ward_id").annotate(
+        total=Count("id"),
+        delivered=Count("id", filter=Q(status=Alert.STATUS_DELIVERED)),
+    )
+
+    sync_by_phone = {row["phone_number"]: row for row in sync_rows}
+    triage_by_phone = {row["phone_number"]: row for row in triage_rows}
+    ussd_by_phone = {row["phone_number"]: row for row in ussd_rows}
+    alerts_by_ward = {row["ward_id"]: row for row in alert_rows}
+
+    snapshot = []
+    for chv in chvs:
+        sync_row = sync_by_phone.get(chv.phone_number, {})
+        triage_row = triage_by_phone.get(chv.phone_number, {})
+        ussd_row = ussd_by_phone.get(chv.phone_number, {})
+        ward_alert_row = alerts_by_ward.get(chv.ward_id, {})
+
+        last_sync_at = sync_row.get("latest_sync")
+        candidate_activity_times = [
+            value
+            for value in [
+                last_sync_at,
+                sync_row.get("latest_activity"),
+                triage_row.get("latest_activity"),
+                ussd_row.get("latest_activity"),
+            ]
+            if value
+        ]
+        last_activity_at = max(candidate_activity_times) if candidate_activity_times else None
+
+        snapshot.append(
+            {
+                "id": chv.id,
+                "name": chv.name,
+                "phone_number": chv.phone_number,
+                "language": chv.language,
+                "is_active": chv.is_active,
+                "ward": chv.ward_id,
+                "ward_name": chv.ward.name,
+                "created_at": chv.created_at,
+                "last_sync_at": last_sync_at,
+                "last_activity_at": last_activity_at,
+                "operational_status": _derive_operational_status(chv.is_active, last_activity_at),
+                "sync_health": _derive_sync_health(last_sync_at),
+                "triage_sessions_24h": triage_row.get("triage_sessions_24h", 0),
+                "referrals_24h": triage_row.get("referrals_24h", 0),
+                "sync_payloads_24h": sync_row.get("sync_payloads_24h", 0),
+                "ussd_sessions_24h": ussd_row.get("ussd_sessions_24h", 0),
+                "ward_alerts_total": ward_alert_row.get("total", 0),
+                "ward_alerts_delivered": ward_alert_row.get("delivered", 0),
+            }
+        )
+
+    return snapshot

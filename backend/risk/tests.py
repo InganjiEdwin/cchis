@@ -2409,6 +2409,73 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["ward"], self.other_ward.id)
 
+    def test_admin_can_view_chv_operations_snapshot(self):
+        UssdSessionLog.objects.create(
+            session_id="sess-001",
+            phone_number=self.chv.phone_number,
+            ward=self.ward,
+            text="1*2",
+            response_text="OK",
+            menu_level="advice",
+        )
+        TriageSession.objects.create(
+            channel="API",
+            phone_number=self.chv.phone_number,
+            ward=self.ward,
+            referral_facility=self.health_facility,
+            recommendation="Refer now",
+            referral_needed=True,
+        )
+        SyncQueue.objects.create(
+            source_device_id="device-1",
+            client_submission_id="sync-001",
+            phone_number=self.chv.phone_number,
+            ward=self.ward,
+            payload={"client_submission_id": "sync-001"},
+            status=SyncQueue.STATUS_PROCESSED,
+            processed_at=timezone.now(),
+        )
+        Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="dashboard",
+            message="Ward alert",
+            status=Alert.STATUS_DELIVERED,
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.get(reverse("chv-operations"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        row = response.data[0]
+        self.assertEqual(row["id"], self.chv.id)
+        self.assertEqual(row["operational_status"], "ACTIVE")
+        self.assertEqual(row["sync_health"], "ONLINE")
+        self.assertEqual(row["triage_sessions_24h"], 1)
+        self.assertEqual(row["referrals_24h"], 1)
+        self.assertEqual(row["sync_payloads_24h"], 1)
+        self.assertEqual(row["ussd_sessions_24h"], 1)
+        self.assertEqual(row["ward_alerts_total"], 1)
+        self.assertEqual(row["ward_alerts_delivered"], 1)
+
+    def test_supervisor_chv_operations_snapshot_is_scoped_to_assigned_ward(self):
+        CHV.objects.create(
+            name="Other Ward CHV",
+            phone_number="+254700000010",
+            ward=self.other_ward,
+            is_active=True,
+            language="en",
+        )
+
+        self.authenticate(self.supervisor_user.username)
+        response = self.client.get(reverse("chv-operations"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["ward"], self.other_ward.id)
+
     def test_analyst_can_list_facilities(self):
         self.authenticate(self.analyst_user.username)
         response = self.client.get(reverse("facility-list"))

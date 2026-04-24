@@ -2,6 +2,7 @@ from django.urls import path
 from .views import (
     AlertDetailAPIView,
     AlertListAPIView,
+    CHVOperationsAPIView,
     CHVListAPIView,
     CHVSyncAPIView,
     CHVTriageAPIView,
@@ -21,6 +22,7 @@ urlpatterns = [
     path("wards/", WardListAPIView.as_view(), name="ward-list"),
     path("wards/<int:pk>/", WardDetailAPIView.as_view(), name="ward-detail"),
     path("chvs/", CHVListAPIView.as_view(), name="chv-list"),
+    path("chvs/operations/", CHVOperationsAPIView.as_view(), name="chv-operations"),
     path("facilities/", HealthFacilityListAPIView.as_view(), name="facility-list"),
     path("facilities/<int:pk>/", HealthFacilityDetailAPIView.as_view(), name="facility-detail"),
     path("risk-scores/", RiskScoreListAPIView.as_view(), name="risk-score-list"),
