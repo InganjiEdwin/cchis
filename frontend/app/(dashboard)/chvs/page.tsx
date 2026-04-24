@@ -304,8 +304,8 @@ export default function ChvsPage() {
   const activeReportingRate = totalChvs ? Math.round((activeChvs / totalChvs) * 100) : 0;
   const commandStatus = {
     assign: hasCriticalCoverageGap
-      ? `${criticalCoverageGap?.wardName} shows the strongest visible coverage signal`
-      : "No visible wards show a coverage signal",
+      ? `${criticalCoverageGap?.wardName} stands out in the visible coverage summary`
+      : "No visible wards stand out in the coverage summary",
     broadcast: alerts.length
       ? `${alerts.length} visible alert records are in this scope`
       : "No visible alert records are in this scope",
@@ -397,7 +397,7 @@ export default function ChvsPage() {
               Recorded triage sessions (24h)
             </span>
             <div className="mt-3 text-4xl font-semibold leading-none text-panel-strong">{casesVisibleLabel}</div>
-            <p className="mt-4 text-sm text-panel-muted">{highPriorityReferrals.toLocaleString()} referrals in high-risk wards (derived)</p>
+            <p className="mt-4 text-sm text-panel-muted">{highPriorityReferrals.toLocaleString()} referrals in high-risk wards (calculated)</p>
           </Card>
         </section>
 
@@ -544,7 +544,7 @@ export default function ChvsPage() {
                 {[
                   {
                     icon: Users2,
-                    title: "Ward coverage signal",
+                    title: "Ward coverage summary",
                     detail: commandStatus.assign,
                   },
                   {
@@ -554,7 +554,7 @@ export default function ChvsPage() {
                   },
                   {
                     icon: BriefcaseMedical,
-                    title: "Training status signal",
+                    title: "Training status summary",
                     detail: commandStatus.training,
                   },
                 ].map((item) => (
@@ -597,7 +597,7 @@ export default function ChvsPage() {
                   <ShieldAlert className="size-4" aria-hidden="true" />
                 </span>
                 <h3 className="text-xl font-semibold text-panel-strong">
-                  {hasCriticalCoverageGap ? "Coverage Flag" : "Coverage Summary"}
+                  {hasCriticalCoverageGap ? "Coverage Note" : "Coverage Summary"}
                 </h3>
               </div>
               <p className="mt-4 text-sm leading-6 text-panel-copy">
