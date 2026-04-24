@@ -878,30 +878,30 @@ export default function ChvsPage() {
                 </Card>
 
                 <Card className="rounded-2xl px-4 py-4 shadow-none">
-                  <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-panel-subtle">Operational activity</h3>
+                  <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-panel-subtle">Recorded activity</h3>
                   <p className="mt-3 text-sm leading-6 text-panel-copy">
-                    Recent activity for {selectedChv.wardName} now comes from backend sync, triage, and USSD traces. Last activity was{" "}
-                    {selectedChv.lastProtocolUpdate}, and this CHV is currently{" "}
-                    {selectedChv.status === "ACTIVE" ? "showing current operational activity." : "not showing current operational activity."}
+                    Recent activity for {selectedChv.wardName} is derived from backend sync, triage, and USSD traces. Last activity was{" "}
+                    {selectedChv.lastProtocolUpdate}, and this CHV is currently marked as{" "}
+                    {selectedChv.status === "ACTIVE" ? "active in visible records." : selectedChv.status === "IDLE" ? "idle in visible records." : "offline in visible records."}
                   </p>
                 </Card>
               </div>
 
               <div className="flex flex-col gap-3 border-t border-panel-table-wrap px-5 py-5 sm:px-6">
                 <p className="text-sm text-panel-muted">
-                  Messaging, reassignment, and detailed history actions are still pending backend workflow support from this screen.
+                  Messaging, reassignment, and detailed history actions are unavailable from this screen because the corresponding backend workflows are not exposed here.
                 </p>
                 <Button className="w-full justify-center" disabled>
                   <BellRing className="size-4" aria-hidden="true" />
-                  Send message pending
+                  Messaging unavailable
                 </Button>
                 <Button variant="secondary" className="w-full justify-center" disabled>
                   <Users2 className="size-4" aria-hidden="true" />
-                  Reassign ward pending
+                  Reassignment unavailable
                 </Button>
                 <Button variant="secondary" className="w-full justify-center" disabled>
                   <Activity className="size-4" aria-hidden="true" />
-                  View activity history pending
+                  Activity history unavailable
                 </Button>
               </div>
             </aside>
