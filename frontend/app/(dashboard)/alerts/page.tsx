@@ -1006,14 +1006,18 @@ export default function AlertsPage() {
         </Card>
 
         <Card className="rounded-[2rem] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--brand)_10%,var(--panel)),var(--panel))] px-5 py-5">
-          <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Intelligence signal</span>
+          <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Current signal</span>
           <strong className="mt-3 block text-2xl leading-tight text-panel-strong">
             {mostCriticalAlert
-              ? `${Math.max(72, Math.round((mostCriticalAlert.risk_score ?? 0) * 0.9))}% alert trigger probability`
-              : "No high-confidence alert signal"}
+              ? `${mostCriticalAlert.severityLabel} in ${mostCriticalAlert.ward_name}`
+              : "No priority alert signal in scope"}
           </strong>
           <p className="mt-3 text-sm text-panel-muted">
-            {alertFreshness.isStale ? "Data quality: review freshness" : "Data quality: good"}
+            {mostCriticalAlert
+              ? `Latest recorded risk score: ${mostCriticalAlert.risk_score !== null ? Math.round(mostCriticalAlert.risk_score) : "Unavailable"}`
+              : alertFreshness.isStale
+                ? "Review feed freshness before treating this panel as current."
+                : "No visible alert record currently stands out in the filtered scope."}
           </p>
         </Card>
       </section>
