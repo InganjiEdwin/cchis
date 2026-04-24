@@ -217,10 +217,10 @@ export default function SetupTwoFactorPage() {
           <div className="mt-6 flex flex-col items-center gap-3 text-sm">
             <button type="button" className="inline-flex items-center gap-2 text-[var(--totp-link-muted)] transition hover:text-[var(--totp-link)]" onClick={handleBack}>
               <ArrowLeft className="size-4" aria-hidden="true" />
-              Back
+              Back to profile summary
             </button>
             <Link href={currentUser ? "/profile" : "/login"} className="text-[var(--totp-link-muted)] transition hover:text-[var(--totp-link)]">
-              Return without completing setup
+              Return to profile summary without completing setup
             </Link>
           </div>
         </div>

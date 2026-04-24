@@ -67,7 +67,7 @@ export function DashboardSidebar() {
       <Link
         href="/profile"
         className="group flex cursor-pointer items-center gap-3 rounded-2xl border-t border-[var(--dashboard-sidebar-border)] px-2 pb-0 pt-4 transition hover:bg-[var(--dashboard-nav-hover)]"
-        aria-label="Open profile"
+        aria-label="Open profile summary"
       >
         <div
           className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-[var(--dashboard-sidebar-icon-surface)] text-[var(--dashboard-sidebar-icon-ink)] transition group-hover:text-[var(--dashboard-sidebar-title)]"
