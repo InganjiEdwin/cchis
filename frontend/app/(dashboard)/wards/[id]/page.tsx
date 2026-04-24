@@ -12,46 +12,33 @@ import {
   MapPinned,
   Minus,
   ShieldAlert,
-  Zap,
   Waves,
+  Zap,
 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import { useAuth } from "@/components/auth-provider";
 import { DashboardTopbar } from "@/components/dashboard-topbar";
 import { TriggerAlertPanel } from "@/components/trigger-alert-panel";
-import {
-  fetchWardDetailViaBff,
-  type AlertRecord,
-  type RiskScoreRecord,
-} from "@/lib/dashboard";
+import { Card } from "@/components/ui/card";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { cn } from "@/lib/cn";
+import type { AlertRecord, RiskScoreRecord } from "@/lib/dashboard";
 import { canTriggerAlerts } from "@/lib/roles";
+import {
+  type WardDetailState,
+  type WardRiskLevel,
+  useWardDetailQuery,
+} from "@/queries/use-ward-detail-query";
 
-type WardRiskLevel = "LOW" | "MEDIUM" | "HIGH" | "UNKNOWN";
 type DriverTone = "critical" | "warning" | "watch";
 
 type RiskDriver = {
   icon: "rainfall" | "flood" | "outbreak" | "status";
   text: string;
   tone: DriverTone;
-};
-
-type WardDetailState = {
-  wardId: number;
-  wardName: string;
-  wardCode: string | null;
-  county: string;
-  subCounty: string;
-  riskLevel: WardRiskLevel;
-  riskScore: number | null;
-  predictedCases: number;
-  updatedAt: string | null;
-  source: string | null;
-  modelVersion: string | null;
-  riskHistory: RiskScoreRecord[];
-  relatedAlerts: AlertRecord[];
 };
 
 const STALE_THRESHOLD_MINUTES = 120;
@@ -74,65 +61,38 @@ function formatRiskScore(score: number | null) {
 }
 
 function formatRelativeMinutes(timestamp: string | null) {
-  if (!timestamp) {
-    return "No recent update";
-  }
+  if (!timestamp) return "No recent update";
 
   const date = new Date(timestamp);
-
-  if (Number.isNaN(date.getTime())) {
-    return "Invalid timestamp";
-  }
+  if (Number.isNaN(date.getTime())) return "Invalid timestamp";
 
   const diffMinutes = Math.max(0, Math.round((Date.now() - date.getTime()) / 60000));
-
-  if (diffMinutes < 1) {
-    return "Just now";
-  }
-  if (diffMinutes === 1) {
-    return "1 min ago";
-  }
-  if (diffMinutes < 60) {
-    return `${diffMinutes} min ago`;
-  }
+  if (diffMinutes < 1) return "Just now";
+  if (diffMinutes === 1) return "1 min ago";
+  if (diffMinutes < 60) return `${diffMinutes} min ago`;
 
   const diffHours = Math.round(diffMinutes / 60);
-
-  if (diffHours === 1) {
-    return "1 hr ago";
-  }
-  if (diffHours < 24) {
-    return `${diffHours} hr ago`;
-  }
+  if (diffHours === 1) return "1 hr ago";
+  if (diffHours < 24) return `${diffHours} hr ago`;
 
   const diffDays = Math.round(diffHours / 24);
   return `${diffDays} d ago`;
 }
 
 function formatOperationalTime(timestamp: string | null) {
-  if (!timestamp) {
-    return "No timestamp";
-  }
+  if (!timestamp) return "No timestamp";
 
   const date = new Date(timestamp);
-
-  if (Number.isNaN(date.getTime())) {
-    return "Invalid timestamp";
-  }
+  if (Number.isNaN(date.getTime())) return "Invalid timestamp";
 
   return `${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} (${formatRelativeMinutes(timestamp)})`;
 }
 
 function isStaleTimestamp(timestamp: string | null) {
-  if (!timestamp) {
-    return true;
-  }
+  if (!timestamp) return true;
 
   const date = new Date(timestamp);
-
-  if (Number.isNaN(date.getTime())) {
-    return true;
-  }
+  if (Number.isNaN(date.getTime())) return true;
 
   return (Date.now() - date.getTime()) / 60000 > STALE_THRESHOLD_MINUTES;
 }
@@ -252,14 +212,14 @@ function buildRiskDrivers(detail: WardDetailState | null): RiskDriver[] {
 function getRiskDriverIcon(driver: RiskDriver) {
   switch (driver.icon) {
     case "rainfall":
-      return <Droplets aria-hidden="true" />;
+      return <Droplets className="size-4" aria-hidden="true" />;
     case "flood":
-      return <Waves aria-hidden="true" />;
+      return <Waves className="size-4" aria-hidden="true" />;
     case "outbreak":
-      return <History aria-hidden="true" />;
+      return <History className="size-4" aria-hidden="true" />;
     case "status":
     default:
-      return <Clock3 aria-hidden="true" />;
+      return <Clock3 className="size-4" aria-hidden="true" />;
   }
 }
 
@@ -295,7 +255,6 @@ function getSafeReturnTo(value: string | null) {
   if (!value) {
     return "/wards";
   }
-
   return value.startsWith("/wards") ? value : "/wards";
 }
 
@@ -303,112 +262,40 @@ function getHistoryTrendIcon(index: number, history: RiskScoreRecord[]) {
   const current = history[index];
   const previous = history[index + 1];
 
-  if (!current || !previous) {
-    return "flat" as const;
-  }
-
-  if (normalizeRiskScore(current.score) > normalizeRiskScore(previous.score)) {
-    return "up" as const;
-  }
-
-  if (normalizeRiskScore(current.score) < normalizeRiskScore(previous.score)) {
-    return "down" as const;
-  }
-
+  if (!current || !previous) return "flat" as const;
+  if (normalizeRiskScore(current.score) > normalizeRiskScore(previous.score)) return "up" as const;
+  if (normalizeRiskScore(current.score) < normalizeRiskScore(previous.score)) return "down" as const;
   return "flat" as const;
+}
+
+function getRiskBadgeTone(level: WardRiskLevel) {
+  if (level === "HIGH") return "danger" as const;
+  if (level === "MEDIUM") return "warning" as const;
+  if (level === "LOW") return "success" as const;
+  return "default" as const;
 }
 
 export default function WardDetailPage() {
   const params = useParams<{ id: string }>();
   const searchParams = useSearchParams();
   const { currentUser } = useAuth();
-  const [detail, setDetail] = useState<WardDetailState | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isHistoryLoading, setIsHistoryLoading] = useState(true);
-  const [isAlertsLoading, setIsAlertsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [historyError, setHistoryError] = useState<string | null>(null);
-  const [alertsError, setAlertsError] = useState<string | null>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
-
   const wardId = useMemo(() => Number(params.id), [params.id]);
   const returnTo = useMemo(() => getSafeReturnTo(searchParams.get("returnTo")), [searchParams]);
-
-  useEffect(() => {
-    if (!currentUser || !Number.isFinite(wardId)) {
-      return;
-    }
-    let isActive = true;
-
-    async function loadDetail() {
-      setIsLoading(true);
-      setIsHistoryLoading(true);
-      setIsAlertsLoading(true);
-      setError(null);
-      setHistoryError(null);
-      setAlertsError(null);
-
-      try {
-        const response = await fetchWardDetailViaBff(wardId);
-
-        if (!isActive) {
-          return;
-        }
-
-        const riskHistory = response.riskHistory.results;
-        const relatedAlerts = response.alerts.results;
-        const latestHistory = riskHistory[0] ?? null;
-
-        setDetail({
-          wardId,
-          wardName: response.ward.name,
-          wardCode: response.ward.ward_code ?? null,
-          county: response.ward.county,
-          subCounty: response.ward.sub_county,
-          riskLevel:
-            latestHistory?.risk_level ??
-            response.ward.current_risk_level ??
-            "UNKNOWN",
-          riskScore:
-            latestHistory?.score ??
-            response.ward.current_risk_score ??
-            null,
-          predictedCases: latestHistory?.predicted_cases ?? response.ward.predicted_cases ?? 0,
-          updatedAt:
-            latestHistory?.generated_at ??
-            response.ward.latest_generated_at ??
-            response.ward.updated_at ??
-            null,
-          source: latestHistory?.source ?? response.ward.latest_source ?? null,
-          modelVersion: latestHistory?.model_version ?? response.ward.latest_model_version ?? null,
-          riskHistory,
-          relatedAlerts,
-        });
-      } catch (loadError) {
-        if (!isActive) {
-          return;
-        }
-
-        setDetail(null);
-        setError(loadError instanceof Error ? loadError.message : "Unable to load ward detail.");
-      } finally {
-        if (isActive) {
-          setIsLoading(false);
-          setIsHistoryLoading(false);
-          setIsAlertsLoading(false);
-        }
-      }
-    }
-
-    void loadDetail();
-
-    return () => {
-      isActive = false;
-    };
-  }, [currentUser, refreshKey, wardId]);
+  const wardDetailQuery = useWardDetailQuery({
+    wardId,
+    enabled: Boolean(currentUser) && Number.isFinite(wardId),
+  });
+  const detail = wardDetailQuery.data ?? null;
+  const isLoading = wardDetailQuery.isPending;
+  const isRefreshing = wardDetailQuery.isFetching;
+  const isHistoryLoading = wardDetailQuery.isPending;
+  const isAlertsLoading = wardDetailQuery.isPending;
+  const error = wardDetailQuery.error instanceof Error ? wardDetailQuery.error.message : null;
+  const historyError = null;
+  const alertsError = null;
 
   const isStale = isStaleTimestamp(detail?.updatedAt ?? null);
-  const topbarTimestampLabel = isLoading
+  const topbarTimestampLabel = isRefreshing
     ? "Refreshing..."
     : `${formatOperationalTime(detail?.updatedAt ?? null)}${isStale ? " · Stale" : ""}`;
   const trend = getTrend(detail);
@@ -416,55 +303,64 @@ export default function WardDetailPage() {
   const recommendations = buildOperationalRecommendations(detail?.riskLevel ?? "UNKNOWN");
   const latestAlert = detail?.relatedAlerts[0] ?? null;
   const dataCoverageScore =
-    (detail ? 25 : 0) +
-    (!isStale ? 25 : 0) +
-    (!historyError ? 25 : 0) +
-    (!alertsError ? 25 : 0);
+    (detail ? 25 : 0) + (!isStale ? 25 : 0) + (!historyError ? 25 : 0) + (!alertsError ? 25 : 0);
 
   if (!currentUser) {
     return null;
   }
 
   return (
-    <div className="wards-dashboard ward-detail-dashboard">
+    <div className="space-y-6">
       <DashboardTopbar
         title="Ward Detail"
         subtitle={detail ? `${detail.county} County operational view` : "Migori County operational view"}
         lastUpdatedLabel={topbarTimestampLabel}
         lastUpdatedTone={isStale ? "stale" : "default"}
-        onRefresh={() => setRefreshKey((value) => value + 1)}
+        onRefresh={() => {
+          void wardDetailQuery.refetch();
+        }}
       />
 
       {error ? (
-        <div className="status status-error">
-          <AlertTriangle className="section-icon" aria-hidden="true" />
+        <div className="rounded-2xl border border-[color-mix(in_srgb,var(--danger)_20%,white)] bg-[color-mix(in_srgb,var(--danger)_10%,white)] px-4 py-3 text-sm font-medium text-[color:var(--danger)]">
+          <AlertTriangle className="mr-2 inline-flex size-4" aria-hidden="true" />
           {error}
         </div>
       ) : null}
 
-      <section className="ward-detail-hero ward-detail-hero-redesign">
-        <div className="ward-detail-hero-copy ward-detail-hero-copy-redesign">
-          <Link href={returnTo} className="ward-detail-back-link">
-            <ArrowLeft aria-hidden="true" />
-            Back to wards
-          </Link>
+      <Card className="space-y-5 p-6 md:p-7">
+        <Link
+          href={returnTo}
+          className="inline-flex items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--login-link-hover)]"
+        >
+          <ArrowLeft className="size-4" aria-hidden="true" />
+          Back to wards
+        </Link>
 
-          <div className="ward-detail-title-row">
-            <h1>{isLoading ? "Loading ward detail..." : detail?.wardName ?? "Ward detail"}</h1>
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-[clamp(2rem,1.2rem+1vw,3rem)] font-semibold tracking-[-0.05em] text-panel-strong">
+              {isLoading ? "Loading ward detail..." : detail?.wardName ?? "Ward detail"}
+            </h1>
             {!isLoading ? (
               <>
-                <span className={`risk-pill risk-pill-${(detail?.riskLevel ?? "UNKNOWN").toLowerCase()}`}>
+                <StatusBadge
+                  tone={getRiskBadgeTone(detail?.riskLevel ?? "UNKNOWN")}
+                  className="rounded-full px-3 py-1.5 tracking-[0.14em]"
+                >
                   {formatRiskLevel(detail?.riskLevel ?? "UNKNOWN")}
+                </StatusBadge>
+                <span className="rounded-full border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_30%,transparent)] px-3 py-1.5 text-sm font-semibold text-panel-copy">
+                  Risk score: {formatRiskScore(detail?.riskScore ?? null)}
                 </span>
-                <span className="ward-detail-title-metric">Risk score: {formatRiskScore(detail?.riskScore ?? null)}</span>
-                <span className="ward-detail-title-meta">
+                <span className="text-sm text-panel-muted">
                   Last alert: {latestAlert ? formatRelativeMinutes(latestAlert.created_at) : "No recent alerts"}
                 </span>
               </>
             ) : null}
           </div>
 
-          <p>
+          <p className="text-sm text-panel-muted">
             {isLoading
               ? "Preparing the latest ward risk context."
               : detail
@@ -472,217 +368,285 @@ export default function WardDetailPage() {
                 : "Ward-level operational risk monitoring."}
           </p>
         </div>
-      </section>
+      </Card>
 
-      <section className="ward-detail-layout">
-        <div className="ward-detail-main-column">
-          <article className="card ward-detail-driver-card">
-            <div className="ward-detail-card-heading">
-              <div className="card-header">
-                <ShieldAlert className="section-icon" aria-hidden="true" />
-                <h3>Primary risk drivers</h3>
+      <section className="grid gap-6 xl:grid-cols-[minmax(0,1.55fr)_minmax(320px,0.85fr)]">
+        <div className="space-y-6">
+          <Card className="space-y-5 p-6">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div className="flex items-center gap-3">
+                <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--warning)_12%,white)] text-[color:var(--warning)]">
+                  <ShieldAlert className="size-5" aria-hidden="true" />
+                </span>
+                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Primary risk drivers</h3>
               </div>
-              <div className={`ward-detail-trend-badge ward-detail-trend-badge-${trend.tone}`}>
-                <ArrowUpRight className="section-icon" aria-hidden="true" />
+              <div
+                className={cn(
+                  "inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold",
+                  trend.tone === "up"
+                    ? "bg-[color-mix(in_srgb,var(--danger)_10%,white)] text-[color:var(--danger)]"
+                    : trend.tone === "down"
+                      ? "bg-[color-mix(in_srgb,var(--success)_10%,white)] text-[color:var(--success)]"
+                      : "bg-[color-mix(in_srgb,var(--dashboard-table-line)_40%,transparent)] text-panel-copy",
+                )}
+              >
+                <ArrowUpRight className={cn("size-4", trend.tone === "down" && "rotate-90")} aria-hidden="true" />
                 <span>{isLoading ? "Loading trend..." : trend.label}</span>
               </div>
             </div>
 
             {isLoading ? (
-              <div className="ward-detail-skeleton-stack" aria-hidden="true">
-                <span className="ward-detail-skeleton-line ward-detail-skeleton-line-body" />
-                <span className="ward-detail-skeleton-line ward-detail-skeleton-line-body" />
-                <span className="ward-detail-skeleton-line ward-detail-skeleton-line-body-short" />
+              <div className="space-y-3" aria-hidden="true">
+                <div className="h-16 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
+                <div className="h-16 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
+                <div className="h-16 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
               </div>
             ) : (
-              <div className="ward-detail-driver-list-grid">
+              <div className="space-y-3">
                 {drivers.map((driver) => (
-                  <article key={driver.text} className="ward-detail-driver-item">
-                    <span className={`ward-detail-driver-dot ward-detail-driver-dot-${driver.tone}`} aria-hidden="true" />
-                    <span className={`ward-detail-driver-icon ward-detail-driver-icon-${driver.tone}`}>
+                  <article
+                    key={driver.text}
+                    className="flex items-center gap-3 rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_28%,transparent)] px-4 py-4"
+                  >
+                    <span
+                      className={cn(
+                        "size-3 rounded-full",
+                        driver.tone === "critical"
+                          ? "bg-[color:var(--danger)]"
+                          : driver.tone === "warning"
+                            ? "bg-[color:var(--warning)]"
+                            : "bg-[color:var(--success)]",
+                      )}
+                      aria-hidden="true"
+                    />
+                    <span
+                      className={cn(
+                        "inline-flex size-9 items-center justify-center rounded-full",
+                        driver.tone === "critical"
+                          ? "bg-[color-mix(in_srgb,var(--danger)_10%,white)] text-[color:var(--danger)]"
+                          : driver.tone === "warning"
+                            ? "bg-[color-mix(in_srgb,var(--warning)_10%,white)] text-[color:var(--warning)]"
+                            : "bg-[color-mix(in_srgb,var(--success)_10%,white)] text-[color:var(--success)]",
+                      )}
+                    >
                       {getRiskDriverIcon(driver)}
                     </span>
-                    <strong>{driver.text}</strong>
+                    <strong className="text-sm font-semibold text-panel-strong">{driver.text}</strong>
                   </article>
                 ))}
               </div>
             )}
-          </article>
+          </Card>
 
-          <article className="card ward-detail-history-card ward-detail-history-card-redesign">
-            <div className="ward-detail-card-heading">
-              <div className="card-header">
-                <Waves className="section-icon" aria-hidden="true" />
-                <h3>Recent risk history</h3>
+          <Card className="space-y-5 p-6">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div className="flex items-center gap-3">
+                <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand">
+                  <Waves className="size-5" aria-hidden="true" />
+                </span>
+                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Recent risk history</h3>
               </div>
-              <p>Latest model runs for this ward</p>
+              <p className="text-sm text-panel-muted">Latest model runs for this ward</p>
             </div>
 
             {isHistoryLoading ? (
-              <div className="ward-detail-table-skeleton" aria-hidden="true">
+              <div className="space-y-3" aria-hidden="true">
                 {Array.from({ length: 4 }, (_, index) => (
-                  <div key={`history-skeleton-${index}`} className="ward-detail-table-skeleton-row">
-                    <span className="ward-detail-skeleton-line ward-detail-skeleton-line-table-wide" />
-                    <span className="ward-detail-skeleton-line ward-detail-skeleton-line-table-score" />
-                    <span className="ward-detail-skeleton-pill" />
-                    <span className="ward-detail-skeleton-line ward-detail-skeleton-line-table-score" />
-                  </div>
+                  <div
+                    key={`history-skeleton-${index}`}
+                    className="h-14 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]"
+                  />
                 ))}
               </div>
             ) : historyError ? (
-              <div className="status status-warning">
-                <AlertTriangle className="section-icon" aria-hidden="true" />
+              <div className="rounded-2xl border border-[color-mix(in_srgb,var(--warning)_20%,white)] bg-[color-mix(in_srgb,var(--warning)_10%,white)] px-4 py-3 text-sm font-medium text-[color:var(--warning)]">
+                <AlertTriangle className="mr-2 inline-flex size-4" aria-hidden="true" />
                 {historyError}
               </div>
             ) : detail && detail.riskHistory.length > 0 ? (
-              <div className="wards-table-wrap">
-                <table className="wards-table ward-detail-history-table ward-detail-history-table-redesign">
-                  <thead>
-                    <tr>
-                      <th>Date/time</th>
-                      <th>Risk score</th>
-                      <th>Status</th>
-                      <th>Trend</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {detail.riskHistory.slice(0, 6).map((risk, index, history) => {
-                      const historyTrend = getHistoryTrendIcon(index, history);
+              <div className="overflow-hidden rounded-[1.5rem] border border-[var(--dashboard-table-line)]">
+                <div className="overflow-x-auto">
+                  <table className="min-w-full border-collapse text-left">
+                    <thead>
+                      <tr>
+                        {["Date/time", "Risk score", "Status", "Trend"].map((label) => (
+                          <th
+                            key={label}
+                            className="border-b border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_30%,transparent)] px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted"
+                          >
+                            {label}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {detail.riskHistory.slice(0, 6).map((risk, index, history) => {
+                        const historyTrend = getHistoryTrendIcon(index, history);
 
-                      return (
-                        <tr key={risk.id}>
-                          <td>{formatOperationalTime(risk.generated_at)}</td>
-                          <td className="ward-detail-history-score">{Math.round(normalizeRiskScore(risk.score))}</td>
-                          <td>
-                            <span className={`risk-pill risk-pill-${risk.risk_level.toLowerCase()}`}>{risk.risk_level}</span>
-                          </td>
-                          <td>
-                            <span className={`ward-detail-history-trend ward-detail-history-trend-${historyTrend}`}>
-                              {historyTrend === "up" ? (
-                                <ArrowUpRight aria-hidden="true" />
-                              ) : historyTrend === "down" ? (
-                                <ArrowUpRight className="ward-detail-history-trend-down-icon" aria-hidden="true" />
-                              ) : (
-                                <Minus aria-hidden="true" />
-                              )}
-                            </span>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                        return (
+                          <tr key={risk.id}>
+                            <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm text-panel-copy last:border-b-0">
+                              {formatOperationalTime(risk.generated_at)}
+                            </td>
+                            <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm font-semibold text-panel-strong last:border-b-0">
+                              {Math.round(normalizeRiskScore(risk.score))}
+                            </td>
+                            <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm last:border-b-0">
+                              <StatusBadge
+                                tone={getRiskBadgeTone(risk.risk_level)}
+                                className="rounded-full px-3 py-1 tracking-[0.14em]"
+                              >
+                                {risk.risk_level}
+                              </StatusBadge>
+                            </td>
+                            <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm last:border-b-0">
+                              <span
+                                className={cn(
+                                  "inline-flex size-8 items-center justify-center rounded-full",
+                                  historyTrend === "up"
+                                    ? "bg-[color-mix(in_srgb,var(--danger)_10%,white)] text-[color:var(--danger)]"
+                                    : historyTrend === "down"
+                                      ? "bg-[color-mix(in_srgb,var(--success)_10%,white)] text-[color:var(--success)]"
+                                      : "bg-[color-mix(in_srgb,var(--dashboard-table-line)_40%,transparent)] text-panel-copy",
+                                )}
+                              >
+                                {historyTrend === "up" ? (
+                                  <ArrowUpRight className="size-4" aria-hidden="true" />
+                                ) : historyTrend === "down" ? (
+                                  <ArrowUpRight className="size-4 rotate-90" aria-hidden="true" />
+                                ) : (
+                                  <Minus className="size-4" aria-hidden="true" />
+                                )}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             ) : (
-              <p className="muted">No risk history is currently available for this ward.</p>
+              <p className="text-sm text-panel-muted">No risk history is currently available for this ward.</p>
             )}
-          </article>
+          </Card>
 
-          <section className="ward-detail-bottom-grid">
-            <article className="card ward-detail-context-card">
-              <div className="ward-detail-card-heading">
-                <div className="card-header">
-                  <MapPinned className="section-icon" aria-hidden="true" />
-                  <h3>Ward context</h3>
-                </div>
+          <section className="grid gap-6 lg:grid-cols-2">
+            <Card className="space-y-5 p-6">
+              <div className="flex items-center gap-3">
+                <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand">
+                  <MapPinned className="size-5" aria-hidden="true" />
+                </span>
+                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Ward context</h3>
               </div>
 
               {isLoading ? (
-                <div className="ward-detail-skeleton-stack" aria-hidden="true">
-                  <span className="ward-detail-skeleton-line ward-detail-skeleton-line-body" />
-                  <span className="ward-detail-skeleton-line ward-detail-skeleton-line-body" />
-                  <span className="ward-detail-skeleton-line ward-detail-skeleton-line-body-short" />
+                <div className="space-y-3" aria-hidden="true">
+                  <div className="h-4 w-full rounded-full bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
+                  <div className="h-4 w-full rounded-full bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
+                  <div className="h-4 w-1/2 rounded-full bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
                 </div>
               ) : detail ? (
-                <dl className="ward-detail-stat-list">
-                  <div>
-                    <dt>Sub-county</dt>
-                    <dd>{detail.subCounty || "Not recorded"}</dd>
-                  </div>
-                  <div>
-                    <dt>Ward code</dt>
-                    <dd>{detail.wardCode ?? "Not recorded"}</dd>
-                  </div>
-                  <div>
-                    <dt>Predicted cases</dt>
-                    <dd>{detail.predictedCases}</dd>
-                  </div>
+                <dl className="grid gap-4">
+                  {[
+                    ["Sub-county", detail.subCounty || "Not recorded"],
+                    ["Ward code", detail.wardCode ?? "Not recorded"],
+                    ["Predicted cases", detail.predictedCases],
+                  ].map(([label, value]) => (
+                    <div
+                      key={label}
+                      className="grid gap-1 border-b border-[var(--dashboard-table-line)] pb-3 last:border-b-0 last:pb-0"
+                    >
+                      <dt className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">{label}</dt>
+                      <dd className="text-sm font-medium text-panel-strong">{String(value)}</dd>
+                    </div>
+                  ))}
                 </dl>
               ) : (
-                <p className="muted">No ward detail is available for this route.</p>
+                <p className="text-sm text-panel-muted">No ward detail is available for this route.</p>
               )}
-            </article>
+            </Card>
 
-            <article className="card ward-detail-reliability-card">
-              <div className="ward-detail-card-heading">
-                <div className="card-header">
-                  <Clock3 className="section-icon" aria-hidden="true" />
-                  <h3>Data reliability</h3>
-                </div>
+            <Card className="space-y-5 p-6">
+              <div className="flex items-center gap-3">
+                <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand">
+                  <Clock3 className="size-5" aria-hidden="true" />
+                </span>
+                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Data reliability</h3>
               </div>
 
-              <div className="ward-detail-coverage-bar" aria-hidden="true">
-                <span style={{ width: `${dataCoverageScore}%` }} />
+              <div className="space-y-2">
+                <div className="h-2 w-full rounded-full bg-[color-mix(in_srgb,var(--dashboard-table-line)_70%,transparent)]">
+                  <span
+                    className="block h-full rounded-full bg-[linear-gradient(90deg,var(--login-submit-start),var(--login-submit-end))]"
+                    style={{ width: `${dataCoverageScore}%` }}
+                  />
+                </div>
+                <p className="text-sm font-semibold text-brand">{dataCoverageScore}% operational data coverage</p>
               </div>
-              <p className="ward-detail-coverage-label">{dataCoverageScore}% operational data coverage</p>
-              <dl className="ward-detail-reliability-list">
-                <div>
-                  <dt>Freshness</dt>
-                  <dd>{isLoading ? "Loading..." : isStale ? "Stale" : "Current"}</dd>
-                </div>
-                <div>
-                  <dt>History coverage</dt>
-                  <dd>{isLoading ? "Loading..." : detail ? `${detail.riskHistory.length} recent runs` : "Unavailable"}</dd>
-                </div>
-                <div>
-                  <dt>Alert linkage</dt>
-                  <dd>
-                    {isLoading
+
+              <dl className="grid gap-4">
+                {[
+                  ["Freshness", isLoading ? "Loading..." : isStale ? "Stale" : "Current"],
+                  ["History coverage", isLoading ? "Loading..." : detail ? `${detail.riskHistory.length} recent runs` : "Unavailable"],
+                  [
+                    "Alert linkage",
+                    isLoading
                       ? "Loading..."
                       : alertsError
                         ? "Temporarily unavailable"
                         : detail
                           ? `${detail.relatedAlerts.length} recent alerts`
-                          : "Unavailable"}
-                  </dd>
-                </div>
+                          : "Unavailable",
+                  ],
+                ].map(([label, value]) => (
+                  <div
+                    key={label}
+                    className="grid gap-1 border-b border-[var(--dashboard-table-line)] pb-3 last:border-b-0 last:pb-0"
+                  >
+                    <dt className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">{label}</dt>
+                    <dd className="text-sm font-medium text-panel-strong">{String(value)}</dd>
+                  </div>
+                ))}
               </dl>
-              {!isLoading && isStale ? (
-                <p className="ward-detail-reliability-note">
-                  This ward summary is older than the expected freshness window. Review with caution until the next update lands.
-                </p>
-              ) : (
-                <p className="ward-detail-reliability-note">
-                  Based on the current ward summary, recent history, and linked alert activity.
-                </p>
-              )}
-            </article>
-          </section>
 
+              <p className="text-sm leading-6 text-panel-muted">
+                {!isLoading && isStale
+                  ? "This ward summary is older than the expected freshness window. Review with caution until the next update lands."
+                  : "Based on the current ward summary, recent history, and linked alert activity."}
+              </p>
+            </Card>
+          </section>
         </div>
 
-        <aside className="ward-detail-side-column">
-          <article className="card ward-detail-action-card ward-detail-action-card-redesign">
-            <div className="card-header">
-              <Zap className="section-icon" aria-hidden="true" />
-              <h3>Recommended actions</h3>
+        <aside className="space-y-6">
+          <Card className="space-y-5 p-6">
+            <div className="flex items-center gap-3">
+              <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand">
+                <Zap className="size-5" aria-hidden="true" />
+              </span>
+              <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Recommended actions</h3>
             </div>
 
             {isLoading ? (
-              <div className="ward-detail-skeleton-stack" aria-hidden="true">
-                <span className="ward-detail-skeleton-line ward-detail-skeleton-line-body" />
-                <span className="ward-detail-skeleton-line ward-detail-skeleton-line-body" />
-                <span className="ward-detail-skeleton-line ward-detail-skeleton-line-body-short" />
-                <span className="ward-detail-skeleton-pill ward-detail-skeleton-pill-button" />
+              <div className="space-y-3" aria-hidden="true">
+                <div className="h-16 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
+                <div className="h-16 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
+                <div className="h-16 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
               </div>
             ) : (
-              <div className="ward-detail-action-steps">
+              <div className="space-y-3">
                 {recommendations.map((recommendation, index) => (
-                  <article key={recommendation} className="ward-detail-action-step">
-                    <div className="ward-detail-action-step-index">{String(index + 1).padStart(2, "0")}</div>
-                    <div className="ward-detail-action-step-copy">
-                      <strong>{recommendation}</strong>
-                      <span>
+                  <article
+                    key={recommendation}
+                    className="flex gap-3 rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_28%,transparent)] px-4 py-4"
+                  >
+                    <div className="inline-flex size-9 shrink-0 items-center justify-center rounded-full bg-brand text-sm font-semibold text-white">
+                      {String(index + 1).padStart(2, "0")}
+                    </div>
+                    <div className="space-y-1">
+                      <strong className="block text-sm font-semibold text-panel-strong">{recommendation}</strong>
+                      <span className="text-xs font-semibold uppercase tracking-[0.14em] text-panel-muted">
                         {index === 0 && canTriggerAlerts(currentUser.role)
                           ? "Ready to trigger"
                           : canTriggerAlerts(currentUser.role)
@@ -697,89 +661,104 @@ export default function WardDetailPage() {
 
             {detail ? (
               canTriggerAlerts(currentUser.role) ? (
-                <div className="ward-detail-action-panel ward-detail-action-panel-redesign">
-                  <TriggerAlertPanel
-                    buttonLabel="Send Emergency Alerts"
-                    closeLabel="Close action panel"
-                    buttonClassName="button ward-detail-emergency-button"
-                    fixedWard={{
-                      id: detail.wardId,
-                      name: detail.wardName,
-                      county: detail.county,
-                      subCounty: detail.subCounty,
-                      riskLevel: detail.riskLevel,
-                      riskScore: detail.riskScore,
-                      predictedCases: detail.predictedCases,
-                      updatedAt: detail.updatedAt,
-                    }}
-                  />
-                </div>
+                <TriggerAlertPanel
+                  buttonLabel="Trigger Alert"
+                  closeLabel="Close action panel"
+                  buttonClassName="inline-flex h-12 w-full items-center justify-center gap-2 rounded-pill bg-[var(--login-submit-start)] px-5 text-base font-semibold text-white shadow-[var(--login-submit-shadow)] transition hover:bg-[var(--login-submit-end)] hover:shadow-[var(--login-submit-shadow-hover)]"
+                  fixedWard={{
+                    id: detail.wardId,
+                    name: detail.wardName,
+                    county: detail.county,
+                    subCounty: detail.subCounty,
+                    riskLevel: detail.riskLevel,
+                    riskScore: detail.riskScore,
+                    predictedCases: detail.predictedCases,
+                    updatedAt: detail.updatedAt,
+                  }}
+                />
               ) : (
-                <div className="status status-warning">
-                  <AlertTriangle className="section-icon" aria-hidden="true" />
+                <div className="rounded-2xl border border-[color-mix(in_srgb,var(--warning)_20%,white)] bg-[color-mix(in_srgb,var(--warning)_10%,white)] px-4 py-3 text-sm font-medium text-[color:var(--warning)]">
+                  <AlertTriangle className="mr-2 inline-flex size-4" aria-hidden="true" />
                   Recommended actions are visible, but this role cannot trigger alerts from this page.
                 </div>
               )
             ) : null}
-          </article>
+          </Card>
 
-          <article className="card ward-detail-alert-card">
-            <div className="ward-detail-card-heading">
-              <div className="card-header">
-                <Bell className="section-icon" aria-hidden="true" />
-                <h3>Recent alerts</h3>
-              </div>
+          <Card className="space-y-5 p-6">
+            <div className="flex items-center gap-3">
+              <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand">
+                <Bell className="size-5" aria-hidden="true" />
+              </span>
+              <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Recent alerts</h3>
             </div>
 
             {isAlertsLoading ? (
-              <div className="ward-detail-skeleton-stack" aria-hidden="true">
+              <div className="space-y-3" aria-hidden="true">
                 {Array.from({ length: 3 }, (_, index) => (
-                  <div key={`alert-skeleton-${index}`} className="ward-detail-alert-item ward-detail-alert-item-skeleton">
-                    <span className="ward-detail-skeleton-pill" />
-                    <div className="ward-detail-skeleton-stack ward-detail-skeleton-stack-tight">
-                      <span className="ward-detail-skeleton-line ward-detail-skeleton-line-body-short" />
-                      <span className="ward-detail-skeleton-line ward-detail-skeleton-line-meta" />
-                    </div>
-                  </div>
+                  <div
+                    key={`alert-skeleton-${index}`}
+                    className="h-16 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]"
+                  />
                 ))}
               </div>
             ) : alertsError ? (
-              <div className="status status-warning">
-                <AlertTriangle className="section-icon" aria-hidden="true" />
+              <div className="rounded-2xl border border-[color-mix(in_srgb,var(--warning)_20%,white)] bg-[color-mix(in_srgb,var(--warning)_10%,white)] px-4 py-3 text-sm font-medium text-[color:var(--warning)]">
+                <AlertTriangle className="mr-2 inline-flex size-4" aria-hidden="true" />
                 {alertsError}
               </div>
             ) : detail && detail.relatedAlerts.length > 0 ? (
               <>
-                <div className="ward-detail-alert-list">
+                <div className="space-y-3">
                   {detail.relatedAlerts.slice(0, 4).map((alert) => (
-                    <article key={alert.id} className="ward-detail-alert-item">
-                      <div className="ward-detail-alert-icon">
-                        <Bell aria-hidden="true" />
+                    <article
+                      key={alert.id}
+                      className="flex items-start gap-3 rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_28%,transparent)] px-4 py-4"
+                    >
+                      <div className="inline-flex size-10 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand">
+                        <Bell className="size-4" aria-hidden="true" />
                       </div>
-                      <div className="ward-detail-alert-copy">
-                        <div className="ward-detail-alert-topline">
-                          <strong>{getAlertHeadline(alert)}</strong>
-                          <span className={`status-pill status-pill-${alert.status.toLowerCase()}`}>{alert.status}</span>
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <strong className="text-sm font-semibold text-panel-strong">
+                            {getAlertHeadline(alert)}
+                          </strong>
+                          <StatusBadge
+                            tone={
+                              alert.status === "DELIVERED"
+                                ? "success"
+                                : alert.status === "FAILED"
+                                  ? "danger"
+                                  : "warning"
+                            }
+                            className="rounded-full px-3 py-1 tracking-[0.14em]"
+                          >
+                            {alert.status}
+                          </StatusBadge>
                         </div>
-                        <p>Via {toTitleCase(alert.channel)} • {toTitleCase(alert.status)}</p>
+                        <p className="text-sm text-panel-muted">
+                          Via {toTitleCase(alert.channel)} • {toTitleCase(alert.status)}
+                        </p>
                       </div>
-                      <div className="ward-detail-alert-meta">
-                        <span>{formatRelativeMinutes(alert.created_at)}</span>
+                      <div className="text-xs font-medium text-panel-muted">
+                        {formatRelativeMinutes(alert.created_at)}
                       </div>
                     </article>
                   ))}
                 </div>
-                <Link href="/alerts" className="ward-detail-alert-history-link">
+                <Link
+                  href="/alerts"
+                  className="inline-flex items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--login-link-hover)]"
+                >
                   View Alert History
-                  <ChevronRight aria-hidden="true" />
+                  <ChevronRight className="size-4" aria-hidden="true" />
                 </Link>
               </>
             ) : (
-              <p className="muted">No alerts are currently visible for this ward.</p>
+              <p className="text-sm text-panel-muted">No alerts are currently visible for this ward.</p>
             )}
-          </article>
+          </Card>
         </aside>
-
       </section>
     </div>
   );

@@ -1,6 +1,7 @@
 import {
   Activity,
   Bell,
+  Building2,
   LayoutGrid,
   Map,
   ShieldCheck,
@@ -21,10 +22,11 @@ export type NavItem = {
 
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", href: "/overview", roles: ["ADMIN", "SUPERVISOR", "ANALYST"], icon: LayoutGrid },
-  { label: "Wards", href: "/wards", roles: ["ADMIN", "SUPERVISOR", "ANALYST"], icon: Map },
+  { label: "Ward Intelligence", href: "/wards", roles: ["ADMIN", "SUPERVISOR", "ANALYST"], icon: Map },
   { label: "Alerts", href: "/alerts", roles: ["ADMIN", "SUPERVISOR", "ANALYST"], icon: Bell },
-  { label: "CHVs", href: "/chvs", roles: ["ADMIN", "SUPERVISOR"], icon: Stethoscope },
-  { label: "System", href: "/system", roles: ["ADMIN", "ANALYST"], icon: ShieldCheck },
+  { label: "CHV Operations", href: "/chvs", roles: ["ADMIN", "SUPERVISOR"], icon: Stethoscope },
+  { label: "Facility Readiness", href: "/facility-readiness", roles: ["ADMIN", "SUPERVISOR", "ANALYST"], icon: Building2 },
+  { label: "System Settings", href: "/system", roles: ["ADMIN", "ANALYST"], icon: ShieldCheck },
   { label: "Profile", href: "/profile", roles: ["ADMIN", "SUPERVISOR", "ANALYST"], icon: UserCircle2 },
 ];
 

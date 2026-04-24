@@ -1,11 +1,20 @@
 "use client";
 
 import { ArrowLeft, ShieldCheck } from "lucide-react";
-import Image from "next/image";
 import Link from "next/link";
 import Script from "next/script";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { Button } from "@/components/ui/button";
+import { InputShell } from "@/components/ui/input-shell";
+import {
+  PublicAlert,
+  PublicCard,
+  PublicFooter,
+  PublicScreen,
+  PublicShell,
+  PublicTopbar,
+} from "@/components/ui/public-shell";
 import { fetchAccessRequestOptions, submitAccessRequest, type UserRole } from "@/lib/auth";
 
 type FormState = {
@@ -32,25 +41,11 @@ const ROLE_OPTIONS: Array<{ value: UserRole; label: string }> = [
 
 function normalizeKenyanPhoneNumber(value: string) {
   const trimmed = value.trim();
-
-  if (!trimmed) {
-    return "";
-  }
-
+  if (!trimmed) return "";
   const compact = trimmed.replace(/[\s()-]+/g, "");
-
-  if (/^\+254\d{9}$/.test(compact)) {
-    return compact;
-  }
-
-  if (/^254\d{9}$/.test(compact)) {
-    return `+${compact}`;
-  }
-
-  if (/^0\d{9}$/.test(compact)) {
-    return `+254${compact.slice(1)}`;
-  }
-
+  if (/^\+254\d{9}$/.test(compact)) return compact;
+  if (/^254\d{9}$/.test(compact)) return `+${compact}`;
+  if (/^0\d{9}$/.test(compact)) return `+254${compact.slice(1)}`;
   return compact;
 }
 
@@ -60,37 +55,24 @@ function isValidKenyanPhoneNumber(value: string) {
 
 function validateRequestForm(form: FormState, visibleWards: Array<{ id: number; name: string }>): FormErrors {
   const errors: FormErrors = {};
-
-  if (!form.full_name.trim()) {
-    errors.full_name = "Full name is required.";
-  }
-
+  if (!form.full_name.trim()) errors.full_name = "Full name is required.";
   const normalizedEmail = form.contact_email.trim();
   if (!normalizedEmail) {
     errors.contact_email = "Email address is required.";
   } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
     errors.contact_email = "Enter a valid email address.";
   }
-
   const normalizedPhoneNumber = normalizeKenyanPhoneNumber(form.phone_number);
   if (form.phone_number.trim() && !isValidKenyanPhoneNumber(normalizedPhoneNumber)) {
     errors.phone_number = "Use +254711000123, 254711000123, or 0711000123.";
   }
-
-  if (!form.desired_role) {
-    errors.desired_role = "Select a role.";
-  }
-
-  if (!form.county) {
-    errors.county = "Select a county.";
-  }
-
+  if (!form.desired_role) errors.desired_role = "Select a role.";
+  if (!form.county) errors.county = "Select a county.";
   if (!form.administrative_ward) {
     errors.administrative_ward = "Select an administrative ward.";
   } else if (!visibleWards.some((ward) => ward.name === form.administrative_ward)) {
     errors.administrative_ward = "Select a ward that belongs to the chosen county.";
   }
-
   return errors;
 }
 
@@ -137,43 +119,19 @@ export default function RequestAccessPage() {
   }, []);
 
   useEffect(() => {
-    if (!counties.length) {
-      return;
-    }
-
-    setForm((current) => {
-      if (current.county) {
-        return current;
-      }
-
-      return {
-        ...current,
-        county: counties[0],
-      };
-    });
+    if (!counties.length) return;
+    setForm((current) => (current.county ? current : { ...current, county: counties[0] }));
   }, [counties]);
 
-  const visibleWards = useMemo(() => {
-    if (!form.county) {
-      return wards;
-    }
-    return wards.filter((ward) => ward.county === form.county);
-  }, [form.county, wards]);
+  const visibleWards = useMemo(() => (!form.county ? wards : wards.filter((ward) => ward.county === form.county)), [form.county, wards]);
 
   useEffect(() => {
-    if (!visibleWards.length) {
-      return;
-    }
-
+    if (!visibleWards.length) return;
     setForm((current) => {
       if (current.administrative_ward && visibleWards.some((ward) => ward.name === current.administrative_ward)) {
         return current;
       }
-
-      return {
-        ...current,
-        administrative_ward: visibleWards[0].name,
-      };
+      return { ...current, administrative_ward: visibleWards[0].name };
     });
   }, [visibleWards]);
 
@@ -198,9 +156,7 @@ export default function RequestAccessPage() {
       }
     ).turnstile;
 
-    if (!turnstile || !turnstileContainerRef.current || turnstileWidgetRenderedRef.current) {
-      return;
-    }
+    if (!turnstile || !turnstileContainerRef.current || turnstileWidgetRenderedRef.current) return;
 
     turnstile.render(turnstileContainerRef.current, {
       sitekey: turnstileSiteKey,
@@ -277,305 +233,179 @@ export default function RequestAccessPage() {
     }
   }
 
-  return (
-    <div className="access-request-screen">
-      <header className="request-topbar">
-        <Link href="/login" className="request-brand">
-          <Image
-            src="/brand/chis-brief-colored.png"
-            alt=""
-            width={96}
-            height={96}
-            aria-hidden="true"
-            className="request-brand-mark"
-          />
-          <span>CHIS</span>
-        </Link>
-        <div className="request-topbar-actions">
-          <Link href="/login" className="request-topbar-link">
-            <ArrowLeft aria-hidden="true" />
-            Back to Login
-          </Link>
-        </div>
-      </header>
+  const selectClasses = "h-11 rounded-pill border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 text-sm text-panel-strong outline-none focus:border-[var(--dashboard-icon-button-border)]";
+  const fieldLabel = "text-sm font-medium text-panel-copy";
 
+  return (
+    <PublicScreen className="bg-[var(--request-background)]">
       {isTurnstileEnabled ? (
         <Script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" strategy="afterInteractive" />
       ) : null}
-
-      <main className="request-shell">
-        <section className="request-hero">
-          <h1 className="request-title">Request Access</h1>
-          <p className="request-subtitle">Submit your details for review by the system administrator.</p>
-        </section>
-
-        <section className="request-card">
-          <form className="stack" onSubmit={handleSubmit}>
-            <div className="request-honeypot" aria-hidden="true">
-              <label htmlFor="website">Website</label>
-              <input
-                id="website"
-                tabIndex={-1}
-                autoComplete="off"
-                value={form.website}
-                onChange={(event) => setForm((current) => ({ ...current, website: event.target.value }))}
-              />
+      <PublicTopbar showHelp />
+      <PublicShell className="items-stretch">
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(280px,0.8fr)]">
+          <PublicCard>
+            <div className="mb-6">
+              <h1 className="text-4xl font-semibold tracking-tight text-[var(--request-title)]">Request Dashboard Access</h1>
+              <p className="mt-2 text-sm text-[var(--request-subtitle)]">
+                Submit your operational details to request access to the CHIS dashboard.
+              </p>
             </div>
 
-            <div className="request-grid">
-              <div className="login-field">
-                <label htmlFor="full_name">Full Name</label>
-                <div className="login-input-wrap request-input-wrap">
-                  <input
-                    id="full_name"
-                    value={form.full_name}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      setForm((current) => ({ ...current, full_name: value }));
-                      setFieldErrors((current) => ({ ...current, full_name: undefined }));
-                    }}
-                    placeholder="e.g. Dr. Jane Doe"
-                    required
-                    aria-invalid={Boolean(fieldErrors.full_name)}
-                    aria-describedby={fieldErrors.full_name ? "full_name-error" : undefined}
-                  />
-                </div>
-                {fieldErrors.full_name ? (
-                  <p id="full_name-error" className="request-field-error">
-                    {fieldErrors.full_name}
-                  </p>
-                ) : null}
+            <form className="space-y-4" onSubmit={handleSubmit}>
+              <div className="grid gap-4 md:grid-cols-2">
+                <InputShell
+                  id="full_name"
+                  label="Full Name"
+                  value={form.full_name}
+                  onChange={(event) => setForm((current) => ({ ...current, full_name: event.target.value }))}
+                  placeholder="Your full name"
+                />
+                <InputShell
+                  id="contact_email"
+                  label="Email Address"
+                  type="email"
+                  value={form.contact_email}
+                  onChange={(event) => setForm((current) => ({ ...current, contact_email: event.target.value }))}
+                  placeholder="name@example.org"
+                />
               </div>
 
-              <div className="login-field">
-                <label htmlFor="contact_email">Email Address</label>
-                <div className="login-input-wrap request-input-wrap">
-                  <input
-                    id="contact_email"
-                    type="email"
-                    value={form.contact_email}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      setForm((current) => ({ ...current, contact_email: value }));
-                      setFieldErrors((current) => ({ ...current, contact_email: undefined }));
-                    }}
-                    placeholder="name@organization.go.ke"
-                    required
-                    aria-invalid={Boolean(fieldErrors.contact_email)}
-                    aria-describedby={fieldErrors.contact_email ? "contact_email-error" : undefined}
-                  />
-                </div>
-                {fieldErrors.contact_email ? (
-                  <p id="contact_email-error" className="request-field-error">
-                    {fieldErrors.contact_email}
-                  </p>
-                ) : null}
-              </div>
-
-              <div className="login-field">
-                <label htmlFor="phone_number">Phone Number</label>
-                <div className="login-input-wrap request-input-wrap">
-                  <input
-                    id="phone_number"
-                    type="tel"
-                    inputMode="tel"
-                    value={form.phone_number}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      setForm((current) => ({ ...current, phone_number: value }));
-                      setFieldErrors((current) => ({ ...current, phone_number: undefined }));
-                    }}
-                    placeholder="e.g. +254711000123 or 0711000123"
-                    aria-invalid={Boolean(fieldErrors.phone_number)}
-                    aria-describedby={fieldErrors.phone_number ? "phone_number-error" : undefined}
-                  />
-                </div>
-                {fieldErrors.phone_number ? (
-                  <p id="phone_number-error" className="request-field-error">
-                    {fieldErrors.phone_number}
-                  </p>
-                ) : null}
-              </div>
-
-              <div className="login-field">
-                <label htmlFor="desired_role">Role</label>
-                <div className="request-select-wrap">
+              <div className="grid gap-4 md:grid-cols-2">
+                <InputShell
+                  id="phone_number"
+                  label="Phone Number"
+                  value={form.phone_number}
+                  onChange={(event) => setForm((current) => ({ ...current, phone_number: event.target.value }))}
+                  placeholder="+254711000123"
+                />
+                <label className="flex flex-col gap-2">
+                  <span className={fieldLabel}>Role</span>
                   <select
-                    id="desired_role"
+                    aria-label="Role"
+                    className={selectClasses}
                     value={form.desired_role}
-                    onChange={(event) => {
-                      const value = event.target.value as UserRole | "";
-                      setForm((current) => ({ ...current, desired_role: value }));
-                      setFieldErrors((current) => ({ ...current, desired_role: undefined }));
-                    }}
-                    required
-                    aria-invalid={Boolean(fieldErrors.desired_role)}
-                    aria-describedby={fieldErrors.desired_role ? "desired_role-error" : undefined}
+                    onChange={(event) => setForm((current) => ({ ...current, desired_role: event.target.value as UserRole | "" }))}
                   >
-                    <option value="">Select Role</option>
+                    <option value="">Select role</option>
                     {ROLE_OPTIONS.map((role) => (
                       <option key={role.value} value={role.value}>
                         {role.label}
                       </option>
                     ))}
                   </select>
-                </div>
-                {fieldErrors.desired_role ? (
-                  <p id="desired_role-error" className="request-field-error">
-                    {fieldErrors.desired_role}
-                  </p>
-                ) : null}
+                </label>
               </div>
 
-              <div className="login-field">
-                <label htmlFor="county">County</label>
-                <div className="request-select-wrap">
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="flex flex-col gap-2">
+                  <span className={fieldLabel}>County</span>
                   <select
-                    id="county"
+                    aria-label="County"
+                    className={selectClasses}
                     value={form.county}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      setForm((current) => ({
-                        ...current,
-                        county: value,
-                      }));
-                      setFieldErrors((current) => ({
-                        ...current,
-                        county: undefined,
-                        administrative_ward: undefined,
-                      }));
-                    }}
-                    required
-                    disabled={isLoadingOptions || !counties.length}
-                    aria-invalid={Boolean(fieldErrors.county)}
-                    aria-describedby={fieldErrors.county ? "county-error" : undefined}
+                    onChange={(event) => setForm((current) => ({ ...current, county: event.target.value }))}
+                    disabled={isLoadingOptions}
                   >
-                    <option value="">Select County</option>
                     {counties.map((county) => (
                       <option key={county} value={county}>
                         {county}
                       </option>
                     ))}
                   </select>
-                </div>
-                {fieldErrors.county ? (
-                  <p id="county-error" className="request-field-error">
-                    {fieldErrors.county}
-                  </p>
-                ) : null}
-              </div>
-
-              <div className="login-field">
-                <label htmlFor="administrative_ward">Administrative Ward</label>
-                <div className="request-select-wrap">
+                </label>
+                <label className="flex flex-col gap-2">
+                  <span className={fieldLabel}>Administrative Ward</span>
                   <select
-                    id="administrative_ward"
+                    aria-label="Administrative Ward"
+                    className={selectClasses}
                     value={form.administrative_ward}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      setForm((current) => ({ ...current, administrative_ward: value }));
-                      setFieldErrors((current) => ({ ...current, administrative_ward: undefined }));
-                    }}
-                    required
-                    disabled={isLoadingOptions || !visibleWards.length}
-                    aria-invalid={Boolean(fieldErrors.administrative_ward)}
-                    aria-describedby={fieldErrors.administrative_ward ? "administrative_ward-error" : undefined}
+                    onChange={(event) => setForm((current) => ({ ...current, administrative_ward: event.target.value }))}
+                    disabled={isLoadingOptions}
                   >
-                    <option value="">{isLoadingOptions ? "Loading wards..." : "Select ward"}</option>
                     {visibleWards.map((ward) => (
                       <option key={ward.id} value={ward.name}>
                         {ward.name}
                       </option>
                     ))}
                   </select>
-                </div>
-                {fieldErrors.administrative_ward ? (
-                  <p id="administrative_ward-error" className="request-field-error">
-                    {fieldErrors.administrative_ward}
-                  </p>
-                ) : null}
+                </label>
               </div>
-            </div>
 
-            <div className="login-field">
-              <label htmlFor="organization">
-                Organization or Facility <span className="request-optional">(Optional)</span>
-              </label>
-              <div className="login-input-wrap request-input-wrap">
-                <input
-                  id="organization"
-                  value={form.organization}
-                  onChange={(event) => setForm((current) => ({ ...current, organization: event.target.value }))}
-                  placeholder="Health Center or Organization Name"
-                />
-              </div>
-            </div>
-
-            <div className="login-field">
-              <label htmlFor="message">
-                Reason for Access <span className="request-optional">(Optional)</span>
-              </label>
-              <textarea
-                id="message"
-                className="request-textarea"
-                value={form.message}
-                onChange={(event) => setForm((current) => ({ ...current, message: event.target.value }))}
-                placeholder="Tell us why you need access and how you will use the system..."
-                rows={5}
+              <InputShell
+                id="organization"
+                label="Organization or Facility"
+                value={form.organization}
+                onChange={(event) => setForm((current) => ({ ...current, organization: event.target.value }))}
+                placeholder="County health department"
               />
+
+              <label className="flex flex-col gap-2">
+                <span className={fieldLabel}>Reason for Access</span>
+                <textarea
+                  aria-label="Reason for Access"
+                  className="min-h-28 rounded-[1.5rem] border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 py-3 text-sm text-panel-strong outline-none placeholder:text-panel-subtle focus:border-[var(--dashboard-icon-button-border)]"
+                  value={form.message}
+                  onChange={(event) => setForm((current) => ({ ...current, message: event.target.value }))}
+                  placeholder="Tell us briefly why you need access."
+                />
+              </label>
+
+              <input
+                type="text"
+                value={form.website}
+                onChange={(event) => setForm((current) => ({ ...current, website: event.target.value }))}
+                autoComplete="off"
+                tabIndex={-1}
+                className="hidden"
+                aria-hidden="true"
+              />
+
+              {Object.values(fieldErrors).length ? (
+                <PublicAlert tone="warning">
+                  {Object.values(fieldErrors)[0]}
+                </PublicAlert>
+              ) : null}
+              {error ? <PublicAlert tone="error">{error}</PublicAlert> : null}
+              {successMessage ? <PublicAlert tone="success">{successMessage}</PublicAlert> : null}
+
+              {isTurnstileEnabled ? <div ref={turnstileContainerRef} className="pt-1" /> : null}
+
+              <Button className="w-full" size="lg" type="submit" disabled={isSubmitting || isLoadingOptions}>
+                {isSubmitting ? "Submitting request..." : "Submit Request"}
+              </Button>
+            </form>
+          </PublicCard>
+
+          <PublicCard className="self-start">
+            <div className="mb-5 flex items-center gap-3">
+              <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_14%,white)] text-brand">
+                <ShieldCheck className="size-5" aria-hidden="true" />
+              </span>
+              <div>
+                <h2 className="text-xl font-semibold text-panel-strong">Access Guidelines</h2>
+                <p className="text-sm text-panel-muted">Requests are reviewed against operational need and role scope.</p>
+              </div>
             </div>
 
-            {error ? <div className="status status-error login-error-banner">{error}</div> : null}
-            {successMessage ? <div className="status request-success-banner">{successMessage}</div> : null}
-            {isTurnstileEnabled ? <div ref={turnstileContainerRef} className="request-turnstile" /> : null}
+            <ul className="space-y-3 text-sm text-panel-copy">
+              <li>Use an official email where possible.</li>
+              <li>Select the role that best reflects your real operational responsibility.</li>
+              <li>Choose the ward you primarily support so access can be scoped correctly.</li>
+              <li>CHIS access is role-based and may require two-factor enrollment after approval.</li>
+            </ul>
 
-            <button className="request-submit" type="submit" disabled={isSubmitting || isLoadingOptions}>
-              {isSubmitting ? "Submitting..." : "Submit Request"}
-            </button>
-
-            <Link href="/login" className="request-back-link">
-              <ArrowLeft className="section-icon" aria-hidden="true" />
-              Back to Login
-            </Link>
-          </form>
-        </section>
-
-        <section className="request-support-grid">
-          <article className="request-support-card">
-            <ShieldCheck className="section-icon" aria-hidden="true" />
-            <div>
-              <h3>Secure</h3>
-              <p>Your details are protected and used only to review your access request.</p>
+            <div className="mt-6">
+              <Link href="/login" className="inline-flex items-center gap-2 text-sm font-medium text-brand transition hover:text-[var(--login-link-hover)]">
+                <ArrowLeft className="size-4" aria-hidden="true" />
+                Back to Login
+              </Link>
             </div>
-          </article>
-          <article className="request-support-card">
-            <ShieldCheck className="section-icon" aria-hidden="true" />
-            <div>
-              <h3>Reviewed</h3>
-              <p>Requests are reviewed by the system administrator before access is granted.</p>
-            </div>
-          </article>
-          <article className="request-support-card">
-            <ShieldCheck className="section-icon" aria-hidden="true" />
-            <div>
-              <h3>Support</h3>
-              <p>Select the role and location that best match how you will use the system.</p>
-            </div>
-          </article>
-        </section>
-      </main>
-
-      <footer className="login-footer request-footer">
-        <p>&copy; 2026 Climate Health Intelligence System. All rights reserved.</p>
-        <div className="login-footer-links">
-          <Link href="/privacy" className="login-footer-link">
-            Privacy Policy
-          </Link>
-          <Link href="/terms" className="login-footer-link">
-            Terms of Service
-          </Link>
+          </PublicCard>
         </div>
-      </footer>
-    </div>
+
+        <PublicFooter />
+      </PublicShell>
+    </PublicScreen>
   );
 }

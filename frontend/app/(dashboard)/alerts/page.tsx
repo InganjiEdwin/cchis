@@ -3,12 +3,12 @@
 import {
   AlertTriangle,
   BellRing,
-  Clock3,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   CircleAlert,
   CloudRain,
+  Clock3,
   Download,
   Droplets,
   ExternalLink,
@@ -25,8 +25,16 @@ import { useEffect, useMemo, useState } from "react";
 
 import { useAuth } from "@/components/auth-provider";
 import { DashboardTopbar } from "@/components/dashboard-topbar";
-import { fetchAlertsDataViaBff, type AlertRecord } from "@/lib/dashboard";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { InputShell } from "@/components/ui/input-shell";
+import { PageSectionHeader } from "@/components/ui/page-section-header";
+import { StatusBanner } from "@/components/ui/status-banner";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { cn } from "@/lib/cn";
+import { type AlertRecord } from "@/lib/dashboard";
 import { describeFreshness, formatRelativeTimestamp, getLatestTimestamp } from "@/lib/freshness";
+import { useAlertsQuery } from "@/queries/use-alerts-query";
 
 type AlertStatusFilter = "ALL" | "SENT" | "PENDING" | "FAILED";
 type AlertTypeFilter =
@@ -314,61 +322,40 @@ function downloadAlertsCsv(alerts: DecoratedAlert[]) {
   URL.revokeObjectURL(url);
 }
 
+function getToneSurface(tone: AlertTypeMeta["tone"]) {
+  switch (tone) {
+    case "red":
+      return "bg-[color-mix(in_srgb,var(--danger)_12%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]";
+    case "blue":
+      return "bg-[color-mix(in_srgb,var(--brand)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]";
+    case "orange":
+    case "amber":
+      return "bg-[color-mix(in_srgb,var(--warning)_14%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_18%,transparent)]";
+    case "slate":
+    default:
+      return "bg-[color-mix(in_srgb,var(--dashboard-table-line)_60%,transparent)] text-panel-copy";
+  }
+}
+
 export default function AlertsPage() {
   const { currentUser } = useAuth();
-  const [alerts, setAlerts] = useState<AlertRecord[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [selectedType, setSelectedType] = useState<AlertTypeFilter>("ALL");
   const [selectedStatus, setSelectedStatus] = useState<AlertStatusFilter>("ALL");
   const [page, setPage] = useState(1);
-  const [refreshKey, setRefreshKey] = useState(0);
   const [selectedAlertId, setSelectedAlertId] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (!currentUser) {
-      return;
-    }
-    let isActive = true;
-
-    async function loadAlerts() {
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        const response = await fetchAlertsDataViaBff();
-
-        if (!isActive) {
-          return;
-        }
-
-        setAlerts(response.results);
-      } catch (loadError) {
-        if (!isActive) {
-          return;
-        }
-
-        setError(loadError instanceof Error ? loadError.message : "Unable to load alerts.");
-      } finally {
-        if (isActive) {
-          setIsLoading(false);
-        }
-      }
-    }
-
-    void loadAlerts();
-
-    return () => {
-      isActive = false;
-    };
-  }, [currentUser, refreshKey]);
+  const alertsQuery = useAlertsQuery({ enabled: Boolean(currentUser) });
+  const alerts = alertsQuery.data ?? [];
+  const isLoading = alertsQuery.isPending;
+  const isRefreshing = alertsQuery.isFetching;
+  const error = alertsQuery.error instanceof Error ? alertsQuery.error.message : null;
 
   const decoratedAlerts = useMemo<DecoratedAlert[]>(
     () =>
       alerts.map((alert) => {
         const alertType = classifyAlertType(alert);
         const timestamp = alert.sent_at ?? alert.created_at;
+        const severity = getAlertSeverity(alert.risk_score);
 
         return {
           ...alert,
@@ -379,8 +366,8 @@ export default function AlertsPage() {
           timeLabel: formatSentTime(timestamp),
           relativeLabel: formatRelativeShort(timestamp),
           operationalLabel: formatRelativeTimestamp(timestamp),
-          severity: getAlertSeverity(alert.risk_score),
-          severityLabel: getSeverityLabel(getAlertSeverity(alert.risk_score)),
+          severity,
+          severityLabel: getSeverityLabel(severity),
         };
       }),
     [alerts],
@@ -432,7 +419,7 @@ export default function AlertsPage() {
 
   const latestAlertTimestamp = getLatestTimestamp(decoratedAlerts.map((alert) => alert.created_at));
   const alertFreshness = describeFreshness(latestAlertTimestamp, 20);
-  const topbarTimestampLabel = isLoading ? "Refreshing..." : formatRelativeShort(latestAlertTimestamp);
+  const topbarTimestampLabel = isRefreshing ? "Refreshing..." : formatRelativeShort(latestAlertTimestamp);
   const totalPages = Math.max(1, Math.ceil(filteredAlerts.length / ROWS_PER_PAGE));
   const safePage = Math.min(page, totalPages);
   const visibleAlerts = filteredAlerts.slice((safePage - 1) * ROWS_PER_PAGE, safePage * ROWS_PER_PAGE);
@@ -537,127 +524,233 @@ export default function AlertsPage() {
   }
 
   return (
-    <div className="alerts-dashboard">
+    <div className="space-y-6">
       <DashboardTopbar
         title="Alerts"
         subtitle="Operational alert coordination"
         lastUpdatedLabel={topbarTimestampLabel}
         lastUpdatedTone={alertFreshness.isStale ? "stale" : "default"}
-        onRefresh={() => setRefreshKey((value) => value + 1)}
+        onRefresh={() => {
+          void alertsQuery.refetch();
+        }}
       />
 
       {error ? (
-        <div className="status status-error">
-          <AlertTriangle className="section-icon" aria-hidden="true" />
+        <StatusBanner tone="danger" icon={<AlertTriangle aria-hidden="true" />}>
           {error}
-        </div>
+        </StatusBanner>
       ) : null}
 
       {!isLoading && !error && decoratedAlerts.length === 0 ? (
-        <div className="status status-warning">
-          <AlertTriangle className="section-icon" aria-hidden="true" />
+        <StatusBanner tone="warning" icon={<AlertTriangle aria-hidden="true" />}>
           No alerts are available yet in your visible scope.
-        </div>
+        </StatusBanner>
       ) : null}
 
       {!isLoading && !error && decoratedAlerts.length > 0 && alertFreshness.isStale ? (
-        <section className={`alerts-freshness-state alerts-freshness-state-${freshnessTone}`}>
-          <div className="alerts-freshness-copy">
-            <div className="alerts-freshness-title">
-              <AlertTriangle aria-hidden="true" />
-              <strong>
-                {freshnessTone === "critical" ? "Data freshness issue" : "Freshness warning"} - last update{" "}
-                {formatExactTimestamp(latestAlertTimestamp)} ({formatRelativeShort(latestAlertTimestamp)})
-              </strong>
+        <Card
+          className={cn(
+            "rounded-3xl px-5 py-5 sm:px-6",
+            freshnessTone === "critical"
+              ? "border-[color:var(--danger)]/25 bg-panel"
+              : "border-[color:var(--warning)]/25 bg-panel",
+          )}
+        >
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="flex items-start gap-3">
+              <span
+                className={cn(
+                  "mt-0.5 inline-flex size-9 shrink-0 items-center justify-center rounded-full",
+                  freshnessTone === "critical"
+                    ? "bg-[color-mix(in_srgb,var(--danger)_14%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]"
+                    : "bg-[color-mix(in_srgb,var(--warning)_16%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]",
+                )}
+              >
+                <AlertTriangle className="size-4" aria-hidden="true" />
+              </span>
+              <div className="space-y-1">
+                <div className="text-sm font-semibold text-panel-strong">
+                  {freshnessTone === "critical" ? "Data freshness issue" : "Freshness warning"} - last update{" "}
+                  {formatExactTimestamp(latestAlertTimestamp)} ({formatRelativeShort(latestAlertTimestamp)})
+                </div>
+                <p className="max-w-3xl text-sm text-panel-copy">
+                  Operators should verify ingestion health before treating these alert counts as current field
+                  conditions.
+                </p>
+              </div>
             </div>
-            <p>Operators should verify ingestion health before treating these alert counts as current field conditions.</p>
-          </div>
 
-          <div className="alerts-freshness-actions">
-            <button type="button" className="alerts-freshness-button" onClick={() => setRefreshKey((value) => value + 1)}>
-              Refresh data
-            </button>
-            <Link href="/system" className="alerts-freshness-link">
-              View pipeline status
-            </Link>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                variant="secondary"
+                className="h-10 px-4"
+                onClick={() => {
+                  void alertsQuery.refetch();
+                }}
+              >
+                Refresh data
+              </Button>
+              <Link
+                href="/system"
+                className="inline-flex h-10 items-center justify-center rounded-pill border border-panel-table-wrap px-4 text-sm font-semibold text-panel-copy transition hover:border-[var(--dashboard-icon-button-border)] hover:text-panel-strong"
+              >
+                View pipeline status
+              </Link>
+            </div>
           </div>
-        </section>
+        </Card>
       ) : null}
 
-      <section className="alerts-hero">
-        <div className="alerts-hero-copy">
-          <h1>Alerts Monitoring</h1>
-          <p>Track delivery status, operational risk activity, and ward-level alert pressure across Migori County.</p>
+      <section className="space-y-5">
+        <PageSectionHeader
+          title="Alerts Monitoring"
+          description="Track delivery status, operational risk activity, and ward-level alert pressure across Migori County."
+        />
+
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
+          <div className="grid gap-4 md:grid-cols-3">
+            <Card className="rounded-3xl bg-panel px-5 py-5">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">
+                    Alerts sent (last 24 hours)
+                  </p>
+                  <div className="mt-3 text-4xl font-semibold leading-none text-panel-strong">
+                    {isLoading ? "..." : alertsLast24Hours.toLocaleString()}
+                  </div>
+                </div>
+                <span className="inline-flex size-10 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--brand)_10%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]">
+                  <ChevronRight className="size-4" aria-hidden="true" />
+                </span>
+              </div>
+              <p className="mt-4 text-sm text-panel-muted">
+                {isLoading
+                  ? "Checking recent delivery volume"
+                  : `${sentTrend >= 0 ? "+" : ""}${sentTrend} vs previous 24h`}
+              </p>
+            </Card>
+
+            <Card className="rounded-3xl border-[color:var(--warning)]/20 bg-panel px-5 py-5">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Active alerts</p>
+                  <div className="mt-3 text-4xl font-semibold leading-none text-panel-strong">
+                    {isLoading ? "..." : activeAlertsCount}
+                  </div>
+                </div>
+                <span className="inline-flex size-10 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--warning)_18%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_18%,transparent)]">
+                  <BellRing className="size-4" aria-hidden="true" />
+                </span>
+              </div>
+              <p className="mt-4 text-sm text-panel-muted">
+                Ongoing risk monitoring cycles still awaiting a clean resolution path.
+              </p>
+            </Card>
+
+            <Card
+              className={cn(
+                "rounded-3xl px-5 py-5",
+                failedCount > 0
+                  ? "border-[color:var(--danger)]/20 bg-panel"
+                  : "border-[color:var(--success)]/20 bg-panel",
+              )}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">
+                    Delivery failures
+                  </p>
+                  <div className="mt-3 text-4xl font-semibold leading-none text-panel-strong">
+                    {isLoading ? "..." : failedCount}
+                  </div>
+                </div>
+                <span
+                  className={cn(
+                    "inline-flex size-10 items-center justify-center rounded-full",
+                    failedCount > 0
+                      ? "bg-[color-mix(in_srgb,var(--danger)_14%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]"
+                      : "bg-[color-mix(in_srgb,var(--success)_14%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_18%,transparent)]",
+                  )}
+                >
+                  <AlertTriangle className="size-4" aria-hidden="true" />
+                </span>
+              </div>
+              <p className="mt-4 text-sm text-panel-muted">
+                {lastFailure ? `Last failure ${formatRelativeShort(lastFailure.created_at)}` : "Delivery reliability currently stable."}
+              </p>
+            </Card>
+          </div>
+
+          <Card className="rounded-3xl bg-panel px-5 py-5">
+            <h2 className="text-2xl font-semibold text-panel-strong">Response Protocol</h2>
+            <p className="mt-2 text-sm text-panel-muted">
+              Immediate field coordination guidance for the highest-pressure visible ward.
+            </p>
+            <div className="mt-5 rounded-2xl bg-[color-mix(in_srgb,var(--brand)_8%,var(--panel))] p-4">
+              <strong className="block text-base text-panel-strong">
+                {mostCriticalAlert
+                  ? `${mostCriticalAlert.severity === "HIGH" ? "Escalation Required" : "Escalation Review"} - ${mostCriticalAlert.ward_name}`
+                  : "No active escalation required."}
+              </strong>
+              <p className="mt-2 text-sm text-panel-muted">
+                {mostCriticalAlert
+                  ? `Priority signal: ${mostCriticalAlert.alertType.label} via ${mostCriticalAlert.channelLabel.toLowerCase()} triggered ${mostCriticalAlert.relativeLabel}.`
+                  : "Visible alerts are currently within a stable operating window."}
+              </p>
+            </div>
+            {mostCriticalAlert ? (
+              <Link
+                href={`/alerts/${mostCriticalAlert.id}`}
+                className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--dashboard-icon-button-ink-hover)]"
+              >
+                Start Escalation Protocol
+                <ChevronRight className="size-4" aria-hidden="true" />
+              </Link>
+            ) : null}
+          </Card>
         </div>
       </section>
 
-      <section className="alerts-metrics">
-        <article className="alerts-metric-card alerts-metric-card-primary">
-          <div className="alerts-metric-header">
-            <span>Alerts sent (last 24 hours)</span>
-            <ChevronRight aria-hidden="true" />
-          </div>
-          <strong>{isLoading ? "..." : alertsLast24Hours.toLocaleString()}</strong>
-          <p>
-            {isLoading
-              ? "Checking recent delivery volume"
-              : `${sentTrend >= 0 ? "+" : ""}${sentTrend} vs previous 24h`}
-          </p>
-        </article>
+      <Card className="rounded-[2rem] bg-panel px-5 py-5 sm:px-6">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div className="flex min-w-0 flex-1 flex-col gap-4 lg:flex-row lg:flex-wrap lg:items-end">
+            <InputShell
+              className="min-w-0 flex-[1.4]"
+              icon={<Search className="size-4" aria-hidden="true" />}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search ward, alert type, or channel..."
+            />
 
-        <article className="alerts-metric-card alerts-metric-card-amber alerts-metric-card-urgent">
-          <div className="alerts-metric-header">
-            <span>Active alerts</span>
-            <BellRing aria-hidden="true" />
-          </div>
-          <strong>{isLoading ? "..." : activeAlertsCount}</strong>
-          <p>Ongoing risk monitoring cycles still awaiting a clean resolution path.</p>
-        </article>
-
-        <article
-          className={`alerts-metric-card ${
-            failedCount > 0 ? "alerts-metric-card-danger" : "alerts-metric-card-healthy"
-          }`}
-        >
-          <div className="alerts-metric-header">
-            <span>Delivery failures</span>
-            <AlertTriangle aria-hidden="true" />
-          </div>
-          <strong>{isLoading ? "..." : failedCount}</strong>
-          <p>{lastFailure ? `Last failure ${formatRelativeShort(lastFailure.created_at)}` : "Delivery reliability currently stable."}</p>
-        </article>
-      </section>
-
-      <section className="alerts-table-panel">
-        <div className="alerts-toolbar">
-          <div className="alerts-toolbar-group">
-            <label className="alerts-search-field alerts-search-field-toolbar">
-              <Search aria-hidden="true" />
-              <input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search ward, alert type, or channel..."
-              />
+            <label className="flex min-w-[11rem] flex-col gap-2">
+              <span className="text-sm font-medium text-panel-copy">Alert type</span>
+              <span className="relative flex h-11 items-center rounded-pill border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 shadow-sm">
+                <select
+                  value={selectedType}
+                  onChange={(event) => setSelectedType(event.target.value as AlertTypeFilter)}
+                  className="h-full w-full appearance-none bg-transparent pr-8 text-sm text-panel-strong outline-none"
+                >
+                  {ALERT_TYPE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-4 size-4 text-panel-muted" aria-hidden="true" />
+              </span>
             </label>
 
-            <label className="alerts-select-field">
-              <span>Alert type</span>
-              <select value={selectedType} onChange={(event) => setSelectedType(event.target.value as AlertTypeFilter)}>
-                {ALERT_TYPE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown aria-hidden="true" />
-            </label>
-
-            <div className="alerts-status-tabs" role="tablist" aria-label="Alert status filters">
+            <div className="flex flex-wrap gap-2" role="tablist" aria-label="Alert status filters">
               {STATUS_FILTER_OPTIONS.map((option) => (
                 <button
                   key={option.value}
                   type="button"
-                  className={option.value === selectedStatus ? "is-active" : ""}
+                  className={cn(
+                    "inline-flex h-11 items-center justify-center rounded-pill border px-4 text-sm font-semibold transition",
+                    option.value === selectedStatus
+                      ? "border-brand bg-brand text-white shadow-[var(--login-submit-shadow)]"
+                      : "border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] text-panel-copy hover:border-[var(--dashboard-icon-button-border)] hover:text-panel-strong",
+                  )}
                   onClick={() => setSelectedStatus(option.value)}
                 >
                   {option.label}
@@ -666,332 +759,368 @@ export default function AlertsPage() {
             </div>
           </div>
 
-          <button
-            type="button"
-            className="alerts-export-button"
+          <Button
+            variant="secondary"
+            className="h-11 self-start bg-[var(--dashboard-icon-button-surface)] px-4 xl:self-end"
             onClick={() => downloadAlertsCsv(filteredAlerts)}
             disabled={!filteredAlerts.length}
           >
-            <Download aria-hidden="true" />
+            <Download className="size-4" aria-hidden="true" />
             <span>Export CSV</span>
-          </button>
+          </Button>
         </div>
 
-        <div className="alerts-table-wrap">
-          <table className="alerts-table">
-            <thead>
-              <tr>
-                <th>Alert type</th>
-                <th>Administrative ward</th>
-                <th>Channel</th>
-                <th>Status</th>
-                <th>Sent time</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {isLoading ? (
-                Array.from({ length: ROWS_PER_PAGE }).map((_, index) => (
-                  <tr key={`alerts-skeleton-${index}`} className="alerts-row-skeleton">
-                    <td colSpan={6}>
-                      <div className="alerts-skeleton-line alerts-skeleton-line-wide" />
-                    </td>
-                  </tr>
-                ))
-              ) : visibleAlerts.length > 0 ? (
-                visibleAlerts.map((alert) => {
-                  const AlertIcon = alert.alertType.icon;
-                  const ChannelIcon = getChannelIcon(alert.channel);
-
-                  return (
-                    <tr
-                      key={alert.id}
-                      className="alerts-table-row"
-                      onClick={() => setSelectedAlertId(alert.id)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          setSelectedAlertId(alert.id);
-                        }
-                      }}
-                      tabIndex={0}
+        <div className="mt-6 overflow-hidden rounded-[1.5rem] border border-panel-table-wrap">
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-panel-table-wrap text-sm">
+              <thead className="bg-[color-mix(in_srgb,var(--dashboard-table-line)_30%,transparent)]">
+                <tr className="text-left">
+                  {["Alert type", "Administrative ward", "Channel", "Status", "Sent time", "Action"].map((label) => (
+                    <th
+                      key={label}
+                      className="px-5 py-4 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle"
                     >
-                      <td>
-                        <div className="alerts-type-cell">
-                          <span className={`alerts-type-icon alerts-tone-${alert.alertType.tone}`}>
-                            <AlertIcon aria-hidden="true" />
-                          </span>
-                          <div className="alerts-type-copy">
-                            <strong>{alert.alertType.label}</strong>
-                            <div className="alerts-type-meta">
-                              <span className="alerts-auto-pill">Auto-triggered</span>
-                              <span className={`alerts-severity-pill alerts-severity-${alert.severity.toLowerCase()}`}>
-                                <span className="alerts-severity-dot" aria-hidden="true" />
-                                {alert.severityLabel}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="alerts-ward-cell">
-                        <strong>{alert.ward_name}</strong>
-                      </td>
-                      <td>
-                        <div className="alerts-channel-cell">
-                          <ChannelIcon aria-hidden="true" />
-                          <span>{alert.channelLabel}</span>
-                        </div>
-                      </td>
-                      <td>
-                        <div className="alerts-status-stack">
-                          <span
-                            className={`dashboard-status-badge ${
-                              alert.statusFilter === "SENT"
-                                ? "dashboard-badge-success"
-                                : alert.statusFilter === "FAILED"
-                                  ? "dashboard-badge-danger"
-                                  : "dashboard-badge-warning"
-                            }`}
-                              >
-                            {alert.statusLabel}
-                          </span>
-                          {alert.status === "RETRY_PENDING" ? (
-                            <span className="alerts-retry-label">Retry queue active</span>
-                          ) : null}
-                        </div>
-                      </td>
-                      <td className="alerts-time-cell">{alert.timeLabel}</td>
-                      <td>
-                        <button
-                          type="button"
-                          className="alerts-row-action"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setSelectedAlertId(alert.id);
-                          }}
-                        >
-                          {alert.statusFilter === "FAILED" || alert.status === "RETRY_PENDING" ? "Retry review" : "Open"}
-                        </button>
+                      {label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-panel-table-wrap bg-panel">
+                {isLoading ? (
+                  Array.from({ length: ROWS_PER_PAGE }).map((_, index) => (
+                    <tr key={`alerts-skeleton-${index}`}>
+                      <td colSpan={6} className="px-5 py-5">
+                        <div className="h-6 w-full animate-pulse rounded-full bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
                       </td>
                     </tr>
-                  );
-                })
-              ) : (
-                <tr>
-                  <td colSpan={6} className="alerts-table-empty">
-                    No alerts match the current search and filter combination.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+                  ))
+                ) : visibleAlerts.length > 0 ? (
+                  visibleAlerts.map((alert) => {
+                    const AlertIcon = alert.alertType.icon;
+                    const ChannelIcon = getChannelIcon(alert.channel);
+
+                    return (
+                      <tr
+                        key={alert.id}
+                        className="cursor-pointer transition hover:bg-[color-mix(in_srgb,var(--dashboard-nav-hover)_40%,transparent)] focus-within:bg-[color-mix(in_srgb,var(--dashboard-nav-hover)_46%,transparent)]"
+                        onClick={() => setSelectedAlertId(alert.id)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            setSelectedAlertId(alert.id);
+                          }
+                        }}
+                        tabIndex={0}
+                      >
+                        <td className="px-5 py-4 align-top">
+                          <div className="flex items-start gap-3">
+                            <span
+                              className={cn(
+                                "inline-flex size-11 shrink-0 items-center justify-center rounded-2xl",
+                                getToneSurface(alert.alertType.tone),
+                              )}
+                            >
+                              <AlertIcon className="size-5" aria-hidden="true" />
+                            </span>
+                            <div className="min-w-0 space-y-2">
+                              <div className="font-semibold text-panel-strong">{alert.alertType.label}</div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <StatusBadge tone="info" className="tracking-[0.12em]">
+                                  Auto-triggered
+                                </StatusBadge>
+                                <StatusBadge
+                                  tone={
+                                    alert.severity === "HIGH"
+                                      ? "danger"
+                                      : alert.severity === "MEDIUM"
+                                        ? "warning"
+                                        : "success"
+                                  }
+                                  className="tracking-[0.12em]"
+                                >
+                                  {alert.severityLabel}
+                                </StatusBadge>
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-5 py-4 align-top font-semibold text-panel-strong">{alert.ward_name}</td>
+                        <td className="px-5 py-4 align-top">
+                          <div className="flex items-center gap-2 text-panel-copy">
+                            <ChannelIcon className="size-4 text-panel-muted" aria-hidden="true" />
+                            <span>{alert.channelLabel}</span>
+                          </div>
+                        </td>
+                        <td className="px-5 py-4 align-top">
+                          <div className="space-y-2">
+                            <StatusBadge
+                              tone={
+                                alert.statusFilter === "SENT"
+                                  ? "success"
+                                  : alert.statusFilter === "FAILED"
+                                    ? "danger"
+                                    : "warning"
+                              }
+                              className="tracking-[0.12em]"
+                            >
+                              {alert.statusLabel}
+                            </StatusBadge>
+                            {alert.status === "RETRY_PENDING" ? (
+                              <p className="text-xs font-medium text-[color:var(--warning)]">Retry queue active</p>
+                            ) : null}
+                          </div>
+                        </td>
+                        <td className="px-5 py-4 align-top text-panel-copy">{alert.timeLabel}</td>
+                        <td className="px-5 py-4 align-top">
+                          <Button
+                            variant="ghost"
+                            className="h-9 rounded-pill px-3 text-sm"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setSelectedAlertId(alert.id);
+                            }}
+                          >
+                            {alert.statusFilter === "FAILED" || alert.status === "RETRY_PENDING" ? "Retry review" : "Open"}
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan={6} className="px-5 py-10 text-center text-sm text-panel-muted">
+                      No alerts match the current search and filter combination.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
 
-        <div className="alerts-table-footer">
-          <div className="alerts-table-meta">
+        <div className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-3 text-sm text-panel-muted">
             <span>
               {Math.min(filteredAlerts.length, safePage * ROWS_PER_PAGE)} of {filteredAlerts.length} alerts
             </span>
-            <span className="alerts-confidence-pill">Reliable for escalation decisions</span>
+            <StatusBadge tone="success" className="tracking-[0.12em]">
+              Reliable for escalation decisions
+            </StatusBadge>
           </div>
 
           {totalPages > 1 ? (
-            <div className="alerts-pagination">
-              <button type="button" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={safePage === 1}>
-                <ChevronLeft aria-hidden="true" />
-              </button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                size="icon"
+                className="size-10"
+                onClick={() => setPage((value) => Math.max(1, value - 1))}
+                disabled={safePage === 1}
+              >
+                <ChevronLeft className="size-4" aria-hidden="true" />
+              </Button>
               {paginationItems.map((item, index) =>
                 item === "..." ? (
-                  <span key={`ellipsis-${index}`} className="alerts-pagination-ellipsis">
+                  <span key={`ellipsis-${index}`} className="px-2 text-sm text-panel-subtle">
                     ...
                   </span>
                 ) : (
                   <button
                     key={item}
                     type="button"
-                    className={item === safePage ? "is-active" : ""}
+                    className={cn(
+                      "inline-flex size-10 items-center justify-center rounded-full text-sm font-semibold transition",
+                      item === safePage
+                        ? "bg-brand text-white shadow-[var(--login-submit-shadow)]"
+                        : "text-panel-copy hover:bg-[color-mix(in_srgb,var(--dashboard-nav-hover)_60%,transparent)]",
+                    )}
                     onClick={() => setPage(item)}
                   >
                     {item}
                   </button>
                 ),
               )}
-              <button
-                type="button"
+              <Button
+                variant="secondary"
+                size="icon"
+                className="size-10"
                 onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
                 disabled={safePage === totalPages}
               >
-                <ChevronRight aria-hidden="true" />
-              </button>
+                <ChevronRight className="size-4" aria-hidden="true" />
+              </Button>
             </div>
           ) : null}
         </div>
-      </section>
+      </Card>
 
-      <section className="alerts-lower-grid">
-        <article className="alerts-map-card">
-          <div className="alerts-section-heading">
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_22rem]">
+        <Card className="overflow-hidden rounded-[2rem] p-5 sm:p-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <h2>Active Alert Zones</h2>
-              <p>Real-time operational hotspots based on visible ward alert pressure.</p>
+              <h2 className="text-2xl font-semibold text-panel-strong">Active Alert Zones</h2>
+              <p className="mt-2 text-sm text-panel-muted">
+                Real-time operational hotspots based on visible ward alert pressure.
+              </p>
             </div>
 
-            <div className="alerts-map-tabs">
-              <button type="button" className="is-active">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="inline-flex h-10 items-center justify-center rounded-pill bg-brand px-4 text-sm font-semibold text-white"
+              >
                 Satellite
               </button>
-              <button type="button">Topographic</button>
+              <button
+                type="button"
+                className="inline-flex h-10 items-center justify-center rounded-pill border border-panel-table-wrap px-4 text-sm font-semibold text-panel-copy"
+              >
+                Topographic
+              </button>
             </div>
           </div>
 
-          <div className="alerts-map-visual">
-            <div className="alerts-map-overlay-card">
-              <span>Critical zone</span>
-              <strong>{activeZones[0]?.wardName ?? "No active ward"}</strong>
-              <p>{activeZones[0] ? `${activeZones[0].count} visible alerts in current scope` : "Awaiting live alert activity"}</p>
-            </div>
+          <div className="relative mt-6 min-h-[22rem] overflow-hidden rounded-[1.75rem] border border-panel-table-wrap bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--brand)_12%,transparent),transparent_40%),radial-gradient(circle_at_bottom_right,color-mix(in_srgb,var(--warning)_12%,transparent),transparent_35%),linear-gradient(135deg,color-mix(in_srgb,var(--panel)_92%,white),var(--panel))] p-5">
+            <div className="absolute inset-0 bg-[linear-gradient(90deg,color-mix(in_srgb,var(--dashboard-table-line)_32%,transparent)_1px,transparent_1px),linear-gradient(color-mix(in_srgb,var(--dashboard-table-line)_32%,transparent)_1px,transparent_1px)] bg-[size:6rem_6rem] opacity-60" />
 
-            <div className="alerts-map-grid">
+            <Card className="relative z-10 max-w-xs rounded-[1.5rem] px-4 py-4 shadow-none">
+              <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Critical zone</span>
+              <strong className="mt-2 block text-lg text-panel-strong">{activeZones[0]?.wardName ?? "No active ward"}</strong>
+              <p className="mt-2 text-sm text-panel-muted">
+                {activeZones[0] ? `${activeZones[0].count} visible alerts in current scope` : "Awaiting live alert activity"}
+              </p>
+            </Card>
+
+            <div className="relative z-10 mt-8 h-[16rem]">
               {activeZones.length > 0
                 ? activeZones.map((zone, index) => (
                     <div
                       key={zone.wardName}
-                      className={`alerts-map-node ${index === 0 ? "is-primary" : ""}`}
+                      className="absolute"
                       style={{
                         left: `${20 + index * 18}%`,
                         top: `${18 + (index % 3) * 19}%`,
                       }}
                     >
-                      <span>{zone.wardName}</span>
+                      <span
+                        className={cn(
+                          "inline-flex size-4 rounded-full border-4 border-white bg-brand shadow-[0_0_0_10px_color-mix(in_srgb,var(--brand)_12%,transparent)]",
+                          index === 0 &&
+                            "size-5 bg-[color:var(--danger)] shadow-[0_0_0_14px_color-mix(in_srgb,var(--danger)_16%,transparent)]",
+                        )}
+                      />
+                      <span className="mt-3 block rounded-full bg-panel/90 px-3 py-1 text-xs font-semibold text-panel-strong shadow-sm backdrop-blur">
+                        {zone.wardName}
+                      </span>
                     </div>
                   ))
                 : null}
             </div>
           </div>
-        </article>
+        </Card>
 
-        <aside className="alerts-aside">
-          <article className="alerts-protocol-card">
-            <div className="alerts-section-heading alerts-section-heading-compact">
-              <div>
-                <h2>Response Protocol</h2>
-                <p>Immediate field coordination guidance for the highest-pressure visible ward.</p>
-              </div>
-            </div>
-
-            <strong>
-              {mostCriticalAlert
-                ? `${mostCriticalAlert.severity === "HIGH" ? "Escalation Required" : "Escalation Review"} - ${mostCriticalAlert.ward_name}`
-                : "No active escalation required."}
-            </strong>
-            <p>
-              {mostCriticalAlert
-                ? `Priority signal: ${mostCriticalAlert.alertType.label} via ${mostCriticalAlert.channelLabel.toLowerCase()} triggered ${mostCriticalAlert.relativeLabel}.`
-                : "Visible alerts are currently within a stable operating window."}
-            </p>
-            {mostCriticalAlert ? (
-              <Link href={`/alerts/${mostCriticalAlert.id}`} className="alerts-protocol-link">
-                Start Escalation Protocol
-                <ChevronRight aria-hidden="true" />
-              </Link>
-            ) : null}
-          </article>
-
-          <article className="alerts-signal-card">
-            <span className="alerts-signal-label">Intelligence signal</span>
-            <strong>
-              {mostCriticalAlert ? `${Math.max(72, Math.round((mostCriticalAlert.risk_score ?? 0) * 0.9))}% alert trigger probability` : "No high-confidence alert signal"}
-            </strong>
-            <p>{alertFreshness.isStale ? "Data quality: review freshness" : "Data quality: good"}</p>
-          </article>
-        </aside>
+        <Card className="rounded-[2rem] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--brand)_10%,var(--panel)),var(--panel))] px-5 py-5">
+          <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Intelligence signal</span>
+          <strong className="mt-3 block text-2xl leading-tight text-panel-strong">
+            {mostCriticalAlert
+              ? `${Math.max(72, Math.round((mostCriticalAlert.risk_score ?? 0) * 0.9))}% alert trigger probability`
+              : "No high-confidence alert signal"}
+          </strong>
+          <p className="mt-3 text-sm text-panel-muted">
+            {alertFreshness.isStale ? "Data quality: review freshness" : "Data quality: good"}
+          </p>
+        </Card>
       </section>
 
       {selectedAlert ? (
-        <div
-          className="alerts-drawer-backdrop"
-          onClick={() => setSelectedAlertId(null)}
-          aria-hidden="true"
-        />
-      ) : null}
+        <>
+          <button
+            type="button"
+            className="fixed inset-0 z-40 bg-slate-950/50 backdrop-blur-[1px]"
+            onClick={() => setSelectedAlertId(null)}
+            aria-label="Close alert detail drawer"
+          />
+          <aside className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[30rem] flex-col border-l border-panel-border bg-panel shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-panel-table-wrap px-5 py-5 sm:px-6">
+              <div>
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Alert detail</span>
+                <h2 className="mt-2 text-2xl font-semibold text-panel-strong">{selectedAlert.alertType.label}</h2>
+                <p className="mt-1 text-sm text-panel-muted">{selectedAlert.ward_name}</p>
+              </div>
 
-      {selectedAlert ? (
-        <aside className="alerts-drawer" aria-label="Alert detail drawer">
-          <div className="alerts-drawer-header">
-            <div>
-              <span className="alerts-drawer-kicker">Alert detail</span>
-              <h2>{selectedAlert.alertType.label}</h2>
-              <p>{selectedAlert.ward_name}</p>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-10 shrink-0"
+                onClick={() => setSelectedAlertId(null)}
+                aria-label="Close alert detail"
+              >
+                <X className="size-4" aria-hidden="true" />
+              </Button>
             </div>
 
-            <button type="button" className="alerts-drawer-close" onClick={() => setSelectedAlertId(null)} aria-label="Close alert detail">
-              <X aria-hidden="true" />
-            </button>
-          </div>
+            <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5 sm:px-6">
+              <div className="grid gap-3 sm:grid-cols-2">
+                {[
+                  ["Status", selectedAlert.statusLabel],
+                  ["Severity", selectedAlert.severityLabel],
+                  ["Channel", selectedAlert.channelLabel],
+                  ["Sent time", selectedAlert.timeLabel],
+                ].map(([label, value]) => (
+                  <Card key={label} className="rounded-2xl px-4 py-4 shadow-none">
+                    <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">{label}</span>
+                    <strong className="mt-2 block text-base text-panel-strong">{value}</strong>
+                  </Card>
+                ))}
+              </div>
 
-          <div className="alerts-drawer-grid">
-            <div className="alerts-drawer-stat">
-              <span>Status</span>
-              <strong>{selectedAlert.statusLabel}</strong>
-            </div>
-            <div className="alerts-drawer-stat">
-              <span>Severity</span>
-              <strong>{selectedAlert.severityLabel}</strong>
-            </div>
-            <div className="alerts-drawer-stat">
-              <span>Channel</span>
-              <strong>{selectedAlert.channelLabel}</strong>
-            </div>
-            <div className="alerts-drawer-stat">
-              <span>Sent time</span>
-              <strong>{selectedAlert.timeLabel}</strong>
-            </div>
-          </div>
+              <Card className="rounded-2xl px-4 py-4 shadow-none">
+                <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-panel-subtle">Operational message</h3>
+                <p className="mt-3 text-sm leading-6 text-panel-copy">{selectedAlert.message}</p>
+              </Card>
 
-          <div className="alerts-drawer-section">
-            <h3>Operational message</h3>
-            <p>{selectedAlert.message}</p>
-          </div>
+              <Card className="rounded-2xl px-4 py-4 shadow-none">
+                <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-panel-subtle">Delivery path</h3>
+                <ul className="mt-4 space-y-3 text-sm text-panel-copy">
+                  <li className="flex items-center gap-3">
+                    <Clock3 className="size-4 text-panel-muted" aria-hidden="true" />
+                    <span>Created {selectedAlert.operationalLabel}</span>
+                  </li>
+                  <li className="flex items-center gap-3">
+                    <Info className="size-4 text-panel-muted" aria-hidden="true" />
+                    <span>Backend: {selectedAlert.delivery_backend || "Not recorded"}</span>
+                  </li>
+                  <li className="flex items-center gap-3">
+                    <BellRing className="size-4 text-panel-muted" aria-hidden="true" />
+                    <span>
+                      Attempts {selectedAlert.attempt_count}/{selectedAlert.max_attempts}
+                    </span>
+                  </li>
+                </ul>
+              </Card>
 
-          <div className="alerts-drawer-section">
-            <h3>Delivery path</h3>
-            <ul className="alerts-drawer-list">
-              <li>
-                <Clock3 aria-hidden="true" />
-                <span>Created {selectedAlert.operationalLabel}</span>
-              </li>
-              <li>
-                <Info aria-hidden="true" />
-                <span>Backend: {selectedAlert.delivery_backend || "Not recorded"}</span>
-              </li>
-              <li>
-                <BellRing aria-hidden="true" />
-                <span>
-                  Attempts {selectedAlert.attempt_count}/{selectedAlert.max_attempts}
-                </span>
-              </li>
-            </ul>
-          </div>
-
-          {selectedAlert.error_message ? (
-            <div className="alerts-drawer-section alerts-drawer-section-warning">
-              <h3>Failure context</h3>
-              <p>{selectedAlert.error_message}</p>
+              {selectedAlert.error_message ? (
+                <Card className="rounded-2xl border-[color:var(--warning)]/30 bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] px-4 py-4 shadow-none">
+                  <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[color:var(--warning)]">Failure context</h3>
+                  <p className="mt-3 text-sm leading-6 text-panel-copy">{selectedAlert.error_message}</p>
+                </Card>
+              ) : null}
             </div>
-          ) : null}
 
-          <div className="alerts-drawer-actions">
-            {(selectedAlert.statusFilter === "FAILED" || selectedAlert.status === "RETRY_PENDING") && (
-              <button type="button" className="alerts-drawer-action alerts-drawer-action-primary">
-                Retry workflow review
-              </button>
-            )}
-            <Link href={`/alerts/${selectedAlert.id}`} className="alerts-drawer-action alerts-drawer-action-secondary">
-              Open full alert detail
-              <ExternalLink aria-hidden="true" />
-            </Link>
-          </div>
-        </aside>
+            <div className="flex flex-col gap-3 border-t border-panel-table-wrap px-5 py-5 sm:px-6">
+              {(selectedAlert.statusFilter === "FAILED" || selectedAlert.status === "RETRY_PENDING") && (
+                <Button className="w-full justify-center">Retry workflow review</Button>
+              )}
+              <Link
+                href={`/alerts/${selectedAlert.id}`}
+                className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-pill border border-panel-table-wrap px-4 text-sm font-semibold text-panel-copy transition hover:border-[var(--dashboard-icon-button-border)] hover:text-panel-strong"
+              >
+                Open full alert detail
+                <ExternalLink className="size-4" aria-hidden="true" />
+              </Link>
+            </div>
+          </aside>
+        </>
       ) : null}
     </div>
   );

@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import WardDetailPage from "@/app/(dashboard)/wards/[id]/page";
 
 const mockUseAuth = vi.fn();
-const mockFetchWardDetailViaBff = vi.fn();
+const mockUseWardDetailQuery = vi.fn();
 const mockUseParams = vi.fn();
 const mockUseSearchParams = vi.fn();
 
@@ -32,8 +32,8 @@ vi.mock("next/link", () => ({
     React.createElement("a", { href, ...props }, children),
 }));
 
-vi.mock("@/lib/dashboard", () => ({
-  fetchWardDetailViaBff: (...args: unknown[]) => mockFetchWardDetailViaBff(...args),
+vi.mock("@/queries/use-ward-detail-query", () => ({
+  useWardDetailQuery: (...args: unknown[]) => mockUseWardDetailQuery(...args),
 }));
 
 describe("WardDetailPage", () => {
@@ -57,28 +57,22 @@ describe("WardDetailPage", () => {
       },
     });
 
-    mockFetchWardDetailViaBff.mockResolvedValue({
-      ward: {
-        id: 12,
-        public_id: "ward-12",
+    mockUseWardDetailQuery.mockReturnValue({
+      data: {
+        wardId: 12,
         name: "North Kamagambo",
+        wardName: "North Kamagambo",
+        wardCode: "MIG-12",
         county: "Migori",
-        sub_county: "Rongo",
-        ward_code: "MIG-12",
-        current_risk_level: "HIGH",
-        current_risk_score: 86,
+        subCounty: "Rongo",
+        riskLevel: "HIGH",
+        riskScore: 86,
         predicted_cases: 12,
-        latest_generated_at: "2026-04-22T18:00:00Z",
-        latest_source: "MODEL",
-        latest_model_version: "v1",
-        is_active: true,
-        updated_at: "2026-04-22T18:00:00Z",
-      },
-      riskHistory: {
-        count: 2,
-        next: null,
-        previous: null,
-        results: [
+        predictedCases: 12,
+        updatedAt: "2026-04-22T18:00:00Z",
+        source: "MODEL",
+        modelVersion: "v1",
+        riskHistory: [
           {
             id: 1,
             ward: 12,
@@ -114,12 +108,7 @@ describe("WardDetailPage", () => {
             generated_at: "2026-04-22T16:00:00Z",
           },
         ],
-      },
-      alerts: {
-        count: 1,
-        next: null,
-        previous: null,
-        results: [
+        relatedAlerts: [
           {
             id: 7,
             ward: 12,
@@ -141,6 +130,10 @@ describe("WardDetailPage", () => {
           },
         ],
       },
+      isPending: false,
+      isFetching: false,
+      error: null,
+      refetch: vi.fn(),
     });
   });
 
@@ -148,7 +141,10 @@ describe("WardDetailPage", () => {
     render(React.createElement(WardDetailPage));
 
     await waitFor(() => {
-      expect(mockFetchWardDetailViaBff).toHaveBeenCalledWith(12);
+      expect(mockUseWardDetailQuery).toHaveBeenCalledWith({
+        wardId: 12,
+        enabled: true,
+      });
     });
 
     expect(await screen.findByRole("heading", { name: "North Kamagambo" })).toBeInTheDocument();
@@ -186,28 +182,21 @@ describe("WardDetailPage", () => {
   });
 
   it("keeps the ward summary visible when alerts fail and shows a section warning", async () => {
-    mockFetchWardDetailViaBff.mockResolvedValue({
-      ward: {
-        id: 12,
-        public_id: "ward-12",
-        name: "North Kamagambo",
+    mockUseWardDetailQuery.mockReturnValue({
+      data: {
+        wardId: 12,
+        wardName: "North Kamagambo",
+        wardCode: "MIG-12",
         county: "Migori",
-        sub_county: "Rongo",
-        ward_code: "MIG-12",
-        current_risk_level: "HIGH",
-        current_risk_score: 86,
+        subCounty: "Rongo",
+        riskLevel: "HIGH",
+        riskScore: 86,
         predicted_cases: 12,
-        latest_generated_at: "2026-04-22T18:00:00Z",
-        latest_source: "MODEL",
-        latest_model_version: "v1",
-        is_active: true,
-        updated_at: "2026-04-22T18:00:00Z",
-      },
-      riskHistory: {
-        count: 2,
-        next: null,
-        previous: null,
-        results: [
+        predictedCases: 12,
+        updatedAt: "2026-04-22T18:00:00Z",
+        source: "MODEL",
+        modelVersion: "v1",
+        riskHistory: [
           {
             id: 1,
             ward: 12,
@@ -226,13 +215,12 @@ describe("WardDetailPage", () => {
             generated_at: "2026-04-22T18:00:00Z",
           },
         ],
+        relatedAlerts: [],
       },
-      alerts: {
-        count: 0,
-        next: null,
-        previous: null,
-        results: [],
-      },
+      isPending: false,
+      isFetching: false,
+      error: null,
+      refetch: vi.fn(),
     });
 
     render(React.createElement(WardDetailPage));

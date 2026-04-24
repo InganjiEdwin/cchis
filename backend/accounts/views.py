@@ -1009,7 +1009,7 @@ class AccessRequestAPIView(APIView):
 
 class AccessRequestOptionsAPIView(APIView):
     permission_classes = [permissions.AllowAny]
-    throttle_scope = "access_request"
+    throttle_scope = "access_request_options"
 
     def get(self, request):
         from risk.models import Ward

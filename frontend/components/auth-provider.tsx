@@ -1,6 +1,7 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
 import {
   beginTwoFactorEnrollment as beginTwoFactorEnrollmentRequest,
@@ -23,6 +24,9 @@ import {
   type ThemePreference,
   type SessionResponse,
 } from "@/lib/auth";
+import { queryKeys } from "@/lib/query-keys";
+import { applyThemePreference, persistThemePreference } from "@/lib/theme-preference";
+import { useCurrentUserQuery } from "@/queries/use-current-user-query";
 
 type PendingTwoFactorState = {
   tempToken: string;
@@ -56,33 +60,6 @@ type AuthContextValue = {
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
-const THEME_PREFERENCE_KEY = "cchis.theme_preference";
-
-function applyThemePreference(themePreference: ThemePreference | null) {
-  if (typeof document === "undefined") {
-    return;
-  }
-
-  if (!themePreference || themePreference === "SYSTEM") {
-    document.documentElement.removeAttribute("data-theme");
-    return;
-  }
-
-  document.documentElement.setAttribute("data-theme", themePreference.toLowerCase());
-}
-
-function persistThemePreference(themePreference: ThemePreference | null) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  if (!themePreference || themePreference === "SYSTEM") {
-    window.localStorage.removeItem(THEME_PREFERENCE_KEY);
-    return;
-  }
-
-  window.localStorage.setItem(THEME_PREFERENCE_KEY, themePreference);
-}
 
 function isEstablishedSession(session: SessionResponse): session is SessionResponse & {
   authenticated: true;
@@ -98,21 +75,50 @@ export function AuthProvider({
   children: React.ReactNode;
   initialSession?: SessionResponse | null;
 }) {
-  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(
-    initialSession?.authenticated ? initialSession.user : null,
-  );
-  const [pendingTwoFactor, setPendingTwoFactor] = useState<PendingTwoFactorState | null>(null);
-  const [pendingEnrollment, setPendingEnrollment] = useState<PendingEnrollmentState | null>(null);
-  const [isHydrating, setIsHydrating] = useState(initialSession === null);
-  const refreshInFlight = useRef<Promise<void> | null>(null);
+  const queryClient = useQueryClient();
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(() => {
+    if (initialSession?.authenticated) {
+      return initialSession.user;
+    }
+    if (typeof window !== "undefined") {
+      return readCurrentUser();
+    }
+    return null;
+  });
+  const [pendingTwoFactor, setPendingTwoFactor] = useState<PendingTwoFactorState | null>(() => {
+    if (typeof window === "undefined") {
+      return null;
+    }
+    const token = readPreAuthToken();
+    return token ? { tempToken: token } : null;
+  });
+  const [pendingEnrollment, setPendingEnrollment] = useState<PendingEnrollmentState | null>(() => {
+    if (typeof window === "undefined") {
+      return null;
+    }
+    const token = readEnrollmentToken();
+    return token ? { tempToken: token } : null;
+  });
+  const [isHydrating, setIsHydrating] = useState(initialSession === null && !currentUser);
+  const currentUserQuery = useCurrentUserQuery({
+    enabled: !pendingTwoFactor && !pendingEnrollment,
+    initialSession,
+  });
 
   async function adoptEstablishedSession() {
-    const session = await fetchSession();
+    queryClient.removeQueries({ queryKey: queryKeys.auth.me() });
+
+    const session = await queryClient.fetchQuery({
+      queryKey: queryKeys.auth.me(),
+      queryFn: fetchSession,
+      staleTime: 0,
+    });
 
     if (!isEstablishedSession(session)) {
       throw new Error("We could not establish a full dashboard session. Please sign in again.");
     }
 
+    queryClient.setQueryData(queryKeys.auth.me(), session);
     setCurrentUser(session.user);
     persistCurrentUser(session.user);
     persistPreAuthToken(null);
@@ -124,63 +130,50 @@ export function AuthProvider({
   }
 
   useEffect(() => {
-    const cachedUser = readCurrentUser();
-    const preAuthToken = readPreAuthToken();
-    const enrollmentToken = readEnrollmentToken();
-
-    if (!initialSession && cachedUser) {
-      setCurrentUser(cachedUser);
+    if (currentUserQuery.isPending && !currentUser) {
+      setIsHydrating(true);
+      return;
     }
 
-    if (!initialSession && cachedUser) {
-      setIsHydrating(false);
-    }
-
-    if (preAuthToken) {
-      setPendingTwoFactor({ tempToken: preAuthToken });
-    }
-
-    if (enrollmentToken) {
-      setPendingEnrollment({ tempToken: enrollmentToken });
-    }
-
-    if (initialSession) {
-      if (initialSession.authenticated && initialSession.user) {
-        persistCurrentUser(initialSession.user);
-        setCurrentUser(initialSession.user);
-      } else if (cachedUser) {
-        persistCurrentUser(cachedUser);
-      }
-
+    if (pendingTwoFactor || pendingEnrollment) {
       setIsHydrating(false);
       return;
     }
 
-    const hydrate = async () => {
-      try {
-        const session = await fetchSession();
-
-        if (!session.authenticated || !session.user) {
-          persistCurrentUser(null);
-          setCurrentUser(null);
-          return;
-        }
+    if (currentUserQuery.data) {
+      if (isEstablishedSession(currentUserQuery.data)) {
         persistPreAuthToken(null);
         persistEnrollmentToken(null);
         setPendingTwoFactor(null);
         setPendingEnrollment(null);
-        setCurrentUser(session.user);
-        persistCurrentUser(session.user);
-      } catch {
+        setCurrentUser(currentUserQuery.data.user);
+        persistCurrentUser(currentUserQuery.data.user);
+      } else {
         persistCurrentUser(null);
         setCurrentUser(null);
-      } finally {
-        setIsHydrating(false);
       }
-    };
+      setIsHydrating(false);
+      return;
+    }
 
-    refreshInFlight.current = hydrate();
-  }, [initialSession]);
+    if (currentUserQuery.isError) {
+      persistCurrentUser(null);
+      setCurrentUser(null);
+      setIsHydrating(false);
+      return;
+    }
+
+    if (currentUser) {
+      setIsHydrating(false);
+    }
+  }, [
+    currentUser,
+    currentUserQuery.data,
+    currentUserQuery.isError,
+    currentUserQuery.isPending,
+    pendingEnrollment,
+    pendingTwoFactor,
+  ]);
 
   useEffect(() => {
     if (currentUser?.theme_preference) {
@@ -206,6 +199,12 @@ export function AuthProvider({
         const response = await loginRequest(payload);
 
         if (response.requires_2fa) {
+          queryClient.setQueryData(queryKeys.auth.me(), {
+            authenticated: false,
+            user: null,
+            access: null,
+            session_source: null,
+          } satisfies SessionResponse);
           persistCurrentUser(null);
           setCurrentUser(null);
           persistPreAuthToken(response.temp_token);
@@ -217,6 +216,12 @@ export function AuthProvider({
         }
 
         if (response.requires_2fa_enrollment) {
+          queryClient.setQueryData(queryKeys.auth.me(), {
+            authenticated: false,
+            user: null,
+            access: null,
+            session_source: null,
+          } satisfies SessionResponse);
           persistCurrentUser(null);
           setCurrentUser(null);
           persistPreAuthToken(null);
@@ -252,10 +257,46 @@ export function AuthProvider({
           throw new Error("Your session expired. Please sign in again.");
         }
 
-        const user = await updateAppearanceViaBff(themePreference);
-        setCurrentUser(user);
-        persistCurrentUser(user);
-        return user;
+        const previousUser = currentUser;
+        const optimisticUser = { ...currentUser, theme_preference: themePreference };
+
+        setCurrentUser(optimisticUser);
+        persistCurrentUser(optimisticUser);
+        applyThemePreference(themePreference);
+        persistThemePreference(themePreference);
+        queryClient.setQueryData(queryKeys.auth.me(), {
+          authenticated: true,
+          user: optimisticUser,
+          access: null,
+          session_source: null,
+        } satisfies SessionResponse);
+
+        try {
+          const user = await updateAppearanceViaBff(themePreference);
+          setCurrentUser(user);
+          persistCurrentUser(user);
+          applyThemePreference(user.theme_preference);
+          persistThemePreference(user.theme_preference);
+          queryClient.setQueryData(queryKeys.auth.me(), {
+            authenticated: true,
+            user,
+            access: null,
+            session_source: null,
+          } satisfies SessionResponse);
+          return user;
+        } catch (error) {
+          setCurrentUser(previousUser);
+          persistCurrentUser(previousUser);
+          applyThemePreference(previousUser.theme_preference);
+          persistThemePreference(previousUser.theme_preference);
+          queryClient.setQueryData(queryKeys.auth.me(), {
+            authenticated: true,
+            user: previousUser,
+            access: null,
+            session_source: null,
+          } satisfies SessionResponse);
+          throw error;
+        }
       },
       async confirmTwoFactorEnrollment(code: string) {
         const token = pendingEnrollment?.tempToken;
@@ -285,6 +326,13 @@ export function AuthProvider({
             await logoutViaBff();
           }
         } finally {
+          queryClient.clear();
+          queryClient.setQueryData(queryKeys.auth.me(), {
+            authenticated: false,
+            user: null,
+            access: null,
+            session_source: null,
+          } satisfies SessionResponse);
           persistCurrentUser(null);
           persistPreAuthToken(null);
           persistEnrollmentToken(null);
@@ -296,7 +344,7 @@ export function AuthProvider({
         }
       },
     }),
-    [currentUser, isHydrating, pendingEnrollment, pendingTwoFactor],
+    [currentUser, isHydrating, pendingEnrollment, pendingTwoFactor, queryClient],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

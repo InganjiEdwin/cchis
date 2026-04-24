@@ -1,10 +1,21 @@
 "use client";
 
-import { ArrowLeft, ArrowRight, CircleHelp, Mail, Shield } from "lucide-react";
+import { ArrowRight, Mail, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { FormEvent, useState } from "react";
 
 import { requestPasswordReset } from "@/lib/auth";
+import { Button } from "@/components/ui/button";
+import { InputShell } from "@/components/ui/input-shell";
+import {
+  PublicAlert,
+  PublicFooter,
+  PublicScreen,
+  PublicShell,
+  PublicTopbar,
+  PublicCard,
+  SectionBackLink,
+} from "@/components/ui/public-shell";
 
 export default function ForgotPasswordPage() {
   const [identifier, setIdentifier] = useState("");
@@ -33,78 +44,47 @@ export default function ForgotPasswordPage() {
   }
 
   return (
-    <div className="forgot-screen">
-      <header className="forgot-topbar">
-        <Link href="/login" className="forgot-brand">
-          CHIS
-        </Link>
-        <div className="forgot-topbar-actions">
-          <Link href="/login" className="forgot-topbar-link">
-            Back to Login
-          </Link>
-          <span className="forgot-help-badge" aria-hidden="true">
-            <CircleHelp />
-          </span>
-        </div>
-      </header>
-
-      <main className="forgot-shell">
-        <section className="forgot-card">
-          <div className="forgot-icon" aria-hidden="true">
-            <Shield />
+    <PublicScreen className="bg-[var(--forgot-background)]">
+      <PublicTopbar showHelp />
+      <PublicShell narrow className="justify-center">
+        <PublicCard className="max-w-[560px]">
+          <div className="mx-auto mb-6 flex size-24 items-center justify-center rounded-[2rem] bg-[var(--forgot-icon-surface)] text-[var(--forgot-icon-ink)]">
+            <ShieldCheck className="size-12" aria-hidden="true" />
           </div>
 
-          <div className="forgot-copy">
-            <h1 className="forgot-title">Password Recovery</h1>
-            <p className="forgot-subtitle">
-              Enter your email address or username and we&apos;ll send instructions to help you reset your
-              password.
+          <div className="mb-6 text-center">
+            <h1 className="text-4xl font-semibold tracking-tight text-[var(--forgot-title)]">Password Recovery</h1>
+            <p className="mt-2 text-sm text-[var(--forgot-subtitle)]">
+              Enter your email address or username and we&apos;ll send instructions to help you reset your password.
             </p>
           </div>
 
-          <form className="stack" onSubmit={handleSubmit}>
-            <div className="login-field">
-              <label htmlFor="identifier">Email address or username</label>
-              <div className="login-input-wrap forgot-input-wrap">
-                <Mail className="login-input-icon" aria-hidden="true" />
-                <input
-                  id="identifier"
-                  name="identifier"
-                  autoComplete="username"
-                  value={identifier}
-                  onChange={(event) => setIdentifier(event.target.value)}
-                  placeholder="name@example.org"
-                  required
-                />
-              </div>
-            </div>
+          <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+            <InputShell
+              id="identifier"
+              label="Email address or username"
+              autoComplete="username"
+              value={identifier}
+              onChange={(event) => setIdentifier(event.target.value)}
+              placeholder="name@example.org"
+              icon={<Mail className="size-4" aria-hidden="true" />}
+            />
 
-            {error ? <div className="status status-error login-error-banner">{error}</div> : null}
-            {successMessage ? <div className="status forgot-success-banner">{successMessage}</div> : null}
+            {error ? <PublicAlert tone="error">{error}</PublicAlert> : null}
+            {successMessage ? <PublicAlert tone="success">{successMessage}</PublicAlert> : null}
 
-            <button className="forgot-submit" type="submit" disabled={isSubmitting}>
+            <Button type="submit" size="lg" disabled={isSubmitting} className="w-full">
               {isSubmitting ? "Sending reset instructions..." : "Reset Password"}
-              <ArrowRight className="section-icon forgot-submit-icon" aria-hidden="true" />
-            </button>
+              <ArrowRight className="size-4" aria-hidden="true" />
+            </Button>
           </form>
 
-          <Link href="/login" className="forgot-back-link">
-            <ArrowLeft className="section-icon" aria-hidden="true" />
-            Back to Login
-          </Link>
-        </section>
-
-        <footer className="forgot-footer">
-          <div className="forgot-footer-links">
-            <Link href="/privacy" className="forgot-footer-link">
-              Privacy Policy
-            </Link>
-            <Link href="/terms" className="forgot-footer-link">
-              Terms of Service
-            </Link>
+          <div className="mt-6">
+            <SectionBackLink />
           </div>
-        </footer>
-      </main>
-    </div>
+        </PublicCard>
+        <PublicFooter />
+      </PublicShell>
+    </PublicScreen>
   );
 }

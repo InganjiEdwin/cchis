@@ -6,6 +6,8 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 
 import { useAuth } from "@/components/auth-provider";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/cn";
 import { getVisibleNav } from "@/lib/navigation";
 
 export function DashboardSidebar() {
@@ -20,22 +22,26 @@ export function DashboardSidebar() {
   const navItems = getVisibleNav(currentUser.role);
 
   return (
-    <aside className="dashboard-sidebar">
-      <div className="dashboard-sidebar-brand">
+    <aside className="sticky top-0 grid h-screen grid-rows-[auto_1fr_auto_auto] gap-5 border-r border-[var(--dashboard-sidebar-border)] bg-[var(--dashboard-sidebar-surface)] px-4 pb-4 pt-5 backdrop-blur md:px-[0.9rem] md:pt-[1.15rem] max-[960px]:static max-[960px]:h-auto max-[960px]:border-b max-[960px]:border-r-0">
+      <div className="flex items-center gap-4 px-2 py-1">
         <Image
           src="/brand/chis-brief-colored.svg"
           alt="CHIS logo"
           width={40}
           height={40}
-          className="dashboard-brand-logo"
+          className="h-[2.9rem] w-[2.9rem] shrink-0"
         />
-        <div className="dashboard-brand-copy">
-          <strong>Migori County</strong>
-          <span>Climate Health Intelligence System</span>
+        <div className="grid gap-0.5">
+          <strong className="text-[1.2rem] font-semibold leading-[1.05] tracking-[-0.04em] text-[var(--dashboard-sidebar-title)]">
+            Migori County
+          </strong>
+          <span className="text-[0.68rem] font-bold uppercase tracking-[0.06em] text-[var(--dashboard-sidebar-subtitle)]">
+            Climate Health Intelligence System
+          </span>
         </div>
       </div>
 
-      <nav className="dashboard-sidebar-nav" aria-label="Primary navigation">
+      <nav className="grid content-start gap-1.5" aria-label="Primary navigation">
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive = pathname === item.href;
@@ -44,36 +50,53 @@ export function DashboardSidebar() {
             <Link
               key={item.href}
               href={item.href}
-              className={`dashboard-nav-item${isActive ? " dashboard-nav-item-active" : ""}`}
+              className={cn(
+                "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition",
+                isActive
+                  ? "bg-[var(--dashboard-nav-active-surface)] text-[var(--dashboard-sidebar-title)] shadow-[var(--dashboard-nav-active-shadow)]"
+                  : "text-[var(--dashboard-sidebar-text)] hover:bg-[var(--dashboard-nav-hover)] hover:text-[var(--dashboard-sidebar-title)]",
+              )}
             >
-              <Icon className="section-icon" aria-hidden="true" />
+              <Icon className="size-4 shrink-0" aria-hidden="true" />
               <span>{item.label}</span>
             </Link>
           );
         })}
       </nav>
 
-      <div className="dashboard-sidebar-user">
-        <div className="dashboard-sidebar-user-icon" aria-hidden="true">
-          <UserCircle2 />
+      <Link
+        href="/profile"
+        className="group flex cursor-pointer items-center gap-3 rounded-2xl border-t border-[var(--dashboard-sidebar-border)] px-2 pb-0 pt-4 transition hover:bg-[var(--dashboard-nav-hover)]"
+        aria-label="Open profile"
+      >
+        <div
+          className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-[var(--dashboard-sidebar-icon-surface)] text-[var(--dashboard-sidebar-icon-ink)] transition group-hover:text-[var(--dashboard-sidebar-title)]"
+          aria-hidden="true"
+        >
+          <UserCircle2 className="size-5" />
         </div>
-        <div className="dashboard-sidebar-user-copy">
-          <strong>{currentUser.full_name || currentUser.username}</strong>
-          <span>{currentUser.role}</span>
-          <span>{currentUser.ward_name ?? "County-wide access"}</span>
+        <div className="grid gap-0.5">
+          <strong className="text-sm font-semibold text-[var(--dashboard-sidebar-text-strong)]">
+            {currentUser.full_name || currentUser.username}
+          </strong>
+          <span className="text-xs text-[var(--dashboard-sidebar-muted)]">{currentUser.role}</span>
+          <span className="text-xs text-[var(--dashboard-sidebar-muted)]">
+            {currentUser.ward_name ?? "County-wide access"}
+          </span>
         </div>
-      </div>
+      </Link>
 
-      <button
-        type="button"
-        className="dashboard-signout"
+      <Button
+        variant="secondary"
+        size="md"
+        className="w-full justify-center gap-2 rounded-2xl border-[var(--dashboard-sidebar-border)] bg-[var(--dashboard-nav-active-surface)] font-bold text-[var(--dashboard-sidebar-text)] hover:border-[var(--dashboard-icon-button-border)] hover:text-[var(--dashboard-sidebar-title)]"
         onClick={() => {
           void logout().then(() => router.replace("/login"));
         }}
       >
-        <LogOut className="section-icon" aria-hidden="true" />
+        <LogOut className="size-4" aria-hidden="true" />
         Sign out
-      </button>
+      </Button>
     </aside>
   );
 }

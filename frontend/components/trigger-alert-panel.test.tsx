@@ -6,16 +6,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TriggerAlertPanel } from "@/components/trigger-alert-panel";
 
 const mockUseAuth = vi.fn();
-const mockFetchWardRiskDataViaBff = vi.fn();
-const mockTriggerAlertViaBff = vi.fn();
+const mockUseWardsQuery = vi.fn();
 
 vi.mock("@/components/auth-provider", () => ({
   useAuth: () => mockUseAuth(),
 }));
 
-vi.mock("@/lib/dashboard", () => ({
-  fetchWardRiskDataViaBff: (...args: unknown[]) => mockFetchWardRiskDataViaBff(...args),
-  triggerAlertViaBff: (...args: unknown[]) => mockTriggerAlertViaBff(...args),
+vi.mock("@/queries/use-wards-query", () => ({
+  useWardsQuery: (...args: unknown[]) => mockUseWardsQuery(...args),
 }));
 
 describe("TriggerAlertPanel", () => {
@@ -38,66 +36,64 @@ describe("TriggerAlertPanel", () => {
       },
     });
 
-    mockFetchWardRiskDataViaBff.mockResolvedValue({
-      wards: {
-        count: 2,
-        next: null,
-        previous: null,
-        results: [
+    mockUseWardsQuery.mockReturnValue({
+      data: {
+        wards: {
+          count: 2,
+          next: null,
+          previous: null,
+          results: [
+            {
+              id: 1,
+              public_id: "ward-1",
+              name: "Alpha Ward",
+              county: "Nairobi",
+              sub_county: "West",
+              ward_code: "A1",
+              current_risk_level: "HIGH",
+              current_risk_score: 0.91,
+              is_active: true,
+              updated_at: "2026-04-21T08:00:00Z",
+            },
+            {
+              id: 2,
+              public_id: "ward-2",
+              name: "Beta Ward",
+              county: "Kisumu",
+              sub_county: "East",
+              ward_code: "B2",
+              current_risk_level: "MEDIUM",
+              current_risk_score: 0.52,
+              is_active: true,
+              updated_at: "2026-04-21T08:30:00Z",
+            },
+          ],
+        },
+        latestRisks: [
           {
-            id: 1,
-            public_id: "ward-1",
-            name: "Alpha Ward",
-            county: "Nairobi",
-            sub_county: "West",
-            ward_code: "A1",
-            current_risk_level: "HIGH",
-            current_risk_score: 0.91,
-            is_active: true,
-            updated_at: "2026-04-21T08:00:00Z",
+            ward_id: 1,
+            ward_name: "Alpha Ward",
+            risk_level: "HIGH",
+            risk_score: 0.91,
+            predicted_cases: 8,
+            generated_at: "2026-04-21T08:00:00Z",
           },
           {
-            id: 2,
-            public_id: "ward-2",
-            name: "Beta Ward",
-            county: "Kisumu",
-            sub_county: "East",
-            ward_code: "B2",
-            current_risk_level: "MEDIUM",
-            current_risk_score: 0.52,
-            is_active: true,
-            updated_at: "2026-04-21T08:30:00Z",
+            ward_id: 2,
+            ward_name: "Beta Ward",
+            risk_level: "MEDIUM",
+            risk_score: 0.52,
+            predicted_cases: 4,
+            generated_at: "2026-04-21T08:30:00Z",
           },
         ],
       },
-      latestRisks: [
-        {
-          ward_id: 1,
-          ward_name: "Alpha Ward",
-          risk_level: "HIGH",
-          risk_score: 0.91,
-          predicted_cases: 8,
-          generated_at: "2026-04-21T08:00:00Z",
-        },
-        {
-          ward_id: 2,
-          ward_name: "Beta Ward",
-          risk_level: "MEDIUM",
-          risk_score: 0.52,
-          predicted_cases: 4,
-          generated_at: "2026-04-21T08:30:00Z",
-        },
-      ],
-    });
-
-    mockTriggerAlertViaBff.mockResolvedValue({
-      message: "Alert task queued successfully.",
-      risk_score_id: 88,
-      task_id: "task-123",
+      isPending: false,
+      error: null,
     });
   });
 
-  it("loads ward context and queues an alert after explicit confirmation", async () => {
+  it("opens a structured multi-step workflow and completes the UI-only success state", async () => {
     const user = userEvent.setup();
 
     render(React.createElement(TriggerAlertPanel));
@@ -105,32 +101,30 @@ describe("TriggerAlertPanel", () => {
     await user.click(screen.getByRole("button", { name: "Trigger Alert" }));
 
     await waitFor(() => {
-      expect(mockFetchWardRiskDataViaBff).toHaveBeenCalled();
+      expect(mockUseWardsQuery).toHaveBeenCalled();
     });
 
-    expect(screen.getByRole("combobox", { name: "Ward" })).toHaveValue("2");
-    expect(screen.getByText("Beta Ward")).toBeInTheDocument();
+    expect(screen.getByText("Structured alert workflow")).toBeInTheDocument();
+    expect(screen.getByText("Step 1")).toBeInTheDocument();
+    expect(screen.getByText("Select Target")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("checkbox", { name: /also request sms delivery/i }));
-    await user.click(
-      screen.getByRole("checkbox", {
-        name: /i confirm this ward context is correct and i want to queue this alert now/i,
-      }),
-    );
-    await user.click(screen.getByRole("button", { name: "Confirm and trigger" }));
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(screen.getByText("Define Alert")).toBeInTheDocument();
 
-    await waitFor(() => {
-      expect(mockTriggerAlertViaBff).toHaveBeenCalledWith({
-        ward_id: 2,
-        send_sms: true,
-      });
-    });
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(screen.getByText("Delivery")).toBeInTheDocument();
 
-    expect(screen.getByText(/alert task queued successfully\./i)).toBeInTheDocument();
-    expect(screen.getByText(/task task-123 is queued/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(screen.getByText("Review")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Send Alert" }));
+
+    expect(screen.getByText("Alert sent successfully")).toBeInTheDocument();
+    expect(screen.getByText("ALT-0042")).toBeInTheDocument();
+    expect(screen.getByText("Dispatch Timeline")).toBeInTheDocument();
   });
 
-  it("blocks submission until the confirmation checkbox is selected", async () => {
+  it("marks county-wide targeting as restricted for non-admin users", async () => {
     const user = userEvent.setup();
 
     render(React.createElement(TriggerAlertPanel));
@@ -138,10 +132,11 @@ describe("TriggerAlertPanel", () => {
     await user.click(screen.getByRole("button", { name: "Trigger Alert" }));
 
     await waitFor(() => {
-      expect(mockFetchWardRiskDataViaBff).toHaveBeenCalled();
+      expect(mockUseWardsQuery).toHaveBeenCalled();
     });
 
-    expect(screen.getByRole("button", { name: "Confirm and trigger" })).toBeDisabled();
-    expect(mockTriggerAlertViaBff).not.toHaveBeenCalled();
+    const countyOption = screen.getByRole("button", { name: /Entire county/i });
+    expect(countyOption.className).toContain("cursor-not-allowed");
+    expect(countyOption.className).toContain("opacity-60");
   });
 });

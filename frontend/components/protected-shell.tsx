@@ -6,6 +6,7 @@ import { useEffect } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { DashboardFooter } from "@/components/dashboard-footer";
 import { DashboardSidebar } from "@/components/dashboard-sidebar";
+import { PublicCard, PublicScreen, PublicShell } from "@/components/ui/public-shell";
 import { isDashboardRole } from "@/lib/roles";
 
 export function ProtectedShell({ children }: { children: React.ReactNode }) {
@@ -30,15 +31,21 @@ export function ProtectedShell({ children }: { children: React.ReactNode }) {
 
   if (isHydrating) {
     return (
-      <div className="auth-shell">
-        <div className="auth-card">
-          <p className="eyebrow">CHIS Dashboard</p>
-          <h1 className="title">Restoring your session</h1>
-          <p className="subtitle">
-            Checking your current access scope before we render the operational dashboard.
-          </p>
-        </div>
-      </div>
+      <PublicScreen>
+        <PublicShell narrow className="justify-center">
+          <PublicCard className="max-w-2xl">
+            <p className="mb-3 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--login-description)]">
+              CHIS Dashboard
+            </p>
+            <h1 className="text-balance text-4xl font-semibold tracking-[-0.04em] text-[var(--totp-ink)]">
+              Restoring your session
+            </h1>
+            <p className="mt-4 text-sm leading-6 text-[var(--login-description)]">
+              Checking your current access scope before we render the operational dashboard.
+            </p>
+          </PublicCard>
+        </PublicShell>
+      </PublicScreen>
     );
   }
 
@@ -47,10 +54,10 @@ export function ProtectedShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="dashboard-shell">
+    <div className="grid min-h-screen bg-app-bg text-panel-copy md:grid-cols-[260px_minmax(0,1fr)]">
       <DashboardSidebar />
-      <div className="dashboard-stage">
-        <main className="dashboard-main">{children}</main>
+      <div className="grid min-w-0 grid-rows-[1fr_auto]">
+        <main className="min-w-0 px-[1.4rem] pb-[1.1rem] max-[640px]:px-4 max-[640px]:pb-4">{children}</main>
         <DashboardFooter />
       </div>
     </div>

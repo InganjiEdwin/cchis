@@ -1,8 +1,27 @@
- "use client";
+"use client";
 
-import { ArrowLeft, CircleAlert, CircleHelp, Download, ShieldCheck } from "lucide-react";
+import {
+  ArrowLeft,
+  CircleAlert,
+  DatabaseZap,
+  Download,
+  LockKeyhole,
+  Radar,
+  Share2,
+  Siren,
+} from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import {
+  PublicFooter,
+  PublicScreen,
+  PublicShell,
+  PublicTopbar,
+} from "@/components/ui/public-shell";
+import { StatusBadge } from "@/components/ui/status-badge";
 
 const sections = [
   {
@@ -32,9 +51,18 @@ const sections = [
   {
     title: "3. How We Use Data",
     bullets: [
-      "To generate and distribute climate-health risk insights to authorized users.",
-      "To coordinate monitoring, alerts, and operational decision support.",
-      "To secure the platform and limit access to authorized public health stakeholders.",
+      {
+        icon: Radar,
+        copy: "To generate and distribute climate-health risk insights to authorized users.",
+      },
+      {
+        icon: Siren,
+        copy: "To coordinate monitoring, alerts, and operational decision support.",
+      },
+      {
+        icon: LockKeyhole,
+        copy: "To secure the platform and limit access to authorized public health stakeholders.",
+      },
     ],
   },
   {
@@ -68,126 +96,92 @@ export default function PrivacyPage() {
   const router = useRouter();
 
   return (
-    <div className="policy-screen">
-      <header className="forgot-topbar">
-        <div className="policy-topbar-brand">
-          <button
-            type="button"
-            className="policy-history-back"
-            onClick={() => router.back()}
-            aria-label="Go back"
-          >
-            <ArrowLeft aria-hidden="true" />
-          </button>
-          <Link href="/login" className="forgot-brand">
-            CHIS
-          </Link>
-        </div>
-        <div className="forgot-topbar-actions">
-          <Link href="/login" className="forgot-topbar-link">
-            Back to Login
-          </Link>
-          <span className="forgot-help-badge" aria-hidden="true">
-            <CircleHelp />
-          </span>
-        </div>
-      </header>
-
-      <main className="policy-shell">
-        <section className="policy-header">
-          <div className="policy-header-row">
-            <span className="policy-chip">Official Policy</span>
-            <span className="policy-current">Privacy Policy</span>
-          </div>
-          <h1 className="policy-title">Privacy Policy</h1>
-          <p className="policy-updated">Last updated: April 2026</p>
-        </section>
-
-        <section className="policy-card">
-          {sections.map((section) => (
-            <article key={section.title} className="policy-section">
-              <h2>{section.title}</h2>
-
-              {section.body?.map((paragraph) => (
-                <p key={paragraph}>{paragraph}</p>
-              ))}
-
-              {section.cards ? (
-                <div className="policy-info-grid">
-                  {section.cards.map((card) => (
-                    <div key={card.title} className="policy-info-card">
-                      <h3>{card.title}</h3>
-                      <p>{card.copy}</p>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-
-              {section.bullets ? (
-                <div className="policy-bullets">
-                  {section.bullets.map((bullet) => (
-                    <div key={bullet} className="policy-bullet">
-                      <ShieldCheck aria-hidden="true" />
-                      <p>{bullet}</p>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-
-              {section.note ? (
-                <div className="policy-note policy-note-alert">
-                  <CircleAlert aria-hidden="true" />
-                  <p>{section.note}</p>
-                </div>
-              ) : null}
-
-              {section.callout ? (
-                <div className="policy-note">
-                  <ShieldCheck aria-hidden="true" />
-                  <p>{section.callout}</p>
-                </div>
-              ) : null}
-            </article>
-          ))}
-
-          <article className="policy-section">
-            <h2>8. Contact Information</h2>
-            <div className="policy-contact-grid">
-              <div>
-                <span className="policy-contact-label">Administrator</span>
-                <p>Usalama Technology Limited</p>
-              </div>
-              <div>
-                <span className="policy-contact-label">Support email</span>
-                <p>support@usalama.tech</p>
-              </div>
+    <PublicScreen className="bg-[var(--forgot-background)]">
+      <PublicTopbar extra={<button type="button" className="text-sm text-[var(--forgot-link)] transition hover:text-[var(--forgot-link-hover)]" onClick={() => router.back()}>Back</button>} />
+      <PublicShell>
+        <div className="w-full space-y-6">
+          <div className="space-y-3">
+            <div className="flex items-center gap-3">
+              <StatusBadge tone="info">Official Policy</StatusBadge>
+              <span className="text-sm font-medium text-panel-muted">Privacy Policy</span>
             </div>
-          </article>
-        </section>
+            <h1 className="text-5xl font-semibold tracking-tight text-panel-strong">Privacy Policy</h1>
+            <p className="text-sm text-panel-muted">Last updated: April 2026</p>
+          </div>
 
-        <div className="policy-actions">
-          <a href="/legal/chis-privacy-policy.pdf" download className="policy-download">
-            <Download aria-hidden="true" />
-            Download Policy as PDF
-          </a>
-          <button type="button" className="policy-back-link" onClick={() => router.back()}>
-            <ArrowLeft aria-hidden="true" />
-            Back
-          </button>
-        </div>
-      </main>
+          <Card className="space-y-8 p-6 md:p-8">
+            {sections.map((section) => (
+              <article key={section.title} className="space-y-4">
+                <h2 className="text-2xl font-semibold text-panel-strong">{section.title}</h2>
+                {section.body?.map((paragraph) => (
+                  <p key={paragraph} className="text-sm leading-7 text-panel-copy">{paragraph}</p>
+                ))}
+                {section.cards ? (
+                  <div className="grid gap-4 md:grid-cols-3">
+                    {section.cards.map((card) => (
+                      <Card key={card.title} className="p-5">
+                        <h3 className="text-base font-semibold text-panel-strong">{card.title}</h3>
+                        <p className="mt-2 text-sm leading-6 text-panel-copy">{card.copy}</p>
+                      </Card>
+                    ))}
+                  </div>
+                ) : null}
+                {section.bullets ? (
+                  <div className="space-y-3">
+                    {section.bullets.map((bullet) => (
+                      <div key={bullet.copy} className="flex items-center gap-3 rounded-2xl border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 py-3">
+                        <bullet.icon className="size-5 shrink-0 text-brand" aria-hidden="true" />
+                        <p className="text-sm leading-6 text-panel-copy">{bullet.copy}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {section.note ? (
+                  <div className="flex items-center gap-3 rounded-2xl border border-[color-mix(in_srgb,var(--warning)_24%,white)] bg-[color-mix(in_srgb,var(--warning)_8%,white)] px-4 py-3 text-sm text-[color:var(--warning)]">
+                    <DatabaseZap className="size-5 shrink-0" aria-hidden="true" />
+                    <p className="leading-6">{section.note}</p>
+                  </div>
+                ) : null}
+                {section.callout ? (
+                  <div className="flex items-center gap-3 rounded-2xl border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 py-3 text-sm text-panel-copy">
+                    <Share2 className="size-5 shrink-0 text-brand" aria-hidden="true" />
+                    <p className="leading-6">{section.callout}</p>
+                  </div>
+                ) : null}
+              </article>
+            ))}
 
-      <footer className="login-footer">
-        <p>&copy; 2026 Climate Health Intelligence System. All rights reserved.</p>
-        <div className="login-footer-links">
-          <Link href="/privacy" className="login-footer-link policy-footer-link-active">
-            Privacy Policy
-          </Link>
-          <Link href="/terms" className="login-footer-link">
-            Terms of Service
-          </Link>
+            <article className="space-y-4">
+              <h2 className="text-2xl font-semibold text-panel-strong">8. Contact Information</h2>
+              <div className="grid gap-4 md:grid-cols-2">
+                <Card className="p-5">
+                  <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Administrator</span>
+                  <p className="mt-2 text-sm text-panel-copy">Usalama Technology Limited</p>
+                </Card>
+                <Card className="p-5">
+                  <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Support email</span>
+                  <p className="mt-2 text-sm text-panel-copy">support@usalama.tech</p>
+                </Card>
+              </div>
+            </article>
+          </Card>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <a href="/legal/chis-privacy-policy.pdf" download>
+              <Button size="md">
+                <Download className="size-4" aria-hidden="true" />
+                Download Policy as PDF
+              </Button>
+            </a>
+            <Button type="button" variant="secondary" onClick={() => router.back()}>
+              <ArrowLeft className="size-4" aria-hidden="true" />
+              Back
+            </Button>
+          </div>
         </div>
-      </footer>
-    </div>
+
+        <PublicFooter />
+      </PublicShell>
+    </PublicScreen>
   );
 }

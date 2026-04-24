@@ -25,15 +25,15 @@ import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { DashboardTopbar } from "@/components/dashboard-topbar";
 import { RoleGate } from "@/components/role-gate";
-import {
-  fetchAlertsDataViaBff,
-  fetchChvDataViaBff,
-  fetchWardRiskDataViaBff,
-  type AlertRecord,
-  type ChvRecord,
-  type LatestWardRisk,
-} from "@/lib/dashboard";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { InputShell } from "@/components/ui/input-shell";
+import { StatusBanner } from "@/components/ui/status-banner";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { cn } from "@/lib/cn";
+import type { AlertRecord, ChvRecord, LatestWardRisk } from "@/lib/dashboard";
 import { describeFreshness, formatRelativeTimestamp, getLatestTimestamp } from "@/lib/freshness";
+import { useChvOperationsQuery } from "@/queries/use-chv-operations-query";
 
 type FocusFilter = "ALL" | "HIGH_RISK";
 type RegistryStatus = "ACTIVE" | "IDLE" | "OFFLINE";
@@ -169,60 +169,56 @@ function formatOperationalTime(timestamp: string) {
   return formatRelativeTimestamp(date.toISOString());
 }
 
+function statusTone(status: RegistryStatus) {
+  switch (status) {
+    case "ACTIVE":
+      return "success" as const;
+    case "IDLE":
+      return "warning" as const;
+    case "OFFLINE":
+    default:
+      return "default" as const;
+  }
+}
+
+function riskTone(zone: RegistryRiskZone) {
+  switch (zone) {
+    case "HIGH":
+      return "danger" as const;
+    case "MODERATE":
+      return "warning" as const;
+    case "SAFE":
+    default:
+      return "success" as const;
+  }
+}
+
+function syncTone(sync: SyncHealth) {
+  switch (sync) {
+    case "ONLINE":
+      return "success" as const;
+    case "DELAYED":
+      return "warning" as const;
+    case "OFFLINE":
+    default:
+      return "default" as const;
+  }
+}
+
 export default function ChvsPage() {
   const { currentUser } = useAuth();
-  const [chvs, setChvs] = useState<ChvRecord[]>([]);
-  const [latestRisks, setLatestRisks] = useState<LatestWardRisk[]>([]);
-  const [alerts, setAlerts] = useState<AlertRecord[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [selectedWard, setSelectedWard] = useState("ALL");
   const [focusFilter, setFocusFilter] = useState<FocusFilter>("ALL");
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("ALL");
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedChvId, setSelectedChvId] = useState<number | null>(null);
-
-  useEffect(() => {
-    let isActive = true;
-
-    async function loadPage() {
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        const [chvResponse, wardResponse, alertResponse] = await Promise.all([
-          fetchChvDataViaBff(),
-          fetchWardRiskDataViaBff({ county: "Migori", ordering: "-current_risk_score" }),
-          fetchAlertsDataViaBff(),
-        ]);
-
-        if (!isActive) {
-          return;
-        }
-
-        setChvs(chvResponse.results);
-        setLatestRisks(wardResponse.latestRisks);
-        setAlerts(alertResponse.results);
-      } catch (loadError) {
-        if (!isActive) {
-          return;
-        }
-
-        setError(loadError instanceof Error ? loadError.message : "Unable to load CHV operations.");
-      } finally {
-        if (isActive) {
-          setIsLoading(false);
-        }
-      }
-    }
-
-    void loadPage();
-
-    return () => {
-      isActive = false;
-    };
-  }, []);
+  const { data, isPending: isLoading, error } = useChvOperationsQuery({
+    enabled: Boolean(currentUser),
+  });
+  const chvs = data?.chvs ?? [];
+  const latestRisks = data?.latestRisks ?? [];
+  const alerts = data?.alerts ?? [];
 
   const latestTimestamp = useMemo(
     () =>
@@ -242,23 +238,19 @@ export default function ChvsPage() {
 
   const riskByWard = useMemo(() => {
     const map = new Map<string, LatestWardRisk>();
-
     latestRisks.forEach((risk) => {
       map.set(risk.ward_name, risk);
     });
-
     return map;
   }, [latestRisks]);
 
   const alertsByWard = useMemo(() => {
     const map = new Map<string, AlertRecord[]>();
-
     alerts.forEach((alert) => {
       const existing = map.get(alert.ward_name) ?? [];
       existing.push(alert);
       map.set(alert.ward_name, existing);
     });
-
     return map;
   }, [alerts]);
 
@@ -281,18 +273,10 @@ export default function ChvsPage() {
       }
 
       const status = resolveRegistryStatus(chv);
-      if (quickFilter === "ACTIVE" && status !== "ACTIVE") {
-        return false;
-      }
-      if (quickFilter === "IDLE" && status !== "IDLE") {
-        return false;
-      }
-      if (quickFilter === "OFFLINE" && status !== "OFFLINE") {
-        return false;
-      }
-      if (quickFilter === "HIGH_RISK" && riskLevel !== "HIGH") {
-        return false;
-      }
+      if (quickFilter === "ACTIVE" && status !== "ACTIVE") return false;
+      if (quickFilter === "IDLE" && status !== "IDLE") return false;
+      if (quickFilter === "OFFLINE" && status !== "OFFLINE") return false;
+      if (quickFilter === "HIGH_RISK" && riskLevel !== "HIGH") return false;
 
       if (!normalizedSearch) {
         return true;
@@ -380,7 +364,9 @@ export default function ChvsPage() {
       return map;
     }, new Map<string, number>());
 
-    const candidate = latestRisks.find((risk) => risk.risk_level === "HIGH" && (wardCounts.get(risk.ward_name) ?? 0) <= 1);
+    const candidate = latestRisks.find(
+      (risk) => risk.risk_level === "HIGH" && (wardCounts.get(risk.ward_name) ?? 0) <= 1,
+    );
 
     if (!candidate) {
       return null;
@@ -394,17 +380,20 @@ export default function ChvsPage() {
   }, [chvs, latestRisks]);
 
   const hasCriticalCoverageGap = Boolean(criticalCoverageGap);
-  const highPriorityReferrals = latestRisks.filter((item) => item.risk_level === "HIGH").reduce((sum, item) => sum + Math.max(1, Math.ceil(item.predicted_cases / 2)), 0);
+  const highPriorityReferrals = latestRisks
+    .filter((item) => item.risk_level === "HIGH")
+    .reduce((sum, item) => sum + Math.max(1, Math.ceil(item.predicted_cases / 2)), 0);
   const activeReportingRate = totalChvs ? Math.round((activeChvs / totalChvs) * 100) : 0;
   const commandStatus = {
     assign: hasCriticalCoverageGap
       ? `${criticalCoverageGap?.wardName} needs reinforcement`
       : "No wards currently require emergency reassignment",
-    broadcast: alerts.length ? `Last broadcast aligned to ${alerts.length} alert records` : "No county-wide broadcast sent in this cycle",
+    broadcast: alerts.length
+      ? `Last broadcast aligned to ${alerts.length} alert records`
+      : "No county-wide broadcast sent in this cycle",
     training: `${registryRows.filter((row) => row.syncHealth !== "ONLINE").length} CHVs pending protocol refresh`,
   };
 
-  const allWardsLabel = selectedWard === "ALL" ? "All Wards" : selectedWard;
   const coverageShare = totalChvs ? Math.max(8, Math.round((activeChvs / totalChvs) * 100)) : 0;
   const acknowledgedDelta = Math.max(0.4, Number(((100 - acknowledgedRate) / 10).toFixed(1)));
   const totalVisibleLabel = isLoading ? "..." : totalChvs.toLocaleString();
@@ -416,7 +405,7 @@ export default function ChvsPage() {
   }
 
   return (
-    <div className="dashboard-page chv-operations-page">
+    <div className="space-y-6">
       <DashboardTopbar
         title="Community Health Volunteers"
         subtitle="Monitor field activity, response readiness, and community-level engagement"
@@ -430,69 +419,87 @@ export default function ChvsPage() {
         message="Only Admin and Supervisor roles should use the field operations surface."
       >
         {error ? (
-          <div className="status status-error">
-            <AlertTriangle className="section-icon" aria-hidden="true" />
-            {error}
-          </div>
+          <StatusBanner tone="danger" icon={<AlertTriangle aria-hidden="true" />}>
+            {error instanceof Error ? error.message : "Unable to load CHV operations."}
+          </StatusBanner>
         ) : null}
 
-        <section className="chv-operations-metrics">
-          <article className="chv-metric-card">
-            <span className="chv-metric-label">Total CHVs</span>
-            <div className="chv-metric-value-row">
-              <strong>{totalVisibleLabel}</strong>
-            </div>
-            <span className="chv-metric-subtext">Visible in current ward scope</span>
-          </article>
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <Card className="rounded-[2rem] px-5 py-5">
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Total CHVs</span>
+            <div className="mt-3 text-4xl font-semibold leading-none text-panel-strong">{totalVisibleLabel}</div>
+            <p className="mt-4 text-sm text-panel-muted">Visible in current ward scope</p>
+          </Card>
 
-          <article className="chv-metric-card">
-            <span className="chv-metric-label">Active today</span>
-            <div className="chv-metric-value-row">
-              <strong>{activeVisibleLabel}</strong>
-              <span className="chv-metric-range">/ {totalVisibleLabel}</span>
+          <Card className="rounded-[2rem] px-5 py-5">
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Active today</span>
+            <div className="mt-3 flex items-end gap-2">
+              <strong className="text-4xl font-semibold leading-none text-panel-strong">{activeVisibleLabel}</strong>
+              <span className="pb-1 text-sm font-medium text-panel-muted">/ {totalVisibleLabel}</span>
             </div>
-            <div className="chv-metric-progress" aria-hidden="true">
-              <span style={{ width: `${coverageShare}%` }} />
+            <div className="mt-4 h-2 rounded-full bg-[color-mix(in_srgb,var(--dashboard-table-line)_70%,transparent)]">
+              <span
+                className="block h-full rounded-full bg-brand"
+                style={{ width: `${coverageShare}%` }}
+                aria-hidden="true"
+              />
             </div>
-            <span className="chv-metric-subtext">{activeReportingRate}% reporting in current scope</span>
-          </article>
+            <p className="mt-3 text-sm text-panel-muted">{activeReportingRate}% reporting in current scope</p>
+          </Card>
 
-          <article className="chv-metric-card">
-            <span className="chv-metric-label">Alert acknowledged rate</span>
-            <div className="chv-metric-value-row chv-metric-value-row-alerts">
-              <strong>{acknowledgedRate.toFixed(1)}%</strong>
-              <span className="chv-metric-badge">-{acknowledgedDelta}%</span>
+          <Card className="rounded-[2rem] px-5 py-5">
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">
+              Alert acknowledged rate
+            </span>
+            <div className="mt-3 flex items-center gap-3">
+              <strong className="text-4xl font-semibold leading-none text-panel-strong">{acknowledgedRate.toFixed(1)}%</strong>
+              <StatusBadge tone="danger" className="tracking-[0.12em]">
+                -{acknowledgedDelta}% 
+              </StatusBadge>
             </div>
-            <span className="chv-metric-subtext">vs yesterday</span>
-          </article>
+            <p className="mt-4 text-sm text-panel-muted">vs yesterday</p>
+          </Card>
 
-          <article className="chv-metric-card">
-            <span className="chv-metric-label">Cases reported (24h)</span>
-            <div className="chv-metric-value-row">
-              <strong>{casesVisibleLabel}</strong>
-            </div>
-            <span className="chv-metric-subtext">{highPriorityReferrals.toLocaleString()} high-priority referrals</span>
-          </article>
+          <Card className="rounded-[2rem] px-5 py-5">
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">
+              Cases reported (24h)
+            </span>
+            <div className="mt-3 text-4xl font-semibold leading-none text-panel-strong">{casesVisibleLabel}</div>
+            <p className="mt-4 text-sm text-panel-muted">{highPriorityReferrals.toLocaleString()} high-priority referrals</p>
+          </Card>
         </section>
 
-        <section className="chv-operations-stage">
-          <article className="chv-coverage-card">
-            <div className="chv-panel-heading">
+        <section className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_22rem]">
+          <Card className="overflow-hidden rounded-[2rem] p-5 sm:p-6">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <h2>CHV Coverage &amp; Deployment</h2>
-                <p>Real-time distribution across Migori wards</p>
+                <h2 className="text-[clamp(1.6rem,1rem+1vw,2.35rem)] font-semibold leading-tight text-panel-strong">
+                  CHV Coverage &amp; Deployment
+                </h2>
+                <p className="mt-2 text-sm text-panel-muted">Real-time distribution across Migori wards</p>
               </div>
-              <div className="chv-segmented-control" role="tablist" aria-label="Deployment focus">
+
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  className={focusFilter === "ALL" ? "is-active" : ""}
+                  className={cn(
+                    "inline-flex h-10 items-center justify-center rounded-pill px-4 text-sm font-semibold transition",
+                    focusFilter === "ALL"
+                      ? "bg-brand text-white shadow-[var(--login-submit-shadow)]"
+                      : "border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] text-panel-copy",
+                  )}
                   onClick={() => setFocusFilter("ALL")}
                 >
                   All Wards
                 </button>
                 <button
                   type="button"
-                  className={focusFilter === "HIGH_RISK" ? "is-active" : ""}
+                  className={cn(
+                    "inline-flex h-10 items-center justify-center rounded-pill px-4 text-sm font-semibold transition",
+                    focusFilter === "HIGH_RISK"
+                      ? "bg-brand text-white shadow-[var(--login-submit-shadow)]"
+                      : "border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] text-panel-copy",
+                  )}
                   onClick={() => setFocusFilter("HIGH_RISK")}
                 >
                   High Risk Focus
@@ -500,132 +507,169 @@ export default function ChvsPage() {
               </div>
             </div>
 
-            <div className="chv-deployment-surface">
-              <div className="chv-map-fog" aria-hidden="true" />
-              <div className="chv-map-grid" aria-hidden="true" />
+            <div className="relative mt-6 min-h-[30rem] overflow-hidden rounded-[1.75rem] border border-panel-table-wrap bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--brand)_10%,transparent),transparent_35%),radial-gradient(circle_at_bottom_right,color-mix(in_srgb,var(--warning)_10%,transparent),transparent_32%),linear-gradient(135deg,color-mix(in_srgb,var(--panel)_92%,white),var(--panel))] p-5">
+              <div className="absolute inset-0 bg-[linear-gradient(90deg,color-mix(in_srgb,var(--dashboard-table-line)_32%,transparent)_1px,transparent_1px),linear-gradient(color-mix(in_srgb,var(--dashboard-table-line)_32%,transparent)_1px,transparent_1px)] bg-[size:6rem_6rem] opacity-60" />
 
               {deploymentDots.map((dot) => (
                 <button
                   key={dot.wardName}
                   type="button"
-                  className={`chv-deployment-dot chv-deployment-dot-${dot.riskTone.toLowerCase()}`}
+                  className="absolute z-10"
                   style={{ left: dot.left, top: dot.top }}
                   title={`${dot.wardName}: ${dot.chvCount} CHVs`}
                 >
-                  <span />
-                  <span className="chv-deployment-label">
-                    <strong>{dot.wardName}</strong>
-                    <small>
+                  <span
+                    className={cn(
+                      "inline-flex size-4 rounded-full border-4 border-white shadow-[0_0_0_12px_color-mix(in_srgb,var(--brand)_12%,transparent)]",
+                      dot.riskTone === "HIGH" && "bg-[color:var(--danger)] shadow-[0_0_0_12px_color-mix(in_srgb,var(--danger)_16%,transparent)]",
+                      dot.riskTone === "MODERATE" && "bg-[color:var(--warning)] shadow-[0_0_0_12px_color-mix(in_srgb,var(--warning)_16%,transparent)]",
+                      dot.riskTone === "SAFE" && "bg-brand",
+                    )}
+                  />
+                  <span className="mt-3 block rounded-2xl bg-panel/95 px-3 py-2 text-left shadow-sm backdrop-blur">
+                    <strong className="block text-sm text-panel-strong">{dot.wardName}</strong>
+                    <small className="block text-xs text-panel-muted">
                       {dot.activeCount}/{dot.chvCount} active · {dot.riskLabel}
                     </small>
                   </span>
                 </button>
               ))}
 
-              <div className="chv-map-legend">
-                <span className="chv-map-legend-title">Coverage density</span>
-                <div className="chv-map-legend-row">
-                  <span className="chv-map-legend-dot chv-map-legend-dot-safe" />
-                  <span>Optimal deployment</span>
+              <Card className="absolute bottom-5 left-5 z-10 rounded-[1.5rem] px-4 py-4 shadow-none">
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Coverage density</span>
+                <div className="mt-4 space-y-3 text-sm text-panel-copy">
+                  <div className="flex items-center gap-2">
+                    <span className="size-3 rounded-full bg-brand" />
+                    <span>Optimal deployment</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="size-3 rounded-full bg-[color:var(--danger)]" />
+                    <span>Underserved areas (urgent)</span>
+                  </div>
                 </div>
-                <div className="chv-map-legend-row">
-                  <span className="chv-map-legend-dot chv-map-legend-dot-high" />
-                  <span>Underserved areas (urgent)</span>
-                </div>
-              </div>
+              </Card>
             </div>
-          </article>
+          </Card>
 
-          <aside className="chv-command-rail">
-            <article className="chv-command-card">
-              <h2>Operations Command</h2>
+          <div className="space-y-5">
+            <Card className="rounded-[2rem] px-5 py-5">
+              <h2 className="text-2xl font-semibold text-panel-strong">Operations Command</h2>
 
-              <button type="button" className="chv-command-action">
-                <span className="chv-command-action-icon">
-                  <Users2 aria-hidden="true" />
-                </span>
-                <span className="chv-command-action-copy">
-                  <strong>Assign to Ward</strong>
-                  <small>{commandStatus.assign}</small>
-                </span>
-                <ChevronsRight aria-hidden="true" />
-              </button>
-
-              <button type="button" className="chv-command-action">
-                <span className="chv-command-action-icon">
-                  <Megaphone aria-hidden="true" />
-                </span>
-                <span className="chv-command-action-copy">
-                  <strong>Broadcast Message</strong>
-                  <small>{commandStatus.broadcast}</small>
-                </span>
-                <ChevronsRight aria-hidden="true" />
-              </button>
-
-              <button type="button" className="chv-command-action">
-                <span className="chv-command-action-icon">
-                  <BriefcaseMedical aria-hidden="true" />
-                </span>
-                <span className="chv-command-action-copy">
-                  <strong>Trigger Training</strong>
-                  <small>{commandStatus.training}</small>
-                </span>
-                <ChevronsRight aria-hidden="true" />
-              </button>
-            </article>
-
-            <article className={`chv-gap-card ${hasCriticalCoverageGap ? "chv-gap-card-critical" : "chv-gap-card-stable"}`}>
-              <div className="chv-gap-header">
-                <ShieldAlert aria-hidden="true" />
-                <h3>{hasCriticalCoverageGap ? "Critical Coverage Gap" : "Coverage Status"}</h3>
+              <div className="mt-5 space-y-3">
+                {[
+                  {
+                    icon: Users2,
+                    title: "Assign to Ward",
+                    detail: commandStatus.assign,
+                  },
+                  {
+                    icon: Megaphone,
+                    title: "Broadcast Message",
+                    detail: commandStatus.broadcast,
+                  },
+                  {
+                    icon: BriefcaseMedical,
+                    title: "Trigger Training",
+                    detail: commandStatus.training,
+                  },
+                ].map((item) => (
+                  <button
+                    key={item.title}
+                    type="button"
+                    className="flex w-full items-center gap-3 rounded-[1.5rem] border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 py-4 text-left transition hover:border-[var(--dashboard-icon-button-border)] hover:bg-[color-mix(in_srgb,var(--dashboard-nav-hover)_40%,transparent)]"
+                  >
+                    <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--brand)_10%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]">
+                      <item.icon className="size-5" aria-hidden="true" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <strong className="block text-base text-panel-strong">{item.title}</strong>
+                      <small className="mt-1 block text-sm text-panel-muted">{item.detail}</small>
+                    </span>
+                    <ChevronsRight className="size-4 shrink-0 text-panel-muted" aria-hidden="true" />
+                  </button>
+                ))}
               </div>
-              <p>
+            </Card>
+
+            <Card
+              className={cn(
+                "rounded-[2rem] px-5 py-5",
+                hasCriticalCoverageGap
+                  ? "border-[color:var(--warning)]/25 bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))]"
+                  : "border-[color:var(--success)]/25 bg-[color-mix(in_srgb,var(--success)_6%,var(--panel))]",
+              )}
+            >
+              <div className="flex items-center gap-3">
+                <span
+                  className={cn(
+                    "inline-flex size-10 items-center justify-center rounded-full",
+                    hasCriticalCoverageGap
+                      ? "bg-[color-mix(in_srgb,var(--warning)_18%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]"
+                      : "bg-[color-mix(in_srgb,var(--success)_18%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_20%,transparent)]",
+                  )}
+                >
+                  <ShieldAlert className="size-4" aria-hidden="true" />
+                </span>
+                <h3 className="text-xl font-semibold text-panel-strong">
+                  {hasCriticalCoverageGap ? "Critical Coverage Gap" : "Coverage Status"}
+                </h3>
+              </div>
+              <p className="mt-4 text-sm leading-6 text-panel-copy">
                 {hasCriticalCoverageGap
                   ? `${criticalCoverageGap?.wardName} has only ${criticalCoverageGap?.activeCount} active CHV on duty while ${criticalCoverageGap?.predictedCases} predicted cases remain in play.`
                   : "No urgent CHV coverage gaps detected in visible wards."}
               </p>
-              <button type="button" className="chv-gap-button" disabled={!hasCriticalCoverageGap}>
+              <Button className="mt-5 w-full justify-center" disabled={!hasCriticalCoverageGap}>
                 Re-deploy now
-              </button>
-            </article>
-          </aside>
+              </Button>
+            </Card>
+          </div>
         </section>
 
-        <section className="chv-registry-card">
-          <div className="chv-panel-heading chv-panel-heading-registry">
+        <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div>
-              <h2>CHV Personnel Registry</h2>
-              <p>Detailed performance and activity tracking</p>
+              <h2 className="text-[clamp(1.6rem,1rem+1vw,2.3rem)] font-semibold leading-tight text-panel-strong">
+                CHV Personnel Registry
+              </h2>
+              <p className="mt-2 text-sm text-panel-muted">Detailed performance and activity tracking</p>
             </div>
 
-            <div className="chv-registry-toolbar">
-              <label className="chv-registry-search">
-                <Search aria-hidden="true" />
-                <input
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Search by name..."
-                  aria-label="Search by name"
-                />
+            <div className="flex min-w-0 flex-1 flex-col gap-4 xl:max-w-3xl xl:flex-row xl:flex-wrap xl:justify-end">
+              <InputShell
+                className="min-w-0 flex-[1.2]"
+                icon={<Search className="size-4" aria-hidden="true" />}
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search by name..."
+                aria-label="Search by name"
+              />
+
+              <label className="flex min-w-[12rem] flex-col gap-2">
+                <span className="text-sm font-medium text-panel-copy">Ward</span>
+                <span className="relative flex h-11 items-center rounded-pill border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 shadow-sm">
+                  <select
+                    value={selectedWard}
+                    onChange={(event) => setSelectedWard(event.target.value)}
+                    aria-label="Ward filter"
+                    className="h-full w-full appearance-none bg-transparent pr-8 text-sm text-panel-strong outline-none"
+                  >
+                    {wardsForFilter.map((option) => (
+                      <option key={option} value={option}>
+                        {option === "ALL" ? "All Wards" : option}
+                      </option>
+                    ))}
+                  </select>
+                </span>
               </label>
 
-              <label className="chv-registry-ward-filter">
-                <select value={selectedWard} onChange={(event) => setSelectedWard(event.target.value)} aria-label="Ward filter">
-                  {wardsForFilter.map((option) => (
-                    <option key={option} value={option}>
-                      {option === "ALL" ? "All Wards" : option}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <button type="button" className="chv-registry-filter-button" aria-label="More filters">
-                <Filter aria-hidden="true" />
-              </button>
+              <Button variant="secondary" size="icon" className="size-11" aria-label="More filters">
+                <Filter className="size-4" aria-hidden="true" />
+              </Button>
             </div>
           </div>
 
-          <div className="chv-quick-filters" role="tablist" aria-label="Quick CHV filters">
+          <div className="mt-5 flex flex-wrap gap-2">
             {[
               { value: "ALL", label: "All" },
               { value: "ACTIVE", label: "Active" },
@@ -636,7 +680,12 @@ export default function ChvsPage() {
               <button
                 key={filterOption.value}
                 type="button"
-                className={quickFilter === filterOption.value ? "is-active" : ""}
+                className={cn(
+                  "inline-flex h-10 items-center justify-center rounded-pill border px-4 text-sm font-semibold transition",
+                  quickFilter === filterOption.value
+                    ? "border-brand bg-brand text-white shadow-[var(--login-submit-shadow)]"
+                    : "border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] text-panel-copy hover:border-[var(--dashboard-icon-button-border)] hover:text-panel-strong",
+                )}
                 onClick={() => setQuickFilter(filterOption.value as QuickFilter)}
               >
                 {filterOption.label}
@@ -644,195 +693,229 @@ export default function ChvsPage() {
             ))}
           </div>
 
-          <div className="chv-registry-table-wrap">
-            <table className="chv-registry-table">
-              <thead>
-                <tr>
-                  <th>Volunteer name</th>
-                  <th>Ward</th>
-                  <th>Status</th>
-                  <th>Alerts (Received/Ack)</th>
-                  <th>Sync health</th>
-                  <th>Last sync</th>
-                  <th>Ward risk</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {isLoading ? (
-                  Array.from({ length: 3 }).map((_, index) => (
-                    <tr key={`skeleton-${index}`} className="chv-registry-skeleton-row">
-                      <td colSpan={8}>
-                        <span />
-                      </td>
-                    </tr>
-                  ))
-                ) : pagedRows.length ? (
-                  pagedRows.map((row) => (
-                    <tr key={row.id} onClick={() => setSelectedChvId(row.id)} className="chv-registry-row">
-                      <td>
-                        <div className="chv-registry-person">
-                          <span className="chv-registry-avatar">{row.initials}</span>
-                          <div>
-                            <strong>{row.name}</strong>
-                            <small>{row.rosterId}</small>
-                          </div>
-                        </div>
-                      </td>
-                      <td>{row.wardName}</td>
-                      <td>
-                        <span className={`chv-status-pill chv-status-pill-${row.status.toLowerCase()}`}>
-                          {toTitleStatus(row.status)}
-                        </span>
-                      </td>
-                      <td>
-                        {row.alertsRaised} / {row.alertsAcknowledged}
-                      </td>
-                      <td>
-                        <span className={`chv-sync-pill chv-sync-pill-${row.syncHealth.toLowerCase()}`}>
-                          {toSyncHealthLabel(row.syncHealth)}
-                        </span>
-                      </td>
-                      <td>{row.lastSync}</td>
-                      <td>
-                        <span className={`chv-risk-pill chv-risk-pill-${row.riskZone.toLowerCase()}`}>
-                          {toRiskZoneLabel(row.riskZone)}
-                        </span>
-                      </td>
-                      <td>
-                        <div className="chv-table-actions" onClick={(event) => event.stopPropagation()}>
-                          <button type="button" className="chv-table-action chv-table-action-view" onClick={() => setSelectedChvId(row.id)}>
-                            View
-                          </button>
-                          <button type="button" className="chv-table-action" aria-label={`Message ${row.name}`}>
-                            <BellRing aria-hidden="true" />
-                          </button>
-                          <button type="button" className="chv-table-action" aria-label={`More actions for ${row.name}`}>
-                            <MoreHorizontal aria-hidden="true" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={8} className="chv-empty-state">
-                      No CHVs match the current filters.
-                    </td>
+          <div className="mt-6 overflow-hidden rounded-[1.5rem] border border-panel-table-wrap">
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-panel-table-wrap text-sm">
+                <thead className="bg-[color-mix(in_srgb,var(--dashboard-table-line)_30%,transparent)]">
+                  <tr className="text-left">
+                    {[
+                      "Volunteer name",
+                      "Ward",
+                      "Status",
+                      "Alerts (Received/Ack)",
+                      "Sync health",
+                      "Last sync",
+                      "Ward risk",
+                      "Action",
+                    ].map((label) => (
+                      <th
+                        key={label}
+                        className="px-5 py-4 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle"
+                      >
+                        {label}
+                      </th>
+                    ))}
                   </tr>
-                )}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-panel-table-wrap bg-panel">
+                  {isLoading ? (
+                    Array.from({ length: 3 }).map((_, index) => (
+                      <tr key={`skeleton-${index}`}>
+                        <td colSpan={8} className="px-5 py-5">
+                          <div className="h-6 w-full animate-pulse rounded-full bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
+                        </td>
+                      </tr>
+                    ))
+                  ) : pagedRows.length ? (
+                    pagedRows.map((row) => (
+                      <tr
+                        key={row.id}
+                        onClick={() => setSelectedChvId(row.id)}
+                        className="cursor-pointer transition hover:bg-[color-mix(in_srgb,var(--dashboard-nav-hover)_40%,transparent)]"
+                      >
+                        <td className="px-5 py-4 align-top">
+                          <div className="flex items-center gap-3">
+                            <span className="inline-flex size-11 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--brand)_12%,white)] text-sm font-semibold text-brand dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]">
+                              {row.initials}
+                            </span>
+                            <div>
+                              <strong className="block text-base text-panel-strong">{row.name}</strong>
+                              <small className="text-sm text-panel-muted">{row.rosterId}</small>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-5 py-4 align-top text-panel-copy">{row.wardName}</td>
+                        <td className="px-5 py-4 align-top">
+                          <StatusBadge tone={statusTone(row.status)} className="tracking-[0.12em]">
+                            {toTitleStatus(row.status)}
+                          </StatusBadge>
+                        </td>
+                        <td className="px-5 py-4 align-top text-panel-copy">
+                          {row.alertsRaised} / {row.alertsAcknowledged}
+                        </td>
+                        <td className="px-5 py-4 align-top">
+                          <StatusBadge tone={syncTone(row.syncHealth)} className="tracking-[0.12em]">
+                            {toSyncHealthLabel(row.syncHealth)}
+                          </StatusBadge>
+                        </td>
+                        <td className="px-5 py-4 align-top text-panel-copy">{row.lastSync}</td>
+                        <td className="px-5 py-4 align-top">
+                          <StatusBadge tone={riskTone(row.riskZone)} className="tracking-[0.12em]">
+                            {toRiskZoneLabel(row.riskZone)}
+                          </StatusBadge>
+                        </td>
+                        <td className="px-5 py-4 align-top">
+                          <div className="flex items-center gap-2" onClick={(event) => event.stopPropagation()}>
+                            <Button variant="ghost" className="h-9 rounded-pill px-3 text-sm" onClick={() => setSelectedChvId(row.id)}>
+                              View
+                            </Button>
+                            <Button variant="secondary" size="icon" className="size-9" aria-label={`Message ${row.name}`}>
+                              <BellRing className="size-4" aria-hidden="true" />
+                            </Button>
+                            <Button variant="secondary" size="icon" className="size-9" aria-label={`More actions for ${row.name}`}>
+                              <MoreHorizontal className="size-4" aria-hidden="true" />
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={8} className="px-5 py-10 text-center text-sm text-panel-muted">
+                        No CHVs match the current filters.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
 
-          <div className="chv-registry-footer">
-            <span>
+          <div className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <span className="text-sm text-panel-muted">
               Showing {pagedRows.length} of {registryRows.length || 0} volunteers
             </span>
             {totalPages > 1 ? (
-              <div className="chv-registry-pagination">
-                <button
-                  type="button"
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="icon"
+                  className="size-10"
                   onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
                   disabled={clampedPage === 1}
                   aria-label="Previous page"
                 >
-                  <ChevronLeft aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
+                  <ChevronLeft className="size-4" aria-hidden="true" />
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="icon"
+                  className="size-10"
                   onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
                   disabled={clampedPage === totalPages}
                   aria-label="Next page"
                 >
-                  <ChevronRight aria-hidden="true" />
-                </button>
+                  <ChevronRight className="size-4" aria-hidden="true" />
+                </Button>
               </div>
             ) : null}
           </div>
-        </section>
+        </Card>
 
         {selectedChv ? (
           <>
-            <button type="button" className="alerts-drawer-backdrop" aria-label="Close CHV detail drawer" onClick={() => setSelectedChvId(null)} />
-            <aside className="alerts-drawer" aria-label="CHV detail drawer">
-              <div className="alerts-drawer-header">
+            <button
+              type="button"
+              className="fixed inset-0 z-40 bg-slate-950/50 backdrop-blur-[1px]"
+              aria-label="Close CHV detail drawer"
+              onClick={() => setSelectedChvId(null)}
+            />
+            <aside className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[30rem] flex-col border-l border-panel-border bg-panel shadow-2xl">
+              <div className="flex items-start justify-between gap-4 border-b border-panel-table-wrap px-5 py-5 sm:px-6">
                 <div>
-                  <span className="alerts-drawer-kicker">CHV detail</span>
-                  <h2>{selectedChv.name}</h2>
-                  <p>
+                  <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">CHV detail</span>
+                  <h2 className="mt-2 text-2xl font-semibold text-panel-strong">{selectedChv.name}</h2>
+                  <p className="mt-1 text-sm text-panel-muted">
                     {selectedChv.rosterId} · {selectedChv.wardName}
                   </p>
                 </div>
-                <button type="button" className="alerts-drawer-close" onClick={() => setSelectedChvId(null)} aria-label="Close CHV detail">
-                  <X aria-hidden="true" />
-                </button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-10 shrink-0"
+                  onClick={() => setSelectedChvId(null)}
+                  aria-label="Close CHV detail"
+                >
+                  <X className="size-4" aria-hidden="true" />
+                </Button>
               </div>
 
-              <div className="alerts-drawer-grid">
-                <div className="alerts-drawer-stat">
-                  <span>Status</span>
-                  <strong>{toTitleStatus(selectedChv.status)}</strong>
+              <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5 sm:px-6">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {[
+                    ["Status", toTitleStatus(selectedChv.status)],
+                    ["Sync health", toSyncHealthLabel(selectedChv.syncHealth)],
+                    ["Alerts", `${selectedChv.alertsRaised} received / ${selectedChv.alertsAcknowledged} acknowledged`],
+                    ["Ward risk", toRiskZoneLabel(selectedChv.riskZone)],
+                  ].map(([label, value]) => (
+                    <Card key={label} className="rounded-2xl px-4 py-4 shadow-none">
+                      <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">{label}</span>
+                      <strong className="mt-2 block text-base text-panel-strong">{value}</strong>
+                    </Card>
+                  ))}
                 </div>
-                <div className="alerts-drawer-stat">
-                  <span>Sync health</span>
-                  <strong>{toSyncHealthLabel(selectedChv.syncHealth)}</strong>
-                </div>
-                <div className="alerts-drawer-stat">
-                  <span>Alerts</span>
-                  <strong>
-                    {selectedChv.alertsRaised} received / {selectedChv.alertsAcknowledged} acknowledged
-                  </strong>
-                </div>
-                <div className="alerts-drawer-stat">
-                  <span>Ward risk</span>
-                  <strong>{toRiskZoneLabel(selectedChv.riskZone)}</strong>
-                </div>
+
+                <Card className="rounded-2xl px-4 py-4 shadow-none">
+                  <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-panel-subtle">Field profile</h3>
+                  <ul className="mt-4 space-y-3 text-sm text-panel-copy">
+                    <li className="flex items-center gap-3">
+                      <Smartphone className="size-4 text-panel-muted" aria-hidden="true" />
+                      {selectedChv.phoneNumber}
+                    </li>
+                    <li className="flex items-center gap-3">
+                      <Activity className="size-4 text-panel-muted" aria-hidden="true" />
+                      Language: {selectedChv.language}
+                    </li>
+                    <li className="flex items-center gap-3">
+                      {selectedChv.syncHealth === "OFFLINE" ? (
+                        <WifiOff className="size-4 text-panel-muted" aria-hidden="true" />
+                      ) : (
+                        <Wifi className="size-4 text-panel-muted" aria-hidden="true" />
+                      )}
+                      Connectivity: {toSyncHealthLabel(selectedChv.syncHealth)}
+                    </li>
+                    <li className="flex items-center gap-3">
+                      <Clock3 className="size-4 text-panel-muted" aria-hidden="true" />
+                      Last sync: {selectedChv.lastSync}
+                    </li>
+                  </ul>
+                </Card>
+
+                <Card className="rounded-2xl px-4 py-4 shadow-none">
+                  <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-panel-subtle">Operational activity</h3>
+                  <p className="mt-3 text-sm leading-6 text-panel-copy">
+                    Recent case reports remain tied to {selectedChv.wardName}. Last protocol update was{" "}
+                    {selectedChv.lastProtocolUpdate}, and this CHV is currently
+                    {selectedChv.status === "ACTIVE"
+                      ? " available for immediate field engagement."
+                      : " not yet at immediate field readiness."}
+                  </p>
+                </Card>
               </div>
 
-              <div className="alerts-drawer-section">
-                <h3>Field profile</h3>
-                <ul className="alerts-drawer-list">
-                  <li>
-                    <Smartphone aria-hidden="true" />
-                    {selectedChv.phoneNumber}
-                  </li>
-                  <li>
-                    <Activity aria-hidden="true" />
-                    Language: {selectedChv.language}
-                  </li>
-                  <li>
-                    {selectedChv.syncHealth === "OFFLINE" ? <WifiOff aria-hidden="true" /> : <Wifi aria-hidden="true" />}
-                    Connectivity: {toSyncHealthLabel(selectedChv.syncHealth)}
-                  </li>
-                  <li>
-                    <Clock3 aria-hidden="true" />
-                    Last sync: {selectedChv.lastSync}
-                  </li>
-                </ul>
-              </div>
-
-              <div className="alerts-drawer-section">
-                <h3>Operational activity</h3>
-                <p>
-                  Recent case reports remain tied to {selectedChv.wardName}. Last protocol update was {selectedChv.lastProtocolUpdate}, and this CHV is currently
-                  {selectedChv.status === "ACTIVE" ? " available for immediate field engagement." : " not yet at immediate field readiness."}
-                </p>
-              </div>
-
-              <div className="alerts-drawer-actions">
-                <button type="button" className="alerts-drawer-action alerts-drawer-action-primary">
-                  <BellRing aria-hidden="true" />
+              <div className="flex flex-col gap-3 border-t border-panel-table-wrap px-5 py-5 sm:px-6">
+                <Button className="w-full justify-center">
+                  <BellRing className="size-4" aria-hidden="true" />
                   Send message
-                </button>
-                <button type="button" className="alerts-drawer-action alerts-drawer-action-secondary">
-                  <Users2 aria-hidden="true" />
+                </Button>
+                <Button variant="secondary" className="w-full justify-center">
+                  <Users2 className="size-4" aria-hidden="true" />
                   Reassign ward
-                </button>
-                <button type="button" className="alerts-drawer-action alerts-drawer-action-secondary">
-                  <Activity aria-hidden="true" />
+                </Button>
+                <Button variant="secondary" className="w-full justify-center">
+                  <Activity className="size-4" aria-hidden="true" />
                   View activity history
-                </button>
+                </Button>
               </div>
             </aside>
           </>

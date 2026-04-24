@@ -1707,6 +1707,43 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         self.assertIn("wards", response.data)
         self.assertTrue(any(ward["name"] == self.ward.name for ward in response.data["wards"]))
 
+    @override_settings(
+        REST_FRAMEWORK={
+            **settings.REST_FRAMEWORK,
+            "DEFAULT_THROTTLE_RATES": {
+                **settings.REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"],
+                "access_request": "1/hour",
+                "access_request_options": "10/hour",
+            },
+        }
+    )
+    def test_access_request_options_are_not_throttled_by_submission_scope(self):
+        submit_payload = {
+            "full_name": "County Analyst",
+            "county": self.ward.county,
+            "administrative_ward": self.ward.name,
+            "organization": "Migori County",
+            "desired_role": User.ROLE_ANALYST,
+            "contact_email": "analyst@example.com",
+            "message": "Need access.",
+        }
+
+        first_submit = self.client.post(reverse("access-request"), submit_payload, format="json")
+        self.assertEqual(first_submit.status_code, status.HTTP_201_CREATED)
+
+        second_submit = self.client.post(
+            reverse("access-request"),
+            {
+                **submit_payload,
+                "contact_email": "second-analyst@example.com",
+            },
+            format="json",
+        )
+        self.assertEqual(second_submit.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+        options_response = self.client.get(reverse("access-request-options"))
+        self.assertEqual(options_response.status_code, status.HTTP_200_OK)
+
     def test_admin_can_deactivate_and_reactivate_user(self):
         login_response = self.client.post(
             reverse("auth-login"),

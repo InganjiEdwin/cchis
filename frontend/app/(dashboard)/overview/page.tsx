@@ -1,44 +1,17 @@
 "use client";
 
-import {
-  AlertTriangle,
-  ArrowRight,
-  Bell,
-  CircleAlert,
-  MapPin,
-  TriangleAlert,
-} from "lucide-react";
+import { AlertTriangle, ArrowRight, Bell, CircleAlert, MapPin, TriangleAlert } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import { useAuth } from "@/components/auth-provider";
 import { DashboardTopbar } from "@/components/dashboard-topbar";
 import { TriggerAlertPanel } from "@/components/trigger-alert-panel";
-import {
-  fetchOverviewDataViaBff,
-  type AlertRecord,
-  type LatestWardRisk,
-  type WardSummary,
-} from "@/lib/dashboard";
-import { getLatestTimestamp } from "@/lib/freshness";
-
-type OverviewViewModel = {
-  wards: WardSummary[];
-  totalWards: number;
-  highRiskWards: LatestWardRisk[];
-  mediumRiskWards: LatestWardRisk[];
-  recentAlerts: AlertRecord[];
-  alertsTodayCount: number;
-  deliveredAlertRate: number;
-  latestTimestamp: string | null;
-  primaryCountyLabel: string;
-};
-
-function startOfTodayIso() {
-  const date = new Date();
-  date.setHours(0, 0, 0, 0);
-  return date.getTime();
-}
+import { Card } from "@/components/ui/card";
+import { PageSectionHeader } from "@/components/ui/page-section-header";
+import { StatusBadge } from "@/components/ui/status-badge";
+import type { AlertRecord } from "@/lib/dashboard";
+import { useOverviewQuery } from "@/queries/use-overview-query";
 
 function formatStatusLabel(status: AlertRecord["status"]) {
   return status
@@ -53,29 +26,6 @@ function formatChannelLabel(channel: AlertRecord["channel"]) {
     return "System";
   }
   return channel;
-}
-
-function getStatusTone(status: AlertRecord["status"]) {
-  switch (status) {
-    case "DELIVERED":
-      return "dashboard-badge-success";
-    case "RETRY_PENDING":
-      return "dashboard-badge-warning";
-    case "FAILED":
-      return "dashboard-badge-danger";
-    default:
-      return "dashboard-badge-muted";
-  }
-}
-
-function getRiskTone(level: LatestWardRisk["risk_level"]) {
-  if (level === "HIGH") {
-    return "dashboard-risk-high";
-  }
-  if (level === "MEDIUM") {
-    return "dashboard-risk-medium";
-  }
-  return "dashboard-risk-low";
 }
 
 function normalizeRiskScore(score: number) {
@@ -108,23 +58,13 @@ function formatCompactRelativeMinutes(timestamp: string | null) {
 
   const diffMinutes = Math.max(0, Math.round((Date.now() - date.getTime()) / 60000));
 
-  if (diffMinutes < 1) {
-    return "Just now";
-  }
-  if (diffMinutes === 1) {
-    return "1 min ago";
-  }
-  if (diffMinutes < 60) {
-    return `${diffMinutes} min ago`;
-  }
+  if (diffMinutes < 1) return "Just now";
+  if (diffMinutes === 1) return "1 min ago";
+  if (diffMinutes < 60) return `${diffMinutes} min ago`;
 
   const diffHours = Math.round(diffMinutes / 60);
-  if (diffHours === 1) {
-    return "1 hr ago";
-  }
-  if (diffHours < 24) {
-    return `${diffHours} hr ago`;
-  }
+  if (diffHours === 1) return "1 hr ago";
+  if (diffHours < 24) return `${diffHours} hr ago`;
 
   const diffDays = Math.round(diffHours / 24);
   return `${diffDays} d ago`;
@@ -152,308 +92,295 @@ function formatOperationalTime(timestamp: string | null) {
 function getScoreTone(score: number) {
   const normalizedScore = normalizeRiskScore(score);
 
-  if (normalizedScore >= 80) {
-    return "overview-score-pill-danger";
-  }
-  if (normalizedScore >= 65) {
-    return "overview-score-pill-high";
-  }
-  if (normalizedScore >= 45) {
-    return "overview-score-pill-medium";
-  }
-  if (normalizedScore >= 25) {
-    return "overview-score-pill-low";
-  }
-  return "overview-score-pill-minimal";
+  if (normalizedScore >= 80)
+    return "bg-[color-mix(in_srgb,var(--danger)_14%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_20%,transparent)]";
+  if (normalizedScore >= 65)
+    return "bg-[color-mix(in_srgb,var(--danger)_10%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_16%,transparent)]";
+  if (normalizedScore >= 45)
+    return "bg-[color-mix(in_srgb,var(--warning)_14%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]";
+  if (normalizedScore >= 25)
+    return "bg-[color-mix(in_srgb,var(--brand)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]";
+  return "bg-[color-mix(in_srgb,var(--success)_14%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_20%,transparent)]";
 }
 
-function buildOverviewViewModel(wards: WardSummary[], latestRisks: LatestWardRisk[], alerts: AlertRecord[]): OverviewViewModel {
-  const highRiskWards = latestRisks
-    .filter((item) => item.risk_level === "HIGH")
-    .sort((left, right) => (right.risk_score ?? 0) - (left.risk_score ?? 0));
-  const mediumRiskWards = latestRisks
-    .filter((item) => item.risk_level === "MEDIUM")
-    .sort((left, right) => (right.risk_score ?? 0) - (left.risk_score ?? 0));
-  const latestTimestamp = getLatestTimestamp([
-    ...latestRisks.map((item) => item.generated_at),
-    ...alerts.map((item) => item.created_at),
-  ]);
-  const deliveredAlertRate = alerts.length
-    ? Math.round((alerts.filter((item) => item.status === "DELIVERED").length / alerts.length) * 100)
-    : 0;
-  const alertsTodayCount = alerts.filter((item) => new Date(item.created_at).getTime() >= startOfTodayIso()).length;
-  const countyCounts = wards.reduce<Map<string, number>>((accumulator, ward) => {
-    accumulator.set(ward.county, (accumulator.get(ward.county) ?? 0) + 1);
-    return accumulator;
-  }, new Map<string, number>());
-  const primaryCountyLabel =
-    [...countyCounts.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] ?? "Operational";
+function getRiskBadgeTone(level: "LOW" | "MEDIUM" | "HIGH" | null) {
+  if (level === "HIGH") return "danger" as const;
+  if (level === "MEDIUM") return "warning" as const;
+  return "success" as const;
+}
 
-  return {
-    wards,
-    totalWards: wards.length ? Math.max(wards.length, latestRisks.length) : latestRisks.length,
-    highRiskWards,
-    mediumRiskWards,
-    recentAlerts: alerts.slice(0, 5),
-    alertsTodayCount,
-    deliveredAlertRate,
-    latestTimestamp,
-    primaryCountyLabel: primaryCountyLabel === "Operational" ? "Migori" : primaryCountyLabel,
-  };
+function getAttentionCardClass(level: "LOW" | "MEDIUM" | "HIGH" | null, isPrimary: boolean) {
+  const base = "space-y-3 rounded-[1.5rem] p-4 shadow-none";
+
+  if (level === "HIGH") {
+    return `${base} border-[color-mix(in_srgb,var(--danger)_22%,white)] bg-[color-mix(in_srgb,var(--danger)_8%,white)] dark:border-[color-mix(in_srgb,var(--danger)_28%,transparent)] dark:bg-[color-mix(in_srgb,var(--danger)_14%,transparent)]${isPrimary ? " ring-1 ring-[color:var(--danger)]/15 dark:ring-[color:var(--danger)]/25" : ""}`;
+  }
+
+  if (level === "MEDIUM") {
+    return `${base} border-[color-mix(in_srgb,var(--warning)_22%,white)] bg-[color-mix(in_srgb,var(--warning)_8%,white)] dark:border-[color-mix(in_srgb,var(--warning)_28%,transparent)] dark:bg-[color-mix(in_srgb,var(--warning)_14%,transparent)]`;
+  }
+
+  return `${base} border-[color-mix(in_srgb,var(--success)_20%,white)] bg-[color-mix(in_srgb,var(--success)_8%,white)] dark:border-[color-mix(in_srgb,var(--success)_28%,transparent)] dark:bg-[color-mix(in_srgb,var(--success)_14%,transparent)]`;
 }
 
 export default function OverviewPage() {
   const { currentUser } = useAuth();
-  const [overview, setOverview] = useState<OverviewViewModel | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [refreshKey, setRefreshKey] = useState(0);
+  const overviewQuery = useOverviewQuery({ enabled: Boolean(currentUser) });
+  const overview = overviewQuery.data ?? null;
+  const error = overviewQuery.error instanceof Error ? overviewQuery.error.message : null;
+  const isLoading = overviewQuery.isPending;
+  const isRefreshing = overviewQuery.isFetching;
 
-  useEffect(() => {
-    if (!currentUser) {
-      return;
-    }
-
-    let isActive = true;
-
-    async function loadOverview() {
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        const data = await fetchOverviewDataViaBff();
-
-        if (!isActive) {
-          return;
-        }
-
-        const migoriWards = data.wards.results.filter((ward) => ward.county === "Migori");
-        const migoriWardIds = new Set(migoriWards.map((ward) => ward.id));
-        const migoriRisks = data.latestRisks.filter((risk) => migoriWardIds.has(risk.ward_id));
-        const migoriAlerts = data.alerts.results.filter((alert) => migoriWardIds.has(alert.ward));
-        const model = buildOverviewViewModel(migoriWards, migoriRisks, migoriAlerts);
-        setOverview({
-          ...model,
-          totalWards: migoriWards.length,
-        });
-      } catch (loadError) {
-        if (!isActive) {
-          return;
-        }
-
-        setError(loadError instanceof Error ? loadError.message : "Unable to load overview data.");
-      } finally {
-        if (isActive) {
-          setIsLoading(false);
-        }
-      }
-    }
-
-    void loadOverview();
-
-    return () => {
-      isActive = false;
-    };
-  }, [currentUser, refreshKey]);
-
-  const immediateAttention = useMemo(
-    () => overview?.highRiskWards.slice(0, 3) ?? [],
-    [overview],
-  );
+  const immediateAttention = useMemo(() => overview?.highRiskWards.slice(0, 3) ?? [], [overview]);
 
   if (!currentUser) {
     return null;
   }
 
   return (
-    <div className="overview-dashboard">
+    <div className="space-y-6">
       <DashboardTopbar
         title="Overview"
         subtitle="Climate Health Risk Monitoring"
-        lastUpdatedLabel={isLoading ? "Refreshing..." : formatOperationalTime(overview?.latestTimestamp ?? null)}
-        onRefresh={() => setRefreshKey((value) => value + 1)}
+        lastUpdatedLabel={isRefreshing ? "Refreshing..." : formatOperationalTime(overview?.latestTimestamp ?? null)}
+        onRefresh={() => {
+          void overviewQuery.refetch();
+        }}
       >
         <TriggerAlertPanel
-          buttonLabel="Send Emergency Alerts"
-          closeLabel="Close Emergency Alerts"
-          buttonClassName="dashboard-primary-action"
+          buttonLabel="Trigger Alert"
+          closeLabel="Close Alert Builder"
+          buttonClassName="inline-flex h-11 items-center justify-center gap-2 rounded-[0.8rem] bg-[linear-gradient(180deg,#1d6fda_0%,#175fc2_100%)] px-4 text-sm font-semibold text-white shadow-[0_16px_32px_rgba(23,95,194,0.22)] transition hover:-translate-y-px"
         />
       </DashboardTopbar>
 
       {error ? (
-        <div className="status status-error">
-          <AlertTriangle className="section-icon" aria-hidden="true" />
+        <div className="rounded-2xl border border-[color-mix(in_srgb,var(--danger)_20%,white)] bg-[color-mix(in_srgb,var(--danger)_10%,white)] px-4 py-3 text-sm font-medium text-[color:var(--danger)] dark:border-[color-mix(in_srgb,var(--danger)_34%,transparent)] dark:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]">
+          <AlertTriangle className="mr-2 inline-flex size-4" aria-hidden="true" />
           {error}
         </div>
       ) : null}
 
-      <section className="overview-metrics">
-        <article className="overview-metric-card">
-          <div className="overview-metric-icon overview-metric-icon-blue">
-            <MapPin aria-hidden="true" />
+      <section className="grid gap-6 xl:grid-cols-4">
+        <Card className="flex items-start gap-4 p-6">
+          <div className="inline-flex size-12 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+            <MapPin className="size-5" aria-hidden="true" />
           </div>
-          <div className="overview-metric-copy">
-            <span className="overview-metric-label">Total wards</span>
-            <strong>{isLoading ? "..." : overview?.totalWards ?? 0}</strong>
-            <p>Total wards monitored</p>
+          <div className="space-y-1">
+            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Total wards</span>
+            <strong className="block text-4xl font-semibold tracking-[-0.05em] text-panel-strong">
+              {isLoading ? "..." : overview?.totalWards ?? 0}
+            </strong>
+            <p className="text-sm text-panel-muted">Total wards monitored</p>
           </div>
-        </article>
+        </Card>
 
-        <article className="overview-metric-card">
-          <div className="overview-metric-icon overview-metric-icon-red">
-            <TriangleAlert aria-hidden="true" />
+        <Card className="flex items-start gap-4 p-6">
+          <div className="inline-flex size-12 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--danger)_12%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_20%,transparent)]">
+            <TriangleAlert className="size-5" aria-hidden="true" />
           </div>
-          <div className="overview-metric-copy">
-            <span className="overview-metric-label overview-metric-pill">Immediate action</span>
-            <strong>{isLoading ? "..." : overview?.highRiskWards.length ?? 0}</strong>
-            <p>High risk wards</p>
+          <div className="space-y-1">
+            <StatusBadge tone="danger" className="rounded-full px-3 py-1 tracking-[0.14em]">
+              Immediate action
+            </StatusBadge>
+            <strong className="block text-4xl font-semibold tracking-[-0.05em] text-panel-strong">
+              {isLoading ? "..." : overview?.highRiskWards.length ?? 0}
+            </strong>
+            <p className="text-sm text-panel-muted">High risk wards</p>
           </div>
-        </article>
+        </Card>
 
-        <article className="overview-metric-card">
-          <div className="overview-metric-icon overview-metric-icon-amber">
-            <CircleAlert aria-hidden="true" />
+        <Card className="flex items-start gap-4 p-6">
+          <div className="inline-flex size-12 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--warning)_12%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]">
+            <CircleAlert className="size-5" aria-hidden="true" />
           </div>
-          <div className="overview-metric-copy">
-            <span className="overview-metric-label overview-metric-pill overview-metric-pill-muted">
+          <div className="space-y-1">
+            <StatusBadge tone="warning" className="rounded-full px-3 py-1 tracking-[0.14em]">
               Stable monitoring
-            </span>
-            <strong>{isLoading ? "..." : overview?.mediumRiskWards.length ?? 0}</strong>
-            <p>Medium risk wards</p>
+            </StatusBadge>
+            <strong className="block text-4xl font-semibold tracking-[-0.05em] text-panel-strong">
+              {isLoading ? "..." : overview?.mediumRiskWards.length ?? 0}
+            </strong>
+            <p className="text-sm text-panel-muted">Medium risk wards</p>
           </div>
-        </article>
+        </Card>
 
-        <article className="overview-metric-card">
-          <div className="overview-metric-icon overview-metric-icon-slate">
-            <Bell aria-hidden="true" />
+        <Card className="flex items-start gap-4 p-6">
+          <div className="inline-flex size-12 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-table-line)_70%,transparent)] text-panel-copy">
+            <Bell className="size-5" aria-hidden="true" />
           </div>
-          <div className="overview-metric-copy">
-            <span className="overview-metric-label">{overview?.deliveredAlertRate ?? 0}% delivered</span>
-            <strong>{isLoading ? "..." : overview?.alertsTodayCount ?? 0}</strong>
-            <p>Alerts today</p>
+          <div className="space-y-1">
+            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">
+              {overview?.deliveredAlertRate ?? 0}% delivered
+            </span>
+            <strong className="block text-4xl font-semibold tracking-[-0.05em] text-panel-strong">
+              {isLoading ? "..." : overview?.alertsTodayCount ?? 0}
+            </strong>
+            <p className="text-sm text-panel-muted">Alerts today</p>
           </div>
-        </article>
+        </Card>
       </section>
 
-      <section className="overview-content-grid">
-        <div className="overview-table-panel">
-          <div className="overview-section-heading">
-            <div>
-              <h2>Recent Alerts</h2>
-              <p>{overview?.primaryCountyLabel ?? "Current scope"} operational activity</p>
+      <section className="grid gap-6 xl:grid-cols-[minmax(0,1.7fr)_minmax(320px,0.9fr)]">
+        <Card className="space-y-5 p-6">
+          <PageSectionHeader
+            title="Recent Alerts"
+            description={`${overview?.primaryCountyLabel ?? "Current scope"} operational activity`}
+          />
+
+          <div className="overflow-hidden rounded-[1.5rem] border border-[var(--dashboard-table-line)]">
+            <div className="overflow-x-auto">
+              <table className="min-w-full border-collapse text-left">
+                <thead>
+                  <tr>
+                    {["Administrative ward", "Channel", "Score", "Status", "Time"].map((label) => (
+                      <th
+                        key={label}
+                        className="border-b border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_30%,transparent)] px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted"
+                      >
+                        {label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {isLoading ? (
+                    <tr>
+                      <td colSpan={5} className="px-4 py-8 text-sm text-panel-muted">
+                        Loading operational alerts...
+                      </td>
+                    </tr>
+                  ) : overview && overview.recentAlerts.length > 0 ? (
+                    overview.recentAlerts.map((alert) => (
+                      <tr key={alert.id}>
+                        <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm last:border-b-0">
+                          <strong className="font-semibold text-panel-strong">{alert.ward_name}</strong>
+                        </td>
+                        <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm text-panel-copy last:border-b-0">
+                          {formatChannelLabel(alert.channel)}
+                        </td>
+                        <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm last:border-b-0">
+                          {typeof alert.risk_score === "number" ? (
+                            <span
+                              className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] ${getScoreTone(alert.risk_score)}`}
+                            >
+                              {formatRiskScore(alert.risk_score)}
+                            </span>
+                          ) : (
+                            <span className="text-panel-muted">N/A</span>
+                          )}
+                        </td>
+                        <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm last:border-b-0">
+                          <StatusBadge
+                            tone={
+                              alert.status === "DELIVERED"
+                                ? "success"
+                                : alert.status === "FAILED"
+                                  ? "danger"
+                                  : alert.status === "RETRY_PENDING"
+                                    ? "warning"
+                                    : "default"
+                            }
+                            className="rounded-full px-3 py-1 tracking-[0.14em]"
+                          >
+                            {formatStatusLabel(alert.status)}
+                          </StatusBadge>
+                        </td>
+                        <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm text-panel-copy last:border-b-0">
+                          {formatOperationalTime(alert.created_at)}
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={5} className="px-4 py-8 text-sm text-panel-muted">
+                        No visible alerts in the current scope yet.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
 
-          <div className="overview-table-wrap">
-            <table className="overview-table">
-              <thead>
-                <tr>
-                  <th>Administrative ward</th>
-                  <th>Channel</th>
-                  <th className="overview-table-score-column">Score</th>
-                  <th>Status</th>
-                  <th>Time</th>
-                </tr>
-              </thead>
-              <tbody>
-                {isLoading ? (
-                  <tr>
-                    <td colSpan={5} className="overview-table-empty">
-                      Loading operational alerts...
-                    </td>
-                  </tr>
-                ) : overview && overview.recentAlerts.length > 0 ? (
-                  overview.recentAlerts.map((alert) => (
-                    <tr key={alert.id}>
-                      <td>
-                        <strong>{alert.ward_name}</strong>
-                      </td>
-                      <td>{formatChannelLabel(alert.channel)}</td>
-                      <td className="overview-table-score-column">
-                        {typeof alert.risk_score === "number" ? (
-                          <span className={`overview-score-pill ${getScoreTone(alert.risk_score)}`}>
-                            {formatRiskScore(alert.risk_score)}
-                          </span>
-                        ) : (
-                          "N/A"
-                        )}
-                      </td>
-                      <td>
-                        <span className={`dashboard-status-badge ${getStatusTone(alert.status)}`}>
-                          {formatStatusLabel(alert.status)}
-                        </span>
-                      </td>
-                      <td>{formatOperationalTime(alert.created_at)}</td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={5} className="overview-table-empty">
-                      No visible alerts in the current scope yet.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="overview-table-meta">
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-panel-muted">
             <span>Model confidence: derived from current risk feed</span>
             <span>Data quality: live API-backed</span>
           </div>
-        </div>
+        </Card>
 
-        <aside className="overview-aside">
-          <section className="overview-attention-panel">
-            <div className="overview-section-heading">
-              <h2>Immediate Attention</h2>
-            </div>
+        <aside className="space-y-6">
+          <Card className="space-y-5 p-6">
+            <PageSectionHeader title="Immediate Attention" />
 
-            <div className="overview-attention-list">
+            <div className="space-y-4">
               {isLoading ? (
-                <div className="overview-attention-card">
-                  <p>Loading priority wards...</p>
-                </div>
+                <Card className="rounded-[1.5rem] p-4 shadow-none">
+                  <p className="text-sm text-panel-muted">Loading priority wards...</p>
+                </Card>
               ) : immediateAttention.length > 0 ? (
                 immediateAttention.map((ward, index) => (
-                  <article
+                  <Card
                     key={ward.ward_id}
-                    className={`overview-attention-card ${getRiskTone(ward.risk_level)}${index === 0 ? " overview-attention-card-primary" : ""}`}
+                    className={getAttentionCardClass(ward.risk_level, index === 0)}
                   >
-                    <div className="overview-attention-card-top">
-                      <strong>{ward.ward_name}</strong>
-                      <span>{ward.risk_level ?? "Unknown"}</span>
+                    <div className="flex items-start justify-between gap-3">
+                      <strong className="text-base font-semibold text-panel-strong">{ward.ward_name}</strong>
+                      <StatusBadge
+                        tone={getRiskBadgeTone(ward.risk_level)}
+                        className="rounded-full px-3 py-1 tracking-[0.14em]"
+                      >
+                        {ward.risk_level ?? "Unknown"}
+                      </StatusBadge>
                     </div>
-                    <p>{index === 0 ? "Highest current risk score" : "Current risk score"}</p>
-                    <div className="overview-attention-score">
-                      <strong>{typeof ward.risk_score === "number" ? formatRiskScore(ward.risk_score) : "N/A"}</strong>
-                      <span>/100</span>
+                    <p className="text-sm text-panel-muted">
+                      {index === 0 ? "Highest current risk score" : "Current risk score"}
+                    </p>
+                    <div className="flex items-end gap-2">
+                      <strong className="text-3xl font-semibold tracking-[-0.05em] text-panel-strong">
+                        {typeof ward.risk_score === "number" ? formatRiskScore(ward.risk_score) : "N/A"}
+                      </strong>
+                      <span className="pb-1 text-sm text-panel-muted">/100</span>
                     </div>
-                  </article>
+                  </Card>
                 ))
               ) : (
-                <div className="overview-attention-card">
-                  <p>No high-risk wards are currently visible in your scope.</p>
-                </div>
+                <Card className="rounded-[1.5rem] p-4 shadow-none">
+                  <p className="text-sm text-panel-muted">No high-risk wards are currently visible in your scope.</p>
+                </Card>
               )}
             </div>
 
-            <Link href="/wards" className="overview-secondary-link">
+            <Link
+              href="/wards"
+              className="inline-flex items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--dashboard-icon-button-ink-hover)]"
+            >
               View high risk wards
-              <ArrowRight aria-hidden="true" />
+              <ArrowRight className="size-4" aria-hidden="true" />
             </Link>
-          </section>
+          </Card>
 
-          <section className="overview-map-card">
-            <div className="overview-map-visual" aria-hidden="true">
-              <span>{overview?.primaryCountyLabel ?? "County"}</span>
+          <Card className="space-y-4 p-6">
+            <div
+              className="flex min-h-[180px] items-center justify-center rounded-[1.75rem] border border-dashed border-[var(--dashboard-table-line)] bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--dashboard-sidebar-title)_10%,white),transparent_52%),radial-gradient(circle_at_bottom_right,color-mix(in_srgb,var(--warning)_10%,white),transparent_48%),var(--color-panel)] dark:bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--dashboard-sidebar-title)_22%,transparent),transparent_52%),radial-gradient(circle_at_bottom_right,color-mix(in_srgb,var(--warning)_20%,transparent),transparent_48%),var(--color-panel)]"
+              aria-hidden="true"
+            >
+              <span className="rounded-full bg-[color-mix(in_srgb,var(--dashboard-table-line)_70%,transparent)] px-4 py-2 text-sm font-semibold text-panel-copy">
+                {overview?.primaryCountyLabel ?? "County"}
+              </span>
             </div>
-            <div className="overview-map-copy">
-              <p>Live geographic monitor</p>
-              <strong>{overview?.primaryCountyLabel ?? "Current scope"}</strong>
-              <span>Map-ready boundary and hotspot overlays need backend geographic endpoints.</span>
+            <div className="space-y-1">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">
+                Live geographic monitor
+              </p>
+              <strong className="block text-lg font-semibold text-panel-strong">
+                {overview?.primaryCountyLabel ?? "Current scope"}
+              </strong>
+              <span className="text-sm text-panel-muted">
+                Map-ready boundary and hotspot overlays need backend geographic endpoints.
+              </span>
             </div>
-          </section>
+          </Card>
         </aside>
       </section>
     </div>

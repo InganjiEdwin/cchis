@@ -154,6 +154,7 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_THROTTLE_RATES": {
         "access_request": config("THROTTLE_ACCESS_REQUEST", default="3/hour"),
+        "access_request_options": config("THROTTLE_ACCESS_REQUEST_OPTIONS", default="120/hour"),
         "auth_login": config("THROTTLE_AUTH_LOGIN", default="5/minute"),
         "auth_2fa": config("THROTTLE_AUTH_2FA", default="5/minute"),
         "auth_refresh": config("THROTTLE_AUTH_REFRESH", default="30/minute"),

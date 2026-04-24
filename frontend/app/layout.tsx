@@ -3,6 +3,7 @@ import localFont from "next/font/local";
 
 import "./globals.css";
 import { AuthProvider } from "@/components/auth-provider";
+import { QueryProvider } from "@/components/query-provider";
 import { fetchServerSession, sanitizeSessionResponse } from "@/lib/server-session";
 
 const axiforma = localFont({
@@ -116,7 +117,9 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             `,
           }}
         />
-        <AuthProvider initialSession={initialSession}>{children}</AuthProvider>
+        <QueryProvider>
+          <AuthProvider initialSession={initialSession}>{children}</AuthProvider>
+        </QueryProvider>
       </body>
     </html>
   );
