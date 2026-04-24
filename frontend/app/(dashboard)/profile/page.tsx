@@ -1,9 +1,9 @@
 "use client";
 
-import { ChevronRight, Clock3, Globe, KeyRound, LogOut, MapPinned, MonitorCog, RefreshCcw, ShieldCheck, Smartphone, UserRound, Waves } from "lucide-react";
+import { ChevronRight, Clock3, Globe, KeyRound, LogOut, MapPinned, MonitorCog, RefreshCcw, ShieldCheck, Smartphone, UserRound } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { useAuth } from "@/components/auth-provider";
 import { DashboardTopbar } from "@/components/dashboard-topbar";
@@ -113,29 +113,6 @@ export default function ProfilePage() {
     { value: "DARK", label: "Dark" },
   ] as const;
   const capabilityCopy = buildCapabilityCopy(currentUser.role);
-  const activityItems = [
-    {
-      title: "Triggered Flood Protocol - Sector B",
-      subtitle: "Emergency alert dispatched to 42 CHVs",
-      time: "Today, 09:02 AM",
-      tone: "info" as const,
-      icon: Waves,
-    },
-    {
-      title: "Exported Health Risk Report",
-      subtitle: "PDF generated for County Health Board",
-      time: "Yesterday, 04:30 PM",
-      tone: "default" as const,
-      icon: Globe,
-    },
-    {
-      title: "Updated Risk Thresholds",
-      subtitle: "Changed AQI alert level for pediatric respiratory units",
-      time: "Oct 14, 11:05 AM",
-      tone: "warning" as const,
-      icon: MonitorCog,
-    },
-  ];
   const detailItems = [
     { label: "Email address", value: currentUser.email || "Not provided" },
     { label: "Phone number", value: currentUser.phone_number || "Not provided" },
@@ -484,52 +461,19 @@ export default function ProfilePage() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <h2 className="text-[1.25rem] font-semibold tracking-[-0.04em] text-panel-strong">Recent Activity Log</h2>
-              <p className="mt-1 text-sm text-panel-muted">Latest operator actions associated with your account.</p>
+              <p className="mt-1 text-sm text-panel-muted">Visible account activity is not exposed on this page yet.</p>
             </div>
             <button
               type="button"
+              disabled
               className="text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle transition hover:text-panel-copy"
             >
-              View full audit trail
+              Audit trail unavailable
             </button>
           </div>
 
-          <div className="mt-6 space-y-3">
-            {activityItems.map((item) => {
-              const Icon = item.icon;
-
-              return (
-                <div
-                  key={item.title}
-                  className="flex flex-col gap-3 rounded-[1.35rem] border border-panel-table-wrap px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
-                >
-                  <div className="flex items-start gap-3">
-                    <span
-                      className={cn(
-                        "inline-flex size-9 items-center justify-center rounded-full",
-                        item.tone === "info" &&
-                          "bg-[color-mix(in_srgb,var(--brand)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]",
-                        item.tone === "warning" &&
-                          "bg-[color-mix(in_srgb,var(--warning)_14%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]",
-                        item.tone === "default" &&
-                          "bg-[color-mix(in_srgb,var(--dashboard-table-line)_60%,transparent)] text-panel-copy",
-                      )}
-                    >
-                      <Icon className="size-4" aria-hidden="true" />
-                    </span>
-                    <div>
-                      <strong className="block text-sm font-semibold text-panel-strong">{item.title}</strong>
-                      <p className="mt-1 text-xs text-panel-muted">{item.subtitle}</p>
-                    </div>
-                  </div>
-
-                  <div className="inline-flex items-center gap-2 text-xs font-medium uppercase tracking-[0.14em] text-panel-subtle">
-                    <Clock3 className="size-3.5" aria-hidden="true" />
-                    {item.time}
-                  </div>
-                </div>
-              );
-            })}
+          <div className="mt-6 rounded-[1.35rem] border border-panel-table-wrap px-4 py-5 text-sm text-panel-muted">
+            No account activity records are exposed on this page yet.
           </div>
 
           <div className="mt-5 flex flex-wrap items-center gap-4 text-sm text-panel-muted">
