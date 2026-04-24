@@ -261,7 +261,7 @@ export default function SystemPage() {
         name: "Risk Scoring Coverage",
         state:
           snapshot && snapshot.visibleWards > 0
-            ? `${snapshot.wardsWithFreshRisk}/${snapshot.visibleWards} wards have fresh model output`
+            ? `${snapshot.wardsWithFreshRisk}/${snapshot.visibleWards} wards have recent model records`
             : "Awaiting ward risk records",
         tone:
           !snapshot || snapshot.visibleWards === 0
@@ -631,7 +631,7 @@ export default function SystemPage() {
               <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-white/60">Limitation</p>
               <p className="mt-2 text-sm font-semibold">Read-only system page</p>
               <p className="mt-1 text-xs text-white/64">
-                This page shows backend-derived system summaries only. Manual control actions remain unavailable until owned by real APIs.
+                This page shows system summaries from backend records only. Manual control actions remain unavailable until owned by real APIs.
               </p>
             </div>
           </Card>
@@ -748,7 +748,7 @@ export default function SystemPage() {
                 Read-only
               </StatusBadge>
               <StatusBadge tone="default" className="px-3 py-1 tracking-[0.14em]">
-                Backend-derived
+                Record-derived
               </StatusBadge>
             </div>
           </div>
@@ -779,7 +779,7 @@ export default function SystemPage() {
                   </div>
                 ))
               ) : (
-                <div className="px-4 py-6 text-sm text-panel-muted">No derived events are available for the current scope yet.</div>
+                <div className="px-4 py-6 text-sm text-panel-muted">No derived events are available for this view yet.</div>
               )}
             </div>
           </div>
@@ -787,7 +787,7 @@ export default function SystemPage() {
           <div className="mt-5 flex flex-wrap items-center gap-4 text-sm text-panel-muted">
             <span className="inline-flex items-center gap-2">
               <Logs className="size-4" aria-hidden="true" />
-              Event summaries are synthesized from dashboard records.
+              Event summaries are assembled from dashboard records.
             </span>
             <span className="inline-flex items-center gap-2">
               <Clock3 className="size-4" aria-hidden="true" />
