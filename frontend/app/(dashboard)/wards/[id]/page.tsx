@@ -260,7 +260,7 @@ export default function WardDetailPage() {
           <Card className="space-y-5 p-6">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div className="flex items-center gap-3">
-                <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--warning)_12%,white)] text-[color:var(--warning)]">
+                <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--warning)_12%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]">
                   <ShieldAlert className="size-5" aria-hidden="true" />
                 </span>
                 <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Observed signals</h3>
@@ -308,9 +308,9 @@ export default function WardDetailPage() {
                       className={cn(
                         "inline-flex size-9 items-center justify-center rounded-full",
                         driver.tone === "critical"
-                          ? "bg-[color-mix(in_srgb,var(--danger)_10%,white)] text-[color:var(--danger)]"
+                          ? "bg-[color-mix(in_srgb,var(--danger)_10%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]"
                           : driver.tone === "warning"
-                            ? "bg-[color-mix(in_srgb,var(--warning)_10%,white)] text-[color:var(--warning)]"
+                            ? "bg-[color-mix(in_srgb,var(--warning)_10%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_18%,transparent)]"
                             : "bg-[color-mix(in_srgb,var(--dashboard-table-line)_40%,transparent)] text-panel-copy",
                       )}
                     >
@@ -326,7 +326,7 @@ export default function WardDetailPage() {
           <Card className="space-y-5 p-6">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div className="flex items-center gap-3">
-                <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand">
+                <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
                   <Waves className="size-5" aria-hidden="true" />
                 </span>
                 <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Recent risk history</h3>
@@ -419,7 +419,7 @@ export default function WardDetailPage() {
           <section className="grid gap-6 lg:grid-cols-3">
             <Card className="space-y-5 p-6">
               <div className="flex items-center gap-3">
-                <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand">
+                <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
                   <MapPinned className="size-5" aria-hidden="true" />
                 </span>
                 <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Ward context</h3>
@@ -454,7 +454,7 @@ export default function WardDetailPage() {
 
             <Card className="space-y-5 p-6">
               <div className="flex items-center gap-3">
-                <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand">
+                <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
                   <MapPinned className="size-5" aria-hidden="true" />
                 </span>
                 <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Ward geometry</h3>
@@ -484,7 +484,7 @@ export default function WardDetailPage() {
                     )}
                   </div>
                   {detail?.wardMapFeature ? (
-                    <div className="inline-flex w-max items-center gap-2 rounded-full bg-[color-mix(in_srgb,var(--brand)_10%,white)] px-3 py-1.5 text-xs font-semibold text-panel-strong">
+                    <div className="inline-flex w-max items-center gap-2 rounded-full bg-[color-mix(in_srgb,var(--brand)_10%,white)] px-3 py-1.5 text-xs font-semibold text-panel-strong dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]">
                       <span className="size-2 rounded-full bg-brand" />
                       {detail.wardName} boundary
                     </div>
@@ -495,7 +495,7 @@ export default function WardDetailPage() {
 
             <Card className="space-y-5 p-6">
               <div className="flex items-center gap-3">
-                <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand">
+                <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
                   <Clock3 className="size-5" aria-hidden="true" />
                 </span>
                 <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Freshness and availability</h3>
@@ -538,7 +538,7 @@ export default function WardDetailPage() {
         <aside className="space-y-6">
           <Card className="space-y-5 p-6">
             <div className="flex items-center gap-3">
-              <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand">
+              <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
                 <Zap className="size-5" aria-hidden="true" />
               </span>
               <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Guidance for this risk tier</h3>
@@ -605,7 +605,7 @@ export default function WardDetailPage() {
 
           <Card className="space-y-5 p-6">
             <div className="flex items-center gap-3">
-              <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand">
+              <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
                 <Bell className="size-5" aria-hidden="true" />
               </span>
               <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Recent alerts</h3>
@@ -633,7 +633,7 @@ export default function WardDetailPage() {
                       key={alert.id}
                       className="flex items-start gap-3 rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_28%,transparent)] px-4 py-4"
                     >
-                      <div className="inline-flex size-10 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand">
+                      <div className="inline-flex size-10 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
                         <Bell className="size-4" aria-hidden="true" />
                       </div>
                       <div className="min-w-0 flex-1 space-y-1">
