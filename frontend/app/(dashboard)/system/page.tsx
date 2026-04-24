@@ -375,7 +375,7 @@ export default function SystemPage() {
         ? makeEvent({
             time: snapshot.latestRiskTimestamp,
             level: "INFO",
-            message: `Latest ward risk update is ${formatRelativeLabel(snapshot.latestRiskTimestamp)} and covers ${snapshot.wardsWithFreshRisk}/${snapshot.visibleWards} wards in scope.`,
+            message: `Latest ward risk record is ${formatRelativeLabel(snapshot.latestRiskTimestamp)} and covers ${snapshot.wardsWithFreshRisk}/${snapshot.visibleWards} visible wards.`,
             tone: "success" as const,
           })
         : null,
@@ -383,7 +383,7 @@ export default function SystemPage() {
         ? makeEvent({
             time: snapshot?.latestFailedAlertTimestamp ?? snapshot?.latestAlertTimestamp ?? null,
             level: "ERROR",
-            message: `${snapshot?.failedAlerts ?? 0} alert deliveries are currently failed in the visible dashboard scope.`,
+            message: `${snapshot?.failedAlerts ?? 0} alert deliveries are recorded as failed in visible records.`,
             tone: "danger" as const,
           })
         : null,
@@ -391,7 +391,7 @@ export default function SystemPage() {
         ? makeEvent({
             time: snapshot?.latestRetryAlertTimestamp ?? snapshot?.latestAlertTimestamp ?? null,
             level: "WARN",
-            message: `${snapshot?.retryPendingAlerts ?? 0} alerts are pending retry and still require delivery follow-through.`,
+            message: `${snapshot?.retryPendingAlerts ?? 0} alerts are recorded as retry-pending in visible records.`,
             tone: "warning" as const,
           })
         : null,
@@ -399,7 +399,7 @@ export default function SystemPage() {
         ? makeEvent({
             time: snapshot.latestChvTimestamp,
             level: "INFO",
-            message: `Latest CHV activity landed ${formatRelativeLabel(snapshot.latestChvTimestamp)} across sync, triage, and USSD traces.`,
+            message: `Latest CHV record landed ${formatRelativeLabel(snapshot.latestChvTimestamp)} across sync, triage, and USSD traces.`,
             tone: chvFreshness.isStale ? ("warning" as const) : ("success" as const),
           })
         : null,
@@ -415,7 +415,7 @@ export default function SystemPage() {
         ? makeEvent({
             time: snapshot?.latestAlertTimestamp ?? null,
             level: "INFO",
-            message: `${alertBacklog} alerts remain queued or retry-pending for current operators to watch.`,
+            message: `${alertBacklog} alerts are recorded as queued or retry-pending in visible records.`,
             tone: "warning" as const,
           })
         : null,
@@ -740,8 +740,8 @@ export default function SystemPage() {
           <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
             <PageSectionHeader
               className="gap-1"
-              title="Observed Event Stream"
-              description="This is a derived operational summary, not a raw infrastructure log sink."
+              title="Observed Record Stream"
+              description="This is a derived record summary, not a raw infrastructure log sink."
             />
             <div className="flex flex-wrap items-center gap-2">
               <StatusBadge tone="default" className="px-3 py-1 tracking-[0.14em]">
