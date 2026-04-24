@@ -898,15 +898,15 @@ export default function AlertsPage() {
           </div>
         </div>
 
-        <div className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-wrap items-center gap-3 text-sm text-panel-muted">
-            <span>
-              {Math.min(filteredAlerts.length, safePage * ROWS_PER_PAGE)} of {filteredAlerts.length} alerts
-            </span>
-            <StatusBadge tone="success" className="tracking-[0.12em]">
-              Reliable for escalation decisions
-            </StatusBadge>
-          </div>
+          <div className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-wrap items-center gap-3 text-sm text-panel-muted">
+              <span>
+                {Math.min(filteredAlerts.length, safePage * ROWS_PER_PAGE)} of {filteredAlerts.length} alerts
+              </span>
+              <StatusBadge tone="warning" className="tracking-[0.12em]">
+                Read-path only
+              </StatusBadge>
+            </div>
 
           {totalPages > 1 ? (
             <div className="flex items-center gap-2">
@@ -958,64 +958,50 @@ export default function AlertsPage() {
         <Card className="overflow-hidden rounded-[2rem] p-5 sm:p-6">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <h2 className="text-2xl font-semibold text-panel-strong">Active Alert Zones</h2>
+              <h2 className="text-2xl font-semibold text-panel-strong">Alert Pressure By Ward</h2>
               <p className="mt-2 text-sm text-panel-muted">
-                Real-time operational hotspots based on visible ward alert pressure.
+                Derived ward ranking from visible alert counts and latest recorded risk, without a dedicated geospatial alert-zone contract on this page yet.
               </p>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                className="inline-flex h-10 items-center justify-center rounded-pill bg-brand px-4 text-sm font-semibold text-white"
-              >
-                Satellite
-              </button>
-              <button
-                type="button"
-                className="inline-flex h-10 items-center justify-center rounded-pill border border-panel-table-wrap px-4 text-sm font-semibold text-panel-copy"
-              >
-                Topographic
-              </button>
             </div>
           </div>
 
-          <div className="relative mt-6 min-h-[22rem] overflow-hidden rounded-[1.75rem] border border-panel-table-wrap bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--brand)_12%,transparent),transparent_40%),radial-gradient(circle_at_bottom_right,color-mix(in_srgb,var(--warning)_12%,transparent),transparent_35%),linear-gradient(135deg,color-mix(in_srgb,var(--panel)_92%,white),var(--panel))] p-5">
-            <div className="absolute inset-0 bg-[linear-gradient(90deg,color-mix(in_srgb,var(--dashboard-table-line)_32%,transparent)_1px,transparent_1px),linear-gradient(color-mix(in_srgb,var(--dashboard-table-line)_32%,transparent)_1px,transparent_1px)] bg-[size:6rem_6rem] opacity-60" />
-
-            <Card className="relative z-10 max-w-xs rounded-[1.5rem] px-4 py-4 shadow-none">
-              <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Critical zone</span>
-              <strong className="mt-2 block text-lg text-panel-strong">{activeZones[0]?.wardName ?? "No active ward"}</strong>
-              <p className="mt-2 text-sm text-panel-muted">
-                {activeZones[0] ? `${activeZones[0].count} visible alerts in current scope` : "Awaiting live alert activity"}
-              </p>
-            </Card>
-
-            <div className="relative z-10 mt-8 h-[16rem]">
-              {activeZones.length > 0
-                ? activeZones.map((zone, index) => (
-                    <div
-                      key={zone.wardName}
-                      className="absolute"
-                      style={{
-                        left: `${20 + index * 18}%`,
-                        top: `${18 + (index % 3) * 19}%`,
-                      }}
-                    >
-                      <span
-                        className={cn(
-                          "inline-flex size-4 rounded-full border-4 border-white bg-brand shadow-[0_0_0_10px_color-mix(in_srgb,var(--brand)_12%,transparent)]",
-                          index === 0 &&
-                            "size-5 bg-[color:var(--danger)] shadow-[0_0_0_14px_color-mix(in_srgb,var(--danger)_16%,transparent)]",
-                        )}
-                      />
-                      <span className="mt-3 block rounded-full bg-panel/90 px-3 py-1 text-xs font-semibold text-panel-strong shadow-sm backdrop-blur">
-                        {zone.wardName}
-                      </span>
+          <div className="mt-6 rounded-[1.75rem] border border-panel-table-wrap bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--brand)_12%,transparent),transparent_40%),radial-gradient(circle_at_bottom_right,color-mix(in_srgb,var(--warning)_12%,transparent),transparent_35%),linear-gradient(135deg,color-mix(in_srgb,var(--panel)_92%,white),var(--panel))] p-5">
+            {activeZones.length > 0 ? (
+              <div className="space-y-3">
+                {activeZones.map((zone, index) => (
+                  <div
+                    key={zone.wardName}
+                    className="flex items-center justify-between gap-4 rounded-[1.3rem] border border-panel-table-wrap bg-panel/85 px-4 py-4"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <StatusBadge
+                          tone={index === 0 ? "danger" : "warning"}
+                          className="tracking-[0.12em]"
+                        >
+                          {index === 0 ? "Highest visible pressure" : "Derived review"}
+                        </StatusBadge>
+                        <strong className="truncate text-base text-panel-strong">{zone.wardName}</strong>
+                      </div>
+                      <p className="mt-2 text-sm text-panel-muted">
+                        {zone.count} visible alerts, highest recorded risk {Math.round(zone.highestRisk)}/100, latest activity {formatRelativeShort(zone.latestAt)}.
+                      </p>
                     </div>
-                  ))
-                : null}
-            </div>
+                    <Link
+                      href={`/wards?search=${encodeURIComponent(zone.wardName)}`}
+                      className="inline-flex shrink-0 items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--dashboard-icon-button-ink-hover)]"
+                    >
+                      Review ward
+                      <ChevronRight className="size-4" aria-hidden="true" />
+                    </Link>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-[1.3rem] border border-dashed border-panel-table-wrap px-4 py-8 text-sm text-panel-muted">
+                No visible ward alert pressure is available for ranking in the current scope yet.
+              </div>
+            )}
           </div>
         </Card>
 
@@ -1109,7 +1095,9 @@ export default function AlertsPage() {
 
             <div className="flex flex-col gap-3 border-t border-panel-table-wrap px-5 py-5 sm:px-6">
               {(selectedAlert.statusFilter === "FAILED" || selectedAlert.status === "RETRY_PENDING") && (
-                <Button className="w-full justify-center">Retry workflow review</Button>
+                <Button className="w-full justify-center" disabled>
+                  Retry workflow pending
+                </Button>
               )}
               <Link
                 href={`/alerts/${selectedAlert.id}`}

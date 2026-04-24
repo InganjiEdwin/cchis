@@ -417,7 +417,7 @@ export default function AlertDetailPage() {
               ? "Alert delivered"
               : alert.status === "FAILED"
                 ? "Delivery blocked"
-                : "Delivery workflow active",
+                : "Delivery still in progress",
           tone: alert.status === "FAILED" ? "warning" : "success",
         },
         {
@@ -431,7 +431,9 @@ export default function AlertDetailPage() {
         },
         {
           label:
-            alert.risk_score !== null && alert.risk_score >= 75 ? "Escalation should be triggered" : "No escalation triggered",
+            alert.risk_score !== null && alert.risk_score >= 75
+              ? "High ward risk accompanies this alert"
+              : "No high ward-risk threshold recorded",
           tone: alert.risk_score !== null && alert.risk_score >= 75 ? "warning" : "neutral",
         },
       ]
