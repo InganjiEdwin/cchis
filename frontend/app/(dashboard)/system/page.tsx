@@ -71,7 +71,7 @@ function describeFreshness(timestamp: string | null, thresholdMinutes: number) {
   if (!timestamp) {
     return {
       label: "No visible timestamp available",
-      detail: "Awaiting visible upstream records",
+      detail: "Awaiting visible records",
       isStale: true,
       tone: "danger" as const,
     };
@@ -209,7 +209,7 @@ export default function SystemPage() {
       },
       {
         title: "Alert Delivery Feed",
-        subtitle: `${snapshot?.visibleAlerts ?? 0} alerts visible, ${alertBacklog} pending dispatch or retry`,
+        subtitle: `${snapshot?.visibleAlerts ?? 0} alerts visible, ${alertBacklog} queued or retry-pending`,
         status: alertFreshness.label,
         detail: alertFreshness.detail,
         tone: alertFreshness.tone,
@@ -262,7 +262,7 @@ export default function SystemPage() {
         state:
           snapshot && snapshot.visibleWards > 0
             ? `${snapshot.wardsWithFreshRisk}/${snapshot.visibleWards} wards have fresh model output`
-            : "Awaiting ward risk output",
+            : "Awaiting ward risk records",
         tone:
           !snapshot || snapshot.visibleWards === 0
             ? ("default" as const)
@@ -325,7 +325,7 @@ export default function SystemPage() {
                 .join(", ")
             : "No recent alert backend observed",
         note: snapshot?.deliveryBackends.length
-          ? `${snapshot.deliveryBackends.reduce((sum, item) => sum + item.count, 0)} recent alerts sampled through backend-owned delivery metadata`
+          ? `${snapshot.deliveryBackends.reduce((sum, item) => sum + item.count, 0)} recent alerts sampled through delivery metadata`
           : "Awaiting recent alert activity",
         tone: snapshot?.deliveryBackends.length ? ("success" as const) : ("default" as const),
         icon: <Waypoints className="size-4" aria-hidden="true" />,
@@ -527,7 +527,7 @@ export default function SystemPage() {
               <PageSectionHeader
                 className="gap-1"
                 title="Data Freshness"
-                description="These signals are derived from backend timestamps, not infrastructure uptime probes."
+                description="These signals are derived from backend timestamps, not infrastructure probe data."
               />
               <Button
                 variant="secondary"
@@ -628,7 +628,7 @@ export default function SystemPage() {
             </div>
 
             <div className="mt-5 rounded-[1.25rem] border border-white/10 bg-black/10 px-4 py-4">
-              <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-white/60">Current limitation</p>
+              <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-white/60">Limitation</p>
               <p className="mt-2 text-sm font-semibold">Read-only system page</p>
               <p className="mt-1 text-xs text-white/64">
                 This page shows backend-derived system summaries only. Manual control actions remain unavailable until owned by real APIs.
@@ -683,7 +683,7 @@ export default function SystemPage() {
             <PageSectionHeader
               className="gap-1"
               title="Observed Channels"
-              description="Current activity surfaced only where a backend source already exists."
+              description="Activity is surfaced only where a backend source already exists."
             />
 
             <div className="mt-5 grid gap-3 sm:grid-cols-2">
