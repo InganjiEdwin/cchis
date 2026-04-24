@@ -294,7 +294,6 @@ export default function WardsPage() {
     filteredItems.length > 0
       ? filteredItems.reduce((sum, item) => sum + normalizeRiskScore(item.riskScore), 0) / filteredItems.length
       : 0;
-  const coverage = items.length > 0 ? Math.round((filteredItems.length / items.length) * 100) : 0;
   const isStale = isStaleTimestamp(latestWardTimestamp);
   const hasActiveFilters =
     Boolean(search.trim()) || selectedSubCounty !== "ALL" || selectedRisk !== "ALL" || sortBy !== "RISK_DESC";
@@ -680,7 +679,7 @@ export default function WardsPage() {
             {isLoading ? "..." : String(highRiskItems.length).padStart(2, "0")}
           </strong>
           <p className="text-sm text-panel-muted">
-            {highRiskItems.length > 0 ? `+${Math.max(1, highRiskItems.length - 1)} from yesterday` : "No change from yesterday"}
+            {isLoading ? "Loading filtered ward count..." : `${highRiskItems.length} visible in the current ward list`}
           </p>
         </Card>
 
@@ -699,11 +698,11 @@ export default function WardsPage() {
 
         <Card className="space-y-4 p-6">
           <div className="flex items-center justify-between gap-3">
-            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Surveillance coverage</span>
+            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Visible ward rows</span>
             <TriangleAlert className="size-5 text-[color:var(--warning)]" aria-hidden="true" />
           </div>
           <strong className="block text-4xl font-semibold tracking-[-0.05em] text-panel-strong">
-            {isLoading ? "..." : `${coverage}%`}
+            {isLoading ? "..." : `${filteredItems.length}`}
           </strong>
           <p className="text-sm text-panel-muted">{getCoverageLabel(filteredItems.length, items.length)}</p>
         </Card>
