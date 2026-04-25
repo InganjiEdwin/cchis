@@ -636,13 +636,14 @@ def build_facility_intelligence_snapshot(
     *,
     stale_threshold_minutes: int = 120,
 ) -> dict:
-    from .facility_forecasting import latest_facility_forecast_for_facility
+    from .facility_forecasting import latest_facility_forecast_for_facility, latest_promoted_facility_forecast_for_facility
 
     latest_risk = latest_riskscore_for_ward(facility.ward)
     related_alerts = list(
         facility.ward.alerts.select_related("risk_score").order_by("-created_at")[:6]
     )
-    latest_forecast = latest_facility_forecast_for_facility(facility)
+    promoted_forecast = latest_promoted_facility_forecast_for_facility(facility)
+    latest_forecast = promoted_forecast or latest_facility_forecast_for_facility(facility)
 
     ward_risk_level = latest_risk.risk_level if latest_risk else facility.ward.current_risk_level
     ward_risk_score = latest_risk.score if latest_risk else facility.ward.current_risk_score
@@ -678,29 +679,50 @@ def build_facility_intelligence_snapshot(
             45 if staffing_state == "CAPACITY_CONCERN" else 70 if staffing_state == "WATCH" else max(85, proxy_staffing_percent)
         )
         staffing_filled = max(1, round((staffing_percent / 100) * staffing_required))
-        readiness_mode = "forecast_preview_backed_facility_burden_not_promoted"
-        readiness_backing_source = "forecast_preview"
-        dashboard_truth_state = "blocked_until_promotion"
+        is_promoted_forecast = promoted_forecast is not None and latest_forecast.id == promoted_forecast.id
+        readiness_mode = (
+            "promoted_facility_burden_forecast"
+            if is_promoted_forecast
+            else "forecast_preview_backed_facility_burden_not_promoted"
+        )
+        readiness_backing_source = "forecast_promoted" if is_promoted_forecast else "forecast_preview"
+        dashboard_truth_state = "promoted" if is_promoted_forecast else "blocked_until_promotion"
         driving_ward_ids = latest_forecast.driving_ward_ids or [facility.ward_id]
-        action_reasoning = [
-            "Forecast preview is available for facility pressure review.",
-            "Use driving wards to trace which ward signals are contributing to projected facility strain.",
-            "Do not treat this facility forecast as promoted dashboard truth until promotion blockers are cleared.",
-        ]
+        action_reasoning = (
+            [
+                "A promoted facility burden forecast is driving this readiness summary.",
+                "Use driving wards to trace which ward signals are contributing to projected facility strain.",
+                "This forecast is eligible for dashboard readiness use because it has been explicitly promoted.",
+            ]
+            if is_promoted_forecast
+            else [
+                "Forecast preview is available for facility pressure review.",
+                "Use driving wards to trace which ward signals are contributing to projected facility strain.",
+                "Do not treat this facility forecast as promoted dashboard truth until promotion blockers are cleared.",
+            ]
+        )
         status_banner_label = (
-            "Forecast preview indicates high facility pressure"
+            "Promoted forecast indicates high facility pressure"
+            if is_promoted_forecast and surge_risk == "EXTREME"
+            else "Promoted forecast indicates elevated facility pressure"
+            if is_promoted_forecast and surge_risk == "MODERATE"
+            else "Promoted forecast indicates low facility pressure"
+            if is_promoted_forecast
+            else "Forecast preview indicates high facility pressure"
             if surge_risk == "EXTREME"
             else "Forecast preview indicates elevated facility pressure"
             if surge_risk == "MODERATE"
             else "Forecast preview indicates low facility pressure"
         )
         context_summary = (
-            f"{facility.name} has a forecast-backed preview for near-term burden. "
+            f"{facility.name} is using a promoted facility burden forecast for near-term readiness."
+            if is_promoted_forecast
+            else f"{facility.name} has a forecast-backed preview for near-term burden. "
             "This preview is usable for review, but it is not yet a promoted dashboard readiness signal."
         )
         forecast_summary = {
-            "source_kind": "forecast_preview",
-            "governance_mode": "preview_only",
+            "source_kind": "promoted_forecast" if is_promoted_forecast else "forecast_preview",
+            "governance_mode": "promoted" if is_promoted_forecast else "preview_only",
             "model_version": latest_forecast.model_version or latest_forecast.forecast_run.model_version,
             "forecast_mode": latest_forecast.forecast_mode,
             "projected_pressure_score": latest_forecast.projected_pressure_score,
@@ -788,11 +810,13 @@ def build_facility_intelligence_snapshot(
                 "id": f"facility-forecast-{latest_forecast.id}",
                 "title": "Facility burden forecast preview available",
                 "description": (
-                    "A Negative Binomial facility burden preview exists for this facility. "
+                    "A promoted Negative Binomial facility burden forecast is active for this facility."
+                    if promoted_forecast is not None and latest_forecast.id == promoted_forecast.id
+                    else "A Negative Binomial facility burden preview exists for this facility. "
                     "It is available for review but still blocked from promoted dashboard truth."
                 ),
                 "timestamp": latest_forecast.generated_at,
-                "tone": "warning",
+                "tone": "success" if promoted_forecast is not None and latest_forecast.id == promoted_forecast.id else "warning",
                 "category": "system",
                 "meta": f"Model version: {latest_forecast.model_version or latest_forecast.forecast_run.model_version}",
                 "details": [

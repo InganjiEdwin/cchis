@@ -2809,6 +2809,7 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
             run_id=run.id,
             promoted_by="audit",
             note="External audit promotion test",
+            allow_blocked_promotion=True,
         )
 
         self.authenticate(self.admin_user.username)
@@ -2996,6 +2997,38 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertGreaterEqual(len(response.data["context"]["action_reasoning"]), 2)
         self.assertEqual(response.data["freshness"]["mode"], "derived_from_forecast_or_facility_timestamp")
         self.assertEqual(response.data["timeline"][0]["id"].startswith("facility-forecast-"), True)
+
+    def test_facility_intelligence_prefers_promoted_facility_forecast_over_newer_preview_run(self):
+        promoted_run = run_facility_burden_forecast_pipeline(
+            model_version="fnb-promoted-fi-v1",
+            execution_context="test_case",
+            run_purpose="forecast_scoring",
+        )
+        call_command(
+            "promote_facility_burden_forecast",
+            run_id=promoted_run.id,
+            promoted_by="auditor",
+            note="facility-intelligence-promotion-test",
+            allow_blocked_promotion=True,
+        )
+        newer_preview_run = run_facility_burden_forecast_pipeline(
+            model_version="fnb-preview-fi-v2",
+            execution_context="test_case",
+            run_purpose="forecast_scoring",
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("facility-intelligence", args=[self.health_facility.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["readiness"]["mode"], "promoted_facility_burden_forecast")
+        self.assertEqual(response.data["readiness"]["backing_source"], "forecast_promoted")
+        self.assertEqual(response.data["readiness"]["dashboard_truth_state"], "promoted")
+        self.assertEqual(response.data["forecasting"]["source_kind"], "promoted_forecast")
+        self.assertEqual(response.data["forecasting"]["governance_mode"], "promoted")
+        self.assertEqual(response.data["forecasting"]["model_version"], promoted_run.model_version)
+        self.assertNotEqual(response.data["forecasting"]["model_version"], newer_preview_run.model_version)
+        self.assertEqual(response.data["timeline"][0]["tone"], "success")
 
     def test_supervisor_can_view_facility_intelligence_for_assigned_ward_only(self):
         other_facility = HealthFacility.objects.create(
