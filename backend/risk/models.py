@@ -377,6 +377,84 @@ class FeatureDatasetRow(models.Model):
         return f"{self.dataset.dataset_ref}:{self.ward_name_snapshot}"
 
 
+class FacilityForecastRun(models.Model):
+    STATUS_RUNNING = "RUNNING"
+    STATUS_SUCCESS = "SUCCESS"
+    STATUS_FAILED = "FAILED"
+    STATUS_CHOICES = [
+        (STATUS_RUNNING, "Running"),
+        (STATUS_SUCCESS, "Success"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    algorithm_name = models.CharField(max_length=120, default="negative-binomial-baseline")
+    model_version = models.CharField(max_length=50)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_RUNNING)
+    horizon_days = models.PositiveSmallIntegerField(default=7)
+    feature_schema_version = models.CharField(max_length=50, default="facility-burden-v1")
+    feature_keys = models.JSONField(default=list, blank=True)
+    target_definition = models.CharField(max_length=160, default="expected_suspected_cases_per_facility_7d")
+    training_row_count = models.PositiveIntegerField(default=0)
+    inference_row_count = models.PositiveIntegerField(default=0)
+    evaluation_metrics = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    started_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-started_at"]
+        indexes = [
+            models.Index(fields=["model_version", "started_at"]),
+            models.Index(fields=["status", "started_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.model_version} [{self.status}] {self.started_at}"
+
+
+class FacilityForecast(models.Model):
+    READINESS_LOW = "low"
+    READINESS_WATCH = "watch"
+    READINESS_CAPACITY_CONCERN = "capacity_concern"
+    READINESS_CHOICES = [
+        (READINESS_LOW, "Low"),
+        (READINESS_WATCH, "Watch"),
+        (READINESS_CAPACITY_CONCERN, "Capacity Concern"),
+    ]
+
+    facility = models.ForeignKey(
+        HealthFacility,
+        on_delete=models.CASCADE,
+        related_name="facility_forecasts",
+    )
+    forecast_run = models.ForeignKey(
+        "risk.FacilityForecastRun",
+        on_delete=models.CASCADE,
+        related_name="forecasts",
+    )
+    generated_at = models.DateTimeField(default=timezone.now)
+    horizon_days = models.PositiveSmallIntegerField(default=7)
+    projected_case_burden = models.PositiveIntegerField(default=0)
+    projected_pressure_score = models.PositiveSmallIntegerField(default=0)
+    projected_readiness_state = models.CharField(max_length=32, choices=READINESS_CHOICES, default=READINESS_LOW)
+    surge_threshold_state = models.JSONField(default=dict, blank=True)
+    driving_ward_ids = models.JSONField(default=list, blank=True)
+    forecast_factors = models.JSONField(default=list, blank=True)
+    model_version = models.CharField(max_length=50, blank=True)
+    freshness_state = models.CharField(max_length=20, default="UNKNOWN")
+    forecast_mode = models.CharField(max_length=80, default="negative_binomial_baseline_preview")
+
+    class Meta:
+        ordering = ["-generated_at"]
+        indexes = [
+            models.Index(fields=["generated_at"]),
+            models.Index(fields=["projected_readiness_state", "generated_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.facility.name} forecast {self.model_version or 'unversioned'}"
+
+
 class Alert(models.Model):
     CHANNEL_SMS = "SMS"
     CHANNEL_WHATSAPP = "WHATSAPP"

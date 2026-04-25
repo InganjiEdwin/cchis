@@ -70,6 +70,7 @@ from risk.etl_records import (
     surveillance_record_from_sync_queue,
     surveillance_record_from_triage_session,
 )
+from risk.facility_forecasting import run_facility_burden_forecast_pipeline
 from risk.map_data import MIGORI_WARD_GEOMETRY_PATH
 from risk.canonical import (
     alert_to_canonical_record,
@@ -100,6 +101,8 @@ from .models import (
     ETLHeartbeat,
     FeatureDataset,
     FeatureDatasetRow,
+    FacilityForecast,
+    FacilityForecastRun,
     HealthFacility,
     IngestionRun,
     ModelRun,
@@ -2952,6 +2955,40 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.data["driving_ward_ids"], [self.ward.id])
         self.assertGreaterEqual(len(response.data["forecast_factors"]), 3)
 
+    def test_facility_forecast_preview_prefers_persisted_negative_binomial_forecast(self):
+        run = run_facility_burden_forecast_pipeline(
+            model_version="fnb-v1",
+            execution_context="test_case",
+            run_purpose="forecast_scoring",
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("facility-forecast-preview", args=[self.health_facility.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["forecast_mode"], "negative_binomial_baseline_preview")
+        self.assertEqual(response.data["model_version"], "fnb-v1")
+        self.assertEqual(response.data["baseline_model_status"], "negative_binomial_implemented_not_promoted")
+        self.assertGreaterEqual(response.data["projected_case_burden"], 1)
+        self.assertEqual(
+            FacilityForecast.objects.filter(forecast_run=run, facility=self.health_facility).count(),
+            1,
+        )
+
+    def test_facility_forecasting_status_reflects_successful_baseline_run(self):
+        run_facility_burden_forecast_pipeline(
+            model_version="fnb-v1",
+            execution_context="test_case",
+            run_purpose="forecast_scoring",
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("facility-forecasting-status"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["forecasting_state"], "phase_2_baseline_implemented_not_promoted")
+        self.assertEqual(response.data["current_baseline_model"], "negative-binomial-baseline")
+
     def test_supervisor_cannot_view_out_of_scope_facility_forecast_preview(self):
         self.authenticate(self.supervisor_user.username)
         response = self.client.get(reverse("facility-forecast-preview", args=[self.health_facility.id]))
@@ -3809,6 +3846,48 @@ class SeedAndModelCommandTestCase(APITestCase):
         }
 
         self.assertEqual(second_counts, first_counts)
+
+    def test_run_facility_burden_forecast_command_persists_forecast_run_and_rows(self):
+        call_command("seed_demo_data")
+
+        call_command("run_facility_burden_forecast", model_version="fnb-v1")
+
+        run = FacilityForecastRun.objects.get(model_version="fnb-v1")
+        self.assertEqual(run.status, FacilityForecastRun.STATUS_SUCCESS)
+        self.assertEqual(run.algorithm_name, "negative-binomial-baseline")
+        self.assertEqual(run.metadata["execution_context"], "manual_command")
+        self.assertEqual(run.metadata["promotion_target"], "forecast_preview_only")
+        self.assertEqual(run.evaluation_metrics["target_mode"], "proxy_derived_facility_burden")
+        self.assertGreater(run.training_row_count, 0)
+        self.assertEqual(run.inference_row_count, HealthFacility.objects.filter(is_active=True).count())
+        self.assertEqual(FacilityForecast.objects.filter(forecast_run=run).count(), run.inference_row_count)
+
+    def test_run_facility_burden_forecast_command_async_queues_task(self):
+        with patch("risk.management.commands.run_facility_burden_forecast.run_facility_burden_forecast_task.delay") as delay_mock:
+            delay_mock.return_value = SimpleNamespace(id="facility-task-123")
+            stdout = StringIO()
+
+            call_command(
+                "run_facility_burden_forecast",
+                model_version="fnb-v2",
+                run_async=True,
+                stdout=stdout,
+            )
+
+        delay_mock.assert_called_once_with(model_version="fnb-v2", horizon_days=7)
+        self.assertIn("Queued facility burden forecast task", stdout.getvalue())
+
+    def test_failed_facility_burden_forecast_run_is_persisted_with_failure_metadata(self):
+        call_command("seed_demo_data")
+
+        with patch("risk.facility_forecasting._fit_negative_binomial", side_effect=RuntimeError("nb-fit-failed")):
+            with self.assertRaisesMessage(RuntimeError, "nb-fit-failed"):
+                call_command("run_facility_burden_forecast", model_version="fnb-vfail")
+
+        run = FacilityForecastRun.objects.get(model_version="fnb-vfail")
+        self.assertEqual(run.status, FacilityForecastRun.STATUS_FAILED)
+        self.assertEqual(run.metadata["failure_reason"], "nb-fit-failed")
+        self.assertEqual(FacilityForecast.objects.filter(forecast_run=run).count(), 0)
 
     def test_reconcile_ward_codes_command_restores_canonical_codes(self):
         call_command("seed_kenya_administrative_areas", counties=["Migori"])

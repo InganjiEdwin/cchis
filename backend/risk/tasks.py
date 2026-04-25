@@ -3,6 +3,7 @@ import logging
 from celery import shared_task
 from django.utils import timezone
 
+from risk.facility_forecasting import run_facility_burden_forecast_pipeline
 from risk.ml.ingestion import fetch_rainfall_for_wards
 from risk.ml.pipeline import run_mock_prediction_pipeline
 from risk.models import Alert, ETLHeartbeat, RiskScore, Ward
@@ -170,3 +171,28 @@ def run_random_forest_benchmark_task(
         },
     )
     return len(created_scores)
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+def run_facility_burden_forecast_task(
+    self,
+    model_version: str = "fnb-v1",
+    horizon_days: int = 7,
+) -> int:
+    run = run_facility_burden_forecast_pipeline(
+        model_version=model_version,
+        horizon_days=horizon_days,
+        execution_context="scheduled_task",
+        run_purpose="forecast_scoring",
+    )
+    logger.info(
+        "run_facility_burden_forecast_task_completed",
+        extra={
+            "forecast_run_id": run.id,
+            "model_version": run.model_version,
+            "algorithm": run.algorithm_name,
+            "horizon_days": run.horizon_days,
+            "status": run.status,
+        },
+    )
+    return run.id

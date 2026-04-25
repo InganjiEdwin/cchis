@@ -1,8 +1,14 @@
 from __future__ import annotations
 
-from django.utils import timezone
+from dataclasses import dataclass
+from uuid import uuid4
 
-from risk.models import HealthFacility
+import numpy as np
+from django.utils import timezone
+from scipy.optimize import minimize
+from scipy.special import gammaln
+
+from risk.models import FacilityForecast, FacilityForecastRun, HealthFacility
 
 from .services import build_facility_intelligence_snapshot, latest_riskscore_for_ward
 
@@ -10,12 +16,38 @@ from .services import build_facility_intelligence_snapshot, latest_riskscore_for
 FACILITY_FORECAST_HORIZON_DAYS = 7
 FACILITY_FORECAST_TARGET = "expected_suspected_cases_per_facility_7d"
 FACILITY_FORECAST_MODE_PROXY = "proxy_preforecast_from_current_readiness_contract"
+FACILITY_FORECAST_MODE_MODEL = "negative_binomial_baseline_preview"
+FACILITY_FORECAST_FEATURE_SCHEMA_VERSION = "facility-burden-v1"
+FACILITY_FORECAST_FEATURE_KEYS = [
+    "ward_risk_score",
+    "ward_alert_count",
+    "facility_level_numeric",
+    "facility_type_numeric",
+    "staffing_percent",
+    "ors_estimate_percent",
+]
+
+
+@dataclass
+class FacilityForecastRow:
+    facility: HealthFacility
+    ward_risk_score: float
+    ward_alert_count: int
+    facility_level_numeric: int
+    facility_type_numeric: int
+    staffing_percent: int
+    ors_estimate_percent: int
+    target_count: int
 
 
 def build_facility_forecasting_truth_audit() -> dict:
+    latest_run = FacilityForecastRun.objects.filter(status=FacilityForecastRun.STATUS_SUCCESS).order_by("-started_at").first()
+    current_model = latest_run.algorithm_name if latest_run else None
+    current_state = "implemented_not_promoted" if latest_run else "not_yet_implemented"
     return {
-        "forecasting_state": "phase_0_truth_audited_phase_1_contract_defined",
-        "current_baseline_model": None,
+        "forecasting_state": "phase_2_baseline_implemented_not_promoted" if latest_run else "phase_0_truth_audited_phase_1_contract_defined",
+        "current_baseline_model": current_model,
+        "current_baseline_state": current_state,
         "planned_baseline_model": "negative_binomial_regression",
         "truth_sources": {
             "direct_operational_truth": [
@@ -40,9 +72,9 @@ def build_facility_forecasting_truth_audit() -> dict:
             ],
         },
         "honesty_rules": {
-            "negative_binomial_not_yet_live": True,
+            "negative_binomial_not_yet_promoted": True,
             "current_readiness_is_proxy_backed": True,
-            "dashboard_must_not_present_proxy_as_promoted_forecast": True,
+            "dashboard_must_not_present_preview_as_promoted_forecast": True,
         },
     }
 
@@ -90,6 +122,273 @@ def build_initial_facility_forecast_contract_definition() -> dict:
     }
 
 
+def _level_to_numeric(level: str) -> int:
+    return {
+        HealthFacility.LEVEL_2: 2,
+        HealthFacility.LEVEL_3: 3,
+        HealthFacility.LEVEL_4: 4,
+        HealthFacility.LEVEL_5: 5,
+    }.get(level, 2)
+
+
+def _type_to_numeric(facility_type: str) -> int:
+    return {
+        HealthFacility.TYPE_DISPENSARY: 1,
+        HealthFacility.TYPE_HEALTH_CENTER: 2,
+        HealthFacility.TYPE_CLINIC: 2,
+        HealthFacility.TYPE_HOSPITAL: 4,
+    }.get(facility_type, 1)
+
+
+def _target_count_from_snapshot(readiness: dict, context: dict) -> int:
+    projected_cases = int(readiness["projected_cases"])
+    alert_weight = int(context["ward_alert_count"]) * 2
+    surge_weight = 6 if readiness["surge_risk"] == "EXTREME" else 3 if readiness["surge_risk"] == "MODERATE" else 0
+    return max(1, projected_cases + alert_weight + surge_weight)
+
+
+def _build_base_training_rows(facilities: list[HealthFacility]) -> list[FacilityForecastRow]:
+    rows: list[FacilityForecastRow] = []
+    for facility in facilities:
+        snapshot = build_facility_intelligence_snapshot(facility)
+        readiness = snapshot["readiness"]
+        context = snapshot["context"]
+        rows.append(
+            FacilityForecastRow(
+                facility=facility,
+                ward_risk_score=float(context["ward_risk_score"] or 0.0),
+                ward_alert_count=int(context["ward_alert_count"] or 0),
+                facility_level_numeric=_level_to_numeric(facility.level),
+                facility_type_numeric=_type_to_numeric(facility.facility_type),
+                staffing_percent=int(readiness["staffing_percent"]),
+                ors_estimate_percent=int(readiness["ors_estimate_percent"]),
+                target_count=_target_count_from_snapshot(readiness, context),
+            )
+        )
+    return rows
+
+
+def _expand_training_rows(rows: list[FacilityForecastRow]) -> list[FacilityForecastRow]:
+    expanded: list[FacilityForecastRow] = []
+    multipliers = [0.85, 1.0, 1.15]
+    for row in rows:
+        for idx, multiplier in enumerate(multipliers):
+            target = max(1, int(round(row.target_count * multiplier + (idx - 1) + (row.facility.id % 3))))
+            expanded.append(
+                FacilityForecastRow(
+                    facility=row.facility,
+                    ward_risk_score=max(0.0, row.ward_risk_score * multiplier),
+                    ward_alert_count=max(0, int(round(row.ward_alert_count * multiplier))),
+                    facility_level_numeric=row.facility_level_numeric,
+                    facility_type_numeric=row.facility_type_numeric,
+                    staffing_percent=max(1, min(100, int(round(row.staffing_percent * (2 - multiplier))))),
+                    ors_estimate_percent=max(1, min(100, int(round(row.ors_estimate_percent * (2 - multiplier))))),
+                    target_count=target,
+                )
+            )
+    return expanded
+
+
+def _rows_to_matrix(rows: list[FacilityForecastRow]) -> tuple[np.ndarray, np.ndarray]:
+    x = []
+    y = []
+    for row in rows:
+        x.append(
+            [
+                1.0,
+                row.ward_risk_score,
+                row.ward_alert_count,
+                row.facility_level_numeric,
+                row.facility_type_numeric,
+                row.staffing_percent / 100.0,
+                row.ors_estimate_percent / 100.0,
+            ]
+        )
+        y.append(row.target_count)
+    return np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+
+
+def _negative_binomial_nll(params: np.ndarray, x: np.ndarray, y: np.ndarray) -> float:
+    beta = params[:-1]
+    log_alpha = params[-1]
+    alpha = float(np.exp(log_alpha))
+    mu = np.exp(np.clip(x @ beta, -20, 20))
+    inv_alpha = 1.0 / max(alpha, 1e-8)
+    term = (
+        gammaln(y + inv_alpha)
+        - gammaln(inv_alpha)
+        - gammaln(y + 1.0)
+        + inv_alpha * np.log(inv_alpha / (inv_alpha + mu))
+        + y * np.log(mu / (inv_alpha + mu))
+    )
+    return float(-np.sum(term))
+
+
+def _fit_negative_binomial(x: np.ndarray, y: np.ndarray) -> dict:
+    initial = np.zeros(x.shape[1] + 1, dtype=float)
+    initial[-1] = np.log(0.5)
+    result = minimize(_negative_binomial_nll, initial, args=(x, y), method="L-BFGS-B")
+    if not result.success:
+        raise RuntimeError(f"Negative Binomial optimization failed: {result.message}")
+    beta = result.x[:-1]
+    alpha = float(np.exp(result.x[-1]))
+    return {"coefficients": beta, "alpha": alpha, "optimizer_success": True}
+
+
+def _predict_counts(model: dict, x: np.ndarray) -> np.ndarray:
+    return np.exp(np.clip(x @ model["coefficients"], -20, 20))
+
+
+def _pressure_score_from_forecast(case_burden: int, staffing_percent: int, ors_percent: int) -> int:
+    score = case_burden * 3 + max(0, 70 - staffing_percent) // 2 + max(0, 70 - ors_percent) // 2
+    return max(0, min(100, score))
+
+
+def _readiness_state_from_score(score: int) -> str:
+    if score >= 75:
+        return FacilityForecast.READINESS_CAPACITY_CONCERN
+    if score >= 45:
+        return FacilityForecast.READINESS_WATCH
+    return FacilityForecast.READINESS_LOW
+
+
+def _surge_threshold_state(case_burden: int, staffing_percent: int, ors_percent: int) -> dict:
+    def level_from_percent(percent: int) -> str:
+        if percent < 35:
+            return "capacity_concern"
+        if percent < 65:
+            return "watch"
+        return "low"
+
+    return {
+        "ors": level_from_percent(ors_percent),
+        "staffing": level_from_percent(staffing_percent),
+        "observation_burden": "capacity_concern" if case_burden >= 20 else "watch" if case_burden >= 10 else "low",
+    }
+
+
+def _forecast_factors(row: FacilityForecastRow) -> list[dict]:
+    return [
+        {"label": "Ward risk score", "value": round(row.ward_risk_score, 4), "source": "promoted_ward_risk", "mode": "direct_or_fallback"},
+        {"label": "Ward alert count", "value": row.ward_alert_count, "source": "ward_alert_history", "mode": "direct_or_fallback"},
+        {"label": "Facility level", "value": row.facility_level_numeric, "source": "facility_master_record", "mode": "direct"},
+        {"label": "Facility type", "value": row.facility_type_numeric, "source": "facility_master_record", "mode": "direct"},
+        {"label": "Staffing percent", "value": row.staffing_percent, "source": "facility_proxy_projection", "mode": "proxy"},
+        {"label": "ORS estimate percent", "value": row.ors_estimate_percent, "source": "facility_proxy_projection", "mode": "proxy"},
+    ]
+
+
+def run_facility_burden_forecast_pipeline(
+    *,
+    model_version: str = "fnb-v1",
+    horizon_days: int = FACILITY_FORECAST_HORIZON_DAYS,
+    execution_context: str = "manual_command",
+    run_purpose: str = "forecast_scoring",
+) -> FacilityForecastRun:
+    facilities = list(HealthFacility.objects.filter(is_active=True).select_related("ward").order_by("ward__name", "name"))
+    if not facilities:
+        raise RuntimeError("No active facilities are available for facility burden forecasting.")
+
+    base_rows = _build_base_training_rows(facilities)
+    run = FacilityForecastRun.objects.create(
+        algorithm_name="negative-binomial-baseline",
+        model_version=model_version,
+        status=FacilityForecastRun.STATUS_RUNNING,
+        horizon_days=horizon_days,
+        feature_schema_version=FACILITY_FORECAST_FEATURE_SCHEMA_VERSION,
+        feature_keys=FACILITY_FORECAST_FEATURE_KEYS,
+        target_definition=FACILITY_FORECAST_TARGET,
+        training_row_count=0,
+        inference_row_count=len(base_rows),
+        evaluation_metrics={},
+        metadata={
+            "execution_context": execution_context,
+            "run_purpose": run_purpose,
+            "promotion_target": "forecast_preview_only",
+            "retraining_policy": "manual_promotion_only",
+            "model_family": "facility_burden_forecasting",
+            "baseline_model_status": "implemented_not_promoted",
+            "target_mode": "proxy_derived_facility_burden",
+            "training_dataset_ref": f"facility-forecast-training-{FACILITY_FORECAST_FEATURE_SCHEMA_VERSION}-{uuid4().hex[:8]}",
+            "inference_dataset_ref": f"facility-forecast-inference-{FACILITY_FORECAST_FEATURE_SCHEMA_VERSION}-{uuid4().hex[:8]}",
+        },
+    )
+
+    try:
+        training_rows = _expand_training_rows(base_rows)
+        x_train, y_train = _rows_to_matrix(training_rows)
+        model = _fit_negative_binomial(x_train, y_train)
+        y_hat = _predict_counts(model, x_train)
+        mae = float(np.mean(np.abs(y_train - y_hat)))
+
+        run.training_row_count = len(training_rows)
+        run.evaluation_metrics = {
+            "algorithm": "negative_binomial_regression",
+            "training_count_mae": round(mae, 4),
+            "training_row_count": len(training_rows),
+            "alpha": round(model["alpha"], 6),
+            "target_mode": "proxy_derived_facility_burden",
+            "evidence_limitations": [
+                "facility_historical_case_counts_not_yet_available",
+                "training_target_is_proxy_derived",
+            ],
+        }
+        run.save(update_fields=["training_row_count", "evaluation_metrics"])
+
+        inference_x, _ = _rows_to_matrix(base_rows)
+        predictions = _predict_counts(model, inference_x)
+        generated_at = timezone.now()
+
+        forecasts = []
+        for row, prediction in zip(base_rows, predictions):
+            projected_case_burden = max(1, int(round(float(prediction))))
+            pressure_score = _pressure_score_from_forecast(
+                projected_case_burden,
+                row.staffing_percent,
+                row.ors_estimate_percent,
+            )
+            forecasts.append(
+                FacilityForecast(
+                    facility=row.facility,
+                    forecast_run=run,
+                    generated_at=generated_at,
+                    horizon_days=horizon_days,
+                    projected_case_burden=projected_case_burden,
+                    projected_pressure_score=pressure_score,
+                    projected_readiness_state=_readiness_state_from_score(pressure_score),
+                    surge_threshold_state=_surge_threshold_state(
+                        projected_case_burden,
+                        row.staffing_percent,
+                        row.ors_estimate_percent,
+                    ),
+                    driving_ward_ids=[row.facility.ward_id],
+                    forecast_factors=_forecast_factors(row),
+                    model_version=model_version,
+                    freshness_state="FRESH",
+                    forecast_mode=FACILITY_FORECAST_MODE_MODEL,
+                )
+            )
+        FacilityForecast.objects.bulk_create(forecasts)
+
+        run.status = FacilityForecastRun.STATUS_SUCCESS
+        run.completed_at = timezone.now()
+        run.save(update_fields=["status", "completed_at"])
+        return run
+    except Exception as exc:
+        run.status = FacilityForecastRun.STATUS_FAILED
+        run.completed_at = timezone.now()
+        run.metadata = {
+            **(run.metadata or {}),
+            "failure_reason": str(exc),
+        }
+        run.save(update_fields=["status", "completed_at", "metadata"])
+        raise
+
+
+def latest_facility_forecast_for_facility(facility: HealthFacility) -> FacilityForecast | None:
+    return facility.facility_forecasts.select_related("forecast_run").order_by("-generated_at").first()
+
+
 def _pressure_score_from_snapshot(readiness: dict) -> int:
     surge_risk = readiness.get("surge_risk")
     base = 25
@@ -104,15 +403,25 @@ def _pressure_score_from_snapshot(readiness: dict) -> int:
     return max(0, min(100, pressure))
 
 
-def _readiness_state_from_score(score: int) -> str:
-    if score >= 75:
-        return "capacity_concern"
-    if score >= 45:
-        return "watch"
-    return "low"
-
-
 def build_initial_facility_forecast_preview(facility: HealthFacility) -> dict:
+    latest_forecast = latest_facility_forecast_for_facility(facility)
+    if latest_forecast and latest_forecast.forecast_run.status == FacilityForecastRun.STATUS_SUCCESS:
+        return {
+            "facility_id": facility.id,
+            "generated_at": latest_forecast.generated_at,
+            "horizon_days": latest_forecast.horizon_days,
+            "projected_case_burden": latest_forecast.projected_case_burden,
+            "projected_pressure_score": latest_forecast.projected_pressure_score,
+            "projected_readiness_state": latest_forecast.projected_readiness_state,
+            "surge_threshold_state": latest_forecast.surge_threshold_state,
+            "driving_ward_ids": latest_forecast.driving_ward_ids,
+            "forecast_factors": latest_forecast.forecast_factors,
+            "model_version": latest_forecast.model_version or latest_forecast.forecast_run.model_version,
+            "freshness_state": latest_forecast.freshness_state,
+            "forecast_mode": latest_forecast.forecast_mode,
+            "baseline_model_status": "negative_binomial_implemented_not_promoted",
+        }
+
     snapshot = build_facility_intelligence_snapshot(facility)
     readiness = snapshot["readiness"]
     latest_risk = latest_riskscore_for_ward(facility.ward)

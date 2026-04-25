@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Alert, CHV, ETLHeartbeat, FeatureDataset, FeatureDatasetRow, HealthFacility, IngestionRun, ModelRun, RiskScore, SyncQueue, TriageSession, UssdSessionLog, Ward
+from .models import Alert, CHV, ETLHeartbeat, FacilityForecast, FacilityForecastRun, FeatureDataset, FeatureDatasetRow, HealthFacility, IngestionRun, ModelRun, RiskScore, SyncQueue, TriageSession, UssdSessionLog, Ward
 
 
 @admin.register(Ward)
@@ -115,6 +115,38 @@ class FeatureDatasetRowAdmin(admin.ModelAdmin):
     list_display = ("dataset", "ward_name_snapshot", "month", "label", "created_at")
     search_fields = ("dataset__dataset_ref", "ward_name_snapshot")
     list_filter = ("dataset__dataset_kind", "month", "created_at")
+
+
+@admin.register(FacilityForecastRun)
+class FacilityForecastRunAdmin(admin.ModelAdmin):
+    list_display = (
+        "model_version",
+        "algorithm_name",
+        "status",
+        "horizon_days",
+        "feature_schema_version",
+        "training_row_count",
+        "inference_row_count",
+        "started_at",
+        "completed_at",
+    )
+    search_fields = ("model_version", "algorithm_name", "target_definition")
+    list_filter = ("status", "algorithm_name", "horizon_days", "started_at")
+
+
+@admin.register(FacilityForecast)
+class FacilityForecastAdmin(admin.ModelAdmin):
+    list_display = (
+        "facility",
+        "forecast_run",
+        "projected_case_burden",
+        "projected_pressure_score",
+        "projected_readiness_state",
+        "forecast_mode",
+        "generated_at",
+    )
+    search_fields = ("facility__name", "forecast_run__model_version", "model_version")
+    list_filter = ("projected_readiness_state", "forecast_mode", "generated_at")
 
 
 @admin.register(Alert)
