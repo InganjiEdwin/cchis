@@ -5,6 +5,7 @@ from pathlib import Path
 
 from django.db.models import Count, Prefetch
 
+from .ml.alignment import get_live_model_alignment_summary, promoted_risk_scores
 from .models import (
     Alert,
     CHV,
@@ -219,11 +220,12 @@ def build_migori_ward_map_summary(ward_queryset, *, limit_to_backend_wards: bool
     geometry = load_active_migori_ward_geometry()
     metadata = geometry.get("metadata", {})
     placeholder_geometry_detected = metadata.get("placeholder_geometry_detected", False)
+    model_alignment = get_live_model_alignment_summary()
     wards = list(
         ward_queryset.prefetch_related(
             Prefetch(
                 "risk_scores",
-                queryset=RiskScore.objects.order_by("-generated_at"),
+                queryset=RiskScore.objects.select_related("model_run").order_by("-generated_at"),
             )
         )
     )
@@ -284,7 +286,7 @@ def build_migori_ward_map_summary(ward_queryset, *, limit_to_backend_wards: bool
             if ward is not None:
                 match_source = "name"
 
-        ward_risks = list(ward.risk_scores.all()[:4]) if ward else []
+        ward_risks = promoted_risk_scores(ward.risk_scores.all())[:4] if ward else []
         latest_risk = ward_risks[0] if ward_risks else None
         trend = _derive_risk_trend(ward_risks)
         geometry_name_keys.add(normalized_name)
@@ -344,6 +346,7 @@ def build_migori_ward_map_summary(ward_queryset, *, limit_to_backend_wards: bool
             "backend_ward_code_match_count": ward_code_match_count,
             "backend_ward_name_fallback_match_count": ward_name_fallback_match_count,
             "matching_strategy": "ward_code_then_name",
+            "model_alignment": model_alignment,
             "returned_feature_count": len(features),
             "backend_wards_without_geometry": backend_wards_without_geometry,
             "placeholder_geometry_detected": placeholder_geometry_detected,

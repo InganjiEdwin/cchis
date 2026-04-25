@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from .ml.alignment import latest_promoted_riskscore_for_ward
 from .models import Alert, CHV, ETLHeartbeat, FeatureDataset, FeatureDatasetRow, HealthFacility, IngestionRun, ModelRun, RiskScore, SyncQueue, TriageSession, UssdSessionLog, Ward
 
 
@@ -46,7 +47,7 @@ class WardDetailSerializer(serializers.ModelSerializer):
         ]
 
     def _get_latest_risk(self, obj: Ward):
-        return obj.risk_scores.order_by("-generated_at").first()
+        return latest_promoted_riskscore_for_ward(obj)
 
     def get_predicted_cases(self, obj: Ward):
         latest = self._get_latest_risk(obj)

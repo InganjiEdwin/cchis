@@ -2479,6 +2479,14 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.data["metadata"]["geometry_source"], "managed:migori-ward-boundaries:test-admin-map-v1")
         self.assertEqual(response.data["metadata"]["dataset_slug"], "migori-ward-boundaries")
         self.assertEqual(response.data["metadata"]["dataset_version_label"], "test-admin-map-v1")
+        self.assertEqual(
+            response.data["metadata"]["model_alignment"]["current_live_baseline"]["algorithm"],
+            "logistic_regression",
+        )
+        self.assertEqual(
+            response.data["metadata"]["model_alignment"]["dashboard_policy"]["surface_only_promoted_outputs"],
+            True,
+        )
 
         north_kamagambo = next(
             feature for feature in response.data["features"] if feature["properties"]["name"] == self.ward.name
@@ -2506,6 +2514,46 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.data["metadata"]["returned_feature_count"], 1)
         self.assertEqual(response.data["features"][0]["properties"]["name"], self.other_ward.name)
         self.assertEqual(response.data["features"][0]["properties"]["backend_ward_id"], self.other_ward.id)
+
+    def test_ward_detail_prefers_promoted_model_output_over_newer_benchmark_output(self):
+        benchmark_run = ModelRun.objects.create(
+            algorithm_name="random-forest-benchmark",
+            model_version="rf-shadow-v1",
+            status=ModelRun.STATUS_SUCCESS,
+            month=4,
+            feature_schema_version="baseline-v1",
+            feature_keys=self.model_run.feature_keys,
+            training_dataset_ref="rf-shadow-training",
+            inference_dataset_ref="rf-shadow-inference",
+            training_row_count=8,
+            inference_row_count=2,
+            evaluation_metrics={"training_accuracy": 0.95},
+            metadata={
+                "algorithm": "random_forest",
+                "promotion_target": "benchmark_only",
+                "execution_context": "manual_command",
+                "run_purpose": "benchmark_scoring",
+            },
+            completed_at=timezone.now(),
+        )
+        RiskScore.objects.create(
+            ward=self.ward,
+            model_run=benchmark_run,
+            score=0.97,
+            risk_level=Ward.RISK_HIGH,
+            rainfall_mm=150.0,
+            flood_indicator=0.9,
+            predicted_cases=20,
+            source=RiskScore.SOURCE_MODEL,
+            model_version="rf-shadow-v1",
+            generated_at=timezone.now(),
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("ward-detail", kwargs={"pk": self.ward.id}))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["latest_model_version"], "v0-test")
 
     def test_migori_ward_map_exposes_recent_history_trend_when_multiple_runs_exist(self):
         self.import_active_migori_geometry("test-admin-map-history-v1")

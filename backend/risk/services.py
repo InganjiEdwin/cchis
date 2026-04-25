@@ -6,6 +6,7 @@ from django.db.models import Count, Max, Q
 from django.utils import timezone
 
 from .models import Alert, CHV, HealthFacility, RiskScore, SyncQueue, TriageSession, UssdSessionLog, Ward
+from .ml.alignment import latest_promoted_riskscore_for_ward, promoted_risk_scores
 from .providers import DeliveryResult, get_sms_provider
 
 
@@ -144,7 +145,7 @@ def trigger_alerts_for_riskscore(risk_score: RiskScore, send_sms_enabled: bool =
 
 
 def latest_riskscore_for_ward(ward: Ward) -> RiskScore | None:
-    return ward.risk_scores.order_by("-generated_at").first()
+    return latest_promoted_riskscore_for_ward(ward)
 
 
 def _classify_alert_record(alert: Alert) -> dict:
@@ -435,9 +436,13 @@ def build_alert_intelligence_snapshot(
 
 
 def build_ward_intelligence_snapshot(ward: Ward, *, stale_threshold_minutes: int = 120) -> dict:
-    risk_history = list(
-        ward.risk_scores.select_related("model_run").order_by("-generated_at")[:6]
-    )
+    prefetched = getattr(ward, "_prefetched_objects_cache", {})
+    if "risk_scores" in prefetched:
+        risk_history = promoted_risk_scores(prefetched["risk_scores"])[:6]
+    else:
+        risk_history = promoted_risk_scores(
+            ward.risk_scores.select_related("model_run").order_by("-generated_at")[:12]
+        )[:6]
     related_alerts = list(
         ward.alerts.select_related("risk_score").order_by("-created_at")[:6]
     )
