@@ -50,11 +50,26 @@ class FacilityForecastRow:
 
 
 def build_facility_forecasting_truth_audit() -> dict:
-    latest_run = FacilityForecastRun.objects.filter(status=FacilityForecastRun.STATUS_SUCCESS).order_by("-started_at").first()
-    current_model = latest_run.algorithm_name if latest_run else None
-    current_state = "implemented_not_promoted" if latest_run else "not_yet_implemented"
+    promoted_run = _latest_promoted_facility_forecast_run()
+    latest_run = _latest_successful_facility_forecast_run()
+    current_run = promoted_run or latest_run
+    current_model = current_run.algorithm_name if current_run else None
+    current_state = (
+        "promoted"
+        if promoted_run
+        else "implemented_not_promoted"
+        if latest_run
+        else "not_yet_implemented"
+    )
+    forecasting_state = (
+        "phase_4_promoted_dashboard_forecast_available"
+        if promoted_run
+        else "phase_2_baseline_implemented_not_promoted"
+        if latest_run
+        else "phase_0_truth_audited_phase_1_contract_defined"
+    )
     return {
-        "forecasting_state": "phase_2_baseline_implemented_not_promoted" if latest_run else "phase_0_truth_audited_phase_1_contract_defined",
+        "forecasting_state": forecasting_state,
         "current_baseline_model": current_model,
         "current_baseline_state": current_state,
         "planned_baseline_model": "negative_binomial_regression",
@@ -81,7 +96,7 @@ def build_facility_forecasting_truth_audit() -> dict:
             ],
         },
         "honesty_rules": {
-            "negative_binomial_not_yet_promoted": True,
+            "negative_binomial_not_yet_promoted": not bool(promoted_run),
             "current_readiness_is_proxy_backed": True,
             "dashboard_must_not_present_preview_as_promoted_forecast": True,
         },
@@ -90,6 +105,17 @@ def build_facility_forecasting_truth_audit() -> dict:
 
 def _latest_successful_facility_forecast_run() -> FacilityForecastRun | None:
     return FacilityForecastRun.objects.filter(status=FacilityForecastRun.STATUS_SUCCESS).order_by("-started_at").first()
+
+
+def _latest_promoted_facility_forecast_run() -> FacilityForecastRun | None:
+    return (
+        FacilityForecastRun.objects.filter(
+            status=FacilityForecastRun.STATUS_SUCCESS,
+            metadata__promotion_target=FACILITY_FORECAST_PROMOTION_TARGET_DASHBOARD,
+        )
+        .order_by("-started_at")
+        .first()
+    )
 
 
 def _run_summary(run: FacilityForecastRun) -> dict:
@@ -116,7 +142,7 @@ def _run_summary(run: FacilityForecastRun) -> dict:
 
 
 def build_facility_forecast_promotion_summary(run: FacilityForecastRun | None = None) -> dict:
-    run = run or _latest_successful_facility_forecast_run()
+    run = run or _latest_promoted_facility_forecast_run() or _latest_successful_facility_forecast_run()
     if run is None:
         return {
             "current_run": None,
@@ -172,6 +198,39 @@ def build_facility_forecast_promotion_summary(run: FacilityForecastRun | None = 
 
     explainability_status = "present" if forecasts else "not_available"
 
+    is_promoted = is_promoted_facility_forecast_run(run)
+    promotion_blockers = [] if is_promoted else FACILITY_FORECAST_PROMOTION_BLOCKERS
+    recommended_state = "promoted" if is_promoted else "not_promoted"
+    governance_mode = "promoted" if is_promoted else "preview_only"
+    promotion_readiness = "promoted_with_manual_review" if is_promoted else "not_ready_for_promotion"
+    decision_reason = (
+        "This facility burden forecast run has been manually promoted for dashboard readiness use after explicit review."
+        if is_promoted
+        else "The Negative Binomial baseline is implemented and persisted, but promotion remains blocked because "
+        "the target is still proxy-derived and real facility burden evidence is incomplete."
+    )
+    allowed_product_surfaces = (
+        [
+            "facility_forecast_preview",
+            "ops_admin_review",
+            "forecast_evaluation_review",
+            "dashboard_readiness_warning",
+            "promoted_facility_summary",
+            "action_panel_facility_pressure",
+        ]
+        if is_promoted
+        else [
+            "facility_forecast_preview",
+            "ops_admin_review",
+            "forecast_evaluation_review",
+        ]
+    )
+    blocked_product_surfaces = [] if is_promoted else [
+        "dashboard_readiness_warning",
+        "promoted_facility_summary",
+        "action_panel_facility_pressure",
+    ]
+
     return {
         "current_run": _run_summary(run),
         "evaluation": {
@@ -202,24 +261,13 @@ def build_facility_forecast_promotion_summary(run: FacilityForecastRun | None = 
             },
         },
         "decision": {
-            "recommended_state": "not_promoted",
-            "governance_mode": "preview_only",
-            "promotion_readiness": "not_ready_for_promotion",
-            "promotion_blockers": FACILITY_FORECAST_PROMOTION_BLOCKERS,
-            "decision_reason": (
-                "The Negative Binomial baseline is implemented and persisted, but promotion remains blocked because "
-                "the target is still proxy-derived and real facility burden evidence is incomplete."
-            ),
-            "allowed_product_surfaces": [
-                "facility_forecast_preview",
-                "ops_admin_review",
-                "forecast_evaluation_review",
-            ],
-            "blocked_product_surfaces": [
-                "dashboard_readiness_warning",
-                "promoted_facility_summary",
-                "action_panel_facility_pressure",
-            ],
+            "recommended_state": recommended_state,
+            "governance_mode": governance_mode,
+            "promotion_readiness": promotion_readiness,
+            "promotion_blockers": promotion_blockers,
+            "decision_reason": decision_reason,
+            "allowed_product_surfaces": allowed_product_surfaces,
+            "blocked_product_surfaces": blocked_product_surfaces,
         },
     }
 
@@ -554,7 +602,16 @@ def promote_facility_forecast_run(
     *,
     promoted_by: str | None = None,
     note: str | None = None,
+    allow_blocked_promotion: bool = False,
 ) -> FacilityForecastRun:
+    summary = build_facility_forecast_promotion_summary(run)
+    blockers = summary["decision"]["promotion_blockers"]
+    if blockers and not allow_blocked_promotion:
+        raise ValueError(
+            "Promotion is blocked by unresolved evidence gaps. "
+            "Use explicit override acknowledgement to promote anyway."
+        )
+
     for existing_run in FacilityForecastRun.objects.filter(
         status=FacilityForecastRun.STATUS_SUCCESS,
         metadata__promotion_target=FACILITY_FORECAST_PROMOTION_TARGET_DASHBOARD,
@@ -573,6 +630,8 @@ def promote_facility_forecast_run(
         "promoted_at": timezone.now().isoformat(),
         "promoted_by": promoted_by,
         "promotion_note": note or "",
+        "promotion_override_acknowledged": allow_blocked_promotion,
+        "promotion_blockers_at_decision": blockers,
     }
     run.save(update_fields=["metadata"])
     return run

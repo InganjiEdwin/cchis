@@ -3084,6 +3084,31 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.data["promotion_summary"]["decision"]["governance_mode"], "preview_only")
         self.assertIn("proxy_training_target_only", response.data["promotion_summary"]["decision"]["promotion_blockers"])
 
+    def test_facility_forecasting_status_reflects_promoted_baseline_run(self):
+        run = run_facility_burden_forecast_pipeline(
+            model_version="fnb-vpromoted-status",
+            execution_context="test_case",
+            run_purpose="forecast_scoring",
+        )
+        call_command(
+            "promote_facility_burden_forecast",
+            run_id=run.id,
+            promoted_by="auditor",
+            note="status-promotion-test",
+            allow_blocked_promotion=True,
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("facility-forecasting-status"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["forecasting_state"], "phase_4_promoted_dashboard_forecast_available")
+        self.assertEqual(response.data["current_baseline_state"], "promoted")
+        self.assertFalse(response.data["honesty_rules"]["negative_binomial_not_yet_promoted"])
+        self.assertEqual(response.data["promotion_summary"]["decision"]["governance_mode"], "promoted")
+        self.assertEqual(response.data["promotion_summary"]["decision"]["promotion_readiness"], "promoted_with_manual_review")
+        self.assertEqual(response.data["promotion_summary"]["decision"]["promotion_blockers"], [])
+
     def test_analyst_can_view_facility_forecasting_evaluation(self):
         run_facility_burden_forecast_pipeline(
             model_version="fnb-v1",
@@ -3099,6 +3124,30 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.data["decision"]["promotion_readiness"], "not_ready_for_promotion")
         self.assertEqual(response.data["decision"]["governance_mode"], "preview_only")
         self.assertIn("dashboard_readiness_warning", response.data["decision"]["blocked_product_surfaces"])
+
+    def test_facility_forecasting_evaluation_reflects_promoted_run(self):
+        run = run_facility_burden_forecast_pipeline(
+            model_version="fnb-vpromoted-eval",
+            execution_context="test_case",
+            run_purpose="forecast_scoring",
+        )
+        call_command(
+            "promote_facility_burden_forecast",
+            run_id=run.id,
+            promoted_by="auditor",
+            note="evaluation-promotion-test",
+            allow_blocked_promotion=True,
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("facility-forecasting-evaluation"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["current_run"]["model_version"], "fnb-vpromoted-eval")
+        self.assertEqual(response.data["decision"]["promotion_readiness"], "promoted_with_manual_review")
+        self.assertEqual(response.data["decision"]["governance_mode"], "promoted")
+        self.assertEqual(response.data["decision"]["promotion_blockers"], [])
+        self.assertIn("dashboard_readiness_warning", response.data["decision"]["allowed_product_surfaces"])
 
     def test_supervisor_cannot_view_out_of_scope_facility_forecast_preview(self):
         self.authenticate(self.supervisor_user.username)
@@ -4004,12 +4053,25 @@ class SeedAndModelCommandTestCase(APITestCase):
             model_version="fnb-vpromote",
             promoted_by="auditor",
             note="promotion-test",
+            allow_blocked_promotion=True,
         )
 
         run = FacilityForecastRun.objects.get(model_version="fnb-vpromote")
         self.assertEqual(run.metadata["promotion_target"], "dashboard_readiness_promoted")
         self.assertEqual(run.metadata["promoted_by"], "auditor")
         self.assertEqual(run.metadata["promotion_note"], "promotion-test")
+        self.assertTrue(run.metadata["promotion_override_acknowledged"])
+
+    def test_promote_facility_burden_forecast_command_requires_explicit_override_for_blocked_run(self):
+        call_command("seed_demo_data")
+        call_command("run_facility_burden_forecast", model_version="fnb-vblocked")
+
+        with self.assertRaisesMessage(CommandError, "Promotion is blocked by unresolved evidence gaps."):
+            call_command(
+                "promote_facility_burden_forecast",
+                model_version="fnb-vblocked",
+                promoted_by="auditor",
+            )
 
     def test_failed_facility_burden_forecast_run_is_persisted_with_failure_metadata(self):
         call_command("seed_demo_data")
