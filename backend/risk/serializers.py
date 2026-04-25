@@ -287,6 +287,29 @@ class ModelRunSerializer(serializers.ModelSerializer):
     rainfall_ingestion_run_status = serializers.CharField(source="rainfall_ingestion_run.status", read_only=True)
     training_feature_dataset_ref = serializers.CharField(source="training_feature_dataset.dataset_ref", read_only=True)
     inference_feature_dataset_ref = serializers.CharField(source="inference_feature_dataset.dataset_ref", read_only=True)
+    execution_context = serializers.SerializerMethodField()
+    run_purpose = serializers.SerializerMethodField()
+    promotion_target = serializers.SerializerMethodField()
+    retraining_policy = serializers.SerializerMethodField()
+    alert_eligible = serializers.SerializerMethodField()
+
+    def _metadata_value(self, obj: ModelRun, key: str, default=None):
+        return (obj.metadata or {}).get(key, default)
+
+    def get_execution_context(self, obj: ModelRun):
+        return self._metadata_value(obj, "execution_context")
+
+    def get_run_purpose(self, obj: ModelRun):
+        return self._metadata_value(obj, "run_purpose")
+
+    def get_promotion_target(self, obj: ModelRun):
+        return self._metadata_value(obj, "promotion_target")
+
+    def get_retraining_policy(self, obj: ModelRun):
+        return self._metadata_value(obj, "retraining_policy")
+
+    def get_alert_eligible(self, obj: ModelRun):
+        return self._metadata_value(obj, "alert_eligible")
 
     class Meta:
         model = ModelRun
@@ -304,6 +327,11 @@ class ModelRunSerializer(serializers.ModelSerializer):
             "inference_row_count",
             "evaluation_metrics",
             "metadata",
+            "execution_context",
+            "run_purpose",
+            "promotion_target",
+            "retraining_policy",
+            "alert_eligible",
             "training_feature_dataset",
             "training_feature_dataset_ref",
             "inference_feature_dataset",

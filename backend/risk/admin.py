@@ -74,9 +74,33 @@ class ETLHeartbeatAdmin(admin.ModelAdmin):
 
 @admin.register(ModelRun)
 class ModelRunAdmin(admin.ModelAdmin):
-    list_display = ("model_version", "algorithm_name", "status", "month", "feature_schema_version", "training_row_count", "inference_row_count", "started_at")
+    list_display = (
+        "model_version",
+        "algorithm_name",
+        "run_purpose",
+        "execution_context",
+        "promotion_target",
+        "status",
+        "month",
+        "feature_schema_version",
+        "training_row_count",
+        "inference_row_count",
+        "started_at",
+    )
     search_fields = ("model_version", "algorithm_name", "status", "feature_schema_version", "training_dataset_ref", "inference_dataset_ref")
     list_filter = ("status", "algorithm_name", "month", "started_at")
+
+    @admin.display(description="Run Purpose")
+    def run_purpose(self, obj):
+        return obj.metadata.get("run_purpose", "unknown")
+
+    @admin.display(description="Execution Context")
+    def execution_context(self, obj):
+        return obj.metadata.get("execution_context", "unknown")
+
+    @admin.display(description="Promotion Target")
+    def promotion_target(self, obj):
+        return obj.metadata.get("promotion_target", "unknown")
 
 
 @admin.register(FeatureDataset)

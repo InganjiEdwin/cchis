@@ -39,6 +39,8 @@ def _persist_blocked_model_run(
     alert_eligible: bool,
     operational_trust: dict,
     requested_trigger_alerts: bool,
+    execution_context: str,
+    run_purpose: str,
 ) -> ModelRun:
     blocked_at = timezone.now()
     return ModelRun.objects.create(
@@ -64,10 +66,15 @@ def _persist_blocked_model_run(
             "send_sms": False,
             "algorithm": algorithm,
             "run_role": run_role,
+            "execution_context": execution_context,
+            "run_purpose": run_purpose,
             "benchmark_group_ref": benchmark_group_ref,
             "alert_eligible": alert_eligible,
             "dual_model_mode": benchmark_group_ref is not None,
             "promotion_state": "promoted" if alert_eligible else "benchmark_only",
+            "promotion_target": "live_baseline" if alert_eligible else "benchmark_only",
+            "retraining_policy": "manual_promotion_only",
+            "model_family": "ward_risk_classification",
             "operational_trust": operational_trust,
             "automatic_alerts_blocked_by_trust_policy": requested_trigger_alerts,
             "scoring_blocked_by_trust_policy": True,
@@ -94,6 +101,8 @@ def _persist_model_outputs(
     alert_eligible: bool,
     operational_trust: dict,
     requested_trigger_alerts: bool,
+    execution_context: str,
+    run_purpose: str,
 ) -> list[RiskScore]:
     effective_trigger_alerts = trigger_alerts and alert_eligible and alerts_allowed_for_snapshot(operational_trust)
 
@@ -126,10 +135,15 @@ def _persist_model_outputs(
             "send_sms": send_sms and effective_trigger_alerts,
             "algorithm": algorithm,
             "run_role": run_role,
+            "execution_context": execution_context,
+            "run_purpose": run_purpose,
             "benchmark_group_ref": benchmark_group_ref,
             "alert_eligible": alert_eligible,
             "dual_model_mode": benchmark_group_ref is not None,
             "promotion_state": "promoted" if alert_eligible else "benchmark_only",
+            "promotion_target": "live_baseline" if alert_eligible else "benchmark_only",
+            "retraining_policy": "manual_promotion_only",
+            "model_family": "ward_risk_classification",
             "operational_trust": operational_trust,
             "automatic_alerts_blocked_by_trust_policy": requested_trigger_alerts and not effective_trigger_alerts,
         },
@@ -193,6 +207,8 @@ def run_mock_prediction_pipeline(
     benchmark_algorithm: str = "random_forest",
     benchmark_model_version: str = "rf-v1",
     alert_algorithm: str | None = None,
+    execution_context: str = "manual_command",
+    run_purpose: str = "live_scoring",
 ) -> list[RiskScore]:
     wards = Ward.objects.filter(is_active=True).order_by("name")
     inference_dataset = build_inference_feature_dataset(wards, month=month)
@@ -243,6 +259,8 @@ def run_mock_prediction_pipeline(
                 alert_eligible=alert_algorithm == algorithm,
                 operational_trust=operational_trust,
                 requested_trigger_alerts=trigger_alerts,
+                execution_context=execution_context,
+                run_purpose=run_purpose,
             )
             if dual_model:
                 _persist_blocked_model_run(
@@ -258,6 +276,8 @@ def run_mock_prediction_pipeline(
                     alert_eligible=alert_algorithm == benchmark_algorithm,
                     operational_trust=operational_trust,
                     requested_trigger_alerts=trigger_alerts,
+                    execution_context=execution_context,
+                    run_purpose="benchmark_scoring",
                 )
         return []
 
@@ -279,6 +299,8 @@ def run_mock_prediction_pipeline(
                 alert_eligible=alert_algorithm == algorithm,
                 operational_trust=operational_trust,
                 requested_trigger_alerts=trigger_alerts,
+                execution_context=execution_context,
+                run_purpose=run_purpose,
             )
         )
         if dual_model:
@@ -299,6 +321,8 @@ def run_mock_prediction_pipeline(
                     alert_eligible=alert_algorithm == benchmark_algorithm,
                     operational_trust=operational_trust,
                     requested_trigger_alerts=trigger_alerts,
+                    execution_context=execution_context,
+                    run_purpose="benchmark_scoring",
                 )
             )
 

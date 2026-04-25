@@ -3987,6 +3987,10 @@ class SeedAndModelCommandTestCase(APITestCase):
         self.assertTrue(model_run.metadata["alert_eligible"])
         self.assertEqual(model_run.metadata["operational_trust"]["prediction_state"], TRUST_STATE_DEGRADED)
         self.assertTrue(model_run.metadata["automatic_alerts_blocked_by_trust_policy"] is False)
+        self.assertEqual(model_run.metadata["execution_context"], "manual_command")
+        self.assertEqual(model_run.metadata["run_purpose"], "live_scoring")
+        self.assertEqual(model_run.metadata["promotion_target"], "live_baseline")
+        self.assertEqual(model_run.metadata["retraining_policy"], "manual_promotion_only")
 
     def test_run_risk_model_dual_model_mode_persists_shared_dataset_lineage(self):
         Ward.objects.create(
@@ -4028,10 +4032,16 @@ class SeedAndModelCommandTestCase(APITestCase):
         self.assertEqual(primary_run.inference_feature_dataset_id, benchmark_run.inference_feature_dataset_id)
         self.assertEqual(primary_run.metadata["run_role"], "primary")
         self.assertEqual(benchmark_run.metadata["run_role"], "benchmark")
+        self.assertEqual(primary_run.metadata["run_purpose"], "live_scoring")
+        self.assertEqual(benchmark_run.metadata["run_purpose"], "benchmark_scoring")
+        self.assertEqual(primary_run.metadata["execution_context"], "manual_command")
+        self.assertEqual(benchmark_run.metadata["execution_context"], "manual_command")
         self.assertTrue(primary_run.metadata["alert_eligible"])
         self.assertFalse(benchmark_run.metadata["alert_eligible"])
         self.assertEqual(primary_run.metadata["promotion_state"], "promoted")
         self.assertEqual(benchmark_run.metadata["promotion_state"], "benchmark_only")
+        self.assertEqual(primary_run.metadata["promotion_target"], "live_baseline")
+        self.assertEqual(benchmark_run.metadata["promotion_target"], "benchmark_only")
         self.assertEqual(primary_run.metadata["benchmark_group_ref"], benchmark_run.metadata["benchmark_group_ref"])
         self.assertEqual(
             RiskScore.objects.filter(model_run=primary_run, source=RiskScore.SOURCE_MODEL).count(),
@@ -4234,6 +4244,11 @@ class SeedAndModelCommandTestCase(APITestCase):
 
         self.assertTrue(ModelRun.objects.filter(model_version="v0-demo", status=ModelRun.STATUS_SUCCESS).exists())
         self.assertFalse(RiskScore.objects.filter(source=RiskScore.SOURCE_MODEL, model_run__isnull=True).exists())
+        demo_run = ModelRun.objects.get(model_version="v0-demo")
+        self.assertEqual(demo_run.metadata["execution_context"], "seeded_demo")
+        self.assertEqual(demo_run.metadata["run_purpose"], "demo_seed")
+        self.assertEqual(demo_run.metadata["promotion_target"], "demo_only")
+        self.assertFalse(demo_run.metadata["alert_eligible"])
 
 
 class ETLOperationalTrustPolicyTestCase(APITestCase):

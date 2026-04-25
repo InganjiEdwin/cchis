@@ -107,6 +107,8 @@ def run_risk_model_task(
     benchmark_algorithm: str = "random_forest",
     benchmark_model_version: str = "rf-v1",
     alert_algorithm: str | None = None,
+    execution_context: str = "scheduled_task",
+    run_purpose: str = "live_scoring",
 ) -> int:
     if month is None:
         month = timezone.now().month
@@ -121,6 +123,8 @@ def run_risk_model_task(
         benchmark_algorithm=benchmark_algorithm,
         benchmark_model_version=benchmark_model_version,
         alert_algorithm=alert_algorithm,
+        execution_context=execution_context,
+        run_purpose=run_purpose,
     )
     logger.info(
         "run_risk_model_task_completed",
@@ -130,6 +134,8 @@ def run_risk_model_task(
             "algorithm": algorithm,
             "month": month,
             "dual_model": dual_model,
+            "execution_context": execution_context,
+            "run_purpose": run_purpose,
         },
     )
     return len(created_scores)

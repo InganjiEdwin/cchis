@@ -58,6 +58,8 @@ class Command(BaseCommand):
                 benchmark_algorithm=benchmark_algorithm,
                 benchmark_model_version=benchmark_model_version,
                 alert_algorithm=alert_algorithm,
+                execution_context="manual_task",
+                run_purpose="live_scoring",
             )
             self.stdout.write(
                 self.style.SUCCESS(
@@ -76,6 +78,8 @@ class Command(BaseCommand):
             benchmark_algorithm=benchmark_algorithm,
             benchmark_model_version=benchmark_model_version,
             alert_algorithm=alert_algorithm,
+            execution_context="manual_command",
+            run_purpose="live_scoring",
         )
 
         self.stdout.write(

@@ -139,7 +139,15 @@ class Command(BaseCommand):
                 "training_row_count": 8,
                 "inference_row_count": len(wards_data),
                 "evaluation_metrics": {"seed_demo": True},
-                "metadata": {"seeded": True},
+                "metadata": {
+                    "seeded": True,
+                    "execution_context": "seeded_demo",
+                    "run_purpose": "demo_seed",
+                    "promotion_target": "demo_only",
+                    "retraining_policy": "manual_promotion_only",
+                    "alert_eligible": False,
+                    "model_family": "ward_risk_classification",
+                },
                 "completed_at": timezone.now(),
             },
         )
