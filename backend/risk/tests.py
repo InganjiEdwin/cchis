@@ -1,4 +1,6 @@
+import json
 import os
+import tempfile
 import time
 from datetime import timedelta
 from types import SimpleNamespace
@@ -46,6 +48,7 @@ from core.observability import (
 from core.data_lifecycle import DATA_RETENTION_INVENTORY, FIELD_DATA_MINIMIZATION_RULES
 from core.recovery_discipline import BACKUP_EXPECTATIONS, RESTORE_REHEARSAL_EXPECTATIONS
 from risk.ml.ingestion import fetch_rainfall_for_ward
+from risk.map_data import MIGORI_WARD_GEOMETRY_PATH
 from risk.canonical import (
     alert_to_canonical_record,
     canonical_export_envelope,
@@ -68,7 +71,21 @@ def started_at_ms(offset_ms: int = 2000) -> int:
     return int(time.time() * 1000) - offset_ms
 from risk.views import USSDMenuAPIView
 
-from .models import Alert, CHV, HealthFacility, IngestionRun, ModelRun, RiskScore, SyncQueue, TriageSession, UssdSessionLog, Ward
+from .models import (
+    Alert,
+    CHV,
+    HealthFacility,
+    IngestionRun,
+    ModelRun,
+    RiskScore,
+    SyncQueue,
+    TriageSession,
+    UssdSessionLog,
+    Ward,
+    WardGeometryDataset,
+    WardGeometryDatasetVersion,
+    WardGeometryFeature,
+)
 
 
 User = get_user_model()
@@ -197,6 +214,15 @@ class AuthenticatedAPITestCase(APITestCase):
 
         self._enroll_user_for_totp(self.admin_user)
         self._enroll_user_for_totp(self.supervisor_user)
+
+    def import_active_migori_geometry(self, version_label: str = "test-managed-v1"):
+        call_command("seed_kenya_administrative_areas", counties=["Migori"])
+        call_command(
+            "import_ward_geometry",
+            version_label=version_label,
+            activate=True,
+            strict=True,
+        )
 
     def _create_user(
         self,
@@ -2374,7 +2400,8 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]["ward_name"], "North Kadem")
 
-    def test_admin_can_view_migori_ward_map_with_backend_counts_and_source_gap_note(self):
+    def test_admin_can_view_migori_ward_map_with_backend_counts_and_hardened_metadata(self):
+        self.import_active_migori_geometry("test-admin-map-v1")
         Alert.objects.create(
             ward=self.ward,
             risk_score=self.risk_score,
@@ -2405,13 +2432,21 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["type"], "FeatureCollection")
-        self.assertIn("Kanyasa", response.data["metadata"]["missing_source_wards"])
-        self.assertGreaterEqual(response.data["metadata"]["returned_feature_count"], 39)
+        self.assertEqual(response.data["metadata"]["geometry_feature_count"], 40)
+        self.assertEqual(response.data["metadata"]["expected_ward_count"], 40)
+        self.assertEqual(response.data["metadata"]["returned_feature_count"], 40)
+        self.assertEqual(response.data["metadata"]["missing_source_wards"], [])
+        self.assertEqual(response.data["metadata"]["matching_strategy"], "ward_code_then_name")
+        self.assertFalse(response.data["metadata"]["placeholder_geometry_detected"])
+        self.assertEqual(response.data["metadata"]["geometry_source"], "managed:migori-ward-boundaries:test-admin-map-v1")
+        self.assertEqual(response.data["metadata"]["dataset_slug"], "migori-ward-boundaries")
+        self.assertEqual(response.data["metadata"]["dataset_version_label"], "test-admin-map-v1")
 
         north_kamagambo = next(
             feature for feature in response.data["features"] if feature["properties"]["name"] == self.ward.name
         )
         self.assertEqual(north_kamagambo["properties"]["backend_ward_id"], self.ward.id)
+        self.assertEqual(north_kamagambo["properties"]["matching_source"], "ward_code")
         self.assertEqual(north_kamagambo["properties"]["chv_count"], 1)
         self.assertEqual(north_kamagambo["properties"]["active_chv_count"], 1)
         self.assertEqual(north_kamagambo["properties"]["alert_count"], 1)
@@ -2419,6 +2454,7 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(north_kamagambo["properties"]["risk_level"], Ward.RISK_HIGH)
 
     def test_supervisor_map_scope_is_limited_to_assigned_ward_geometry(self):
+        self.import_active_migori_geometry("test-supervisor-map-v1")
         self.authenticate(self.supervisor_user.username)
         response = self.client.get(reverse("migori-ward-map"))
 
@@ -3411,8 +3447,13 @@ class SeedAndModelCommandTestCase(APITestCase):
         self.assertTrue(User.objects.filter(username="superuser", is_superuser=True).exists())
         self.assertTrue(User.objects.filter(username="admin", role=User.ROLE_ADMIN).exists())
         self.assertTrue(User.objects.filter(username="chv_demo", role=User.ROLE_CHV).exists())
-        self.assertFalse(Ward.objects.filter(ward_code="").exists())
+        self.assertFalse(Ward.objects.filter(county="Migori", ward_code="").exists())
         self.assertFalse(HealthFacility.objects.filter(facility_code="").exists())
+        self.assertEqual(
+            Ward.objects.get(county="Migori", name="North Kamagambo").ward_code,
+            "KE-WARD-1261",
+        )
+        self.assertTrue(Ward.objects.filter(county="Migori", name="Macalder/Kanyarwanda").exists())
 
     def test_seed_demo_data_command_is_idempotent(self):
         call_command("seed_demo_data")
@@ -3434,6 +3475,340 @@ class SeedAndModelCommandTestCase(APITestCase):
         }
 
         self.assertEqual(second_counts, first_counts)
+
+    def test_reconcile_ward_codes_command_restores_canonical_codes(self):
+        call_command("seed_kenya_administrative_areas", counties=["Migori"])
+        ward = Ward.objects.get(
+            name="North Kamagambo",
+            county="Migori",
+        )
+        ward.ward_code = "CCHIS-WARD-001"
+        ward.save(update_fields=["ward_code"])
+
+        call_command("reconcile_ward_codes", counties=["Migori"])
+
+        ward.refresh_from_db()
+        self.assertEqual(ward.ward_code, "KE-WARD-1261")
+
+    def test_reconcile_ward_codes_command_normalizes_known_name_drift(self):
+        Ward.objects.create(
+            name="Macalder Kanyarwanda",
+            county="Migori",
+            sub_county="Nyatike",
+            ward_code="CCHIS-WARD-003",
+            is_active=True,
+        )
+
+        call_command("reconcile_ward_codes", counties=["Migori"])
+
+        canonical = Ward.objects.get(county="Migori", name="Macalder/Kanyarwanda")
+        self.assertEqual(canonical.ward_code, "KE-WARD-1285")
+
+    def test_import_ward_geometry_command_dry_run_does_not_write_rows(self):
+        call_command("seed_kenya_administrative_areas", counties=["Migori"])
+
+        call_command(
+            "import_ward_geometry",
+            version_label="2026-04-25-dry-run",
+            dry_run=True,
+            strict=True,
+        )
+
+        self.assertEqual(WardGeometryDataset.objects.count(), 0)
+        self.assertEqual(WardGeometryDatasetVersion.objects.count(), 0)
+        self.assertEqual(WardGeometryFeature.objects.count(), 0)
+
+    def test_import_ward_geometry_command_creates_managed_geometry_version(self):
+        call_command("seed_kenya_administrative_areas", counties=["Migori"])
+
+        call_command(
+            "import_ward_geometry",
+            version_label="2026-04-25-v1",
+            strict=True,
+            activate=True,
+        )
+
+        dataset = WardGeometryDataset.objects.get(slug="migori-ward-boundaries")
+        version = WardGeometryDatasetVersion.objects.get(dataset=dataset, version_label="2026-04-25-v1")
+        self.assertTrue(version.is_active)
+        self.assertEqual(version.feature_count, 40)
+        self.assertEqual(version.expected_feature_count, 40)
+        self.assertEqual(version.source_url, "https://github.com/benaboki/Kenya-County-Assembly-Boundaries")
+        self.assertEqual(version.source_crs, "EPSG:4326")
+        self.assertEqual(version.validation_summary["backend_ward_code_match_count"], 40)
+        self.assertEqual(version.validation_summary["backend_ward_name_fallback_match_count"], 0)
+        self.assertEqual(WardGeometryFeature.objects.filter(dataset_version=version).count(), 40)
+        self.assertFalse(
+            WardGeometryFeature.objects.filter(dataset_version=version, matching_source="name").exists()
+        )
+
+    def test_import_ward_geometry_command_rejects_unknown_operator_username(self):
+        call_command("seed_kenya_administrative_areas", counties=["Migori"])
+
+        with self.assertRaisesMessage(CommandError, "Operator username not found: missing-operator"):
+            call_command(
+                "import_ward_geometry",
+                version_label="unknown-operator-v1",
+                strict=True,
+                operator_username="missing-operator",
+            )
+
+    def test_import_ward_geometry_command_rejects_missing_source_url_provenance(self):
+        call_command("seed_kenya_administrative_areas", counties=["Migori"])
+
+        payload = json.loads(MIGORI_WARD_GEOMETRY_PATH.read_text())
+        payload_metadata = payload.setdefault("metadata", {})
+        payload_metadata.pop("source", None)
+        payload_metadata.pop("source_url", None)
+
+        with tempfile.NamedTemporaryFile("w", suffix=".geojson", delete=False) as handle:
+            json.dump(payload, handle)
+            temp_path = handle.name
+
+        try:
+            with self.assertRaisesMessage(
+                CommandError,
+                "source-url is required unless the input GeoJSON metadata provides source or source_url.",
+            ):
+                call_command(
+                    "import_ward_geometry",
+                    input_path=temp_path,
+                    version_label="missing-source-url-v1",
+                    strict=True,
+                )
+        finally:
+            os.remove(temp_path)
+
+    def test_activate_ward_geometry_version_command_switches_active_version_and_records_operator(self):
+        call_command("seed_kenya_administrative_areas", counties=["Migori"])
+        operator = User.objects.create_user(username="geometry_operator", password="ChangeMe123!")
+        call_command(
+            "import_ward_geometry",
+            version_label="phase7-v1",
+            strict=True,
+            activate=True,
+            operator_username=operator.username,
+        )
+        call_command(
+            "import_ward_geometry",
+            version_label="phase7-v2",
+            strict=True,
+            activate=False,
+            operator_username=operator.username,
+        )
+
+        call_command(
+            "activate_ward_geometry_version",
+            dataset_slug="migori-ward-boundaries",
+            version_label="phase7-v2",
+            operator_username=operator.username,
+            notes="Rollback forward to phase7-v2",
+        )
+
+        dataset = WardGeometryDataset.objects.get(slug="migori-ward-boundaries")
+        v1 = WardGeometryDatasetVersion.objects.get(dataset=dataset, version_label="phase7-v1")
+        v2 = WardGeometryDatasetVersion.objects.get(dataset=dataset, version_label="phase7-v2")
+        self.assertFalse(v1.is_active)
+        self.assertTrue(v2.is_active)
+        self.assertEqual(v2.activated_by_id, operator.id)
+        self.assertEqual(v2.imported_by_id, operator.id)
+        self.assertEqual(v2.notes, "Rollback forward to phase7-v2")
+        self.assertIsNotNone(Ward.objects.get(county="Migori", name="North Kamagambo").boundary)
+
+    def test_activate_ward_geometry_version_command_rejects_unknown_operator_username(self):
+        call_command("seed_kenya_administrative_areas", counties=["Migori"])
+        call_command(
+            "import_ward_geometry",
+            version_label="phase7-unknown-operator-v1",
+            strict=True,
+            activate=True,
+        )
+
+        with self.assertRaisesMessage(CommandError, "Operator username not found: missing-operator"):
+            call_command(
+                "activate_ward_geometry_version",
+                dataset_slug="migori-ward-boundaries",
+                version_label="phase7-unknown-operator-v1",
+                operator_username="missing-operator",
+            )
+
+    def test_ward_geometry_status_command_reports_versions(self):
+        call_command("seed_kenya_administrative_areas", counties=["Migori"])
+        operator = User.objects.create_user(username="status_operator", password="ChangeMe123!")
+        call_command(
+            "import_ward_geometry",
+            version_label="phase7-status-v1",
+            strict=True,
+            activate=True,
+            operator_username=operator.username,
+            notes="Status test import",
+        )
+        with patch("sys.stdout.write") as mocked_write:
+            call_command("ward_geometry_status", dataset_slug="migori-ward-boundaries")
+
+        rendered = "".join(str(call.args[0]) for call in mocked_write.call_args_list)
+        self.assertIn("phase7-status-v1", rendered)
+        self.assertIn("migori-ward-boundaries", rendered)
+        self.assertIn("https://github.com/benaboki/Kenya-County-Assembly-Boundaries", rendered)
+        self.assertIn("\"imported_by\": \"status_operator\"", rendered)
+        self.assertIn("\"activated_by\": \"status_operator\"", rendered)
+        self.assertIn("\"source_license\": \"CC-BY-4.0\"", rendered)
+        self.assertIn("\"notes\": \"Status test import\"", rendered)
+
+    def test_activate_ward_geometry_version_command_syncs_canonical_fields_by_default(self):
+        call_command("seed_kenya_administrative_areas", counties=["Migori"])
+        call_command(
+            "import_ward_geometry",
+            version_label="phase10-v1",
+            strict=True,
+            activate=True,
+        )
+        call_command(
+            "import_ward_geometry",
+            version_label="phase10-v2",
+            strict=True,
+            activate=False,
+        )
+        ward = Ward.objects.get(county="Migori", name="North Kamagambo")
+        ward.boundary = None
+        ward.centroid = None
+        ward.save(update_fields=["boundary", "centroid"])
+
+        call_command(
+            "activate_ward_geometry_version",
+            dataset_slug="migori-ward-boundaries",
+            version_label="phase10-v2",
+        )
+
+        ward.refresh_from_db()
+        self.assertIsNotNone(ward.boundary)
+        self.assertIsNotNone(ward.centroid)
+
+    def test_activate_ward_geometry_version_command_skip_sync_leaves_canonical_fields_unchanged(self):
+        call_command("seed_kenya_administrative_areas", counties=["Migori"])
+        call_command(
+            "import_ward_geometry",
+            version_label="phase10-skip-v1",
+            strict=True,
+            activate=True,
+        )
+        call_command(
+            "import_ward_geometry",
+            version_label="phase10-skip-v2",
+            strict=True,
+            activate=False,
+        )
+        ward = Ward.objects.get(county="Migori", name="North Kamagambo")
+        ward.boundary = None
+        ward.centroid = None
+        ward.save(update_fields=["boundary", "centroid"])
+
+        call_command(
+            "activate_ward_geometry_version",
+            dataset_slug="migori-ward-boundaries",
+            version_label="phase10-skip-v2",
+            skip_sync=True,
+        )
+
+        ward.refresh_from_db()
+        self.assertIsNone(ward.boundary)
+        self.assertIsNone(ward.centroid)
+
+    def test_sync_ward_geometry_fields_command_populates_boundary_and_centroid_from_active_version(self):
+        call_command("seed_kenya_administrative_areas", counties=["Migori"])
+        ward = Ward.objects.get(county="Migori", name="North Kamagambo")
+        ward.boundary = None
+        ward.centroid = None
+        ward.save(update_fields=["boundary", "centroid"])
+
+        call_command(
+            "import_ward_geometry",
+            version_label="phase8-sync-v1",
+            strict=True,
+            activate=True,
+        )
+        call_command("sync_ward_geometry_fields", dataset_slug="migori-ward-boundaries")
+
+        ward.refresh_from_db()
+        self.assertIsNotNone(ward.boundary)
+        self.assertIsNotNone(ward.centroid)
+
+    def test_merge_ward_records_command_moves_known_related_rows_and_deletes_legacy(self):
+        legacy = Ward.objects.create(
+            name="Macalder Kanyarwanda",
+            county="Migori",
+            sub_county="Nyatike",
+            ward_code="CCHIS-WARD-003",
+            is_active=True,
+        )
+        canonical = Ward.objects.create(
+            name="Macalder/Kanyarwanda",
+            county="Migori",
+            sub_county="Nyatike",
+            ward_code="KE-WARD-1285",
+            is_active=True,
+        )
+        user = User.objects.create_user(username="ward_merge_user", password="ChangeMe123!")
+        user.ward = legacy
+        user.save(update_fields=["ward"])
+        AuthAuditEvent.objects.create(
+            event_type=AuthAuditEvent.EVENT_LOGIN_SUCCESS,
+            status=AuthAuditEvent.STATUS_SUCCESS,
+            ward=legacy,
+        )
+        chv = CHV.objects.create(name="Merge CHV", phone_number="+254700111111", ward=legacy, is_active=True)
+        facility = HealthFacility.objects.create(
+            name="Merge Facility",
+            facility_code="MERGE-HF-001",
+            ward=legacy,
+            facility_type=HealthFacility.TYPE_DISPENSARY,
+            ownership=HealthFacility.OWNERSHIP_PUBLIC,
+            level=HealthFacility.LEVEL_2,
+            is_active=True,
+        )
+        model_run = ModelRun.objects.create(model_version="merge-test", status=ModelRun.STATUS_SUCCESS)
+        risk_score = RiskScore.objects.create(
+            ward=legacy,
+            model_run=model_run,
+            score=0.7,
+            risk_level=Ward.RISK_MEDIUM,
+            predicted_cases=5,
+        )
+        alert = Alert.objects.create(
+            ward=legacy,
+            risk_score=risk_score,
+            recipient="+254700111111",
+            message="test",
+        )
+        triage = TriageSession.objects.create(ward=legacy)
+        ussd = UssdSessionLog.objects.create(session_id="merge-session", ward=legacy)
+        sync = SyncQueue.objects.create(client_submission_id="merge-sync", ward=legacy)
+
+        call_command(
+            "merge_ward_records",
+            county="Migori",
+            legacy_name="Macalder Kanyarwanda",
+            canonical_name="Macalder/Kanyarwanda",
+        )
+
+        self.assertFalse(Ward.objects.filter(id=legacy.id).exists())
+        user.refresh_from_db()
+        chv.refresh_from_db()
+        facility.refresh_from_db()
+        risk_score.refresh_from_db()
+        alert.refresh_from_db()
+        triage.refresh_from_db()
+        ussd.refresh_from_db()
+        sync.refresh_from_db()
+        self.assertEqual(user.ward_id, canonical.id)
+        self.assertEqual(chv.ward_id, canonical.id)
+        self.assertEqual(facility.ward_id, canonical.id)
+        self.assertEqual(risk_score.ward_id, canonical.id)
+        self.assertEqual(alert.ward_id, canonical.id)
+        self.assertEqual(triage.ward_id, canonical.id)
+        self.assertEqual(ussd.ward_id, canonical.id)
+        self.assertEqual(sync.ward_id, canonical.id)
+        self.assertEqual(AuthAuditEvent.objects.filter(ward=canonical).count(), 1)
 
     @patch.dict(
         os.environ,

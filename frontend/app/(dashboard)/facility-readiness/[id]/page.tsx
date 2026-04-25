@@ -56,8 +56,8 @@ export default function FacilityDetailPage() {
   const capabilities = intelligence?.capabilities ?? null;
   const wardMap = data?.wardMap ?? null;
   const selectedMapWard = useMemo(
-    () => wardMap?.features.find((feature) => feature.properties.name === facilityRecord?.ward_name) ?? null,
-    [facilityRecord?.ward_name, wardMap],
+    () => wardMap?.features.find((feature) => feature.properties.backend_ward_id === facilityRecord?.ward) ?? null,
+    [facilityRecord?.ward, wardMap],
   );
   const latestTimestamp = intelligence?.freshness.updated_at ?? null;
   const freshness = useMemo(() => describeFreshness(latestTimestamp, 120), [latestTimestamp]);
@@ -185,7 +185,7 @@ export default function FacilityDetailPage() {
                           {wardMap?.features.length ? (
                             <MigoriWardMap
                               features={wardMap.features}
-                              selectedWardName={facilityRecord.ward_name}
+                              selectedWardCode={selectedMapWard?.properties.ward_code ?? null}
                               onSelectWard={() => undefined}
                             />
                           ) : (
@@ -196,7 +196,7 @@ export default function FacilityDetailPage() {
                         </div>
                         <div className="inline-flex w-max items-center gap-2 rounded-full bg-[color-mix(in_srgb,var(--brand)_10%,white)] px-3 py-1.5 text-xs font-semibold text-panel-strong">
                           <span className="size-2 rounded-full bg-brand" />
-                          {facilityRecord.ward_name} ward context
+                          {selectedMapWard?.properties.name ?? facilityRecord.ward_name} ward context
                         </div>
                       </div>
                     </div>

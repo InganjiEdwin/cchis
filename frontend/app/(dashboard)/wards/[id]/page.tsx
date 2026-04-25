@@ -474,7 +474,7 @@ export default function WardDetailPage() {
                     {wardMapFeatures.length ? (
                       <MigoriWardMap
                         features={wardMapFeatures}
-                        selectedWardName={detail?.wardName ?? null}
+                        selectedWardCode={detail?.wardMapFeature?.properties.ward_code ?? null}
                         onSelectWard={() => undefined}
                       />
                     ) : (

@@ -1,6 +1,7 @@
 import uuid
 
 from django.contrib.gis.db import models
+from django.conf import settings
 from django.utils import timezone
 
 
@@ -365,3 +366,129 @@ class SyncQueue(models.Model):
 
     def __str__(self) -> str:
         return f"SyncQueue {self.id} [{self.status}]"
+
+
+class WardGeometryDataset(models.Model):
+    SCOPE_COUNTY = "COUNTY"
+    SCOPE_NATIONAL = "NATIONAL"
+    COVERAGE_SCOPE_CHOICES = [
+        (SCOPE_COUNTY, "County"),
+        (SCOPE_NATIONAL, "National"),
+    ]
+
+    KIND_WARD_BOUNDARIES = "WARD_BOUNDARIES"
+    GEOMETRY_KIND_CHOICES = [
+        (KIND_WARD_BOUNDARIES, "Ward Boundaries"),
+    ]
+
+    slug = models.SlugField(unique=True)
+    name = models.CharField(max_length=160)
+    coverage_scope = models.CharField(max_length=20, choices=COVERAGE_SCOPE_CHOICES, default=SCOPE_COUNTY)
+    geometry_kind = models.CharField(max_length=40, choices=GEOMETRY_KIND_CHOICES, default=KIND_WARD_BOUNDARIES)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class WardGeometryDatasetVersion(models.Model):
+    dataset = models.ForeignKey(
+        WardGeometryDataset,
+        on_delete=models.CASCADE,
+        related_name="versions",
+    )
+    version_label = models.CharField(max_length=120)
+    source_name = models.CharField(max_length=200)
+    source_url = models.URLField(blank=True)
+    source_license = models.CharField(max_length=120, blank=True)
+    source_crs = models.CharField(max_length=32, default="EPSG:4326")
+    source_checksum = models.CharField(max_length=128, blank=True)
+    imported_at = models.DateTimeField(default=timezone.now)
+    imported_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="ward_geometry_imports",
+    )
+    activated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="ward_geometry_activations",
+    )
+    validation_summary = models.JSONField(default=dict, blank=True)
+    feature_count = models.PositiveIntegerField(default=0)
+    expected_feature_count = models.PositiveIntegerField(default=0)
+    missing_source_wards = models.JSONField(default=list, blank=True)
+    is_active = models.BooleanField(default=False)
+    activated_at = models.DateTimeField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["dataset__name", "-imported_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["dataset", "version_label"],
+                name="unique_ward_geometry_version_per_dataset",
+            ),
+            models.UniqueConstraint(
+                fields=["dataset"],
+                condition=models.Q(is_active=True),
+                name="unique_active_ward_geometry_version_per_dataset",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["dataset", "-imported_at"]),
+            models.Index(fields=["is_active", "activated_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.dataset.slug}:{self.version_label}"
+
+
+class WardGeometryFeature(models.Model):
+    dataset_version = models.ForeignKey(
+        WardGeometryDatasetVersion,
+        on_delete=models.CASCADE,
+        related_name="features",
+    )
+    ward = models.ForeignKey(
+        Ward,
+        on_delete=models.CASCADE,
+        related_name="geometry_features",
+    )
+    backend_public_id_snapshot = models.UUIDField()
+    ward_code_snapshot = models.CharField(max_length=50, blank=True)
+    display_name_snapshot = models.CharField(max_length=120)
+    source_name = models.CharField(max_length=160, blank=True)
+    source_ward_code = models.CharField(max_length=80, blank=True)
+    matching_source = models.CharField(max_length=40, blank=True)
+    geometry = models.MultiPolygonField(srid=4326)
+    centroid = models.PointField(null=True, blank=True, srid=4326)
+    properties = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["dataset_version_id", "display_name_snapshot"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["dataset_version", "ward"],
+                name="unique_ward_geometry_feature_per_version",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["dataset_version", "ward_code_snapshot"]),
+            models.Index(fields=["dataset_version", "matching_source"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.display_name_snapshot} [{self.dataset_version.version_label}]"

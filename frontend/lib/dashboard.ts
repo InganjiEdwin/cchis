@@ -148,10 +148,13 @@ export type WardMapFeature = {
   properties: {
     name: string;
     ward_code: string;
+    source_name?: string | null;
+    source_ward_code?: string | null;
     centroid: [number, number] | null;
     backend_ward_id: number | null;
     backend_public_id: string | null;
     has_backend_ward: boolean;
+    matching_source?: "ward_code" | "name" | null;
     risk_level: "LOW" | "MEDIUM" | "HIGH" | null;
     risk_score: number | null;
     predicted_cases: number;
@@ -168,12 +171,20 @@ export type WardMapResponse = {
   metadata: {
     county: string;
     geometry_source: string;
+    source_dataset?: string | null;
+    source_license?: string | null;
+    source_crs?: string | null;
     geometry_feature_count: number;
     expected_ward_count: number;
     missing_source_wards: string[];
     backend_ward_match_count: number;
+    backend_ward_code_match_count?: number;
+    backend_ward_name_fallback_match_count?: number;
+    matching_strategy?: string | null;
     returned_feature_count: number;
     backend_wards_without_geometry: string[];
+    placeholder_geometry_detected: boolean;
+    geometry_note: string | null;
   };
   features: WardMapFeature[];
 };

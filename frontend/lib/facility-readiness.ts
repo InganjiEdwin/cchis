@@ -160,5 +160,5 @@ export function freshnessTone(state: FacilityRow["freshnessState"]) {
 }
 
 export function findFacilityAlerts(row: FacilityRow, alerts: AlertRecord[]) {
-  return alerts.filter((alert) => alert.ward === row.wardId || alert.ward_name === row.wardName);
+  return alerts.filter((alert) => alert.ward === row.wardId);
 }

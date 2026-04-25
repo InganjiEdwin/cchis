@@ -28,6 +28,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { cn } from "@/lib/cn";
 import { type AlertRecord } from "@/lib/dashboard";
 import { describeFreshness, formatRelativeTimestamp, getLatestTimestamp } from "@/lib/freshness";
+import { groupByWardId } from "@/lib/ward-identity";
 import { useAlertsQuery } from "@/queries/use-alerts-query";
 
 type AlertStatusFilter = "ALL" | "SENT" | "PENDING" | "FAILED";
@@ -313,38 +314,16 @@ export default function AlertsPage() {
   }, [decoratedAlerts]);
 
   const activeZones = useMemo(() => {
-    const wardMap = new Map<
-      string,
-      {
-        wardName: string;
-        count: number;
-        highestRisk: number;
-        latestAt: string;
-      }
-    >();
-
-    for (const alert of decoratedAlerts) {
-      const existing = wardMap.get(alert.ward_name);
-      const risk = alert.risk_score ?? 0;
-
-      if (!existing) {
-        wardMap.set(alert.ward_name, {
-          wardName: alert.ward_name,
-          count: 1,
-          highestRisk: risk,
-          latestAt: alert.created_at,
-        });
-        continue;
-      }
-
-      existing.count += 1;
-      existing.highestRisk = Math.max(existing.highestRisk, risk);
-      if (new Date(alert.created_at).getTime() > new Date(existing.latestAt).getTime()) {
-        existing.latestAt = alert.created_at;
-      }
-    }
-
-    return [...wardMap.values()]
+    return [...groupByWardId(decoratedAlerts).values()]
+      .map((group) => ({
+        wardId: group.wardId,
+        wardName: group.wardName,
+        count: group.items.length,
+        highestRisk: Math.max(...group.items.map((alert) => alert.risk_score ?? 0)),
+        latestAt: group.items
+          .map((alert) => alert.created_at)
+          .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0],
+      }))
       .sort((left, right) => {
         if (right.highestRisk !== left.highestRisk) {
           return right.highestRisk - left.highestRisk;
@@ -800,7 +779,7 @@ export default function AlertsPage() {
               <div className="space-y-3">
                 {activeZones.map((zone, index) => (
                   <div
-                    key={zone.wardName}
+                    key={zone.wardId}
                     className="flex items-center justify-between gap-4 rounded-[1.3rem] border border-panel-table-wrap bg-panel/85 px-4 py-4"
                   >
                     <div className="min-w-0">

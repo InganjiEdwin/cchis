@@ -10,7 +10,10 @@ from django.utils import timezone
 
 from accounts.two_factor import generate_totp_secret
 from risk.models import Alert, CHV, HealthFacility, ModelRun, RiskScore, Ward
-from risk.seed_kenya_administrative_areas import seed_kenya_counties_and_wards
+from risk.seed_kenya_administrative_areas import (
+    reconcile_ward_codes_from_reference,
+    seed_kenya_counties_and_wards,
+)
 
 
 User = get_user_model()
@@ -47,7 +50,6 @@ class Command(BaseCommand):
         wards_data = [
             {
                 "name": "North Kamagambo",
-                "ward_code": "CCHIS-WARD-001",
                 "sub_county": "Rongo",
                 "risk_level": "HIGH",
                 "score": 0.86,
@@ -65,7 +67,6 @@ class Command(BaseCommand):
             },
             {
                 "name": "North Kadem",
-                "ward_code": "CCHIS-WARD-002",
                 "sub_county": "Nyatike",
                 "risk_level": "MEDIUM",
                 "score": 0.62,
@@ -82,8 +83,7 @@ class Command(BaseCommand):
                 ],
             },
             {
-                "name": "Macalder Kanyarwanda",
-                "ward_code": "CCHIS-WARD-003",
+                "name": "Macalder/Kanyarwanda",
                 "sub_county": "Nyatike",
                 "risk_level": "HIGH",
                 "score": 0.79,
@@ -101,7 +101,6 @@ class Command(BaseCommand):
             },
             {
                 "name": "Got Kachola",
-                "ward_code": "CCHIS-WARD-004",
                 "sub_county": "Nyatike",
                 "risk_level": "HIGH",
                 "score": 0.83,
@@ -162,8 +161,7 @@ class Command(BaseCommand):
 
             ward.current_risk_level = item["risk_level"]
             ward.current_risk_score = item["score"]
-            ward.ward_code = item["ward_code"]
-            ward.save()
+            ward.save(update_fields=["current_risk_level", "current_risk_score"])
             seeded_wards.append(ward)
 
             CHV.objects.get_or_create(
@@ -207,6 +205,8 @@ class Command(BaseCommand):
                 },
             )
 
+        reconcile_ward_codes_from_reference(stdout=self.stdout, county_names=["Migori"])
+
         seeded_risk_scores = {
             risk_score.ward.name: risk_score
             for risk_score in RiskScore.objects.filter(ward__in=seeded_wards, model_version="v0-demo")
@@ -236,7 +236,7 @@ class Command(BaseCommand):
                 "external_id": "seed-alert-002",
             },
             {
-                "ward_name": "Macalder Kanyarwanda",
+                "ward_name": "Macalder/Kanyarwanda",
                 "channel": Alert.CHANNEL_DASHBOARD,
                 "recipient": "dashboard",
                 "status": Alert.STATUS_DELIVERED,

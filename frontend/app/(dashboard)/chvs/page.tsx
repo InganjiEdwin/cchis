@@ -41,6 +41,7 @@ type RegistryStatus = "ACTIVE" | "IDLE" | "OFFLINE";
 type RegistryRiskZone = "HIGH" | "MODERATE" | "SAFE";
 type SyncHealth = "ONLINE" | "DELAYED" | "OFFLINE";
 type QuickFilter = "ALL" | "ACTIVE" | "IDLE" | "OFFLINE" | "HIGH_RISK";
+type SelectedWardFilter = "ALL" | `id:${number}`;
 
 type RegistryRow = {
   id: number;
@@ -153,10 +154,62 @@ function syncTone(sync: SyncHealth) {
   }
 }
 
+function getCoverageStatus(feature: WardMapFeature) {
+  if (!feature.properties.has_backend_ward) {
+    return {
+      label: "Unmatched",
+      tone: "default" as const,
+      reason: "Geometry exists locally, but no backend ward row is matched yet.",
+    };
+  }
+
+  const active = feature.properties.active_chv_count;
+  const total = feature.properties.chv_count;
+  const riskLevel = feature.properties.risk_level;
+
+  if (active === 0) {
+    return {
+      label: "Gap",
+      tone: "danger" as const,
+      reason: "0 active CHVs are recorded in this ward.",
+    };
+  }
+
+  if (riskLevel === "HIGH" && active <= 1) {
+    return {
+      label: "Gap",
+      tone: "danger" as const,
+      reason: "High recorded risk is paired with only 1 active CHV.",
+    };
+  }
+
+  if ((riskLevel === "HIGH" && active <= 2) || (riskLevel === "MEDIUM" && active <= 1)) {
+    return {
+      label: "Watch",
+      tone: "warning" as const,
+      reason: "Recorded risk is elevated relative to the visible active CHV count.",
+    };
+  }
+
+  if (total > 0 && active / total < 0.5) {
+    return {
+      label: "Watch",
+      tone: "warning" as const,
+      reason: "Less than half of linked CHVs are active in this ward.",
+    };
+  }
+
+  return {
+    label: "Adequate",
+    tone: "success" as const,
+    reason: "Active CHV coverage is present for the current recorded ward risk.",
+  };
+}
+
 export default function ChvsPage() {
   const { currentUser } = useAuth();
   const [search, setSearch] = useState("");
-  const [selectedWard, setSelectedWard] = useState("ALL");
+  const [selectedWard, setSelectedWard] = useState<SelectedWardFilter>("ALL");
   const [focusFilter, setFocusFilter] = useState<FocusFilter>("ALL");
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("ALL");
   const [currentPage, setCurrentPage] = useState(1);
@@ -187,32 +240,47 @@ export default function ChvsPage() {
   const lastUpdatedLabel = latestTimestamp ? formatRelativeTimestamp(latestTimestamp) : freshness.label;
 
   const riskByWard = useMemo(() => {
-    const map = new Map<string, LatestWardRisk>();
+    const map = new Map<number, LatestWardRisk>();
     latestRisks.forEach((risk) => {
-      map.set(risk.ward_name, risk);
+      map.set(risk.ward_id, risk);
     });
     return map;
   }, [latestRisks]);
 
-  const wardsForFilter = useMemo(
-    () => [
-      "ALL",
-      ...Array.from(new Set([...mapFeatures.map((item) => item.properties.name), ...chvs.map((item) => item.ward_name)]))
-        .filter(Boolean)
-        .sort((a, b) => a.localeCompare(b)),
-    ],
-    [chvs, mapFeatures],
-  );
+  const wardsForFilter = useMemo(() => {
+    const options = new Map<string, string>();
+    options.set("ALL", "All Wards");
+
+    mapFeatures.forEach((feature) => {
+      if (feature.properties.backend_ward_id) {
+        options.set(`id:${feature.properties.backend_ward_id}`, feature.properties.name);
+      }
+    });
+
+    chvs.forEach((chv) => {
+      options.set(`id:${chv.ward}`, chv.ward_name);
+    });
+
+    return [...options.entries()]
+      .map(([value, label]) => ({ value, label }))
+      .sort((left, right) => {
+        if (left.value === "ALL") return -1;
+        if (right.value === "ALL") return 1;
+        return left.label.localeCompare(right.label);
+      });
+  }, [chvs, mapFeatures]);
 
   const filteredChvs = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
 
     return chvs.filter((chv) => {
-      if (selectedWard !== "ALL" && chv.ward_name !== selectedWard) {
-        return false;
+      if (selectedWard !== "ALL") {
+        if (chv.ward !== Number(selectedWard.slice(3))) {
+          return false;
+        }
       }
 
-      const riskLevel = riskByWard.get(chv.ward_name)?.risk_level ?? "LOW";
+      const riskLevel = riskByWard.get(chv.ward)?.risk_level ?? "LOW";
       if (focusFilter === "HIGH_RISK" && riskLevel !== "HIGH") {
         return false;
       }
@@ -258,7 +326,7 @@ export default function ChvsPage() {
         alertsRaised: chv.ward_alerts_total,
         alertsAcknowledged: chv.ward_alerts_delivered,
         lastSync: chv.last_sync_at ? formatRelativeTimestamp(chv.last_sync_at) : "No sync recorded",
-        riskZone: resolveRiskZone(riskByWard.get(chv.ward_name)?.risk_level),
+        riskZone: resolveRiskZone(riskByWard.get(chv.ward)?.risk_level),
         syncHealth: chv.sync_health,
         phoneNumber: chv.phone_number,
         language: chv.language,
@@ -278,12 +346,12 @@ export default function ChvsPage() {
 
   const criticalCoverageGap = useMemo(() => {
     const wardCounts = chvs.reduce((map, chv) => {
-      map.set(chv.ward_name, (map.get(chv.ward_name) ?? 0) + (chv.operational_status === "ACTIVE" ? 1 : 0));
+      map.set(chv.ward, (map.get(chv.ward) ?? 0) + (chv.operational_status === "ACTIVE" ? 1 : 0));
       return map;
-    }, new Map<string, number>());
+    }, new Map<number, number>());
 
     const candidate = latestRisks.find(
-      (risk) => risk.risk_level === "HIGH" && (wardCounts.get(risk.ward_name) ?? 0) <= 1,
+      (risk) => risk.risk_level === "HIGH" && (wardCounts.get(risk.ward_id) ?? 0) <= 1,
     );
 
     if (!candidate) {
@@ -292,7 +360,7 @@ export default function ChvsPage() {
 
     return {
       wardName: candidate.ward_name,
-      activeCount: wardCounts.get(candidate.ward_name) ?? 0,
+      activeCount: wardCounts.get(candidate.ward_id) ?? 0,
       predictedCases: candidate.predicted_cases,
     };
   }, [chvs, latestRisks]);
@@ -300,7 +368,14 @@ export default function ChvsPage() {
   const hasCriticalCoverageGap = Boolean(criticalCoverageGap);
   const highPriorityReferrals = latestRisks
     .filter((item) => item.risk_level === "HIGH")
-    .reduce((sum, item) => sum + filteredChvs.filter((chv) => chv.ward_name === item.ward_name).reduce((chvSum, chv) => chvSum + chv.referrals_24h, 0), 0);
+    .reduce(
+      (sum, item) =>
+        sum +
+        filteredChvs
+          .filter((chv) => chv.ward === item.ward_id)
+          .reduce((chvSum, chv) => chvSum + chv.referrals_24h, 0),
+      0,
+    );
   const activeReportingRate = totalChvs ? Math.round((activeChvs / totalChvs) * 100) : 0;
   const commandStatus = {
     assign: hasCriticalCoverageGap
@@ -322,7 +397,7 @@ export default function ChvsPage() {
     }
 
     if (selectedWard !== "ALL") {
-      return mapFeatures.find((feature) => feature.properties.name === selectedWard) ?? null;
+      return mapFeatures.find((feature) => feature.properties.backend_ward_id === Number(selectedWard.slice(3))) ?? null;
     }
 
     const highestPriority = mapFeatures
@@ -331,6 +406,41 @@ export default function ChvsPage() {
 
     return highestPriority ?? mapFeatures[0];
   }, [mapFeatures, selectedWard]);
+  const selectedWardCoverage = useMemo(
+    () => (selectedMapWard ? getCoverageStatus(selectedMapWard) : null),
+    [selectedMapWard],
+  );
+  const selectedWardRecords = useMemo(
+    () =>
+      selectedMapWard?.properties.backend_ward_id
+        ? chvs.filter((chv) => chv.ward === selectedMapWard.properties.backend_ward_id)
+        : [],
+    [chvs, selectedMapWard],
+  );
+  const selectedWardLatestActivity = useMemo(
+    () => getLatestTimestamp(selectedWardRecords.map((item) => item.last_activity_at).filter(Boolean)),
+    [selectedWardRecords],
+  );
+  const selectedWardLatestSync = useMemo(
+    () => getLatestTimestamp(selectedWardRecords.map((item) => item.last_sync_at).filter(Boolean)),
+    [selectedWardRecords],
+  );
+  const selectedWardSyncFreshness = useMemo(
+    () => describeFreshness(selectedWardLatestSync, STALE_THRESHOLD_MINUTES),
+    [selectedWardLatestSync],
+  );
+  const selectedWardRiskLabel = selectedMapWard?.properties.risk_level
+    ? toRiskZoneLabel(resolveRiskZone(selectedMapWard.properties.risk_level))
+    : "No backend risk";
+  const selectedWardPanelTone = selectedWardCoverage?.tone ?? "default";
+  const selectedWardPanelClassName =
+    selectedWardPanelTone === "danger"
+      ? "border-[color:var(--danger)]/25 bg-[linear-gradient(180deg,color-mix(in_srgb,var(--danger)_7%,white),white)]"
+      : selectedWardPanelTone === "warning"
+        ? "border-[color:var(--warning)]/28 bg-[linear-gradient(180deg,color-mix(in_srgb,var(--warning)_8%,white),white)]"
+        : selectedWardPanelTone === "success"
+          ? "border-[color:var(--success)]/24 bg-[linear-gradient(180deg,color-mix(in_srgb,var(--success)_7%,white),white)]"
+          : "border-panel-table-wrap bg-white";
 
   if (!currentUser) {
     return null;
@@ -419,6 +529,11 @@ export default function ChvsPage() {
                       : ""}
                   </p>
                 ) : null}
+                {wardMap?.metadata.geometry_note ? (
+                  <p className="mt-2 max-w-2xl text-xs text-[color:var(--warning)]">
+                    {wardMap.metadata.geometry_note}
+                  </p>
+                ) : null}
               </div>
 
               <div className="flex items-center gap-2">
@@ -449,17 +564,43 @@ export default function ChvsPage() {
               </div>
             </div>
 
-            <div className="relative mt-6 min-h-[30rem] overflow-hidden rounded-[1.75rem] border border-panel-table-wrap bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--brand)_10%,transparent),transparent_35%),radial-gradient(circle_at_bottom_right,color-mix(in_srgb,var(--warning)_10%,transparent),transparent_32%),linear-gradient(135deg,color-mix(in_srgb,var(--panel)_92%,white),var(--panel))] p-5">
-              <div className="absolute inset-0 bg-[linear-gradient(90deg,color-mix(in_srgb,var(--dashboard-table-line)_32%,transparent)_1px,transparent_1px),linear-gradient(color-mix(in_srgb,var(--dashboard-table-line)_32%,transparent)_1px,transparent_1px)] bg-[size:6rem_6rem] opacity-60" />
+            <div className="relative mt-6 min-h-[30rem] overflow-hidden rounded-[1.75rem] border border-[#CBD5E1] bg-[#F6F9FC] p-5">
               <div className="relative z-10 grid h-full gap-4 lg:grid-cols-[minmax(0,1fr)_17rem]">
-                <div className="min-h-[26rem] rounded-[1.5rem] border border-white/50 bg-white/65 p-3 backdrop-blur dark:bg-panel/75">
+                <div className="min-h-[26rem] rounded-[1.5rem] border border-[#D9E2EC] bg-white/92 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
                   {mapFeatures.length ? (
-                    <MigoriWardMap
-                      features={mapFeatures}
-                      selectedWardName={selectedMapWard?.properties.name ?? null}
-                      focusHighRisk={focusFilter === "HIGH_RISK"}
-                      onSelectWard={(wardName) => setSelectedWard(wardName)}
-                    />
+                    <div className="flex h-full flex-col gap-4">
+                      <div className="flex flex-wrap items-center gap-3 rounded-[1.25rem] border border-[#E2E8F0] bg-white/95 px-4 py-3 text-xs text-panel-copy">
+                        <span className="inline-flex items-center gap-2">
+                          <span className="size-3 rounded-full border border-[#CBD5E1] bg-[#EEF6F2]" />
+                          Safe / normal ward
+                        </span>
+                        <span className="inline-flex items-center gap-2">
+                          <span className="size-3 rounded-full border border-[#F59E0B] bg-[#FFF4E5]" />
+                          Watch / medium risk
+                        </span>
+                        <span className="inline-flex items-center gap-2">
+                          <span className="size-3 rounded-full border border-[#DC2626] bg-[#FEE2E2]" />
+                          High risk
+                        </span>
+                        <span className="inline-flex items-center gap-2">
+                          <span className="size-3 rounded-full border border-[#94A3B8] bg-[#F1F5F9]" />
+                          Unmatched source
+                        </span>
+                      </div>
+
+                      <div className="min-h-[22rem] flex-1">
+                        <MigoriWardMap
+                          features={mapFeatures}
+                          selectedWardCode={selectedMapWard?.properties.ward_code ?? null}
+                          focusHighRisk={focusFilter === "HIGH_RISK"}
+                          onSelectWard={(feature) =>
+                            feature.properties.backend_ward_id
+                              ? setSelectedWard(`id:${feature.properties.backend_ward_id}`)
+                              : undefined
+                          }
+                        />
+                      </div>
+                    </div>
                   ) : (
                     <div className="flex h-full items-center justify-center rounded-[1.25rem] border border-dashed border-panel-table-wrap px-6 text-center text-sm text-panel-muted">
                       Ward geometry is not available for this scope yet.
@@ -467,18 +608,40 @@ export default function ChvsPage() {
                   )}
                 </div>
 
-                <Card className="rounded-[1.5rem] px-4 py-4 shadow-none">
+                <Card className={cn("rounded-[1.5rem] border px-4 py-4 shadow-none", selectedWardPanelClassName)}>
                   <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Selected ward</span>
                   {selectedMapWard ? (
                     <div className="mt-4 space-y-4">
                       <div>
-                        <h3 className="text-lg font-semibold text-panel-strong">{selectedMapWard.properties.name}</h3>
-                        <p className="mt-1 text-sm text-panel-muted">
-                          {selectedMapWard.properties.has_backend_ward
-                            ? `${selectedMapWard.properties.active_chv_count}/${selectedMapWard.properties.chv_count} active CHVs in visible records`
-                            : "Geometry present but no backend ward record yet"}
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <h3 className="text-lg font-semibold text-panel-strong">{selectedMapWard.properties.name}</h3>
+                            <p className="mt-1 text-sm text-panel-muted">{selectedWardRiskLabel}</p>
+                          </div>
+                          {selectedWardCoverage ? (
+                            <StatusBadge tone={selectedWardCoverage.tone}>{selectedWardCoverage.label}</StatusBadge>
+                          ) : null}
+                        </div>
+                        <p className="mt-3 text-sm text-panel-copy">
+                          {selectedWardCoverage?.reason ??
+                            "Select a ward to review CHV coverage relative to its recorded risk."}
                         </p>
                       </div>
+
+                      <div className="rounded-[1.25rem] border border-white/70 bg-white/70 p-3">
+                        <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-panel-subtle">
+                          Coverage status
+                        </span>
+                        <div className="mt-2 flex items-center justify-between gap-3">
+                          <strong className="text-base text-panel-strong">
+                            {selectedMapWard.properties.active_chv_count}/{selectedMapWard.properties.chv_count} active CHVs
+                          </strong>
+                          {selectedWardCoverage ? (
+                            <StatusBadge tone={selectedWardCoverage.tone}>{selectedWardCoverage.label}</StatusBadge>
+                          ) : null}
+                        </div>
+                      </div>
+
                       <div className="grid gap-3 text-sm text-panel-copy">
                         <div className="flex items-center justify-between gap-3">
                           <span>Recorded risk</span>
@@ -489,6 +652,12 @@ export default function ChvsPage() {
                           ) : (
                             <StatusBadge tone="default">No backend risk</StatusBadge>
                           )}
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span>Active CHVs / total CHVs</span>
+                          <strong className="text-panel-strong">
+                            {selectedMapWard.properties.active_chv_count}/{selectedMapWard.properties.chv_count}
+                          </strong>
                         </div>
                         <div className="flex items-center justify-between gap-3">
                           <span>Predicted cases</span>
@@ -503,23 +672,45 @@ export default function ChvsPage() {
                           <strong className="text-panel-strong">{selectedMapWard.properties.facility_count}</strong>
                         </div>
                         <div className="flex items-center justify-between gap-3">
+                          <span>Last CHV activity</span>
+                          <strong className="text-right text-panel-strong">
+                            {selectedWardLatestActivity ? formatRelativeTimestamp(selectedWardLatestActivity) : "No recent activity"}
+                          </strong>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span>Sync freshness</span>
+                          <StatusBadge tone={selectedWardLatestSync ? (selectedWardSyncFreshness.isStale ? "warning" : "success") : "default"}>
+                            {selectedWardLatestSync ? selectedWardSyncFreshness.label : "No sync recorded"}
+                          </StatusBadge>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
                           <span>Ward code</span>
                           <strong className="text-panel-strong">{selectedMapWard.properties.ward_code}</strong>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span>Backend public ID</span>
+                          <strong className="max-w-[10rem] truncate text-panel-strong">
+                            {selectedMapWard.properties.backend_public_id ?? "Not matched"}
+                          </strong>
                         </div>
                       </div>
 
                       <div className="space-y-3 border-t border-panel-table-wrap pt-4 text-sm text-panel-copy">
                         <div className="flex items-center gap-2">
-                          <span className="size-3 rounded-full bg-brand" />
-                          <span>Backend-matched ward row</span>
+                          <span className="size-3 rounded-full border border-[color:color-mix(in_srgb,var(--brand)_34%,var(--panel-muted))] bg-[color:color-mix(in_srgb,var(--panel-muted)_10%,white)]" />
+                          <span>Safe / normal ward</span>
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className="size-3 rounded-full bg-[color:var(--warning)]" />
+                          <span className="size-3 rounded-full border border-[color:color-mix(in_srgb,var(--warning)_72%,black_6%)] bg-[color:color-mix(in_srgb,var(--warning)_18%,white)]" />
                           <span>Watch / medium recorded risk</span>
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className="size-3 rounded-full bg-[color:var(--danger)]" />
+                          <span className="size-3 rounded-full border border-[color:color-mix(in_srgb,var(--danger)_72%,black_6%)] bg-[color:color-mix(in_srgb,var(--danger)_18%,white)]" />
                           <span>High recorded risk ward</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="size-3 rounded-full border border-[color:color-mix(in_srgb,var(--panel-muted)_58%,white)] bg-[color:color-mix(in_srgb,var(--panel-muted)_16%,white)]" />
+                          <span>Geometry-only / unmatched backend ward</span>
                         </div>
                       </div>
                     </div>
@@ -635,13 +826,13 @@ export default function ChvsPage() {
                 <span className="relative flex h-11 items-center rounded-pill border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 shadow-sm">
                   <select
                     value={selectedWard}
-                    onChange={(event) => setSelectedWard(event.target.value)}
+                    onChange={(event) => setSelectedWard(event.target.value as SelectedWardFilter)}
                     aria-label="Ward filter"
                     className="h-full w-full appearance-none bg-transparent pr-8 text-sm text-panel-strong outline-none"
                   >
                     {wardsForFilter.map((option) => (
-                      <option key={option} value={option}>
-                        {option === "ALL" ? "All Wards" : option}
+                      <option key={option.value} value={option.value}>
+                        {option.label}
                       </option>
                     ))}
                   </select>

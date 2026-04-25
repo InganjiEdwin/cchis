@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import type { WardMapFeature } from "@/lib/dashboard";
 import { cn } from "@/lib/cn";
@@ -11,9 +11,9 @@ const PADDING = 48;
 
 type MigoriWardMapProps = {
   features: WardMapFeature[];
-  selectedWardName?: string | null;
+  selectedWardCode?: string | null;
   focusHighRisk?: boolean;
-  onSelectWard?: (wardName: string) => void;
+  onSelectWard?: (feature: WardMapFeature) => void;
 };
 
 type Bounds = {
@@ -23,17 +23,69 @@ type Bounds = {
   maxLat: number;
 };
 
-function getRiskFill(feature: WardMapFeature) {
+type HoveredWard = {
+  feature: WardMapFeature;
+  xPercent: number;
+  yPercent: number;
+};
+
+const MAP_CANVAS = "#F8FAFC";
+const MAP_GRID = "#CBD5E1";
+const SAFE_FILL = "#EEF6F2";
+const SAFE_FILL_HOVER = "#E3F1E9";
+const SAFE_STROKE = "#CBD5E1";
+const WATCH_FILL = "#FFF4E5";
+const WATCH_FILL_HOVER = "#FDE9C8";
+const WATCH_STROKE = "#F59E0B";
+const HIGH_FILL = "#FEE2E2";
+const HIGH_FILL_HOVER = "#FBCACA";
+const HIGH_STROKE = "#DC2626";
+const UNMATCHED_FILL = "#F1F5F9";
+const UNMATCHED_FILL_HOVER = "#E2E8F0";
+const UNMATCHED_STROKE = "#94A3B8";
+const HOVER_STROKE = "#2563EB";
+const SELECTED_STROKE = "#1D4ED8";
+const SELECTED_FILL = "#DBEAFE";
+const COUNTY_OUTLINE = "#334155";
+
+function getRiskPalette(feature: WardMapFeature) {
+  if (!feature.properties.has_backend_ward) {
+    return {
+      fill: UNMATCHED_FILL,
+      fillHover: UNMATCHED_FILL_HOVER,
+      stroke: UNMATCHED_STROKE,
+      glow: SELECTED_FILL,
+      dashArray: "4 3",
+    };
+  }
+
   if (feature.properties.risk_level === "HIGH") {
-    return "color-mix(in_srgb,var(--danger) 72%, white)";
+    return {
+      fill: HIGH_FILL,
+      fillHover: HIGH_FILL_HOVER,
+      stroke: HIGH_STROKE,
+      glow: "#FECACA",
+      dashArray: undefined,
+    };
   }
+
   if (feature.properties.risk_level === "MEDIUM") {
-    return "color-mix(in_srgb,var(--warning) 70%, white)";
+    return {
+      fill: WATCH_FILL,
+      fillHover: WATCH_FILL_HOVER,
+      stroke: WATCH_STROKE,
+      glow: "#FDE68A",
+      dashArray: undefined,
+    };
   }
-  if (feature.properties.has_backend_ward) {
-    return "color-mix(in_srgb,var(--brand) 56%, white)";
-  }
-  return "color-mix(in_srgb,var(--panel-muted) 34%, white)";
+
+  return {
+    fill: SAFE_FILL,
+    fillHover: SAFE_FILL_HOVER,
+    stroke: SAFE_STROKE,
+    glow: "#E0ECFF",
+    dashArray: undefined,
+  };
 }
 
 function flattenCoordinates(feature: WardMapFeature): Array<[number, number]> {
@@ -84,49 +136,176 @@ function geometryToPath(feature: WardMapFeature, bounds: Bounds) {
     .join(" ");
 }
 
+function getRiskLabel(feature: WardMapFeature) {
+  if (!feature.properties.has_backend_ward) {
+    return "Unmatched source";
+  }
+
+  if (feature.properties.risk_level === "HIGH") {
+    return "High risk";
+  }
+
+  if (feature.properties.risk_level === "MEDIUM") {
+    return "Watch";
+  }
+
+  return "Safe";
+}
+
 export function MigoriWardMap({
   features,
-  selectedWardName,
+  selectedWardCode,
   focusHighRisk = false,
   onSelectWard,
 }: MigoriWardMapProps) {
   const bounds = useMemo(() => getBounds(features), [features]);
+  const [hoveredWard, setHoveredWard] = useState<HoveredWard | null>(null);
 
   return (
-    <svg viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`} className="h-full w-full" role="img" aria-label="Migori ward map">
-      {features.map((feature) => {
-        const isSelected = selectedWardName === feature.properties.name;
-        const isMuted = focusHighRisk && feature.properties.risk_level !== "HIGH";
-        const centroid = feature.properties.centroid
-          ? projectPoint(feature.properties.centroid, bounds)
-          : projectPoint(flattenCoordinates(feature)[0], bounds);
-
-        return (
-          <g key={feature.properties.ward_code}>
-            <path
-              d={geometryToPath(feature, bounds)}
-              fill={getRiskFill(feature)}
-              className={cn(
-                "cursor-pointer stroke-white/90 transition-opacity duration-200",
-                isMuted ? "opacity-25" : "opacity-95",
-              )}
-              strokeWidth={isSelected ? 6 : feature.properties.active_chv_count === 0 ? 3.5 : 2.5}
-              onClick={() => onSelectWard?.(feature.properties.name)}
+    <div className="relative h-full w-full">
+      <svg viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`} className="h-full w-full" role="img" aria-label="Migori ward map">
+        <rect x="0" y="0" width={VIEWBOX_WIDTH} height={VIEWBOX_HEIGHT} fill={MAP_CANVAS} rx="28" ry="28" />
+        <g className="pointer-events-none opacity-[0.15]">
+          {Array.from({ length: 12 }).map((_, index) => (
+            <line
+              key={`vertical-${index}`}
+              x1={index * 84}
+              y1="0"
+              x2={index * 84}
+              y2={VIEWBOX_HEIGHT}
+              stroke={MAP_GRID}
+              strokeWidth="1"
             />
-            <text
-              x={centroid[0]}
-              y={centroid[1]}
-              textAnchor="middle"
-              className={cn(
-                "pointer-events-none fill-panel-strong text-[20px] font-semibold",
-                isMuted && "opacity-35",
-              )}
-            >
-              {feature.properties.name}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
+          ))}
+          {Array.from({ length: 10 }).map((_, index) => (
+            <line
+              key={`horizontal-${index}`}
+              x1="0"
+              y1={index * 84}
+              x2={VIEWBOX_WIDTH}
+              y2={index * 84}
+              stroke={MAP_GRID}
+              strokeWidth="1"
+            />
+          ))}
+        </g>
+        {features.map((feature) => {
+          const isSelected = selectedWardCode === feature.properties.ward_code;
+          const isHovered = hoveredWard?.feature.properties.ward_code === feature.properties.ward_code;
+          const isMuted = focusHighRisk && feature.properties.risk_level !== "HIGH";
+          const centroid = feature.properties.centroid
+            ? projectPoint(feature.properties.centroid, bounds)
+            : projectPoint(flattenCoordinates(feature)[0], bounds);
+          const palette = getRiskPalette(feature);
+
+          return (
+            <g key={feature.properties.ward_code}>
+              <path
+                d={geometryToPath(feature, bounds)}
+                fill={palette.glow}
+                className={cn("transition-opacity duration-200", isMuted ? "opacity-0" : "opacity-100")}
+                stroke="none"
+                transform={isSelected ? "scale(1.002)" : undefined}
+                style={{ transformOrigin: `${centroid[0]}px ${centroid[1]}px` }}
+              />
+              <path
+                d={geometryToPath(feature, bounds)}
+                fill={isSelected ? SELECTED_FILL : isHovered ? palette.fillHover : palette.fill}
+                stroke={isSelected ? SELECTED_STROKE : isHovered ? HOVER_STROKE : palette.stroke}
+                className={cn(
+                  "cursor-pointer transition-all duration-200",
+                  isMuted ? "opacity-30" : isHovered || isSelected ? "opacity-100" : "opacity-95",
+                )}
+                strokeWidth={isSelected ? 2.5 : isHovered ? 1.5 : 1}
+                strokeDasharray={palette.dashArray}
+                vectorEffect="non-scaling-stroke"
+                onClick={() => onSelectWard?.(feature)}
+                onMouseLeave={() => setHoveredWard((current) => (current?.feature.properties.ward_code === feature.properties.ward_code ? null : current))}
+                onMouseMove={(event) => {
+                  const svg = event.currentTarget.ownerSVGElement;
+                  if (!svg) {
+                    return;
+                  }
+
+                  const rect = svg.getBoundingClientRect();
+                  setHoveredWard({
+                    feature,
+                    xPercent: ((event.clientX - rect.left) / rect.width) * 100,
+                    yPercent: ((event.clientY - rect.top) / rect.height) * 100,
+                  });
+                }}
+              />
+              {isSelected ? (
+                <path
+                  d={geometryToPath(feature, bounds)}
+                  fill="none"
+                  stroke={SELECTED_STROKE}
+                  strokeWidth={4}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  vectorEffect="non-scaling-stroke"
+                  className="pointer-events-none opacity-85"
+                />
+              ) : null}
+              {isSelected || isHovered ? (
+                <>
+                  <circle
+                    cx={centroid[0]}
+                    cy={centroid[1]}
+                    r={isSelected ? 7 : 5}
+                    fill="#FFFFFF"
+                    stroke={isSelected ? SELECTED_STROKE : palette.stroke}
+                    strokeWidth={2}
+                    className={cn("pointer-events-none", isMuted && "opacity-40")}
+                  />
+                  <text
+                    x={centroid[0]}
+                    y={centroid[1] - 14}
+                    textAnchor="middle"
+                    className={cn("pointer-events-none fill-panel-strong text-[22px] font-semibold", isMuted && "opacity-40")}
+                  >
+                    {feature.properties.name}
+                  </text>
+                </>
+              ) : null}
+            </g>
+          );
+        })}
+        <rect
+          x={PADDING - 6}
+          y={PADDING - 6}
+          width={VIEWBOX_WIDTH - (PADDING - 6) * 2}
+          height={VIEWBOX_HEIGHT - (PADDING - 6) * 2}
+          fill="none"
+          stroke={COUNTY_OUTLINE}
+          strokeWidth="1.5"
+          opacity="0.18"
+          rx="20"
+          ry="20"
+          className="pointer-events-none"
+        />
+      </svg>
+
+      {hoveredWard ? (
+        <div
+          className="pointer-events-none absolute z-20 w-52 rounded-2xl border border-[#CBD5E1] bg-white/95 p-3 text-xs shadow-[0_24px_80px_rgba(15,23,42,0.14)] backdrop-blur"
+          style={{
+            left: `${hoveredWard.xPercent > 66 ? hoveredWard.xPercent - 26 : hoveredWard.xPercent + 4}%`,
+            top: `${hoveredWard.yPercent > 62 ? hoveredWard.yPercent - 28 : hoveredWard.yPercent + 3}%`,
+          }}
+        >
+          <p className="font-semibold text-panel-strong">{hoveredWard.feature.properties.name}</p>
+          <p className="mt-1 text-panel-muted">{getRiskLabel(hoveredWard.feature)}</p>
+          <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-panel-copy">
+            <span>Active CHVs</span>
+            <strong className="text-right text-panel-strong">{hoveredWard.feature.properties.active_chv_count}</strong>
+            <span>Open alerts</span>
+            <strong className="text-right text-panel-strong">{hoveredWard.feature.properties.alert_count}</strong>
+            <span>Facilities</span>
+            <strong className="text-right text-panel-strong">{hoveredWard.feature.properties.facility_count}</strong>
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
