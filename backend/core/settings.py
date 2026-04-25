@@ -296,6 +296,10 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_BEAT_SCHEDULE = {
+    "daily-rainfall-ingestion-run": {
+        "task": "risk.tasks.run_rainfall_ingestion_task",
+        "schedule": crontab(hour=5, minute=30),
+    },
     "daily-risk-model-run": {
         "task": "risk.tasks.run_risk_model_task",
         "schedule": crontab(hour=6, minute=0),

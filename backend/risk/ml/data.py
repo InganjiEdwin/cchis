@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from uuid import uuid4
 from typing import Iterable
 
-from risk.models import IngestionRun, Ward
+from risk.models import FeatureDataset, FeatureDatasetRow, IngestionRun, Ward
 
 from .ingestion import fetch_rainfall_for_wards
+
+
+FEATURE_SCHEMA_VERSION = "baseline-v1"
 
 
 @dataclass
@@ -23,7 +27,14 @@ class WardFeatureRow:
 @dataclass
 class InferenceDataset:
     rows: list[WardFeatureRow]
+    feature_dataset: FeatureDataset | None = None
     rainfall_ingestion_run: IngestionRun | None = None
+
+
+@dataclass
+class TrainingDataset:
+    rows: list[WardFeatureRow]
+    feature_dataset: FeatureDataset | None = None
 
 
 def month_to_seasonality(month: int) -> float:
@@ -45,7 +56,56 @@ def build_mock_training_rows() -> list[WardFeatureRow]:
     return rows
 
 
-def build_mock_inference_rows(wards: Iterable[Ward], month: int) -> InferenceDataset:
+def _feature_values_from_row(row: WardFeatureRow) -> dict:
+    return {
+        "rainfall_mm": row.rainfall_mm,
+        "flood_indicator": row.flood_indicator,
+        "historical_cases": row.historical_cases,
+        "month": row.month,
+        "seasonality": month_to_seasonality(row.month),
+        "population_proxy": row.population_proxy,
+    }
+
+
+def build_training_feature_dataset(month: int) -> TrainingDataset:
+    rows = build_mock_training_rows()
+    dataset = FeatureDataset.objects.create(
+        dataset_ref=f"training-{FEATURE_SCHEMA_VERSION}-month-{month}-{uuid4().hex[:8]}",
+        dataset_kind=FeatureDataset.KIND_TRAINING,
+        schema_version=FEATURE_SCHEMA_VERSION,
+        source_kind=FeatureDataset.SOURCE_KIND_SEEDED,
+        month=month,
+        feature_keys=[
+            "rainfall_mm",
+            "flood_indicator",
+            "historical_cases",
+            "month",
+            "seasonality",
+            "population_proxy",
+        ],
+        row_count=len(rows),
+        lineage_metadata={
+            "builder": "build_training_feature_dataset",
+            "source_mode": "seeded-training-baseline",
+        },
+    )
+    FeatureDatasetRow.objects.bulk_create(
+        [
+            FeatureDatasetRow(
+                dataset=dataset,
+                ward_id=None,
+                ward_name_snapshot=row.ward_name,
+                month=row.month,
+                feature_values=_feature_values_from_row(row),
+                label=row.label,
+            )
+            for row in rows
+        ]
+    )
+    return TrainingDataset(rows=rows, feature_dataset=dataset)
+
+
+def build_inference_feature_dataset(wards: Iterable[Ward], month: int) -> InferenceDataset:
     ward_list = list(wards)
     rainfall_rows, ingestion_run = fetch_rainfall_for_wards(ward_list, return_ingestion_run=True)
 
@@ -74,4 +134,45 @@ def build_mock_inference_rows(wards: Iterable[Ward], month: int) -> InferenceDat
             )
         )
 
-    return InferenceDataset(rows=rows, rainfall_ingestion_run=ingestion_run)
+    source_kind = FeatureDataset.SOURCE_KIND_HYBRID
+    if ingestion_run and ingestion_run.source_kind == IngestionRun.SOURCE_KIND_LIVE:
+        source_kind = FeatureDataset.SOURCE_KIND_LIVE
+    elif ingestion_run and ingestion_run.source_kind == IngestionRun.SOURCE_KIND_SEEDED:
+        source_kind = FeatureDataset.SOURCE_KIND_SEEDED
+
+    dataset = FeatureDataset.objects.create(
+        dataset_ref=f"inference-{FEATURE_SCHEMA_VERSION}-month-{month}-{uuid4().hex[:8]}",
+        dataset_kind=FeatureDataset.KIND_INFERENCE,
+        schema_version=FEATURE_SCHEMA_VERSION,
+        source_kind=source_kind,
+        month=month,
+        feature_keys=[
+            "rainfall_mm",
+            "flood_indicator",
+            "historical_cases",
+            "month",
+            "seasonality",
+            "population_proxy",
+        ],
+        row_count=len(rows),
+        lineage_metadata={
+            "builder": "build_inference_feature_dataset",
+            "rainfall_ingestion_run_id": ingestion_run.id if ingestion_run else None,
+            "rainfall_source_kind": ingestion_run.source_kind if ingestion_run else None,
+        },
+    )
+    FeatureDatasetRow.objects.bulk_create(
+        [
+            FeatureDatasetRow(
+                dataset=dataset,
+                ward_id=row.ward_id,
+                ward_name_snapshot=row.ward_name,
+                month=row.month,
+                feature_values=_feature_values_from_row(row),
+                label=row.label,
+            )
+            for row in rows
+        ]
+    )
+
+    return InferenceDataset(rows=rows, feature_dataset=dataset, rainfall_ingestion_run=ingestion_run)

@@ -48,6 +48,14 @@ from core.observability import (
 from core.data_lifecycle import DATA_RETENTION_INVENTORY, FIELD_DATA_MINIMIZATION_RULES
 from core.recovery_discipline import BACKUP_EXPECTATIONS, RESTORE_REHEARSAL_EXPECTATIONS
 from risk.ml.ingestion import fetch_rainfall_for_ward
+from risk.etl_records import (
+    ETL_SCHEMA_VERSION,
+    chv_response_record_from_sync_queue,
+    chv_response_record_from_triage_session,
+    facility_readiness_record_from_intelligence_snapshot,
+    surveillance_record_from_sync_queue,
+    surveillance_record_from_triage_session,
+)
 from risk.map_data import MIGORI_WARD_GEOMETRY_PATH
 from risk.canonical import (
     alert_to_canonical_record,
@@ -64,6 +72,7 @@ from risk.interoperability import (
 )
 from risk.providers import DeliveryResult, StubSmsProvider, get_sms_provider
 from risk.services import create_alerts_for_riskscore, deliver_alert
+from risk.services import build_facility_intelligence_snapshot
 from risk.tasks import deliver_alert_task, trigger_alerts_task
 
 
@@ -74,6 +83,8 @@ from risk.views import USSDMenuAPIView
 from .models import (
     Alert,
     CHV,
+    FeatureDataset,
+    FeatureDatasetRow,
     HealthFacility,
     IngestionRun,
     ModelRun,
@@ -146,7 +157,7 @@ class AuthenticatedAPITestCase(APITestCase):
             model_version="v0-test",
             status=ModelRun.STATUS_SUCCESS,
             month=4,
-            feature_schema_version="mock-v1",
+            feature_schema_version="baseline-v1",
             feature_keys=[
                 "rainfall_mm",
                 "flood_indicator",
@@ -3946,9 +3957,78 @@ class SeedAndModelCommandTestCase(APITestCase):
         self.assertIsNotNone(model_run.rainfall_ingestion_run)
         self.assertEqual(model_run.rainfall_ingestion_run.run_type, IngestionRun.RUN_TYPE_RAINFALL)
         self.assertEqual(model_run.evaluation_metrics["training_row_count"], 8)
-        self.assertEqual(model_run.feature_schema_version, "mock-v1")
-        self.assertEqual(model_run.training_dataset_ref, "mock-training-dataset:v1")
-        self.assertEqual(model_run.inference_dataset_ref, "mock-inference-dataset:month-4")
+        self.assertEqual(model_run.feature_schema_version, "baseline-v1")
+        self.assertTrue(model_run.training_dataset_ref.startswith("training-baseline-v1-month-4-"))
+        self.assertTrue(model_run.inference_dataset_ref.startswith("inference-baseline-v1-month-4-"))
+        self.assertIsNotNone(model_run.training_feature_dataset)
+        self.assertIsNotNone(model_run.inference_feature_dataset)
+        self.assertEqual(model_run.training_feature_dataset.dataset_kind, FeatureDataset.KIND_TRAINING)
+        self.assertEqual(model_run.inference_feature_dataset.dataset_kind, FeatureDataset.KIND_INFERENCE)
+        self.assertEqual(model_run.training_feature_dataset.schema_version, "baseline-v1")
+        self.assertEqual(model_run.inference_feature_dataset.schema_version, "baseline-v1")
+        self.assertEqual(model_run.training_feature_dataset.row_count, 8)
+        self.assertEqual(model_run.inference_feature_dataset.row_count, 2)
+        self.assertEqual(FeatureDatasetRow.objects.filter(dataset=model_run.training_feature_dataset).count(), 8)
+        self.assertEqual(FeatureDatasetRow.objects.filter(dataset=model_run.inference_feature_dataset).count(), 2)
+        self.assertEqual(model_run.metadata["algorithm"], "logistic_regression")
+        self.assertEqual(model_run.metadata["promotion_state"], "promoted")
+        self.assertTrue(model_run.metadata["alert_eligible"])
+
+    def test_run_risk_model_dual_model_mode_persists_shared_dataset_lineage(self):
+        Ward.objects.create(
+            name="Ward Alpha",
+            county="Migori",
+            sub_county="Rongo",
+            current_risk_level=Ward.RISK_LOW,
+            current_risk_score=0.20,
+            is_active=True,
+        )
+        Ward.objects.create(
+            name="Ward Beta",
+            county="Migori",
+            sub_county="Nyatike",
+            current_risk_level=Ward.RISK_MEDIUM,
+            current_risk_score=0.55,
+            is_active=True,
+        )
+
+        call_command(
+            "run_risk_model",
+            "--month=4",
+            "--model-version=lr-dual-v1",
+            "--dual-model",
+            "--benchmark-version=rf-dual-v1",
+        )
+
+        self.assertEqual(ModelRun.objects.filter(status=ModelRun.STATUS_SUCCESS).count(), 2)
+        self.assertEqual(RiskScore.objects.count(), 4)
+
+        primary_run = ModelRun.objects.get(model_version="lr-dual-v1")
+        benchmark_run = ModelRun.objects.get(model_version="rf-dual-v1")
+
+        self.assertEqual(primary_run.algorithm_name, "logistic-regression-baseline")
+        self.assertEqual(benchmark_run.algorithm_name, "random-forest-benchmark")
+        self.assertEqual(primary_run.training_dataset_ref, benchmark_run.training_dataset_ref)
+        self.assertEqual(primary_run.inference_dataset_ref, benchmark_run.inference_dataset_ref)
+        self.assertEqual(primary_run.training_feature_dataset_id, benchmark_run.training_feature_dataset_id)
+        self.assertEqual(primary_run.inference_feature_dataset_id, benchmark_run.inference_feature_dataset_id)
+        self.assertEqual(primary_run.metadata["run_role"], "primary")
+        self.assertEqual(benchmark_run.metadata["run_role"], "benchmark")
+        self.assertTrue(primary_run.metadata["alert_eligible"])
+        self.assertFalse(benchmark_run.metadata["alert_eligible"])
+        self.assertEqual(primary_run.metadata["promotion_state"], "promoted")
+        self.assertEqual(benchmark_run.metadata["promotion_state"], "benchmark_only")
+        self.assertEqual(primary_run.metadata["benchmark_group_ref"], benchmark_run.metadata["benchmark_group_ref"])
+        self.assertEqual(
+            RiskScore.objects.filter(model_run=primary_run, source=RiskScore.SOURCE_MODEL).count(),
+            2,
+        )
+        self.assertEqual(
+            RiskScore.objects.filter(model_run=benchmark_run, source=RiskScore.SOURCE_MODEL).count(),
+            2,
+        )
+        self.assertEqual(FeatureDataset.objects.filter(dataset_kind=FeatureDataset.KIND_TRAINING).count(), 1)
+        self.assertEqual(FeatureDataset.objects.filter(dataset_kind=FeatureDataset.KIND_INFERENCE).count(), 1)
 
     def test_seed_demo_data_assigns_model_run_to_seeded_model_scores(self):
         call_command("seed_demo_data")
@@ -3973,6 +4053,15 @@ class RainfallIngestionTestCase(APITestCase):
         self.assertEqual(run.status, IngestionRun.STATUS_SUCCESS)
         self.assertEqual(run.requested_wards, ["North Kamagambo"])
         self.assertEqual(run.results[0]["source"], "open-meteo-forecast")
+        self.assertEqual(run.source_kind, IngestionRun.SOURCE_KIND_LIVE)
+        self.assertEqual(run.source_name, "open-meteo-forecast")
+        self.assertEqual(run.freshness_state, IngestionRun.FRESHNESS_FRESH)
+        self.assertFalse(run.fallback_used)
+        self.assertEqual(run.records_seen, 1)
+        self.assertEqual(run.records_loaded, 1)
+        self.assertEqual(run.results[0]["canonical_record"]["entity_type"], "climate_record")
+        self.assertEqual(run.results[0]["canonical_record"]["schema_version"], ETL_SCHEMA_VERSION)
+        self.assertEqual(run.results[0]["canonical_record"]["source_kind"], IngestionRun.SOURCE_KIND_LIVE)
 
     @patch("risk.ml.ingestion.fetch_open_meteo_daily_precipitation", side_effect=Exception("network down"))
     def test_fetch_rainfall_falls_back_to_static(self, mock_fetch):
@@ -3982,6 +4071,11 @@ class RainfallIngestionTestCase(APITestCase):
         run = IngestionRun.objects.get()
         self.assertEqual(run.status, IngestionRun.STATUS_PARTIAL)
         self.assertEqual(run.results[0]["fallback_reason"], "live-fetch-failed")
+        self.assertIn(run.source_kind, [IngestionRun.SOURCE_KIND_SEEDED, IngestionRun.SOURCE_KIND_HYBRID])
+        self.assertTrue(run.fallback_used)
+        self.assertEqual(run.freshness_state, IngestionRun.FRESHNESS_UNKNOWN)
+        self.assertEqual(run.results[0]["canonical_record"]["source_kind"], IngestionRun.SOURCE_KIND_SEEDED)
+        self.assertEqual(run.results[0]["canonical_record"]["fallback_reason"], "live-fetch-failed")
 
     @override_settings()
     @patch("risk.ml.ingestion.fetch_open_meteo_daily_precipitation")
@@ -4007,3 +4101,102 @@ class RainfallIngestionTestCase(APITestCase):
         self.assertEqual(result.coordinate_source, "ward-centroid")
         run = IngestionRun.objects.get()
         self.assertEqual(run.results[0]["coordinate_source"], "ward-centroid")
+
+    @patch("risk.ml.ingestion.fetch_open_meteo_daily_precipitation", side_effect=Exception("network down"))
+    def test_fetch_rainfall_marks_seeded_source_kind_when_static_fallback_used(self, mock_fetch):
+        fetch_rainfall_for_ward("North Kamagambo")
+        run = IngestionRun.objects.get()
+        self.assertEqual(run.source_kind, IngestionRun.SOURCE_KIND_SEEDED)
+        self.assertGreaterEqual(run.records_seen, 1)
+        self.assertGreaterEqual(run.records_loaded, 1)
+
+
+class CanonicalETLNormalizationTestCase(AuthenticatedAPITestCase):
+    def test_triage_session_maps_to_canonical_surveillance_and_chv_response_records(self):
+        session = TriageSession.objects.create(
+            channel="API",
+            phone_number="+254711999001",
+            ward=self.ward,
+            diarrhea=True,
+            vomiting=True,
+            dehydration=False,
+            fever=False,
+            recommendation="Use ORS",
+            referral_needed=True,
+        )
+
+        surveillance = surveillance_record_from_triage_session(session)
+        chv_response = chv_response_record_from_triage_session(session)
+
+        self.assertEqual(surveillance.entity_type, "surveillance_record")
+        self.assertEqual(surveillance.schema_version, ETL_SCHEMA_VERSION)
+        self.assertEqual(surveillance.ward_public_id, str(self.ward.public_id))
+        self.assertEqual(surveillance.suspected_case_count, 1)
+        self.assertTrue(surveillance.outbreak_signal)
+
+        self.assertEqual(chv_response.entity_type, "chv_response_record")
+        self.assertEqual(chv_response.schema_version, ETL_SCHEMA_VERSION)
+        self.assertEqual(chv_response.ward_public_id, str(self.ward.public_id))
+        self.assertIn("diarrhea", chv_response.symptom_signal)
+        self.assertEqual(chv_response.alert_response_state, "referral_needed")
+
+    def test_sync_queue_maps_to_canonical_surveillance_and_chv_response_records(self):
+        triage_session = TriageSession.objects.create(
+            channel="OFFLINE_SYNC",
+            phone_number="+254711999002",
+            ward=self.ward,
+            diarrhea=True,
+            vomiting=False,
+            dehydration=True,
+            fever=False,
+            recommendation="Refer",
+            referral_needed=True,
+        )
+        sync_item = SyncQueue.objects.create(
+            source_device_id="device-001",
+            client_submission_id="submission-001",
+            phone_number="+254711999002",
+            ward=self.ward,
+            triage_session=triage_session,
+            payload={
+                "client_submission_id": "submission-001",
+                "diarrhea": True,
+                "vomiting": False,
+                "dehydration": True,
+                "fever": False,
+                "text_input": "child weak and dehydrated",
+            },
+            status=SyncQueue.STATUS_PROCESSED,
+            processed_at=timezone.now(),
+        )
+
+        surveillance = surveillance_record_from_sync_queue(sync_item)
+        chv_response = chv_response_record_from_sync_queue(sync_item)
+
+        self.assertEqual(surveillance.entity_type, "surveillance_record")
+        self.assertEqual(surveillance.schema_version, ETL_SCHEMA_VERSION)
+        self.assertEqual(surveillance.ward_public_id, str(self.ward.public_id))
+        self.assertEqual(surveillance.source_name, "chv-sync-payload")
+        self.assertEqual(surveillance.suspected_case_count, 1)
+        self.assertTrue(surveillance.outbreak_signal)
+
+        self.assertEqual(chv_response.entity_type, "chv_response_record")
+        self.assertEqual(chv_response.schema_version, ETL_SCHEMA_VERSION)
+        self.assertEqual(chv_response.chv_phone_number, "+254711999002")
+        self.assertEqual(chv_response.alert_response_state, "processed")
+        self.assertIn("dehydration", chv_response.symptom_signal)
+
+    def test_facility_intelligence_snapshot_maps_to_canonical_readiness_record(self):
+        snapshot = build_facility_intelligence_snapshot(self.health_facility)
+        canonical = facility_readiness_record_from_intelligence_snapshot(
+            facility=self.health_facility,
+            snapshot=snapshot,
+        )
+
+        self.assertEqual(canonical.entity_type, "facility_readiness_record")
+        self.assertEqual(canonical.schema_version, ETL_SCHEMA_VERSION)
+        self.assertEqual(canonical.facility_public_id, str(self.health_facility.public_id))
+        self.assertEqual(canonical.ward_public_id, str(self.ward.public_id))
+        self.assertIsNotNone(canonical.readiness_state)
+        self.assertIsNotNone(canonical.readiness_score)
+        self.assertEqual(canonical.source_name, "facility-intelligence-snapshot")

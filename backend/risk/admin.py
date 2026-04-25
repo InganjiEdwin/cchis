@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Alert, CHV, HealthFacility, IngestionRun, ModelRun, RiskScore, SyncQueue, TriageSession, UssdSessionLog, Ward
+from .models import Alert, CHV, FeatureDataset, FeatureDatasetRow, HealthFacility, IngestionRun, ModelRun, RiskScore, SyncQueue, TriageSession, UssdSessionLog, Ward
 
 
 @admin.register(Ward)
@@ -50,9 +50,19 @@ class RiskScoreAdmin(admin.ModelAdmin):
 
 @admin.register(IngestionRun)
 class IngestionRunAdmin(admin.ModelAdmin):
-    list_display = ("run_type", "status", "source_mode", "started_at", "completed_at")
-    search_fields = ("run_type", "status", "error_message")
-    list_filter = ("run_type", "status", "source_mode", "started_at")
+    list_display = (
+        "run_type",
+        "status",
+        "source_mode",
+        "source_kind",
+        "source_name",
+        "freshness_state",
+        "fallback_used",
+        "started_at",
+        "completed_at",
+    )
+    search_fields = ("run_type", "status", "source_mode", "source_name", "error_message")
+    list_filter = ("run_type", "status", "source_mode", "source_kind", "freshness_state", "started_at")
 
 
 @admin.register(ModelRun)
@@ -60,6 +70,20 @@ class ModelRunAdmin(admin.ModelAdmin):
     list_display = ("model_version", "algorithm_name", "status", "month", "feature_schema_version", "training_row_count", "inference_row_count", "started_at")
     search_fields = ("model_version", "algorithm_name", "status", "feature_schema_version", "training_dataset_ref", "inference_dataset_ref")
     list_filter = ("status", "algorithm_name", "month", "started_at")
+
+
+@admin.register(FeatureDataset)
+class FeatureDatasetAdmin(admin.ModelAdmin):
+    list_display = ("dataset_ref", "dataset_kind", "schema_version", "source_kind", "month", "row_count", "created_at")
+    search_fields = ("dataset_ref", "schema_version")
+    list_filter = ("dataset_kind", "schema_version", "source_kind", "created_at")
+
+
+@admin.register(FeatureDatasetRow)
+class FeatureDatasetRowAdmin(admin.ModelAdmin):
+    list_display = ("dataset", "ward_name_snapshot", "month", "label", "created_at")
+    search_fields = ("dataset__dataset_ref", "ward_name_snapshot")
+    list_filter = ("dataset__dataset_kind", "month", "created_at")
 
 
 @admin.register(Alert)

@@ -158,6 +158,28 @@ class IngestionRun(models.Model):
         (RUN_TYPE_RAINFALL, "Rainfall"),
     ]
 
+    SOURCE_KIND_LIVE = "LIVE"
+    SOURCE_KIND_SEEDED = "SEEDED"
+    SOURCE_KIND_HYBRID = "HYBRID"
+    SOURCE_KIND_UNKNOWN = "UNKNOWN"
+    SOURCE_KIND_CHOICES = [
+        (SOURCE_KIND_LIVE, "Live"),
+        (SOURCE_KIND_SEEDED, "Seeded"),
+        (SOURCE_KIND_HYBRID, "Hybrid"),
+        (SOURCE_KIND_UNKNOWN, "Unknown"),
+    ]
+
+    FRESHNESS_FRESH = "FRESH"
+    FRESHNESS_DELAYED = "DELAYED"
+    FRESHNESS_STALE = "STALE"
+    FRESHNESS_UNKNOWN = "UNKNOWN"
+    FRESHNESS_CHOICES = [
+        (FRESHNESS_FRESH, "Fresh"),
+        (FRESHNESS_DELAYED, "Delayed"),
+        (FRESHNESS_STALE, "Stale"),
+        (FRESHNESS_UNKNOWN, "Unknown"),
+    ]
+
     STATUS_SUCCESS = "SUCCESS"
     STATUS_PARTIAL = "PARTIAL"
     STATUS_FAILED = "FAILED"
@@ -170,8 +192,16 @@ class IngestionRun(models.Model):
     run_type = models.CharField(max_length=20, choices=RUN_TYPE_CHOICES, default=RUN_TYPE_RAINFALL)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_SUCCESS)
     source_mode = models.CharField(max_length=20, default="hybrid")
+    source_kind = models.CharField(max_length=20, choices=SOURCE_KIND_CHOICES, default=SOURCE_KIND_UNKNOWN)
+    source_name = models.CharField(max_length=120, blank=True)
     source_priority = models.JSONField(default=list, blank=True)
     requested_wards = models.JSONField(default=list, blank=True)
+    source_timestamp = models.DateTimeField(null=True, blank=True)
+    freshness_state = models.CharField(max_length=20, choices=FRESHNESS_CHOICES, default=FRESHNESS_UNKNOWN)
+    fallback_used = models.BooleanField(default=False)
+    records_seen = models.PositiveIntegerField(default=0)
+    records_loaded = models.PositiveIntegerField(default=0)
+    records_rejected = models.PositiveIntegerField(default=0)
     results = models.JSONField(default=list, blank=True)
     error_message = models.TextField(blank=True)
     started_at = models.DateTimeField(auto_now_add=True)
@@ -210,6 +240,20 @@ class ModelRun(models.Model):
     inference_row_count = models.PositiveIntegerField(default=0)
     evaluation_metrics = models.JSONField(default=dict, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
+    training_feature_dataset = models.ForeignKey(
+        "risk.FeatureDataset",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="training_model_runs",
+    )
+    inference_feature_dataset = models.ForeignKey(
+        "risk.FeatureDataset",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="inference_model_runs",
+    )
     rainfall_ingestion_run = models.ForeignKey(
         "risk.IngestionRun",
         on_delete=models.SET_NULL,
@@ -229,6 +273,74 @@ class ModelRun(models.Model):
 
     def __str__(self) -> str:
         return f"{self.model_version} [{self.status}] {self.started_at}"
+
+
+class FeatureDataset(models.Model):
+    KIND_TRAINING = "TRAINING"
+    KIND_INFERENCE = "INFERENCE"
+    KIND_CHOICES = [
+        (KIND_TRAINING, "Training"),
+        (KIND_INFERENCE, "Inference"),
+    ]
+
+    SOURCE_KIND_LIVE = "LIVE"
+    SOURCE_KIND_SEEDED = "SEEDED"
+    SOURCE_KIND_HYBRID = "HYBRID"
+    SOURCE_KIND_CHOICES = [
+        (SOURCE_KIND_LIVE, "Live"),
+        (SOURCE_KIND_SEEDED, "Seeded"),
+        (SOURCE_KIND_HYBRID, "Hybrid"),
+    ]
+
+    dataset_ref = models.CharField(max_length=160, unique=True)
+    dataset_kind = models.CharField(max_length=20, choices=KIND_CHOICES)
+    schema_version = models.CharField(max_length=50, default="baseline-v1")
+    source_kind = models.CharField(max_length=20, choices=SOURCE_KIND_CHOICES, default=SOURCE_KIND_SEEDED)
+    month = models.PositiveSmallIntegerField(null=True, blank=True)
+    feature_keys = models.JSONField(default=list, blank=True)
+    row_count = models.PositiveIntegerField(default=0)
+    lineage_metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["dataset_kind", "created_at"]),
+            models.Index(fields=["schema_version", "created_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return self.dataset_ref
+
+
+class FeatureDatasetRow(models.Model):
+    dataset = models.ForeignKey(
+        FeatureDataset,
+        on_delete=models.CASCADE,
+        related_name="rows",
+    )
+    ward = models.ForeignKey(
+        Ward,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="feature_dataset_rows",
+    )
+    ward_name_snapshot = models.CharField(max_length=120)
+    month = models.PositiveSmallIntegerField()
+    feature_values = models.JSONField(default=dict, blank=True)
+    label = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["dataset_id", "id"]
+        indexes = [
+            models.Index(fields=["dataset", "month"]),
+            models.Index(fields=["dataset", "ward"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.dataset.dataset_ref}:{self.ward_name_snapshot}"
 
 
 class Alert(models.Model):

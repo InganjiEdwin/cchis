@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import Alert, CHV, HealthFacility, ModelRun, RiskScore, SyncQueue, TriageSession, UssdSessionLog, Ward
+from .models import Alert, CHV, FeatureDataset, FeatureDatasetRow, HealthFacility, IngestionRun, ModelRun, RiskScore, SyncQueue, TriageSession, UssdSessionLog, Ward
 
 
 class WardSerializer(serializers.ModelSerializer):
@@ -210,8 +210,70 @@ class RiskScoreSerializer(serializers.ModelSerializer):
         ]
 
 
+class IngestionRunSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = IngestionRun
+        fields = [
+            "id",
+            "run_type",
+            "status",
+            "source_mode",
+            "source_kind",
+            "source_name",
+            "source_priority",
+            "requested_wards",
+            "source_timestamp",
+            "freshness_state",
+            "fallback_used",
+            "records_seen",
+            "records_loaded",
+            "records_rejected",
+            "results",
+            "error_message",
+            "started_at",
+            "completed_at",
+        ]
+
+
+class FeatureDatasetRowSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FeatureDatasetRow
+        fields = [
+            "id",
+            "dataset",
+            "ward",
+            "ward_name_snapshot",
+            "month",
+            "feature_values",
+            "label",
+            "created_at",
+        ]
+
+
+class FeatureDatasetSerializer(serializers.ModelSerializer):
+    rows = FeatureDatasetRowSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = FeatureDataset
+        fields = [
+            "id",
+            "dataset_ref",
+            "dataset_kind",
+            "schema_version",
+            "source_kind",
+            "month",
+            "feature_keys",
+            "row_count",
+            "lineage_metadata",
+            "created_at",
+            "rows",
+        ]
+
+
 class ModelRunSerializer(serializers.ModelSerializer):
     rainfall_ingestion_run_status = serializers.CharField(source="rainfall_ingestion_run.status", read_only=True)
+    training_feature_dataset_ref = serializers.CharField(source="training_feature_dataset.dataset_ref", read_only=True)
+    inference_feature_dataset_ref = serializers.CharField(source="inference_feature_dataset.dataset_ref", read_only=True)
 
     class Meta:
         model = ModelRun
@@ -229,6 +291,10 @@ class ModelRunSerializer(serializers.ModelSerializer):
             "inference_row_count",
             "evaluation_metrics",
             "metadata",
+            "training_feature_dataset",
+            "training_feature_dataset_ref",
+            "inference_feature_dataset",
+            "inference_feature_dataset_ref",
             "rainfall_ingestion_run",
             "rainfall_ingestion_run_status",
             "started_at",

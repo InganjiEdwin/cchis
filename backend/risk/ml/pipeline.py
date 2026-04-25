@@ -1,111 +1,203 @@
 from __future__ import annotations
 
 import logging
+from uuid import uuid4
 
 from django.db import transaction
 from django.utils import timezone
 
 from risk.models import ModelRun, RiskScore, Ward
 
-from .data import build_mock_inference_rows, build_mock_training_rows
+from .data import FEATURE_SCHEMA_VERSION, build_inference_feature_dataset, build_training_feature_dataset
 from .model import (
+    ALGORITHM_LOGISTIC_REGRESSION,
     FEATURE_KEYS,
-    evaluate_baseline_model,
+    algorithm_to_run_name,
+    evaluate_model,
     predict_probabilities,
     probability_to_predicted_cases,
     probability_to_risk_level,
-    train_baseline_model,
+    train_model,
 )
 
 
 ml_logger = logging.getLogger("risk.ml")
 
 
-def run_mock_prediction_pipeline(
+def _persist_model_outputs(
     *,
+    wards: list[Ward],
+    training_dataset,
+    inference_dataset,
+    training_rows,
+    inference_rows,
+    algorithm: str,
+    model_version: str,
     month: int,
-    model_version: str = "lr-v1",
-    trigger_alerts: bool = False,
-    send_sms: bool = False,
+    trigger_alerts: bool,
+    send_sms: bool,
+    benchmark_group_ref: str | None,
+    run_role: str,
+    alert_eligible: bool,
 ) -> list[RiskScore]:
     if trigger_alerts:
         from risk.tasks import trigger_alerts_task
 
-    wards = Ward.objects.filter(is_active=True).order_by("name")
-    inference_dataset = build_mock_inference_rows(wards, month=month)
-    inference_rows = inference_dataset.rows
-    training_rows = build_mock_training_rows()
-    model = train_baseline_model(training_rows)
-    evaluation_metrics = evaluate_baseline_model(model, training_rows)
-    predictions = predict_probabilities(model, inference_rows)
-
+    model = train_model(training_rows, algorithm=algorithm)
+    evaluation_metrics = evaluate_model(model, training_rows, algorithm=algorithm)
+    predictions = predict_probabilities(model, inference_rows, algorithm=algorithm)
     created_scores: list[RiskScore] = []
+    ward_map = {ward.id: ward for ward in wards}
 
-    ml_logger.info(
-        "risk_model_run_started",
-        extra={"ward_count": wards.count(), "model_version": model_version, "month": month},
+    model_run = ModelRun.objects.create(
+        algorithm_name=algorithm_to_run_name(algorithm),
+        model_version=model_version,
+        status=ModelRun.STATUS_RUNNING,
+        month=month,
+        feature_schema_version=FEATURE_SCHEMA_VERSION,
+        feature_keys=FEATURE_KEYS,
+        training_dataset_ref=training_dataset.feature_dataset.dataset_ref,
+        inference_dataset_ref=inference_dataset.feature_dataset.dataset_ref,
+        training_row_count=len(training_rows),
+        inference_row_count=len(inference_rows),
+        evaluation_metrics=evaluation_metrics,
+        training_feature_dataset=training_dataset.feature_dataset,
+        inference_feature_dataset=inference_dataset.feature_dataset,
+        metadata={
+            "trigger_alerts": trigger_alerts and alert_eligible,
+            "send_sms": send_sms and alert_eligible,
+            "algorithm": algorithm,
+            "run_role": run_role,
+            "benchmark_group_ref": benchmark_group_ref,
+            "alert_eligible": alert_eligible,
+            "dual_model_mode": benchmark_group_ref is not None,
+            "promotion_state": "promoted" if alert_eligible else "benchmark_only",
+        },
+        rainfall_ingestion_run=inference_dataset.rainfall_ingestion_run,
     )
 
-    with transaction.atomic():
-        model_run = ModelRun.objects.create(
-            algorithm_name="logistic-regression-baseline",
+    for prediction in predictions:
+        ward = ward_map[prediction["ward_id"]]
+        probability = prediction["predicted_probability"]
+        risk_level = probability_to_risk_level(probability)
+        predicted_cases = probability_to_predicted_cases(probability)
+
+        note_mode = "This output is alert-eligible." if alert_eligible else "This output is benchmark-only."
+        risk_score = RiskScore.objects.create(
+            ward=ward,
+            model_run=model_run,
+            score=probability,
+            risk_level=risk_level,
+            rainfall_mm=prediction["rainfall_mm"],
+            flood_indicator=prediction["flood_indicator"],
+            predicted_cases=predicted_cases,
+            source=RiskScore.SOURCE_MODEL,
             model_version=model_version,
-            status=ModelRun.STATUS_RUNNING,
-            month=month,
-            feature_schema_version="mock-v1",
-            feature_keys=FEATURE_KEYS,
-            training_dataset_ref="mock-training-dataset:v1",
-            inference_dataset_ref=f"mock-inference-dataset:month-{month}",
-            training_row_count=len(training_rows),
-            inference_row_count=len(inference_rows),
-            evaluation_metrics=evaluation_metrics,
-            metadata={
-                "trigger_alerts": trigger_alerts,
-                "send_sms": send_sms,
-            },
-            rainfall_ingestion_run=inference_dataset.rainfall_ingestion_run,
+            notes=(
+                f"Generated by {algorithm_to_run_name(algorithm)} using shared feature datasets "
+                "for rainfall input, flood proxy, historical cases, seasonality, and population proxy. "
+                f"{note_mode}"
+            ),
+            generated_at=timezone.now(),
         )
-        ward_map = {ward.id: ward for ward in wards}
 
-        for prediction in predictions:
-            ward = ward_map[prediction["ward_id"]]
-            probability = prediction["predicted_probability"]
-            risk_level = probability_to_risk_level(probability)
-            predicted_cases = probability_to_predicted_cases(probability)
-
-            risk_score = RiskScore.objects.create(
-                ward=ward,
-                model_run=model_run,
-                score=probability,
-                risk_level=risk_level,
-                rainfall_mm=prediction["rainfall_mm"],
-                flood_indicator=prediction["flood_indicator"],
-                predicted_cases=predicted_cases,
-                source=RiskScore.SOURCE_MODEL,
-                model_version=model_version,
-                notes=(
-                    "Generated by logistic regression baseline using rainfall input, "
-                    "flood proxy, historical cases, seasonality, and population proxy."
-                ),
-                generated_at=timezone.now(),
-            )
-
+        if alert_eligible:
             ward.current_risk_level = risk_level
             ward.current_risk_score = probability
             ward.save(update_fields=["current_risk_level", "current_risk_score", "updated_at"])
 
-            created_scores.append(risk_score)
+        created_scores.append(risk_score)
 
-            if trigger_alerts and risk_level == Ward.RISK_HIGH:
-                trigger_alerts_task.delay(risk_score.id, send_sms=send_sms)
+        if trigger_alerts and alert_eligible and risk_level == Ward.RISK_HIGH:
+            trigger_alerts_task.delay(risk_score.id, send_sms=send_sms)
 
-        model_run.status = ModelRun.STATUS_SUCCESS
-        model_run.completed_at = timezone.now()
-        model_run.save(update_fields=["status", "completed_at"])
+    model_run.status = ModelRun.STATUS_SUCCESS
+    model_run.completed_at = timezone.now()
+    model_run.save(update_fields=["status", "completed_at"])
+    return created_scores
+
+
+def run_mock_prediction_pipeline(
+    *,
+    month: int,
+    model_version: str = "lr-v1",
+    algorithm: str = ALGORITHM_LOGISTIC_REGRESSION,
+    trigger_alerts: bool = False,
+    send_sms: bool = False,
+    dual_model: bool = False,
+    benchmark_algorithm: str = "random_forest",
+    benchmark_model_version: str = "rf-v1",
+    alert_algorithm: str | None = None,
+) -> list[RiskScore]:
+    wards = Ward.objects.filter(is_active=True).order_by("name")
+    inference_dataset = build_inference_feature_dataset(wards, month=month)
+    inference_rows = inference_dataset.rows
+    training_dataset = build_training_feature_dataset(month=month)
+    training_rows = training_dataset.rows
+    created_scores: list[RiskScore] = []
+    ward_list = list(wards)
+    benchmark_group_ref = uuid4().hex[:12] if dual_model else None
+    if alert_algorithm is None:
+        alert_algorithm = algorithm
+
+    ml_logger.info(
+        "risk_model_run_started",
+        extra={
+            "ward_count": len(ward_list),
+            "model_version": model_version,
+            "month": month,
+            "algorithm": algorithm,
+            "dual_model": dual_model,
+            "benchmark_algorithm": benchmark_algorithm if dual_model else None,
+        },
+    )
+
+    with transaction.atomic():
+        created_scores.extend(
+            _persist_model_outputs(
+                wards=ward_list,
+                training_dataset=training_dataset,
+                inference_dataset=inference_dataset,
+                training_rows=training_rows,
+                inference_rows=inference_rows,
+                algorithm=algorithm,
+                model_version=model_version,
+                month=month,
+                trigger_alerts=trigger_alerts,
+                send_sms=send_sms,
+                benchmark_group_ref=benchmark_group_ref,
+                run_role="primary",
+                alert_eligible=alert_algorithm == algorithm,
+            )
+        )
+        if dual_model:
+            created_scores.extend(
+                _persist_model_outputs(
+                    wards=ward_list,
+                    training_dataset=training_dataset,
+                    inference_dataset=inference_dataset,
+                    training_rows=training_rows,
+                    inference_rows=inference_rows,
+                    algorithm=benchmark_algorithm,
+                    model_version=benchmark_model_version,
+                    month=month,
+                    trigger_alerts=trigger_alerts,
+                    send_sms=send_sms,
+                    benchmark_group_ref=benchmark_group_ref,
+                    run_role="benchmark",
+                    alert_eligible=alert_algorithm == benchmark_algorithm,
+                )
+            )
 
     ml_logger.info(
         "risk_model_run_completed",
-        extra={"scores_created": len(created_scores), "model_version": model_version, "model_run_id": model_run.id},
+        extra={
+            "scores_created": len(created_scores),
+            "model_version": model_version,
+            "algorithm": algorithm,
+            "dual_model": dual_model,
+            "benchmark_group_ref": benchmark_group_ref,
+        },
     )
 
     return created_scores

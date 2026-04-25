@@ -6,11 +6,13 @@ import logging
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from decouple import config
 from django.utils import timezone
 
+from risk.etl_records import canonical_record_envelope, climate_record_from_rainfall_observation
 from risk.models import IngestionRun, Ward
 
 logger = logging.getLogger(__name__)
@@ -21,6 +23,7 @@ class RainfallObservation:
     ward_name: str
     rainfall_mm: float
     source: str
+    source_timestamp: datetime | None = None
     latitude: float | None = None
     longitude: float | None = None
     coordinate_source: str | None = None
@@ -80,6 +83,7 @@ def load_static_rainfall_from_env_or_defaults() -> dict[str, RainfallObservation
             ward_name=ward_name,
             rainfall_mm=float(rainfall_mm),
             source="static-default",
+            source_timestamp=None,
             latitude=lat,
             longitude=lon,
             coordinate_source=coordinate_source,
@@ -118,6 +122,7 @@ def load_static_rainfall_from_csv() -> dict[str, RainfallObservation]:
                 ward_name=ward_name,
                 rainfall_mm=rainfall_mm,
                 source="static-csv",
+                source_timestamp=None,
                 latitude=latitude,
                 longitude=longitude,
                 coordinate_source="static-csv",
@@ -181,6 +186,7 @@ def fetch_open_meteo_daily_precipitation(
         ward_name=_normalize_ward_name(ward_name),
         rainfall_mm=round(rainfall_mm, 2),
         source="open-meteo-forecast",
+        source_timestamp=timezone.now(),
         latitude=latitude,
         longitude=longitude,
     )
@@ -208,6 +214,7 @@ def _build_static_fallback_observation(
             ward_name=normalized,
             rainfall_mm=50.0,
             source="static-fallback",
+            source_timestamp=None,
             latitude=latitude,
             longitude=longitude,
             coordinate_source=coordinate_source,
@@ -218,6 +225,7 @@ def _build_static_fallback_observation(
         ward_name=observation.ward_name,
         rainfall_mm=observation.rainfall_mm,
         source=observation.source,
+        source_timestamp=observation.source_timestamp,
         latitude=observation.latitude if observation.latitude is not None else latitude,
         longitude=observation.longitude if observation.longitude is not None else longitude,
         coordinate_source=observation.coordinate_source or coordinate_source,
@@ -226,17 +234,114 @@ def _build_static_fallback_observation(
 
 
 def _serialize_observation(ward: Ward | None, observation: RainfallObservation) -> dict:
+    source_timestamp = ""
+    if isinstance(observation.source_timestamp, datetime):
+        source_timestamp = observation.source_timestamp.isoformat()
+    elif isinstance(observation.source_timestamp, str):
+        source_timestamp = observation.source_timestamp
+    elif observation.source == "open-meteo-forecast":
+        source_timestamp = timezone.now().isoformat()
+    source_kind = (
+        IngestionRun.SOURCE_KIND_LIVE if observation.source == "open-meteo-forecast" else IngestionRun.SOURCE_KIND_SEEDED
+    )
+    freshness_state = IngestionRun.FRESHNESS_FRESH if source_timestamp else IngestionRun.FRESHNESS_UNKNOWN
     return {
         "ward_id": ward.id if ward else None,
         "ward_public_id": str(ward.public_id) if ward and ward.public_id else "",
         "ward_name": observation.ward_name,
         "rainfall_mm": observation.rainfall_mm,
         "source": observation.source,
+        "source_timestamp": source_timestamp,
         "latitude": observation.latitude,
         "longitude": observation.longitude,
         "coordinate_source": observation.coordinate_source or "",
         "fallback_reason": observation.fallback_reason or "",
+        "canonical_record": canonical_record_envelope(
+            climate_record_from_rainfall_observation(
+                ward=ward,
+                ward_name=observation.ward_name,
+                county=ward.county if ward else "Migori",
+                source_name=observation.source,
+                source_kind=source_kind,
+                source_mode=config("RAINFALL_SOURCE_MODE", default="hybrid").strip().lower(),
+                source_timestamp=source_timestamp or None,
+                freshness_state=freshness_state,
+                rainfall_mm=observation.rainfall_mm,
+                latitude=observation.latitude,
+                longitude=observation.longitude,
+                coordinate_source=observation.coordinate_source,
+                fallback_reason=observation.fallback_reason,
+            )
+        ),
     }
+
+
+def _source_kind_for_results(results: list[dict]) -> str:
+    if not results:
+        return IngestionRun.SOURCE_KIND_UNKNOWN
+    kinds = set()
+    for item in results:
+        source = item.get("source", "")
+        if source == "open-meteo-forecast":
+            kinds.add(IngestionRun.SOURCE_KIND_LIVE)
+        elif source:
+            kinds.add(IngestionRun.SOURCE_KIND_SEEDED)
+    if len(kinds) > 1:
+        return IngestionRun.SOURCE_KIND_HYBRID
+    return next(iter(kinds), IngestionRun.SOURCE_KIND_UNKNOWN)
+
+
+def _freshness_state_for_results(results: list[dict]) -> str:
+    timestamps = []
+    for item in results:
+        source_timestamp = item.get("source_timestamp")
+        if not source_timestamp:
+            continue
+        try:
+            timestamps.append(datetime.fromisoformat(source_timestamp))
+        except ValueError:
+            continue
+    if not timestamps:
+        return IngestionRun.FRESHNESS_UNKNOWN
+    latest = max(timestamps)
+    now = timezone.now()
+    if timezone.is_naive(latest):
+        latest = timezone.make_aware(latest, timezone.get_current_timezone())
+    age = now - latest
+    if age <= timedelta(hours=6):
+        return IngestionRun.FRESHNESS_FRESH
+    if age <= timedelta(hours=24):
+        return IngestionRun.FRESHNESS_DELAYED
+    return IngestionRun.FRESHNESS_STALE
+
+
+def _primary_source_name(results: list[dict]) -> str:
+    for item in results:
+        source = item.get("source", "").strip()
+        if source:
+            return source
+    return ""
+
+
+def _latest_source_timestamp(results: list[dict]):
+    timestamps = []
+    for item in results:
+        source_timestamp = item.get("source_timestamp")
+        if not source_timestamp:
+            continue
+        if isinstance(source_timestamp, datetime):
+            parsed = source_timestamp
+        elif isinstance(source_timestamp, str):
+            try:
+                parsed = datetime.fromisoformat(source_timestamp)
+            except ValueError:
+                continue
+        else:
+            continue
+        if timezone.is_naive(parsed):
+            parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+        timestamps.append(parsed)
+    return max(timestamps) if timestamps else None
 
 
 def _finalize_ingestion_run(ingestion_run: IngestionRun, results: list[dict], error_message: str = "") -> None:
@@ -247,10 +352,33 @@ def _finalize_ingestion_run(ingestion_run: IngestionRun, results: list[dict], er
         status = IngestionRun.STATUS_PARTIAL
 
     ingestion_run.status = status
+    ingestion_run.source_kind = _source_kind_for_results(results)
+    ingestion_run.source_name = _primary_source_name(results)
+    ingestion_run.source_timestamp = _latest_source_timestamp(results)
+    ingestion_run.freshness_state = _freshness_state_for_results(results)
+    ingestion_run.fallback_used = any(item.get("fallback_reason") for item in results)
+    ingestion_run.records_seen = len(ingestion_run.requested_wards or [])
+    ingestion_run.records_loaded = len(results)
+    ingestion_run.records_rejected = max(0, ingestion_run.records_seen - ingestion_run.records_loaded)
     ingestion_run.results = results
     ingestion_run.error_message = error_message
     ingestion_run.completed_at = timezone.now()
-    ingestion_run.save(update_fields=["status", "results", "error_message", "completed_at"])
+    ingestion_run.save(
+        update_fields=[
+            "status",
+            "source_kind",
+            "source_name",
+            "source_timestamp",
+            "freshness_state",
+            "fallback_used",
+            "records_seen",
+            "records_loaded",
+            "records_rejected",
+            "results",
+            "error_message",
+            "completed_at",
+        ]
+    )
 
 
 def _fetch_rainfall_observation(ward_name: str, ward: Ward | None = None) -> RainfallObservation:
@@ -292,6 +420,7 @@ def _fetch_rainfall_observation(ward_name: str, ward: Ward | None = None) -> Rai
             ward_name=observation.ward_name,
             rainfall_mm=observation.rainfall_mm,
             source=observation.source,
+            source_timestamp=observation.source_timestamp,
             latitude=observation.latitude,
             longitude=observation.longitude,
             coordinate_source=coordinate_source,

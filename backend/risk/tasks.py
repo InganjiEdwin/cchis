@@ -3,12 +3,34 @@ import logging
 from celery import shared_task
 from django.utils import timezone
 
+from risk.ml.ingestion import fetch_rainfall_for_wards
 from risk.ml.pipeline import run_mock_prediction_pipeline
-from risk.models import Alert, RiskScore
+from risk.models import Alert, RiskScore, Ward
 from risk.services import deliver_alert, trigger_alerts_for_riskscore
 
 
 logger = logging.getLogger("risk")
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+def run_rainfall_ingestion_task(self) -> int:
+    wards = list(Ward.objects.filter(is_active=True).order_by("name"))
+    if not wards:
+        logger.info("run_rainfall_ingestion_task_completed", extra={"ward_count": 0})
+        return 0
+
+    _, ingestion_run = fetch_rainfall_for_wards(wards, return_ingestion_run=True)
+    logger.info(
+        "run_rainfall_ingestion_task_completed",
+        extra={
+            "ward_count": len(wards),
+            "ingestion_run_id": ingestion_run.id,
+            "status": ingestion_run.status,
+            "source_kind": ingestion_run.source_kind,
+            "freshness_state": ingestion_run.freshness_state,
+        },
+    )
+    return ingestion_run.id
 
 
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
@@ -49,8 +71,13 @@ def run_risk_model_task(
     self,
     month: int | None = None,
     model_version: str = "lr-v1",
+    algorithm: str = "logistic_regression",
     trigger_alerts: bool = False,
     send_sms: bool = False,
+    dual_model: bool = False,
+    benchmark_algorithm: str = "random_forest",
+    benchmark_model_version: str = "rf-v1",
+    alert_algorithm: str | None = None,
 ) -> int:
     if month is None:
         month = timezone.now().month
@@ -58,11 +85,22 @@ def run_risk_model_task(
     created_scores = run_mock_prediction_pipeline(
         month=month,
         model_version=model_version,
+        algorithm=algorithm,
         trigger_alerts=trigger_alerts,
         send_sms=send_sms,
+        dual_model=dual_model,
+        benchmark_algorithm=benchmark_algorithm,
+        benchmark_model_version=benchmark_model_version,
+        alert_algorithm=alert_algorithm,
     )
     logger.info(
         "run_risk_model_task_completed",
-        extra={"scores_created": len(created_scores), "model_version": model_version, "month": month},
+        extra={
+            "scores_created": len(created_scores),
+            "model_version": model_version,
+            "algorithm": algorithm,
+            "month": month,
+            "dual_model": dual_model,
+        },
     )
     return len(created_scores)
