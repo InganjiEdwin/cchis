@@ -3100,6 +3100,29 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
             1,
         )
 
+    def test_facility_forecast_preview_reflects_promoted_baseline_status(self):
+        run = run_facility_burden_forecast_pipeline(
+            model_version="fnb-vpreview-promoted",
+            execution_context="test_case",
+            run_purpose="forecast_scoring",
+        )
+        call_command(
+            "promote_facility_burden_forecast",
+            run_id=run.id,
+            promoted_by="auditor",
+            note="preview-promotion-test",
+            allow_blocked_promotion=True,
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("facility-forecast-preview", args=[self.health_facility.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["baseline_model_status"],
+            "negative_binomial_promoted_for_dashboard_readiness",
+        )
+
     def test_facility_forecasting_status_reflects_successful_baseline_run(self):
         run_facility_burden_forecast_pipeline(
             model_version="fnb-v1",
@@ -3138,6 +3161,7 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.data["forecasting_state"], "phase_4_promoted_dashboard_forecast_available")
         self.assertEqual(response.data["current_baseline_state"], "promoted")
         self.assertFalse(response.data["honesty_rules"]["negative_binomial_not_yet_promoted"])
+        self.assertFalse(response.data["honesty_rules"]["current_readiness_is_proxy_backed"])
         self.assertEqual(response.data["promotion_summary"]["decision"]["governance_mode"], "promoted")
         self.assertEqual(response.data["promotion_summary"]["decision"]["promotion_readiness"], "promoted_with_manual_review")
         self.assertEqual(response.data["promotion_summary"]["decision"]["promotion_blockers"], [])

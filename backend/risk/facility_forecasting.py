@@ -97,7 +97,7 @@ def build_facility_forecasting_truth_audit() -> dict:
         },
         "honesty_rules": {
             "negative_binomial_not_yet_promoted": not bool(promoted_run),
-            "current_readiness_is_proxy_backed": True,
+            "current_readiness_is_proxy_backed": not bool(promoted_run),
             "dashboard_must_not_present_preview_as_promoted_forecast": True,
         },
     }
@@ -747,6 +747,7 @@ def _pressure_score_from_snapshot(readiness: dict) -> int:
 def build_initial_facility_forecast_preview(facility: HealthFacility) -> dict:
     latest_forecast = latest_facility_forecast_for_facility(facility)
     if latest_forecast and latest_forecast.forecast_run.status == FacilityForecastRun.STATUS_SUCCESS:
+        promoted_forecast = is_promoted_facility_forecast_run(latest_forecast.forecast_run)
         return {
             "facility_id": facility.id,
             "generated_at": latest_forecast.generated_at,
@@ -760,7 +761,11 @@ def build_initial_facility_forecast_preview(facility: HealthFacility) -> dict:
             "model_version": latest_forecast.model_version or latest_forecast.forecast_run.model_version,
             "freshness_state": latest_forecast.freshness_state,
             "forecast_mode": latest_forecast.forecast_mode,
-            "baseline_model_status": "negative_binomial_implemented_not_promoted",
+            "baseline_model_status": (
+                "negative_binomial_promoted_for_dashboard_readiness"
+                if promoted_forecast
+                else "negative_binomial_implemented_not_promoted"
+            ),
         }
 
     snapshot = build_facility_intelligence_snapshot(facility)

@@ -172,6 +172,7 @@ This audit closed that gap by adding:
 - promoted-state truth in status and evaluation surfaces
 - explicit override acknowledgement for blocked promotions
 - promoted-forecast preference in facility intelligence over newer preview-only runs
+- promoted-state truth in preview and honesty-rule surfaces
 
 Evidence now exists in:
 
@@ -184,6 +185,7 @@ Evidence now exists in:
 - `risk.tests.RiskPermissionsTestCase.test_facility_forecasting_evaluation_reflects_promoted_run`
 - `risk.tests.SeedAndModelCommandTestCase.test_promote_facility_burden_forecast_command_requires_explicit_override_for_blocked_run`
 - `risk.tests.RiskPermissionsTestCase.test_facility_intelligence_prefers_promoted_facility_forecast_over_newer_preview_run`
+- `risk.tests.RiskPermissionsTestCase.test_facility_forecast_preview_reflects_promoted_baseline_status`
 
 ### Important honesty note
 
