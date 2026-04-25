@@ -48,6 +48,17 @@ from core.observability import (
 from core.data_lifecycle import DATA_RETENTION_INVENTORY, FIELD_DATA_MINIMIZATION_RULES
 from core.recovery_discipline import BACKUP_EXPECTATIONS, RESTORE_REHEARSAL_EXPECTATIONS
 from risk.ml.ingestion import fetch_rainfall_for_ward
+from risk.ml.pipeline import run_mock_prediction_pipeline
+from risk.ml.data import InferenceDataset, TrainingDataset, WardFeatureRow
+from risk.ml.trust import (
+    ALERT_STATE_ALLOWED,
+    ALERT_STATE_BLOCKED,
+    ALERT_STATE_REVIEW_ONLY,
+    TRUST_STATE_BLOCKED,
+    TRUST_STATE_DEGRADED,
+    TRUST_STATE_NORMAL,
+    build_operational_trust_snapshot,
+)
 from risk.etl_records import (
     ETL_SCHEMA_VERSION,
     chv_response_record_from_sync_queue,
@@ -3973,6 +3984,8 @@ class SeedAndModelCommandTestCase(APITestCase):
         self.assertEqual(model_run.metadata["algorithm"], "logistic_regression")
         self.assertEqual(model_run.metadata["promotion_state"], "promoted")
         self.assertTrue(model_run.metadata["alert_eligible"])
+        self.assertEqual(model_run.metadata["operational_trust"]["prediction_state"], TRUST_STATE_DEGRADED)
+        self.assertTrue(model_run.metadata["automatic_alerts_blocked_by_trust_policy"] is False)
 
     def test_run_risk_model_dual_model_mode_persists_shared_dataset_lineage(self):
         Ward.objects.create(
@@ -4030,11 +4043,189 @@ class SeedAndModelCommandTestCase(APITestCase):
         self.assertEqual(FeatureDataset.objects.filter(dataset_kind=FeatureDataset.KIND_TRAINING).count(), 1)
         self.assertEqual(FeatureDataset.objects.filter(dataset_kind=FeatureDataset.KIND_INFERENCE).count(), 1)
 
+    @patch("risk.tasks.trigger_alerts_task.delay", return_value=SimpleNamespace(id="task-123"))
+    def test_run_risk_model_degraded_inputs_suppress_automatic_alerts(self, mock_delay):
+        Ward.objects.create(
+            name="Ward Delta",
+            county="Migori",
+            sub_county="Rongo",
+            current_risk_level=Ward.RISK_HIGH,
+            current_risk_score=0.92,
+            is_active=True,
+        )
+        CHV.objects.create(
+            name="CHV Delta",
+            phone_number="+254700010099",
+            ward=Ward.objects.get(name="Ward Delta"),
+            is_active=True,
+            language="en",
+        )
+
+        call_command("run_risk_model", "--month=4", "--model-version=lr-trust-v1", "--trigger-alerts")
+
+        model_run = ModelRun.objects.get(model_version="lr-trust-v1")
+        self.assertEqual(model_run.metadata["operational_trust"]["prediction_state"], TRUST_STATE_DEGRADED)
+        self.assertEqual(model_run.metadata["operational_trust"]["alert_state"], ALERT_STATE_BLOCKED)
+        self.assertTrue(model_run.metadata["automatic_alerts_blocked_by_trust_policy"])
+        self.assertFalse(model_run.metadata["trigger_alerts"])
+        mock_delay.assert_not_called()
+
+    def test_operational_trust_blocks_predictions_when_live_source_is_stale(self):
+        ward = Ward.objects.create(
+            name="Blocked Ward",
+            county="Migori",
+            sub_county="Rongo",
+            current_risk_level=Ward.RISK_LOW,
+            current_risk_score=0.20,
+            is_active=True,
+        )
+        stale_run = IngestionRun.objects.create(
+            run_type=IngestionRun.RUN_TYPE_RAINFALL,
+            status=IngestionRun.STATUS_SUCCESS,
+            source_mode="live",
+            source_kind=IngestionRun.SOURCE_KIND_LIVE,
+            source_name="open-meteo-forecast",
+            source_timestamp=timezone.now() - timedelta(hours=30),
+            freshness_state=IngestionRun.FRESHNESS_STALE,
+            fallback_used=False,
+            records_seen=1,
+            records_loaded=1,
+            completed_at=timezone.now(),
+        )
+        training_dataset = FeatureDataset.objects.create(
+            dataset_ref="training-test-phase5",
+            dataset_kind=FeatureDataset.KIND_TRAINING,
+            schema_version="baseline-v1",
+            source_kind=FeatureDataset.SOURCE_KIND_SEEDED,
+            month=4,
+            feature_keys=["rainfall_mm", "flood_indicator", "historical_cases", "month", "seasonality", "population_proxy"],
+            row_count=2,
+            lineage_metadata={},
+        )
+        inference_dataset = FeatureDataset.objects.create(
+            dataset_ref="inference-test-phase5",
+            dataset_kind=FeatureDataset.KIND_INFERENCE,
+            schema_version="baseline-v1",
+            source_kind=FeatureDataset.SOURCE_KIND_LIVE,
+            month=4,
+            feature_keys=["rainfall_mm", "flood_indicator", "historical_cases", "month", "seasonality", "population_proxy"],
+            row_count=1,
+            lineage_metadata={},
+        )
+        training_rows = [
+            WardFeatureRow(1, "Train A", 120.0, 0.8, 14, 4, 5400, 1),
+            WardFeatureRow(2, "Train B", 60.0, 0.3, 5, 4, 4700, 0),
+        ]
+        inference_rows = [
+            WardFeatureRow(ward.id, ward.name, 115.0, 0.78, 12, 4, 5000, None),
+        ]
+
+        with patch(
+            "risk.ml.pipeline.build_training_feature_dataset",
+            return_value=TrainingDataset(rows=training_rows, feature_dataset=training_dataset),
+        ), patch(
+            "risk.ml.pipeline.build_inference_feature_dataset",
+            return_value=InferenceDataset(
+                rows=inference_rows,
+                feature_dataset=inference_dataset,
+                rainfall_ingestion_run=stale_run,
+            ),
+        ):
+            created_scores = run_mock_prediction_pipeline(month=4, model_version="lr-stale-v1")
+
+        self.assertEqual(created_scores, [])
+        self.assertFalse(ModelRun.objects.filter(model_version="lr-stale-v1").exists())
+        self.assertFalse(RiskScore.objects.filter(model_version="lr-stale-v1").exists())
+
     def test_seed_demo_data_assigns_model_run_to_seeded_model_scores(self):
         call_command("seed_demo_data")
 
         self.assertTrue(ModelRun.objects.filter(model_version="v0-demo", status=ModelRun.STATUS_SUCCESS).exists())
         self.assertFalse(RiskScore.objects.filter(source=RiskScore.SOURCE_MODEL, model_run__isnull=True).exists())
+
+
+class ETLOperationalTrustPolicyTestCase(APITestCase):
+    def test_build_operational_trust_snapshot_classifies_fresh_live_run_as_normal(self):
+        run = IngestionRun.objects.create(
+            run_type=IngestionRun.RUN_TYPE_RAINFALL,
+            status=IngestionRun.STATUS_SUCCESS,
+            source_mode="hybrid",
+            source_kind=IngestionRun.SOURCE_KIND_LIVE,
+            source_name="open-meteo-forecast",
+            source_timestamp=timezone.now(),
+            freshness_state=IngestionRun.FRESHNESS_FRESH,
+            fallback_used=False,
+            records_seen=1,
+            records_loaded=1,
+            completed_at=timezone.now(),
+        )
+
+        snapshot = build_operational_trust_snapshot(run)
+
+        self.assertEqual(snapshot["prediction_state"], TRUST_STATE_NORMAL)
+        self.assertEqual(snapshot["alert_state"], ALERT_STATE_ALLOWED)
+
+    def test_build_operational_trust_snapshot_marks_fallback_as_degraded(self):
+        run = IngestionRun.objects.create(
+            run_type=IngestionRun.RUN_TYPE_RAINFALL,
+            status=IngestionRun.STATUS_PARTIAL,
+            source_mode="hybrid",
+            source_kind=IngestionRun.SOURCE_KIND_SEEDED,
+            source_name="static-csv",
+            source_timestamp=None,
+            freshness_state=IngestionRun.FRESHNESS_UNKNOWN,
+            fallback_used=True,
+            records_seen=1,
+            records_loaded=1,
+            completed_at=timezone.now(),
+        )
+
+        snapshot = build_operational_trust_snapshot(run)
+
+        self.assertEqual(snapshot["prediction_state"], TRUST_STATE_DEGRADED)
+        self.assertEqual(snapshot["alert_state"], ALERT_STATE_BLOCKED)
+        self.assertIn("fallback-used", snapshot["reasons"])
+
+    def test_build_operational_trust_snapshot_marks_delayed_live_source_for_review(self):
+        run = IngestionRun.objects.create(
+            run_type=IngestionRun.RUN_TYPE_RAINFALL,
+            status=IngestionRun.STATUS_SUCCESS,
+            source_mode="hybrid",
+            source_kind=IngestionRun.SOURCE_KIND_LIVE,
+            source_name="open-meteo-forecast",
+            source_timestamp=timezone.now() - timedelta(hours=12),
+            freshness_state=IngestionRun.FRESHNESS_DELAYED,
+            fallback_used=False,
+            records_seen=1,
+            records_loaded=1,
+            completed_at=timezone.now(),
+        )
+
+        snapshot = build_operational_trust_snapshot(run)
+
+        self.assertEqual(snapshot["prediction_state"], TRUST_STATE_DEGRADED)
+        self.assertEqual(snapshot["alert_state"], ALERT_STATE_REVIEW_ONLY)
+
+    def test_build_operational_trust_snapshot_blocks_stale_live_source(self):
+        run = IngestionRun.objects.create(
+            run_type=IngestionRun.RUN_TYPE_RAINFALL,
+            status=IngestionRun.STATUS_SUCCESS,
+            source_mode="live",
+            source_kind=IngestionRun.SOURCE_KIND_LIVE,
+            source_name="open-meteo-forecast",
+            source_timestamp=timezone.now() - timedelta(hours=30),
+            freshness_state=IngestionRun.FRESHNESS_STALE,
+            fallback_used=False,
+            records_seen=1,
+            records_loaded=1,
+            completed_at=timezone.now(),
+        )
+
+        snapshot = build_operational_trust_snapshot(run)
+
+        self.assertEqual(snapshot["prediction_state"], TRUST_STATE_BLOCKED)
+        self.assertEqual(snapshot["alert_state"], ALERT_STATE_BLOCKED)
+        self.assertIn("source-stale", snapshot["reasons"])
 
 
 class RainfallIngestionTestCase(APITestCase):

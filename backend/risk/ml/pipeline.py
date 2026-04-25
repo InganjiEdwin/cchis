@@ -19,6 +19,7 @@ from .model import (
     probability_to_risk_level,
     train_model,
 )
+from .trust import alerts_allowed_for_snapshot, build_operational_trust_snapshot, predictions_blocked_for_snapshot
 
 
 ml_logger = logging.getLogger("risk.ml")
@@ -39,8 +40,12 @@ def _persist_model_outputs(
     benchmark_group_ref: str | None,
     run_role: str,
     alert_eligible: bool,
+    operational_trust: dict,
+    requested_trigger_alerts: bool,
 ) -> list[RiskScore]:
-    if trigger_alerts:
+    effective_trigger_alerts = trigger_alerts and alert_eligible and alerts_allowed_for_snapshot(operational_trust)
+
+    if effective_trigger_alerts:
         from risk.tasks import trigger_alerts_task
 
     model = train_model(training_rows, algorithm=algorithm)
@@ -64,14 +69,17 @@ def _persist_model_outputs(
         training_feature_dataset=training_dataset.feature_dataset,
         inference_feature_dataset=inference_dataset.feature_dataset,
         metadata={
-            "trigger_alerts": trigger_alerts and alert_eligible,
-            "send_sms": send_sms and alert_eligible,
+            "trigger_alerts": effective_trigger_alerts,
+            "requested_trigger_alerts": requested_trigger_alerts,
+            "send_sms": send_sms and effective_trigger_alerts,
             "algorithm": algorithm,
             "run_role": run_role,
             "benchmark_group_ref": benchmark_group_ref,
             "alert_eligible": alert_eligible,
             "dual_model_mode": benchmark_group_ref is not None,
             "promotion_state": "promoted" if alert_eligible else "benchmark_only",
+            "operational_trust": operational_trust,
+            "automatic_alerts_blocked_by_trust_policy": requested_trigger_alerts and not effective_trigger_alerts,
         },
         rainfall_ingestion_run=inference_dataset.rainfall_ingestion_run,
     )
@@ -82,7 +90,12 @@ def _persist_model_outputs(
         risk_level = probability_to_risk_level(probability)
         predicted_cases = probability_to_predicted_cases(probability)
 
-        note_mode = "This output is alert-eligible." if alert_eligible else "This output is benchmark-only."
+        if effective_trigger_alerts:
+            note_mode = "This output is alert-eligible."
+        elif alert_eligible:
+            note_mode = "This output is alert-eligible in principle, but automatic alerts were blocked by ETL trust policy."
+        else:
+            note_mode = "This output is benchmark-only."
         risk_score = RiskScore.objects.create(
             ward=ward,
             model_run=model_run,
@@ -108,7 +121,7 @@ def _persist_model_outputs(
 
         created_scores.append(risk_score)
 
-        if trigger_alerts and alert_eligible and risk_level == Ward.RISK_HIGH:
+        if effective_trigger_alerts and risk_level == Ward.RISK_HIGH:
             trigger_alerts_task.delay(risk_score.id, send_sms=send_sms)
 
     model_run.status = ModelRun.STATUS_SUCCESS
@@ -139,6 +152,7 @@ def run_mock_prediction_pipeline(
     benchmark_group_ref = uuid4().hex[:12] if dual_model else None
     if alert_algorithm is None:
         alert_algorithm = algorithm
+    operational_trust = build_operational_trust_snapshot(inference_dataset.rainfall_ingestion_run)
 
     ml_logger.info(
         "risk_model_run_started",
@@ -149,8 +163,21 @@ def run_mock_prediction_pipeline(
             "algorithm": algorithm,
             "dual_model": dual_model,
             "benchmark_algorithm": benchmark_algorithm if dual_model else None,
+            "operational_trust": operational_trust,
         },
     )
+
+    if predictions_blocked_for_snapshot(operational_trust):
+        ml_logger.warning(
+            "risk_model_run_blocked_by_etl_trust_policy",
+            extra={
+                "month": month,
+                "model_version": model_version,
+                "algorithm": algorithm,
+                "operational_trust": operational_trust,
+            },
+        )
+        return []
 
     with transaction.atomic():
         created_scores.extend(
@@ -168,6 +195,8 @@ def run_mock_prediction_pipeline(
                 benchmark_group_ref=benchmark_group_ref,
                 run_role="primary",
                 alert_eligible=alert_algorithm == algorithm,
+                operational_trust=operational_trust,
+                requested_trigger_alerts=trigger_alerts,
             )
         )
         if dual_model:
@@ -186,6 +215,8 @@ def run_mock_prediction_pipeline(
                     benchmark_group_ref=benchmark_group_ref,
                     run_role="benchmark",
                     alert_eligible=alert_algorithm == benchmark_algorithm,
+                    operational_trust=operational_trust,
+                    requested_trigger_alerts=trigger_alerts,
                 )
             )
 
