@@ -189,7 +189,7 @@ export default function ProfilePage() {
                   </div>
                   <div className="flex items-center gap-2">
                     <ShieldCheck className="size-4 text-brand" aria-hidden="true" />
-                    <span>Dashboard profile page</span>
+                    <span>Profile page</span>
                   </div>
                 </div>
 
@@ -279,7 +279,7 @@ export default function ProfilePage() {
         <Card className="rounded-[2rem] px-6 py-6">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-[1.25rem] font-semibold tracking-[-0.04em] text-panel-strong">Account Details</h2>
+              <h2 className="text-[1.25rem] font-semibold tracking-[-0.04em] text-panel-strong">Account</h2>
               <p className="mt-1 text-sm text-panel-muted">Identity fields and preferences shown here.</p>
             </div>
             <button
@@ -415,7 +415,7 @@ export default function ProfilePage() {
                 <span className="inline-flex size-10 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--warning)_14%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]">
                   <ShieldCheck className="size-4" aria-hidden="true" />
                 </span>
-                <strong className="text-base font-semibold text-panel-strong">Two-Factor (2FA)</strong>
+                <strong className="text-base font-semibold text-panel-strong">Two-Factor</strong>
               </div>
               <p className="mt-4 min-h-[4.5rem] text-sm leading-6 text-panel-muted">
                 TOTP setup is available on this page. Visible state: {twoFactorLabel}.
@@ -424,7 +424,7 @@ export default function ProfilePage() {
                 href="/setup-2fa"
                 className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--dashboard-icon-button-ink-hover)]"
               >
-                Manage TOTP
+                Open TOTP setup
                 <ChevronRight className="size-4" aria-hidden="true" />
               </Link>
             </Card>
@@ -456,7 +456,7 @@ export default function ProfilePage() {
         <Card className="rounded-[2rem] px-6 py-6">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-[1.25rem] font-semibold tracking-[-0.04em] text-panel-strong">Recent Activity Log</h2>
+              <h2 className="text-[1.25rem] font-semibold tracking-[-0.04em] text-panel-strong">Activity</h2>
               <p className="mt-1 text-sm text-panel-muted">Account activity is not exposed on this page yet.</p>
             </div>
             <button
