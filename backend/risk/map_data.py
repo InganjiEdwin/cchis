@@ -5,6 +5,7 @@ from pathlib import Path
 
 from django.db.models import Count, Prefetch
 
+from .facility_forecasting import build_facility_forecasting_dashboard_summary
 from .ml.alignment import get_live_model_alignment_summary, promoted_risk_scores
 from .models import (
     Alert,
@@ -230,6 +231,7 @@ def build_migori_ward_map_summary(ward_queryset, *, limit_to_backend_wards: bool
         )
     )
     ward_ids = [ward.id for ward in wards]
+    facility_forecasting = build_facility_forecasting_dashboard_summary(wards=wards)
     ward_by_name = {normalize_ward_name(ward.name): ward for ward in wards}
     ward_by_code = {
         str(ward.ward_code).strip(): ward
@@ -289,6 +291,8 @@ def build_migori_ward_map_summary(ward_queryset, *, limit_to_backend_wards: bool
         ward_risks = promoted_risk_scores(ward.risk_scores.all())[:4] if ward else []
         latest_risk = ward_risks[0] if ward_risks else None
         trend = _derive_risk_trend(ward_risks)
+        driving_preview_ward_ids = set(facility_forecasting.get("driving_ward_ids", []))
+        drives_facility_pressure_preview = bool(ward and ward.id in driving_preview_ward_ids)
         geometry_name_keys.add(normalized_name)
         if ward_code:
             geometry_code_keys.add(ward_code)
@@ -319,6 +323,8 @@ def build_migori_ward_map_summary(ward_queryset, *, limit_to_backend_wards: bool
                     "active_chv_count": active_chv_counts.get(ward.id, 0) if ward else 0,
                     "alert_count": alert_counts.get(ward.id, 0) if ward else 0,
                     "facility_count": facility_counts.get(ward.id, 0) if ward else 0,
+                    "drives_facility_pressure_preview": drives_facility_pressure_preview,
+                    "facility_forecast_dashboard_truth_state": facility_forecasting["dashboard_truth_state"],
                 },
             }
         )
@@ -347,6 +353,7 @@ def build_migori_ward_map_summary(ward_queryset, *, limit_to_backend_wards: bool
             "backend_ward_name_fallback_match_count": ward_name_fallback_match_count,
             "matching_strategy": "ward_code_then_name",
             "model_alignment": model_alignment,
+            "facility_forecasting": facility_forecasting,
             "returned_feature_count": len(features),
             "backend_wards_without_geometry": backend_wards_without_geometry,
             "placeholder_geometry_detected": placeholder_geometry_detected,

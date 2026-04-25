@@ -2766,6 +2766,35 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
             "derived_from_recent_history_window",
         )
 
+    def test_migori_ward_map_exposes_facility_forecast_dashboard_summary_honestly(self):
+        self.import_active_migori_geometry("test-admin-map-forecast-v1")
+        run_facility_burden_forecast_pipeline(
+            model_version="fnb-v1",
+            execution_context="test_case",
+            run_purpose="forecast_scoring",
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.get(reverse("migori-ward-map"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["metadata"]["facility_forecasting"]["source_kind"], "forecast_preview")
+        self.assertEqual(response.data["metadata"]["facility_forecasting"]["governance_mode"], "preview_only")
+        self.assertEqual(
+            response.data["metadata"]["facility_forecasting"]["dashboard_truth_state"],
+            "blocked_until_promotion",
+        )
+        self.assertIn(self.ward.id, response.data["metadata"]["facility_forecasting"]["driving_ward_ids"])
+
+        north_kamagambo = next(
+            feature for feature in response.data["features"] if feature["properties"]["name"] == self.ward.name
+        )
+        self.assertTrue(north_kamagambo["properties"]["drives_facility_pressure_preview"])
+        self.assertEqual(
+            north_kamagambo["properties"]["facility_forecast_dashboard_truth_state"],
+            "blocked_until_promotion",
+        )
+
     def test_chv_list_requires_admin_or_supervisor(self):
         self.authenticate(self.chv_user.username)
         response = self.client.get(reverse("chv-list"))

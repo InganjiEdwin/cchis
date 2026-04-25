@@ -8,7 +8,7 @@ from django.utils import timezone
 from scipy.optimize import minimize
 from scipy.special import gammaln
 
-from risk.models import FacilityForecast, FacilityForecastRun, HealthFacility
+from risk.models import FacilityForecast, FacilityForecastRun, HealthFacility, Ward
 
 from .services import build_facility_intelligence_snapshot, latest_riskscore_for_ward
 
@@ -530,6 +530,70 @@ def run_facility_burden_forecast_pipeline(
 
 def latest_facility_forecast_for_facility(facility: HealthFacility) -> FacilityForecast | None:
     return facility.facility_forecasts.select_related("forecast_run").order_by("-generated_at").first()
+
+
+def build_facility_forecasting_dashboard_summary(*, wards: list[Ward] | None = None) -> dict:
+    ward_ids = {ward.id for ward in (wards or [])}
+    forecasts = list(
+        FacilityForecast.objects.select_related("facility", "forecast_run")
+        .filter(forecast_run__status=FacilityForecastRun.STATUS_SUCCESS)
+        .order_by("facility_id", "-generated_at")
+    )
+
+    latest_by_facility: dict[int, FacilityForecast] = {}
+    for forecast in forecasts:
+        latest_by_facility.setdefault(forecast.facility_id, forecast)
+
+    latest_forecasts = list(latest_by_facility.values())
+    if not latest_forecasts:
+        return {
+            "source_kind": "proxy_only",
+            "governance_mode": "not_promoted",
+            "dashboard_truth_state": "blocked_until_promotion",
+            "facility_preview_count": 0,
+            "capacity_concern_count": 0,
+            "watch_count": 0,
+            "driving_ward_ids": [],
+            "blocked_product_surfaces": [
+                "dashboard_readiness_warning",
+                "promoted_facility_summary",
+                "action_panel_facility_pressure",
+            ],
+        }
+
+    relevant_forecasts = latest_forecasts
+    if ward_ids:
+        relevant_forecasts = [
+            forecast
+            for forecast in latest_forecasts
+            if forecast.facility.ward_id in ward_ids or bool(ward_ids.intersection(set(forecast.driving_ward_ids or [])))
+        ]
+
+    driving_ward_ids = sorted(
+        {
+            ward_id
+            for forecast in relevant_forecasts
+            for ward_id in (forecast.driving_ward_ids or [])
+        }
+    )
+    return {
+        "source_kind": "forecast_preview",
+        "governance_mode": "preview_only",
+        "dashboard_truth_state": "blocked_until_promotion",
+        "facility_preview_count": len(relevant_forecasts),
+        "capacity_concern_count": sum(
+            1 for forecast in relevant_forecasts if forecast.projected_readiness_state == FacilityForecast.READINESS_CAPACITY_CONCERN
+        ),
+        "watch_count": sum(
+            1 for forecast in relevant_forecasts if forecast.projected_readiness_state == FacilityForecast.READINESS_WATCH
+        ),
+        "driving_ward_ids": driving_ward_ids,
+        "blocked_product_surfaces": [
+            "dashboard_readiness_warning",
+            "promoted_facility_summary",
+            "action_panel_facility_pressure",
+        ],
+    }
 
 
 def _pressure_score_from_snapshot(readiness: dict) -> int:
