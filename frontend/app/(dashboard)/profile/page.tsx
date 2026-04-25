@@ -25,9 +25,9 @@ function getInitials(name: string) {
 function buildCapabilityCopy(role: string) {
   if (role === "ADMIN") {
     return {
-      heading: "This section offers broad role notes only.",
+      heading: "This section offers broad notes only.",
       items: [
-        "View alert, ward, CHV, facility, and system summary pages available to your role.",
+        "View alert, ward, CHV, facility, and system pages available in your access.",
         "Access on-page actions only where a real route is exposed in the dashboard.",
         "Use linked pages to review recorded or calculated operational context.",
         "Treat this card as role notes, not a full route list.",
@@ -38,9 +38,9 @@ function buildCapabilityCopy(role: string) {
 
   if (role === "ANALYST") {
     return {
-      heading: "This section offers broad role notes only.",
+      heading: "This section offers broad notes only.",
       items: [
-        "View alert, ward, CHV, facility, and system summary pages available to your role.",
+        "View alert, ward, CHV, facility, and system pages available in your access.",
         "Access on-page actions only where a real route is exposed in the dashboard.",
         "Use linked pages to review recorded or calculated operational context.",
         "Treat this card as role notes, not a full route list.",
@@ -51,9 +51,9 @@ function buildCapabilityCopy(role: string) {
 
   if (role === "SUPERVISOR") {
     return {
-      heading: "This section offers broad role notes only.",
+      heading: "This section offers broad notes only.",
       items: [
-        "View alert, ward, CHV, facility, and system summary pages available to your role.",
+        "View alert, ward, CHV, facility, and system pages available in your access.",
         "Access on-page actions only where a real route is exposed in the dashboard.",
         "Use linked pages to review recorded or calculated operational context.",
         "Treat this card as role notes, not a full route list.",
@@ -63,9 +63,9 @@ function buildCapabilityCopy(role: string) {
   }
 
   return {
-    heading: "This section offers broad role notes only.",
+    heading: "This section offers broad notes only.",
     items: [
-      "View alert, ward, CHV, facility, and system summary pages available to your role.",
+      "View alert, ward, CHV, facility, and system pages available in your access.",
       "Access on-page actions only where a real route is exposed in the dashboard.",
       "Use linked pages to review recorded or calculated operational context.",
       "Treat this card as role notes, not a full route list.",
@@ -146,7 +146,7 @@ export default function ProfilePage() {
     <div className="space-y-6">
       <DashboardTopbar
         title="Profile"
-        subtitle="Identity, role, and access"
+        subtitle="Identity and access"
         lastUpdatedLabel="Profile shown"
       />
 
@@ -254,7 +254,7 @@ export default function ProfilePage() {
                 <p className="text-[0.72rem] font-semibold uppercase tracking-[0.18em] text-white/68">
                   Role
                 </p>
-              <p className="mt-2 text-sm text-white/80">This card shows role notes only. Approval and report routes are unavailable.</p>
+              <p className="mt-2 text-sm text-white/80">This card shows notes only. Approval and report routes are unavailable.</p>
               </div>
 
               <div className="rounded-[1.25rem] border border-white/12 bg-white/10 px-4 py-4">
