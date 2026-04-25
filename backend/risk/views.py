@@ -10,6 +10,11 @@ from accounts.permissions import IsAdminOrSupervisor, IsAdminSupervisorOrAnalyst
 
 from .tasks import trigger_alerts_task
 
+from .facility_forecasting import (
+    build_facility_forecasting_truth_audit,
+    build_initial_facility_forecast_contract_definition,
+    build_initial_facility_forecast_preview,
+)
 from .ml.alignment import get_live_model_alignment_summary
 from .models import Alert, CHV, HealthFacility, RiskScore, UssdSessionLog, Ward
 from .map_data import build_migori_ward_map_summary
@@ -22,6 +27,8 @@ from .serializers import (
     CHVTriageRequestSerializer,
     CHVTriageResponseSerializer,
     FacilityIntelligenceSerializer,
+    FacilityForecastPreviewSerializer,
+    FacilityForecastingStatusSerializer,
     HealthFacilitySerializer,
     ModelAlignmentSerializer,
     RiskScoreSerializer,
@@ -198,6 +205,31 @@ class HealthFacilityIntelligenceAPIView(APIView):
 
         payload = build_facility_intelligence_snapshot(facility)
         serializer = FacilityIntelligenceSerializer(payload)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class FacilityForecastingStatusAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request):
+        payload = build_facility_forecasting_truth_audit()
+        payload["contract_definition"] = build_initial_facility_forecast_contract_definition()
+        serializer = FacilityForecastingStatusSerializer(payload)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class HealthFacilityForecastPreviewAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request, pk: int):
+        queryset = HealthFacility.objects.filter(is_active=True).select_related("ward")
+        facility = apply_ward_scope_or_none(queryset, request.user).filter(pk=pk).first()
+
+        if facility is None:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        payload = build_initial_facility_forecast_preview(facility)
+        serializer = FacilityForecastPreviewSerializer(payload)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 

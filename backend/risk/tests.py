@@ -2924,6 +2924,40 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(in_scope_response.data["facility"]["id"], other_facility.id)
         self.assertEqual(out_of_scope_response.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_analyst_can_view_facility_forecasting_status(self):
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("facility-forecasting-status"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["forecasting_state"], "phase_0_truth_audited_phase_1_contract_defined")
+        self.assertEqual(response.data["planned_baseline_model"], "negative_binomial_regression")
+        self.assertIsNone(response.data["current_baseline_model"])
+        self.assertIn("facility master record", response.data["truth_sources"]["direct_operational_truth"])
+        self.assertIn(
+            "negative_binomial_is_live",
+            response.data["contract_definition"]["dashboard_not_allowed_to_imply_yet"],
+        )
+
+    def test_analyst_can_view_facility_forecast_preview(self):
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("facility-forecast-preview", args=[self.health_facility.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["facility_id"], self.health_facility.id)
+        self.assertEqual(response.data["horizon_days"], 7)
+        self.assertEqual(response.data["projected_case_burden"], self.risk_score.predicted_cases)
+        self.assertEqual(response.data["forecast_mode"], "proxy_preforecast_from_current_readiness_contract")
+        self.assertEqual(response.data["model_version"], None)
+        self.assertEqual(response.data["baseline_model_status"], "negative_binomial_not_yet_implemented")
+        self.assertEqual(response.data["driving_ward_ids"], [self.ward.id])
+        self.assertGreaterEqual(len(response.data["forecast_factors"]), 3)
+
+    def test_supervisor_cannot_view_out_of_scope_facility_forecast_preview(self):
+        self.authenticate(self.supervisor_user.username)
+        response = self.client.get(reverse("facility-forecast-preview", args=[self.health_facility.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
     def test_risk_scores_require_authentication(self):
         response = self.client.get(reverse("risk-score-list"))
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)

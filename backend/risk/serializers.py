@@ -509,6 +509,38 @@ class FacilityIntelligenceSerializer(serializers.Serializer):
     capabilities = FacilityIntelligenceCapabilitiesSerializer()
 
 
+class FacilityForecastFactorSerializer(serializers.Serializer):
+    label = serializers.CharField()
+    value = serializers.JSONField()
+    source = serializers.CharField()
+    mode = serializers.CharField()
+
+
+class FacilityForecastPreviewSerializer(serializers.Serializer):
+    facility_id = serializers.IntegerField()
+    generated_at = serializers.DateTimeField()
+    horizon_days = serializers.IntegerField()
+    projected_case_burden = serializers.IntegerField()
+    projected_pressure_score = serializers.IntegerField()
+    projected_readiness_state = serializers.ChoiceField(choices=["low", "watch", "capacity_concern"])
+    surge_threshold_state = serializers.DictField()
+    driving_ward_ids = serializers.ListField(child=serializers.IntegerField())
+    forecast_factors = FacilityForecastFactorSerializer(many=True)
+    model_version = serializers.CharField(allow_null=True)
+    freshness_state = serializers.ChoiceField(choices=["FRESH", "WARNING", "STALE"])
+    forecast_mode = serializers.CharField()
+    baseline_model_status = serializers.CharField()
+
+
+class FacilityForecastingStatusSerializer(serializers.Serializer):
+    forecasting_state = serializers.CharField()
+    current_baseline_model = serializers.CharField(allow_null=True)
+    planned_baseline_model = serializers.CharField()
+    truth_sources = serializers.DictField()
+    honesty_rules = serializers.DictField()
+    contract_definition = serializers.DictField(required=False)
+
+
 class WardIntelligenceSerializer(serializers.Serializer):
     ward = WardDetailSerializer()
     current_risk = WardIntelligenceCurrentRiskSerializer()
