@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import time
+from io import StringIO
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -50,6 +51,7 @@ from core.recovery_discipline import BACKUP_EXPECTATIONS, RESTORE_REHEARSAL_EXPE
 from risk.ml.ingestion import fetch_rainfall_for_ward
 from risk.ml.pipeline import run_mock_prediction_pipeline
 from risk.ml.data import InferenceDataset, TrainingDataset, WardFeatureRow
+from risk.ml.comparison import build_model_comparison_summary
 from risk.ml.trust import (
     ALERT_STATE_ALLOWED,
     ALERT_STATE_BLOCKED,
@@ -4288,6 +4290,84 @@ class SeedAndModelCommandTestCase(APITestCase):
         call_command("run_random_forest_benchmark", "--month=4", "--model-version=rf-queued-v1", "--async")
 
         mock_delay.assert_called_once_with(month=4, model_version="rf-queued-v1")
+
+    def test_compare_model_candidates_command_emits_conservative_decision_summary(self):
+        Ward.objects.create(
+            name="Ward Compare One",
+            county="Migori",
+            sub_county="Rongo",
+            current_risk_level=Ward.RISK_LOW,
+            current_risk_score=0.20,
+            is_active=True,
+        )
+        Ward.objects.create(
+            name="Ward Compare Two",
+            county="Migori",
+            sub_county="Nyatike",
+            current_risk_level=Ward.RISK_MEDIUM,
+            current_risk_score=0.55,
+            is_active=True,
+        )
+
+        call_command("run_risk_model", "--month=4", "--model-version=lr-compare-v1")
+        call_command("run_random_forest_benchmark", "--month=4", "--model-version=rf-compare-v1")
+
+        out = StringIO()
+        call_command(
+            "compare_model_candidates",
+            "--lr-version=lr-compare-v1",
+            "--rf-version=rf-compare-v1",
+            stdout=out,
+        )
+        payload = json.loads(out.getvalue())
+
+        self.assertEqual(payload["decision"]["recommended_primary_model"], "logistic_regression")
+        self.assertEqual(payload["decision"]["governance_mode"], "shadow_benchmark_mode")
+        self.assertEqual(payload["decision"]["promotion_readiness"], "not_ready_for_promotion")
+        self.assertEqual(payload["decision"]["live_alert_task"], "risk.tasks.run_risk_model_task")
+        self.assertEqual(payload["decision"]["benchmark_only_tasks"], ["risk.tasks.run_random_forest_benchmark_task"])
+        self.assertEqual(payload["logistic_regression"]["model_version"], "lr-compare-v1")
+        self.assertEqual(payload["random_forest"]["model_version"], "rf-compare-v1")
+        self.assertTrue(payload["comparison"]["same_feature_schema"])
+        self.assertIn("lead_time_evidence_missing", payload["decision"]["promotion_blockers"])
+        self.assertEqual(payload["decision"]["retraining_task"], None)
+
+    def test_build_model_comparison_summary_marks_input_mismatch_as_promotion_blocker(self):
+        logistic_run = ModelRun.objects.create(
+            algorithm_name="logistic-regression-baseline",
+            model_version="lr-mismatch-v1",
+            status=ModelRun.STATUS_SUCCESS,
+            month=4,
+            feature_schema_version="baseline-v1",
+            training_dataset_ref="training-a",
+            inference_dataset_ref="inference-a",
+            evaluation_metrics={"training_accuracy": 0.71},
+            metadata={"promotion_target": "live_baseline"},
+            completed_at=timezone.now(),
+        )
+        random_forest_run = ModelRun.objects.create(
+            algorithm_name="random-forest-benchmark",
+            model_version="rf-mismatch-v1",
+            status=ModelRun.STATUS_SUCCESS,
+            month=4,
+            feature_schema_version="baseline-v2",
+            training_dataset_ref="training-b",
+            inference_dataset_ref="inference-b",
+            evaluation_metrics={"training_accuracy": 0.88},
+            metadata={"promotion_target": "benchmark_only"},
+            completed_at=timezone.now(),
+        )
+
+        payload = build_model_comparison_summary(
+            logistic_run=logistic_run,
+            random_forest_run=random_forest_run,
+        )
+
+        self.assertEqual(payload["decision"]["comparison_validity"], "comparison_input_mismatch")
+        self.assertIn("feature_or_dataset_mismatch", payload["decision"]["promotion_blockers"])
+        self.assertEqual(payload["decision"]["recommended_primary_model"], "logistic_regression")
+        self.assertEqual(payload["decision"]["governance_mode"], "shadow_benchmark_mode")
+        self.assertFalse(payload["comparison"]["same_feature_schema"])
 
 
 class ETLOperationalTrustPolicyTestCase(APITestCase):
