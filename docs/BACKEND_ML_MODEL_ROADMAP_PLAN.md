@@ -66,6 +66,39 @@ This means the backend is now in a transitional state:
 
 That is closer to the proposal's early-phase intent, but promotion discipline still needs to be documented explicitly.
 
+Additional current truth after execution of Phases 0 to 5:
+
+- `XGBoost` and `LightGBM` now exist only as documented backend candidates
+- they are not runnable live defaults
+- they are not benchmark-promoted models
+- dashboard-facing ward and map surfaces now prefer promoted live outputs over newer benchmark-only or demo-only outputs
+- no scheduled retraining task exists yet
+- retraining remains manual only
+
+### Current executed status
+
+The roadmap is no longer purely aspirational.
+The following phase outputs now exist and should be treated as the audited record of what was actually implemented:
+
+- [BACKEND_ML_MODEL_PHASE_0_STATUS.md](/Users/edwininganji/VSCodeProjects/cchis/docs/BACKEND_ML_MODEL_PHASE_0_STATUS.md)
+- [BACKEND_ML_MODEL_PHASE_1_STATUS.md](/Users/edwininganji/VSCodeProjects/cchis/docs/BACKEND_ML_MODEL_PHASE_1_STATUS.md)
+- [BACKEND_ML_MODEL_PHASE_2_STATUS.md](/Users/edwininganji/VSCodeProjects/cchis/docs/BACKEND_ML_MODEL_PHASE_2_STATUS.md)
+- [BACKEND_ML_MODEL_PHASE_3_EVALUATION.md](/Users/edwininganji/VSCodeProjects/cchis/docs/BACKEND_ML_MODEL_PHASE_3_EVALUATION.md)
+- [BACKEND_ML_MODEL_PHASE_4_STATUS.md](/Users/edwininganji/VSCodeProjects/cchis/docs/BACKEND_ML_MODEL_PHASE_4_STATUS.md)
+- [BACKEND_ML_MODEL_PHASE_5_STATUS.md](/Users/edwininganji/VSCodeProjects/cchis/docs/BACKEND_ML_MODEL_PHASE_5_STATUS.md)
+
+### Current unresolved limitations
+
+The roadmap must remain honest about the following residual limitations:
+
+- current comparative evidence is still early-phase and still depends heavily on seeded or proxy-heavy data
+- calibration review is not complete
+- lead-time validation against real outbreak timing is not complete
+- temporal robustness over longer historical windows is not complete
+- no scheduled retraining workflow exists yet
+- no boosted-model explainability implementation exists yet
+- model promotion is still intentionally conservative
+
 ---
 
 ## Target Early-Phase Model Progression
@@ -177,6 +210,13 @@ Promotion must require:
 - documented tradeoffs
 - auditability
 
+And promotion must not be based only on:
+
+- training accuracy
+- prettier feature-importance outputs
+- a single benchmark run
+- a newer model family existing in code
+
 ### 3. Early-phase backend must support both Logistic Regression and Random Forest
 
 To stay aligned with the proposal, the backend roadmap must reach a stage where both early-phase models are usable for prediction work:
@@ -222,6 +262,22 @@ The plan should distinguish clearly between:
 - scheduled retraining
 - manual benchmark evaluation
 - seeded demo prediction runs
+
+### 7. Product surfaces must prefer promoted truth over recency
+
+Dashboard-facing and operator-facing backend reads must not simply use the newest available model output.
+
+They must prefer:
+
+- promoted live-baseline outputs
+
+over:
+
+- benchmark-only outputs
+- seeded demo outputs
+- candidate-only future model states
+
+This rule matters because product trust is broken if a newer benchmark run silently outranks the actual live baseline.
 
 ---
 
@@ -355,6 +411,23 @@ This phase is not complete until:
 - interpretability cost
 - operational trustworthiness
 
+### Evidence discipline
+
+The following are not sufficient on their own to justify promotion:
+
+- training accuracy
+- in-sample comparison only
+- a single-day benchmark result
+- feature importance visibility alone
+
+Promotion-quality evidence should prefer:
+
+- out-of-time comparison windows
+- lead-time usefulness against the operational target
+- calibration review
+- explicit trust-policy behavior under degraded ETL conditions
+- written rollback readiness if promotion later occurs
+
 ### Promotion rule
 
 Promotion should require:
@@ -375,6 +448,16 @@ It must also state:
 - which Celery task drives live alert-producing predictions
 - which task, if any, performs retraining
 - which tasks are benchmark-only and must not affect live alerts
+
+If the decision introduces:
+
+- `consensus / disagreement review mode`
+
+then the note must also state:
+
+- what constitutes disagreement
+- whether disagreement blocks alerts or routes them to review
+- what backend and dashboard contract changes are required before that mode is considered real
 
 ---
 
@@ -439,6 +522,12 @@ This phase is not complete until:
 - do not present XGBoost or LightGBM as near-term live defaults until benchmark discipline is complete
 - do not add boosted-model branding to the dashboard before a backend promotion decision exists
 
+### Output
+
+Create:
+
+- `docs/BACKEND_ML_MODEL_PHASE_4_STATUS.md`
+
 ---
 
 ## Phase 5: Dashboard and Product Alignment
@@ -462,6 +551,8 @@ This phase is not complete until:
   - current benchmark model
   - future candidate models
 - any dashboard metadata field such as `prediction_model_version` must reflect backend truth
+- dashboard-facing backend selectors must prefer promoted outputs over newer benchmark-only or demo-only outputs
+- benchmark-only or candidate-only model families must not become apparent operational authority through recency alone
 
 ### Cross-plan dependency
 
@@ -487,6 +578,12 @@ Implementation should follow this sequence:
 4. `dashboard consumes only promoted outputs`
 
 This means benchmark models and retraining work must not outrun source freshness discipline or the explicit promotion of live model outputs.
+
+### Output
+
+Create:
+
+- `docs/BACKEND_ML_MODEL_PHASE_5_STATUS.md`
 
 ### Start condition for ML Phase 0
 
@@ -522,6 +619,9 @@ Before calling this plan complete, audit it critically against the following que
 5. Does it avoid implying that calibration methods or temporal models are early-phase production defaults?
 6. Does it link live alerting only to promoted outputs?
 7. Does every phase include explicit git commit and push closure discipline?
+8. Does it forbid promotion by weak evidence such as training accuracy alone?
+9. Does it state current unresolved limitations instead of only future intent?
+10. Does it prevent benchmark recency from outranking promoted operational truth?
 
 Any gap found in this audit must be closed in the plan before treating the plan as execution-ready.
 
