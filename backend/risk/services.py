@@ -623,60 +623,147 @@ def _facility_freshness_state(updated_at, *, warning_minutes: int = 30, stale_mi
     return "FRESH"
 
 
+def _facility_surge_risk_from_forecast_state(readiness_state: str | None) -> str:
+    if readiness_state == "capacity_concern":
+        return "EXTREME"
+    if readiness_state == "watch":
+        return "MODERATE"
+    return "LOW"
+
+
 def build_facility_intelligence_snapshot(
     facility: HealthFacility,
     *,
     stale_threshold_minutes: int = 120,
 ) -> dict:
+    from .facility_forecasting import latest_facility_forecast_for_facility
+
     latest_risk = latest_riskscore_for_ward(facility.ward)
     related_alerts = list(
         facility.ward.alerts.select_related("risk_score").order_by("-created_at")[:6]
     )
+    latest_forecast = latest_facility_forecast_for_facility(facility)
 
     ward_risk_level = latest_risk.risk_level if latest_risk else facility.ward.current_risk_level
     ward_risk_score = latest_risk.score if latest_risk else facility.ward.current_risk_score
-    projected_cases = max(
+    proxy_projected_cases = max(
         1,
         latest_risk.predicted_cases if latest_risk else round((ward_risk_score or 0) * 10),
     )
-    surge_risk = _facility_surge_risk(ward_risk_level)
-    ors_estimate_percent = (
-        max(12, 42 - projected_cases)
-        if surge_risk == "EXTREME"
-        else max(48, 78 - projected_cases)
-        if surge_risk == "MODERATE"
-        else max(84, 96 - projected_cases)
+    proxy_surge_risk = _facility_surge_risk(ward_risk_level)
+    proxy_ors_estimate_percent = (
+        max(12, 42 - proxy_projected_cases)
+        if proxy_surge_risk == "EXTREME"
+        else max(48, 78 - proxy_projected_cases)
+        if proxy_surge_risk == "MODERATE"
+        else max(84, 96 - proxy_projected_cases)
     )
-    staffing_required = 15 if surge_risk == "EXTREME" else 10 if surge_risk == "MODERATE" else 6
-    staffing_filled = max(
+    proxy_staffing_required = 15 if proxy_surge_risk == "EXTREME" else 10 if proxy_surge_risk == "MODERATE" else 6
+    proxy_staffing_filled = max(
         2,
-        staffing_required - (3 if surge_risk == "EXTREME" else 2 if surge_risk == "MODERATE" else 0),
+        proxy_staffing_required - (3 if proxy_surge_risk == "EXTREME" else 2 if proxy_surge_risk == "MODERATE" else 0),
     )
-    staffing_percent = round((staffing_filled / staffing_required) * 100) if staffing_required else 0
-    freshness_state = _facility_freshness_state(facility.updated_at)
+    proxy_staffing_percent = round((proxy_staffing_filled / proxy_staffing_required) * 100) if proxy_staffing_required else 0
 
-    is_stale = True
-    if facility.updated_at is not None:
-        is_stale = (timezone.now() - facility.updated_at).total_seconds() / 60 > stale_threshold_minutes
+    if latest_forecast and latest_forecast.forecast_run.status == latest_forecast.forecast_run.STATUS_SUCCESS:
+        projected_cases = latest_forecast.projected_case_burden
+        surge_risk = _facility_surge_risk_from_forecast_state(latest_forecast.projected_readiness_state)
+        ors_state = str((latest_forecast.surge_threshold_state or {}).get("ors", "low")).upper()
+        staffing_state = str((latest_forecast.surge_threshold_state or {}).get("staffing", "low")).upper()
+        ors_estimate_percent = (
+            25 if ors_state == "CAPACITY_CONCERN" else 55 if ors_state == "WATCH" else max(75, proxy_ors_estimate_percent)
+        )
+        staffing_required = 15 if surge_risk == "EXTREME" else 10 if surge_risk == "MODERATE" else 6
+        staffing_percent = (
+            45 if staffing_state == "CAPACITY_CONCERN" else 70 if staffing_state == "WATCH" else max(85, proxy_staffing_percent)
+        )
+        staffing_filled = max(1, round((staffing_percent / 100) * staffing_required))
+        readiness_mode = "forecast_preview_backed_facility_burden_not_promoted"
+        readiness_backing_source = "forecast_preview"
+        dashboard_truth_state = "blocked_until_promotion"
+        driving_ward_ids = latest_forecast.driving_ward_ids or [facility.ward_id]
+        action_reasoning = [
+            "Forecast preview is available for facility pressure review.",
+            "Use driving wards to trace which ward signals are contributing to projected facility strain.",
+            "Do not treat this facility forecast as promoted dashboard truth until promotion blockers are cleared.",
+        ]
+        status_banner_label = (
+            "Forecast preview indicates high facility pressure"
+            if surge_risk == "EXTREME"
+            else "Forecast preview indicates elevated facility pressure"
+            if surge_risk == "MODERATE"
+            else "Forecast preview indicates low facility pressure"
+        )
+        context_summary = (
+            f"{facility.name} has a forecast-backed preview for near-term burden. "
+            "This preview is usable for review, but it is not yet a promoted dashboard readiness signal."
+        )
+        forecast_summary = {
+            "source_kind": "forecast_preview",
+            "governance_mode": "preview_only",
+            "model_version": latest_forecast.model_version or latest_forecast.forecast_run.model_version,
+            "forecast_mode": latest_forecast.forecast_mode,
+            "projected_pressure_score": latest_forecast.projected_pressure_score,
+            "projected_readiness_state": latest_forecast.projected_readiness_state,
+            "driving_ward_ids": driving_ward_ids,
+            "dashboard_truth_state": dashboard_truth_state,
+        }
+    else:
+        projected_cases = proxy_projected_cases
+        surge_risk = proxy_surge_risk
+        ors_estimate_percent = proxy_ors_estimate_percent
+        staffing_required = proxy_staffing_required
+        staffing_filled = proxy_staffing_filled
+        staffing_percent = proxy_staffing_percent
+        readiness_mode = "calculated_from_facility_identity_and_ward_risk"
+        readiness_backing_source = "proxy"
+        dashboard_truth_state = "proxy_only"
+        driving_ward_ids = [facility.ward_id]
+        action_reasoning = [
+            "Current facility readiness is still derived from linked ward risk and facility identity.",
+            "Use this as an operational proxy until a promoted facility forecast is available.",
+        ]
+        forecast_summary = {
+            "source_kind": "proxy_only",
+            "governance_mode": "not_promoted",
+            "model_version": None,
+            "forecast_mode": "proxy_preforecast_from_current_readiness_contract",
+            "projected_pressure_score": 0,
+            "projected_readiness_state": "not_available",
+            "driving_ward_ids": driving_ward_ids,
+            "dashboard_truth_state": dashboard_truth_state,
+        }
 
     if surge_risk == "EXTREME":
-        status_banner_label = "High calculated readiness pressure"
-        context_summary = (
+        inferred_status_banner_label = "High calculated readiness pressure"
+        inferred_context_summary = (
             f"This facility is linked to a high ward-risk record for {facility.ward.name}. "
             "The page combines facility identity, linked ward risk, and visible alert records."
         )
     elif surge_risk == "MODERATE":
-        status_banner_label = "Moderate calculated readiness pressure"
-        context_summary = (
+        inferred_status_banner_label = "Moderate calculated readiness pressure"
+        inferred_context_summary = (
             f"This facility is linked to a moderate ward-risk record for {facility.ward.name}. "
             "Review later records if pressure continues to rise."
         )
     else:
-        status_banner_label = "Low calculated readiness pressure"
-        context_summary = (
+        inferred_status_banner_label = "Low calculated readiness pressure"
+        inferred_context_summary = (
             f"This facility is linked to a low ward-risk record for {facility.ward.name}. "
             "Maintain routine monitoring until newer records arrive."
         )
+
+    status_banner_label = locals().get("status_banner_label", inferred_status_banner_label)
+    context_summary = locals().get("context_summary", inferred_context_summary)
+
+    freshness_state = _facility_freshness_state(
+        latest_forecast.generated_at if latest_forecast else facility.updated_at
+    )
+
+    is_stale = True
+    freshness_updated_at = latest_forecast.generated_at if latest_forecast else facility.updated_at
+    if freshness_updated_at is not None:
+        is_stale = (timezone.now() - freshness_updated_at).total_seconds() / 60 > stale_threshold_minutes
 
     timeline = [
         {
@@ -693,6 +780,28 @@ def build_facility_intelligence_snapshot(
             "details": [f"Facility code: {facility.facility_code}"],
         }
     ]
+
+    if latest_forecast and latest_forecast.forecast_run.status == latest_forecast.forecast_run.STATUS_SUCCESS:
+        timeline.insert(
+            0,
+            {
+                "id": f"facility-forecast-{latest_forecast.id}",
+                "title": "Facility burden forecast preview available",
+                "description": (
+                    "A Negative Binomial facility burden preview exists for this facility. "
+                    "It is available for review but still blocked from promoted dashboard truth."
+                ),
+                "timestamp": latest_forecast.generated_at,
+                "tone": "warning",
+                "category": "system",
+                "meta": f"Model version: {latest_forecast.model_version or latest_forecast.forecast_run.model_version}",
+                "details": [
+                    f"Projected readiness: {latest_forecast.projected_readiness_state}",
+                    f"Projected pressure score: {latest_forecast.projected_pressure_score}",
+                    f"Driving wards: {', '.join(str(ward_id) for ward_id in (latest_forecast.driving_ward_ids or [])) or 'None'}",
+                ],
+            }
+        )
 
     for alert in related_alerts[:2]:
         timeline.append(
@@ -743,21 +852,26 @@ def build_facility_intelligence_snapshot(
             "staffing_required": staffing_required,
             "staffing_percent": staffing_percent,
             "staffing_state": "LIMITED" if staffing_filled < staffing_required else "OPTIMAL",
-            "last_reported_at": facility.updated_at,
+            "last_reported_at": freshness_updated_at,
             "freshness_state": freshness_state,
-            "mode": "calculated_from_facility_identity_and_ward_risk",
+            "mode": readiness_mode,
+            "backing_source": readiness_backing_source,
+            "dashboard_truth_state": dashboard_truth_state,
         },
         "context": {
             "summary": context_summary,
             "ward_risk_score": ward_risk_score,
             "ward_alert_count": len(related_alerts),
             "map_mode": "shared_ward_geometry_contract",
+            "driving_ward_ids": driving_ward_ids,
+            "action_reasoning": action_reasoning,
         },
+        "forecasting": forecast_summary,
         "freshness": {
-            "updated_at": facility.updated_at,
+            "updated_at": freshness_updated_at,
             "is_stale": is_stale,
             "stale_threshold_minutes": stale_threshold_minutes,
-            "mode": "derived_from_facility_updated_at",
+            "mode": "derived_from_forecast_or_facility_timestamp",
         },
         "timeline": timeline,
         "capabilities": {

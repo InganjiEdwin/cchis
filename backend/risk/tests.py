@@ -2904,9 +2904,37 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["facility"]["id"], self.health_facility.id)
         self.assertEqual(response.data["readiness"]["mode"], "calculated_from_facility_identity_and_ward_risk")
+        self.assertEqual(response.data["readiness"]["backing_source"], "proxy")
+        self.assertEqual(response.data["readiness"]["dashboard_truth_state"], "proxy_only")
         self.assertEqual(response.data["context"]["map_mode"], "shared_ward_geometry_contract")
+        self.assertEqual(response.data["context"]["driving_ward_ids"], [self.ward.id])
+        self.assertEqual(response.data["forecasting"]["source_kind"], "proxy_only")
+        self.assertEqual(response.data["forecasting"]["dashboard_truth_state"], "proxy_only")
         self.assertGreaterEqual(len(response.data["timeline"]), 2)
         self.assertFalse(response.data["capabilities"]["can_dispatch"])
+
+    def test_facility_intelligence_distinguishes_forecast_preview_from_proxy_readiness(self):
+        run_facility_burden_forecast_pipeline(
+            model_version="fnb-v1",
+            execution_context="test_case",
+            run_purpose="forecast_scoring",
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("facility-intelligence", args=[self.health_facility.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["readiness"]["mode"], "forecast_preview_backed_facility_burden_not_promoted")
+        self.assertEqual(response.data["readiness"]["backing_source"], "forecast_preview")
+        self.assertEqual(response.data["readiness"]["dashboard_truth_state"], "blocked_until_promotion")
+        self.assertEqual(response.data["forecasting"]["source_kind"], "forecast_preview")
+        self.assertEqual(response.data["forecasting"]["governance_mode"], "preview_only")
+        self.assertEqual(response.data["forecasting"]["model_version"], "fnb-v1")
+        self.assertEqual(response.data["forecasting"]["dashboard_truth_state"], "blocked_until_promotion")
+        self.assertEqual(response.data["context"]["driving_ward_ids"], [self.ward.id])
+        self.assertGreaterEqual(len(response.data["context"]["action_reasoning"]), 2)
+        self.assertEqual(response.data["freshness"]["mode"], "derived_from_forecast_or_facility_timestamp")
+        self.assertEqual(response.data["timeline"][0]["id"].startswith("facility-forecast-"), True)
 
     def test_supervisor_can_view_facility_intelligence_for_assigned_ward_only(self):
         other_facility = HealthFacility.objects.create(

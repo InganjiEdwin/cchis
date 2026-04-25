@@ -463,6 +463,8 @@ class FacilityIntelligenceReadinessSerializer(serializers.Serializer):
     last_reported_at = serializers.DateTimeField(allow_null=True)
     freshness_state = serializers.ChoiceField(choices=["FRESH", "WARNING", "STALE"])
     mode = serializers.CharField()
+    backing_source = serializers.CharField()
+    dashboard_truth_state = serializers.CharField()
 
 
 class FacilityIntelligenceContextSerializer(serializers.Serializer):
@@ -470,6 +472,8 @@ class FacilityIntelligenceContextSerializer(serializers.Serializer):
     ward_risk_score = serializers.FloatField(allow_null=True)
     ward_alert_count = serializers.IntegerField()
     map_mode = serializers.CharField()
+    driving_ward_ids = serializers.ListField(child=serializers.IntegerField())
+    action_reasoning = serializers.ListField(child=serializers.CharField())
 
 
 class FacilityIntelligenceFreshnessSerializer(serializers.Serializer):
@@ -500,10 +504,22 @@ class FacilityIntelligenceCapabilitiesSerializer(serializers.Serializer):
     mode = serializers.CharField()
 
 
+class FacilityIntelligenceForecastingSerializer(serializers.Serializer):
+    source_kind = serializers.CharField()
+    governance_mode = serializers.CharField()
+    model_version = serializers.CharField(allow_null=True)
+    forecast_mode = serializers.CharField()
+    projected_pressure_score = serializers.IntegerField()
+    projected_readiness_state = serializers.CharField()
+    driving_ward_ids = serializers.ListField(child=serializers.IntegerField())
+    dashboard_truth_state = serializers.CharField()
+
+
 class FacilityIntelligenceSerializer(serializers.Serializer):
     facility = HealthFacilitySerializer()
     readiness = FacilityIntelligenceReadinessSerializer()
     context = FacilityIntelligenceContextSerializer()
+    forecasting = FacilityIntelligenceForecastingSerializer()
     freshness = FacilityIntelligenceFreshnessSerializer()
     timeline = FacilityIntelligenceTimelineEntrySerializer(many=True)
     capabilities = FacilityIntelligenceCapabilitiesSerializer()
