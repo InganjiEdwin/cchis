@@ -3886,6 +3886,13 @@ class EmailProviderFoundationTestCase(AuthenticatedAPITestCase):
 
 
 class SeedAndModelCommandTestCase(APITestCase):
+    def test_celery_beat_schedule_includes_daily_facility_burden_forecast_run(self):
+        schedule = settings.CELERY_BEAT_SCHEDULE["daily-facility-burden-forecast-run"]
+
+        self.assertEqual(schedule["task"], "risk.tasks.run_facility_burden_forecast_task")
+        self.assertEqual(schedule["kwargs"]["model_version"], "fnb-v1")
+        self.assertEqual(schedule["kwargs"]["horizon_days"], 7)
+
     def test_seed_demo_data_command_runs_and_creates_demo_users(self):
         call_command("seed_demo_data")
 

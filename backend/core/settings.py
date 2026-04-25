@@ -313,6 +313,14 @@ CELERY_BEAT_SCHEDULE = {
             "send_sms": False,
         },
     },
+    "daily-facility-burden-forecast-run": {
+        "task": "risk.tasks.run_facility_burden_forecast_task",
+        "schedule": crontab(hour=6, minute=30),
+        "kwargs": {
+            "model_version": "fnb-v1",
+            "horizon_days": 7,
+        },
+    },
 }
 
 EMAIL_PROVIDER = config(

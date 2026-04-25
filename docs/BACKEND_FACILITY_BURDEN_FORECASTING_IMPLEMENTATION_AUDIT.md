@@ -85,6 +85,37 @@ Evidence exists in:
 
 - `implemented with explicit limitations`
 
+## Scheduling Audit
+
+### Planned
+
+- shared execution order includes daily scoring before later retraining cadence
+- recommended early cadence includes daily facility burden scoring
+
+### Fresh-audit finding
+
+On this stricter audit pass, the backend had:
+
+- a dedicated facility burden forecast task
+
+but it did not yet have:
+
+- a Celery beat schedule for daily facility burden scoring
+
+That meant the cadence claim was only partially implemented.
+
+### Gap closure
+
+This audit closed that gap by adding:
+
+- `daily-facility-burden-forecast-run` to `CELERY_BEAT_SCHEDULE`
+
+and a direct test asserting that the schedule is present.
+
+### Verdict
+
+- `implemented after audit gap closure`
+
 ## Phase 3 Audit
 
 ### Planned
