@@ -11,6 +11,8 @@ from .data import WardFeatureRow, month_to_seasonality
 
 ALGORITHM_LOGISTIC_REGRESSION = "logistic_regression"
 ALGORITHM_RANDOM_FOREST = "random_forest"
+ALGORITHM_XGBOOST = "xgboost"
+ALGORITHM_LIGHTGBM = "lightgbm"
 
 
 FEATURE_KEYS = [
@@ -21,6 +23,34 @@ FEATURE_KEYS = [
     "seasonality",
     "population_proxy",
 ]
+
+
+MODEL_CATALOG = {
+    ALGORITHM_LOGISTIC_REGRESSION: {
+        "run_name": "logistic-regression-baseline",
+        "readiness_state": "promoted_live_baseline",
+        "runnable": True,
+        "family": "linear_classifier",
+    },
+    ALGORITHM_RANDOM_FOREST: {
+        "run_name": "random-forest-benchmark",
+        "readiness_state": "benchmark_ready",
+        "runnable": True,
+        "family": "tree_ensemble",
+    },
+    ALGORITHM_XGBOOST: {
+        "run_name": "xgboost-candidate",
+        "readiness_state": "candidate_only",
+        "runnable": False,
+        "family": "boosted_tree_ensemble",
+    },
+    ALGORITHM_LIGHTGBM: {
+        "run_name": "lightgbm-candidate",
+        "readiness_state": "candidate_only",
+        "runnable": False,
+        "family": "boosted_tree_ensemble",
+    },
+}
 
 
 def rows_to_matrix(rows: list[WardFeatureRow]) -> tuple[np.ndarray, np.ndarray | None]:
@@ -47,9 +77,7 @@ def rows_to_matrix(rows: list[WardFeatureRow]) -> tuple[np.ndarray, np.ndarray |
 
 
 def algorithm_to_run_name(algorithm: str) -> str:
-    if algorithm == ALGORITHM_RANDOM_FOREST:
-        return "random-forest-benchmark"
-    return "logistic-regression-baseline"
+    return MODEL_CATALOG.get(algorithm, MODEL_CATALOG[ALGORITHM_LOGISTIC_REGRESSION])["run_name"]
 
 
 def train_model(rows: list[WardFeatureRow], algorithm: str = ALGORITHM_LOGISTIC_REGRESSION):

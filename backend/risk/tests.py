@@ -52,6 +52,7 @@ from risk.ml.ingestion import fetch_rainfall_for_ward
 from risk.ml.pipeline import run_mock_prediction_pipeline
 from risk.ml.data import InferenceDataset, TrainingDataset, WardFeatureRow
 from risk.ml.comparison import build_model_comparison_summary
+from risk.ml.readiness import build_boosting_readiness_summary
 from risk.ml.trust import (
     ALERT_STATE_ALLOWED,
     ALERT_STATE_BLOCKED,
@@ -4368,6 +4369,24 @@ class SeedAndModelCommandTestCase(APITestCase):
         self.assertEqual(payload["decision"]["recommended_primary_model"], "logistic_regression")
         self.assertEqual(payload["decision"]["governance_mode"], "shadow_benchmark_mode")
         self.assertFalse(payload["comparison"]["same_feature_schema"])
+
+    def test_describe_boosting_readiness_command_reports_candidate_only_state(self):
+        out = StringIO()
+        call_command("describe_boosting_readiness", stdout=out)
+        payload = json.loads(out.getvalue())
+
+        self.assertEqual(payload["live_state"]["current_live_baseline"], "logistic_regression")
+        self.assertEqual(payload["live_state"]["current_benchmark_model"], "random_forest")
+        self.assertFalse(payload["candidate_models"]["xgboost"]["runnable"])
+        self.assertFalse(payload["candidate_models"]["lightgbm"]["runnable"])
+        self.assertTrue(payload["decision"]["do_not_enable_in_run_risk_model"])
+
+    def test_boosting_readiness_summary_requires_stricter_promotion_gates(self):
+        payload = build_boosting_readiness_summary()
+
+        self.assertTrue(payload["promotion_gates_stricter_than_random_forest"]["lead_time_evidence_required"])
+        self.assertTrue(payload["promotion_gates_stricter_than_random_forest"]["calibration_review_required"])
+        self.assertEqual(payload["decision"]["recommended_action"], "prepare_interfaces_only")
 
 
 class ETLOperationalTrustPolicyTestCase(APITestCase):
