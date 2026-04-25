@@ -6,6 +6,7 @@ import {
   fetchOverviewDataViaBff,
   type AlertRecord,
   type LatestWardRisk,
+  type WardMapResponse,
   type WardSummary,
 } from "@/lib/dashboard";
 import { getLatestTimestamp } from "@/lib/freshness";
@@ -17,6 +18,7 @@ export type OverviewViewModel = {
   highRiskWards: LatestWardRisk[];
   mediumRiskWards: LatestWardRisk[];
   recentAlerts: AlertRecord[];
+  wardMap: WardMapResponse | null;
   alertsTodayCount: number;
   deliveredAlertRate: number;
   latestTimestamp: string | null;
@@ -33,6 +35,7 @@ function buildOverviewViewModel(
   wards: WardSummary[],
   latestRisks: LatestWardRisk[],
   alerts: AlertRecord[],
+  wardMap: WardMapResponse | null,
 ): OverviewViewModel {
   const highRiskWards = latestRisks
     .filter((item) => item.risk_level === "HIGH")
@@ -61,6 +64,7 @@ function buildOverviewViewModel(
     highRiskWards,
     mediumRiskWards,
     recentAlerts: alerts.slice(0, 5),
+    wardMap,
     alertsTodayCount,
     deliveredAlertRate,
     latestTimestamp,
@@ -77,7 +81,7 @@ export function useOverviewQuery({ enabled = true }: { enabled?: boolean } = {})
       const migoriWardIds = new Set(migoriWards.map((ward) => ward.id));
       const migoriRisks = data.latestRisks.filter((risk) => migoriWardIds.has(risk.ward_id));
       const migoriAlerts = data.alerts.results.filter((alert) => migoriWardIds.has(alert.ward));
-      const model = buildOverviewViewModel(migoriWards, migoriRisks, migoriAlerts);
+      const model = buildOverviewViewModel(migoriWards, migoriRisks, migoriAlerts, data.wardMap ?? null);
 
       return {
         ...model,

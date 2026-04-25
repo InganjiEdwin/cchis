@@ -185,24 +185,27 @@ function getCoverageStatus(feature: WardMapFeature) {
 
   if ((riskLevel === "HIGH" && active <= 2) || (riskLevel === "MEDIUM" && active <= 1)) {
     return {
-      label: "Watch",
+      label: "Low",
       tone: "warning" as const,
       reason: "Recorded risk is elevated relative to the visible active CHV count.",
+      action: "Monitor staffing",
     };
   }
 
   if (total > 0 && active / total < 0.5) {
     return {
-      label: "Watch",
+      label: "Low",
       tone: "warning" as const,
       reason: "Less than half of linked CHVs are active in this ward.",
+      action: "Stabilize activity",
     };
   }
 
   return {
-    label: "Adequate",
+    label: "Good",
     tone: "success" as const,
     reason: "Active CHV coverage is present for the current recorded ward risk.",
+    action: "Maintain coverage",
   };
 }
 
@@ -435,12 +438,62 @@ export default function ChvsPage() {
   const selectedWardPanelTone = selectedWardCoverage?.tone ?? "default";
   const selectedWardPanelClassName =
     selectedWardPanelTone === "danger"
-      ? "border-[color:var(--danger)]/25 bg-[linear-gradient(180deg,color-mix(in_srgb,var(--danger)_7%,white),white)]"
+      ? "border-[color:var(--danger)]/25 bg-[linear-gradient(180deg,color-mix(in_srgb,var(--danger)_8%,var(--panel)),var(--panel))]"
       : selectedWardPanelTone === "warning"
-        ? "border-[color:var(--warning)]/28 bg-[linear-gradient(180deg,color-mix(in_srgb,var(--warning)_8%,white),white)]"
+        ? "border-[color:var(--warning)]/28 bg-[linear-gradient(180deg,color-mix(in_srgb,var(--warning)_9%,var(--panel)),var(--panel))]"
         : selectedWardPanelTone === "success"
-          ? "border-[color:var(--success)]/24 bg-[linear-gradient(180deg,color-mix(in_srgb,var(--success)_7%,white),white)]"
-          : "border-panel-table-wrap bg-white";
+          ? "border-[color:var(--success)]/24 bg-[linear-gradient(180deg,color-mix(in_srgb,var(--success)_8%,var(--panel)),var(--panel))]"
+          : "border-panel-table-wrap bg-panel";
+  const coverageSummary = useMemo(() => {
+    const counts = {
+      gap: 0,
+      low: 0,
+      good: 0,
+      noData: 0,
+    };
+
+    const priorities: Array<{
+      name: string;
+      activeChvs: number;
+      predictedCases: number;
+      tone: "gap" | "low";
+    }> = [];
+
+    mapFeatures.forEach((feature) => {
+      const coverage = getCoverageStatus(feature);
+
+      if (coverage.label === "Gap") counts.gap += 1;
+      else if (coverage.label === "Low") counts.low += 1;
+      else if (coverage.label === "Good") counts.good += 1;
+      else counts.noData += 1;
+
+      if (coverage.label === "Gap" || coverage.label === "Low") {
+        priorities.push({
+          name: feature.properties.name,
+          activeChvs: feature.properties.active_chv_count,
+          predictedCases: feature.properties.predicted_cases,
+          tone: coverage.label === "Gap" ? "gap" : "low",
+        });
+      }
+    });
+
+    priorities.sort((left, right) => {
+      if (left.tone !== right.tone) {
+        return left.tone === "gap" ? -1 : 1;
+      }
+
+      if (left.activeChvs !== right.activeChvs) {
+        return left.activeChvs - right.activeChvs;
+      }
+
+      return right.predictedCases - left.predictedCases;
+    });
+
+    return {
+      ...counts,
+      priorities: priorities.slice(0, 3),
+    };
+  }, [mapFeatures]);
 
   if (!currentUser) {
     return null;
@@ -511,7 +564,7 @@ export default function ChvsPage() {
           </Card>
         </section>
 
-        <section className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_22rem]">
+        <section className="space-y-5">
           <Card className="overflow-hidden rounded-[2rem] p-5 sm:p-6">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div>
@@ -519,7 +572,7 @@ export default function ChvsPage() {
                   CHV Ward Coverage
                 </h2>
                 <p className="mt-2 text-sm text-panel-muted">
-                  Backend-backed Migori ward geometry with visible risk, CHV, alert, and facility counts
+                  Coverage-first Migori ward surface showing where CHV presence is good, low, or missing
                 </p>
                 {wardMap ? (
                   <p className="mt-2 text-xs text-panel-subtle">
@@ -559,36 +612,36 @@ export default function ChvsPage() {
                   )}
                   onClick={() => setFocusFilter("HIGH_RISK")}
                 >
-                  High-Risk Filter
+                  Show high-risk wards
                 </button>
               </div>
             </div>
 
-            <div className="relative mt-6 min-h-[30rem] overflow-hidden rounded-[1.75rem] border border-[#CBD5E1] bg-[#F6F9FC] p-5">
-              <div className="relative z-10 grid h-full gap-4 lg:grid-cols-[minmax(0,1fr)_17rem]">
-                <div className="min-h-[26rem] rounded-[1.5rem] border border-[#D9E2EC] bg-white/92 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
+            <div className="relative mt-5 min-h-[39rem] overflow-hidden rounded-[1.75rem] border border-panel-table-wrap bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--brand)_8%,transparent),transparent_34%),linear-gradient(135deg,color-mix(in_srgb,var(--panel)_94%,var(--background-fade)),var(--panel))] p-4">
+              <div className="relative z-10 grid h-full gap-4 lg:grid-cols-[minmax(0,1.2fr)_18.5rem]">
+                <div className="min-h-[34rem] rounded-[1.5rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--panel)_92%,transparent)] p-2.5 shadow-[inset_0_1px_0_color-mix(in_srgb,var(--dashboard-table-line)_40%,transparent)]">
                   {mapFeatures.length ? (
                     <div className="flex h-full flex-col gap-4">
-                      <div className="flex flex-wrap items-center gap-3 rounded-[1.25rem] border border-[#E2E8F0] bg-white/95 px-4 py-3 text-xs text-panel-copy">
+                      <div className="flex flex-wrap items-center gap-3 rounded-[1.25rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-icon-button-surface)_96%,transparent)] px-4 py-3 text-xs text-panel-copy">
                         <span className="inline-flex items-center gap-2">
                           <span className="size-3 rounded-full border border-[#CBD5E1] bg-[#EEF6F2]" />
-                          Safe / normal ward
+                          Good
                         </span>
                         <span className="inline-flex items-center gap-2">
-                          <span className="size-3 rounded-full border border-[#F59E0B] bg-[#FFF4E5]" />
-                          Watch / medium risk
+                          <span className="size-3 rounded-full border border-[#CBD5E1] bg-[#FFF4E5]" />
+                          Low
                         </span>
                         <span className="inline-flex items-center gap-2">
                           <span className="size-3 rounded-full border border-[#DC2626] bg-[#FEE2E2]" />
-                          High risk
+                          Gap
                         </span>
                         <span className="inline-flex items-center gap-2">
                           <span className="size-3 rounded-full border border-[#94A3B8] bg-[#F1F5F9]" />
-                          Unmatched source
+                          No data
                         </span>
                       </div>
 
-                      <div className="min-h-[22rem] flex-1">
+                      <div className="min-h-[29rem] flex-1">
                         <MigoriWardMap
                           features={mapFeatures}
                           selectedWardCode={selectedMapWard?.properties.ward_code ?? null}
@@ -628,7 +681,7 @@ export default function ChvsPage() {
                         </p>
                       </div>
 
-                      <div className="rounded-[1.25rem] border border-white/70 bg-white/70 p-3">
+                      <div className="rounded-[1.25rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-icon-button-surface)_76%,transparent)] p-3">
                         <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-panel-subtle">
                           Coverage status
                         </span>
@@ -640,6 +693,9 @@ export default function ChvsPage() {
                             <StatusBadge tone={selectedWardCoverage.tone}>{selectedWardCoverage.label}</StatusBadge>
                           ) : null}
                         </div>
+                        <p className="mt-2 text-xs text-panel-muted">
+                          Action recommended: {selectedWardCoverage?.action ?? "Review ward coverage"}
+                        </p>
                       </div>
 
                       <div className="grid gap-3 text-sm text-panel-copy">
@@ -687,31 +743,6 @@ export default function ChvsPage() {
                           <span>Ward code</span>
                           <strong className="text-panel-strong">{selectedMapWard.properties.ward_code}</strong>
                         </div>
-                        <div className="flex items-center justify-between gap-3">
-                          <span>Backend public ID</span>
-                          <strong className="max-w-[10rem] truncate text-panel-strong">
-                            {selectedMapWard.properties.backend_public_id ?? "Not matched"}
-                          </strong>
-                        </div>
-                      </div>
-
-                      <div className="space-y-3 border-t border-panel-table-wrap pt-4 text-sm text-panel-copy">
-                        <div className="flex items-center gap-2">
-                          <span className="size-3 rounded-full border border-[color:color-mix(in_srgb,var(--brand)_34%,var(--panel-muted))] bg-[color:color-mix(in_srgb,var(--panel-muted)_10%,white)]" />
-                          <span>Safe / normal ward</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="size-3 rounded-full border border-[color:color-mix(in_srgb,var(--warning)_72%,black_6%)] bg-[color:color-mix(in_srgb,var(--warning)_18%,white)]" />
-                          <span>Watch / medium recorded risk</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="size-3 rounded-full border border-[color:color-mix(in_srgb,var(--danger)_72%,black_6%)] bg-[color:color-mix(in_srgb,var(--danger)_18%,white)]" />
-                          <span>High recorded risk ward</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="size-3 rounded-full border border-[color:color-mix(in_srgb,var(--panel-muted)_58%,white)] bg-[color:color-mix(in_srgb,var(--panel-muted)_16%,white)]" />
-                          <span>Geometry-only / unmatched backend ward</span>
-                        </div>
                       </div>
                     </div>
                   ) : (
@@ -724,7 +755,7 @@ export default function ChvsPage() {
             </div>
           </Card>
 
-          <div className="space-y-5">
+          <div className="grid gap-5 xl:grid-cols-2">
             <Card className="rounded-[2rem] px-5 py-5">
               <h2 className="text-2xl font-semibold text-panel-strong">Planning Summary</h2>
               <p className="mt-3 text-sm text-panel-muted">
@@ -771,31 +802,72 @@ export default function ChvsPage() {
             <Card
               className={cn(
                 "rounded-[2rem] px-5 py-5",
-                hasCriticalCoverageGap
-                  ? "border-[color:var(--warning)]/25 bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))]"
-                  : "border-[color:var(--success)]/25 bg-[color-mix(in_srgb,var(--success)_6%,var(--panel))]",
+                coverageSummary.gap
+                  ? "border-[color:var(--danger)]/18 bg-[color-mix(in_srgb,var(--danger)_5%,var(--panel))]"
+                  : coverageSummary.low
+                    ? "border-[color:var(--warning)]/25 bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))]"
+                    : "border-[color:var(--success)]/25 bg-[color-mix(in_srgb,var(--success)_6%,var(--panel))]",
               )}
             >
               <div className="flex items-center gap-3">
                 <span
                   className={cn(
                     "inline-flex size-10 items-center justify-center rounded-full",
-                    hasCriticalCoverageGap
-                      ? "bg-[color-mix(in_srgb,var(--warning)_18%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]"
-                      : "bg-[color-mix(in_srgb,var(--success)_18%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_20%,transparent)]",
+                    coverageSummary.gap
+                      ? "bg-[color-mix(in_srgb,var(--danger)_16%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_20%,transparent)]"
+                      : coverageSummary.low
+                        ? "bg-[color-mix(in_srgb,var(--warning)_18%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]"
+                        : "bg-[color-mix(in_srgb,var(--success)_18%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_20%,transparent)]",
                   )}
                 >
                   <ShieldAlert className="size-4" aria-hidden="true" />
                 </span>
-                <h3 className="text-xl font-semibold text-panel-strong">
-                  {hasCriticalCoverageGap ? "Coverage Note" : "Coverage Summary"}
-                </h3>
+                <h3 className="text-xl font-semibold text-panel-strong">Coverage Summary</h3>
               </div>
-              <p className="mt-4 text-sm leading-6 text-panel-copy">
-                {hasCriticalCoverageGap
-                  ? `${criticalCoverageGap?.wardName} shows ${criticalCoverageGap?.activeCount} active CHV in visible records while the linked ward risk feed still shows ${criticalCoverageGap?.predictedCases} predicted cases.`
-                  : "No CHV coverage difference stands out in the visible ward set."}
-              </p>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div className="rounded-[1.25rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-icon-button-surface)_74%,transparent)] px-4 py-3">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Current view</span>
+                  <div className="mt-3 space-y-2 text-sm text-panel-copy">
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Coverage gaps</span>
+                      <strong className="text-[color:var(--danger)]">{coverageSummary.gap}</strong>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Low coverage</span>
+                      <strong className="text-[color:var(--warning)]">{coverageSummary.low}</strong>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Adequately covered</span>
+                      <strong className="text-[color:var(--success)]">{coverageSummary.good}</strong>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>No data</span>
+                      <strong className="text-panel-muted">{coverageSummary.noData}</strong>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-[1.25rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-icon-button-surface)_74%,transparent)] px-4 py-3">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Top priority</span>
+                  {coverageSummary.priorities.length ? (
+                    <div className="mt-3 space-y-3">
+                      {coverageSummary.priorities.map((item) => (
+                        <div key={item.name} className="flex items-start justify-between gap-3 text-sm">
+                          <div>
+                            <strong className="block text-panel-strong">{item.name}</strong>
+                            <span className="text-panel-muted">{item.activeChvs} active CHVs</span>
+                          </div>
+                          <StatusBadge tone={item.tone === "gap" ? "danger" : "warning"}>
+                            {item.tone === "gap" ? "Gap" : "Low"}
+                          </StatusBadge>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-sm text-panel-muted">No wards currently stand out for immediate CHV coverage follow-up.</p>
+                  )}
+                </div>
+              </div>
               <Button className="mt-5 w-full justify-center" disabled>
                 Redeployment unavailable
               </Button>

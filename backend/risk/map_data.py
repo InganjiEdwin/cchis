@@ -138,6 +138,83 @@ def geometry_looks_placeholder(feature_collection: dict) -> bool:
     return True
 
 
+def _derive_risk_trend(risk_history: list[RiskScore]) -> dict:
+    latest_risk = risk_history[0] if risk_history else None
+    previous_risk = risk_history[1] if len(risk_history) > 1 else None
+    recent_history = risk_history[:4]
+
+    if len(recent_history) >= 3:
+        oldest_recent = recent_history[-1]
+        net_delta_points = round((recent_history[0].score - oldest_recent.score) * 100)
+        step_deltas = [
+            round((left.score - right.score) * 100)
+            for left, right in zip(recent_history, recent_history[1:])
+        ]
+
+        if all(abs(delta) < 1 for delta in step_deltas):
+            return {
+                "label": "Stable across recent runs",
+                "direction": "flat",
+                "delta_points": 0,
+                "mode": "derived_from_recent_history_window",
+            }
+
+        if all(delta >= 0 for delta in step_deltas) and any(delta > 0 for delta in step_deltas):
+            return {
+                "label": f"Escalating across recent runs ({net_delta_points:+d} points)",
+                "direction": "up",
+                "delta_points": net_delta_points,
+                "mode": "derived_from_recent_history_window",
+            }
+
+        if all(delta <= 0 for delta in step_deltas) and any(delta < 0 for delta in step_deltas):
+            return {
+                "label": f"Easing across recent runs ({net_delta_points:+d} points)",
+                "direction": "down",
+                "delta_points": net_delta_points,
+                "mode": "derived_from_recent_history_window",
+            }
+
+        if abs(net_delta_points) < 1:
+            return {
+                "label": "Mixed movement across recent runs",
+                "direction": "flat",
+                "delta_points": 0,
+                "mode": "derived_from_recent_history_window",
+            }
+
+        return {
+            "label": f"Mixed recent movement ({net_delta_points:+d} points)",
+            "direction": "up" if net_delta_points > 0 else "down",
+            "delta_points": net_delta_points,
+            "mode": "derived_from_recent_history_window",
+        }
+
+    if latest_risk and previous_risk:
+        delta_points = round((latest_risk.score - previous_risk.score) * 100)
+        if abs(delta_points) < 1:
+            return {
+                "label": "Stable versus previous run",
+                "direction": "flat",
+                "delta_points": 0,
+                "mode": "derived_from_recent_history",
+            }
+
+        return {
+            "label": f"{delta_points:+d} points vs previous run",
+            "direction": "up" if delta_points > 0 else "down",
+            "delta_points": delta_points,
+            "mode": "derived_from_recent_history",
+        }
+
+    return {
+        "label": "No previous run available",
+        "direction": "flat",
+        "delta_points": None,
+        "mode": "derived_from_recent_history",
+    }
+
+
 def build_migori_ward_map_summary(ward_queryset, *, limit_to_backend_wards: bool = False) -> dict:
     geometry = load_active_migori_ward_geometry()
     metadata = geometry.get("metadata", {})
@@ -207,8 +284,9 @@ def build_migori_ward_map_summary(ward_queryset, *, limit_to_backend_wards: bool
             if ward is not None:
                 match_source = "name"
 
-        ward_risks = list(ward.risk_scores.all()[:1]) if ward else []
+        ward_risks = list(ward.risk_scores.all()[:4]) if ward else []
         latest_risk = ward_risks[0] if ward_risks else None
+        trend = _derive_risk_trend(ward_risks)
         geometry_name_keys.add(normalized_name)
         if ward_code:
             geometry_code_keys.add(ward_code)
@@ -234,6 +312,7 @@ def build_migori_ward_map_summary(ward_queryset, *, limit_to_backend_wards: bool
                     "risk_score": latest_risk.score if latest_risk else (ward.current_risk_score if ward else None),
                     "predicted_cases": latest_risk.predicted_cases if latest_risk else 0,
                     "risk_generated_at": latest_risk.generated_at.isoformat() if latest_risk else None,
+                    "trend": trend,
                     "chv_count": chv_counts.get(ward.id, 0) if ward else 0,
                     "active_chv_count": active_chv_counts.get(ward.id, 0) if ward else 0,
                     "alert_count": alert_counts.get(ward.id, 0) if ward else 0,

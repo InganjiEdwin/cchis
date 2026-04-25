@@ -159,6 +159,7 @@ export type WardMapFeature = {
     risk_score: number | null;
     predicted_cases: number;
     risk_generated_at: string | null;
+    trend: WardIntelligenceTrend;
     chv_count: number;
     active_chv_count: number;
     alert_count: number;
@@ -367,6 +368,7 @@ type OverviewRouteResponse = {
   wards: PaginatedResponse<WardSummary>;
   latestRisks: LatestWardRisk[];
   alerts: PaginatedResponse<AlertRecord>;
+  wardMap: WardMapResponse;
 };
 
 type WardsRouteResponse = {

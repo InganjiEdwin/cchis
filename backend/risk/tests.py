@@ -2402,6 +2402,18 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
 
     def test_admin_can_view_migori_ward_map_with_backend_counts_and_hardened_metadata(self):
         self.import_active_migori_geometry("test-admin-map-v1")
+        RiskScore.objects.create(
+            ward=self.ward,
+            model_run=self.model_run,
+            score=0.72,
+            risk_level=Ward.RISK_MEDIUM,
+            rainfall_mm=88.0,
+            flood_indicator=0.5,
+            predicted_cases=11,
+            source=RiskScore.SOURCE_MODEL,
+            model_version="v0-test",
+            generated_at=self.risk_score.generated_at - timedelta(hours=12),
+        )
         Alert.objects.create(
             ward=self.ward,
             risk_score=self.risk_score,
@@ -2452,6 +2464,12 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(north_kamagambo["properties"]["alert_count"], 1)
         self.assertEqual(north_kamagambo["properties"]["facility_count"], 1)
         self.assertEqual(north_kamagambo["properties"]["risk_level"], Ward.RISK_HIGH)
+        self.assertEqual(north_kamagambo["properties"]["trend"]["direction"], "up")
+        self.assertEqual(north_kamagambo["properties"]["trend"]["delta_points"], 14)
+        self.assertEqual(
+            north_kamagambo["properties"]["trend"]["label"],
+            "+14 points vs previous run",
+        )
 
     def test_supervisor_map_scope_is_limited_to_assigned_ward_geometry(self):
         self.import_active_migori_geometry("test-supervisor-map-v1")
@@ -2462,6 +2480,51 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.data["metadata"]["returned_feature_count"], 1)
         self.assertEqual(response.data["features"][0]["properties"]["name"], self.other_ward.name)
         self.assertEqual(response.data["features"][0]["properties"]["backend_ward_id"], self.other_ward.id)
+
+    def test_migori_ward_map_exposes_recent_history_trend_when_multiple_runs_exist(self):
+        self.import_active_migori_geometry("test-admin-map-history-v1")
+        RiskScore.objects.create(
+            ward=self.ward,
+            model_run=self.model_run,
+            score=0.79,
+            risk_level=Ward.RISK_MEDIUM,
+            rainfall_mm=83.0,
+            flood_indicator=0.5,
+            predicted_cases=12,
+            source=RiskScore.SOURCE_MODEL,
+            model_version="v0-test",
+            generated_at=self.risk_score.generated_at - timedelta(hours=8),
+        )
+        RiskScore.objects.create(
+            ward=self.ward,
+            model_run=self.model_run,
+            score=0.68,
+            risk_level=Ward.RISK_MEDIUM,
+            rainfall_mm=74.0,
+            flood_indicator=0.4,
+            predicted_cases=9,
+            source=RiskScore.SOURCE_MODEL,
+            model_version="v0-test",
+            generated_at=self.risk_score.generated_at - timedelta(hours=16),
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.get(reverse("migori-ward-map"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        north_kamagambo = next(
+            feature for feature in response.data["features"] if feature["properties"]["name"] == self.ward.name
+        )
+        self.assertEqual(
+            north_kamagambo["properties"]["trend"]["label"],
+            "Escalating across recent runs (+18 points)",
+        )
+        self.assertEqual(north_kamagambo["properties"]["trend"]["direction"], "up")
+        self.assertEqual(north_kamagambo["properties"]["trend"]["delta_points"], 18)
+        self.assertEqual(
+            north_kamagambo["properties"]["trend"]["mode"],
+            "derived_from_recent_history_window",
+        )
 
     def test_chv_list_requires_admin_or_supervisor(self):
         self.authenticate(self.chv_user.username)

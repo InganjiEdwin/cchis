@@ -2,15 +2,17 @@
 
 import { AlertTriangle, ArrowRight, Bell, CircleAlert, MapPin, TriangleAlert } from "lucide-react";
 import Link from "next/link";
-import { useMemo } from "react";
+import { useRouter } from "next/navigation";
+import { useMemo, useState } from "react";
 
 import { useAuth } from "@/components/auth-provider";
 import { DashboardTopbar } from "@/components/dashboard-topbar";
+import { OverviewHotspotMap, type OverviewMapFilter } from "@/components/overview-hotspot-map";
 import { TriggerAlertPanel } from "@/components/trigger-alert-panel";
 import { Card } from "@/components/ui/card";
 import { PageSectionHeader } from "@/components/ui/page-section-header";
 import { StatusBadge } from "@/components/ui/status-badge";
-import type { AlertRecord } from "@/lib/dashboard";
+import type { AlertRecord, WardMapFeature } from "@/lib/dashboard";
 import { useOverviewQuery } from "@/queries/use-overview-query";
 
 function formatStatusLabel(status: AlertRecord["status"]) {
@@ -123,15 +125,102 @@ function getAttentionCardClass(level: "LOW" | "MEDIUM" | "HIGH" | null, isPrimar
   return `${base} border-[color-mix(in_srgb,var(--success)_20%,white)] bg-[color-mix(in_srgb,var(--success)_8%,white)] dark:border-[color-mix(in_srgb,var(--success)_28%,transparent)] dark:bg-[color-mix(in_srgb,var(--success)_14%,transparent)]`;
 }
 
+function getMapFilterLabel(filter: OverviewMapFilter) {
+  if (filter === "high") return "High risk";
+  if (filter === "medium") return "Medium risk";
+  if (filter === "low") return "Low risk";
+  if (filter === "alerts") return "Active alerts";
+  return "All wards";
+}
+
+function getFeatureAction(feature: WardMapFeature) {
+  if (feature.properties.alert_count > 0) {
+    return {
+      why: `${feature.properties.alert_count} active alert${feature.properties.alert_count === 1 ? "" : "s"} require review in this ward.`,
+      action: "Review ward alerts and investigate field conditions.",
+    };
+  }
+
+  if (feature.properties.risk_level === "HIGH") {
+    return {
+      why: "This ward is currently classified as high risk in the latest visible model run.",
+      action: "Open ward intelligence and review mitigation priorities.",
+    };
+  }
+
+  if (feature.properties.risk_level === "MEDIUM") {
+    return {
+      why: "This ward is trending at watch level and may need closer review.",
+      action: "Monitor closely and compare with adjacent wards.",
+    };
+  }
+
+  return {
+    why: "No immediate hotspot signal is visible for this ward right now.",
+    action: "Continue routine monitoring.",
+  };
+}
+
+function getMapControlClass(isActive: boolean) {
+  return isActive
+    ? "border-brand bg-[color-mix(in_srgb,var(--brand)_14%,transparent)] text-panel-strong shadow-[0_10px_24px_rgba(29,111,218,0.12)]"
+    : "border-panel-table-wrap bg-panel/70 text-panel-muted hover:border-brand/40 hover:text-panel-strong";
+}
+
+function getKpiCardClass(activeTone: "brand" | "danger" | "warning" | "alerts", isActive: boolean) {
+  if (!isActive) {
+    return "p-0";
+  }
+
+  if (activeTone === "danger") {
+    return "overflow-hidden border-[color-mix(in_srgb,var(--danger)_34%,white)] ring-1 ring-[color:var(--danger)]/20 p-0 dark:border-[color-mix(in_srgb,var(--danger)_28%,transparent)]";
+  }
+
+  if (activeTone === "warning") {
+    return "overflow-hidden border-[color-mix(in_srgb,var(--warning)_34%,white)] ring-1 ring-[color:var(--warning)]/20 p-0 dark:border-[color-mix(in_srgb,var(--warning)_28%,transparent)]";
+  }
+
+  if (activeTone === "alerts") {
+    return "overflow-hidden border-[color-mix(in_srgb,#F97316_34%,white)] ring-1 ring-[#F97316]/20 p-0 dark:border-[color-mix(in_srgb,#F97316_28%,transparent)]";
+  }
+
+  return "overflow-hidden border-brand/35 ring-1 ring-brand/20 p-0";
+}
+
 export default function OverviewPage() {
   const { currentUser } = useAuth();
+  const router = useRouter();
   const overviewQuery = useOverviewQuery({ enabled: Boolean(currentUser) });
   const overview = overviewQuery.data ?? null;
   const error = overviewQuery.error instanceof Error ? overviewQuery.error.message : null;
   const isLoading = overviewQuery.isPending;
   const isRefreshing = overviewQuery.isFetching;
+  const [mapFilter, setMapFilter] = useState<OverviewMapFilter>("all");
+  const [hoveredMapFilter, setHoveredMapFilter] = useState<OverviewMapFilter | null>(null);
+  const [selectedWardId, setSelectedWardId] = useState<number | null>(null);
 
   const immediateAttention = useMemo(() => overview?.highRiskWards.slice(0, 3) ?? [], [overview]);
+  const wardFeatures = overview?.wardMap?.features ?? [];
+  const selectedFeature = useMemo(
+    () => wardFeatures.find((feature) => feature.properties.backend_ward_id === selectedWardId) ?? null,
+    [selectedWardId, wardFeatures],
+  );
+  const hotspotHighlightWardId = selectedWardId ?? overview?.recentAlerts[0]?.ward ?? null;
+  const topAlertWard = useMemo(
+    () =>
+      [...wardFeatures]
+        .filter((feature) => feature.properties.alert_count > 0)
+        .sort((left, right) => {
+          if (right.properties.alert_count !== left.properties.alert_count) {
+            return right.properties.alert_count - left.properties.alert_count;
+          }
+
+          const leftRisk = left.properties.risk_level === "HIGH" ? 3 : left.properties.risk_level === "MEDIUM" ? 2 : 1;
+          const rightRisk = right.properties.risk_level === "HIGH" ? 3 : right.properties.risk_level === "MEDIUM" ? 2 : 1;
+          return rightRisk - leftRisk;
+        })[0] ?? null,
+    [wardFeatures],
+  );
 
   if (!currentUser) {
     return null;
@@ -148,8 +237,8 @@ export default function OverviewPage() {
         }}
       >
         <TriggerAlertPanel
-          buttonLabel="Open Trigger Flow"
-          closeLabel="Close Trigger Flow"
+          buttonLabel="Create Alert"
+          closeLabel="Close Alert Flow"
           buttonClassName="inline-flex h-11 items-center justify-center gap-2 rounded-[0.8rem] bg-[linear-gradient(180deg,#1d6fda_0%,#175fc2_100%)] px-4 text-sm font-semibold text-white shadow-[0_16px_32px_rgba(23,95,194,0.22)] transition hover:-translate-y-px"
         />
       </DashboardTopbar>
@@ -162,64 +251,157 @@ export default function OverviewPage() {
       ) : null}
 
       <section className="grid gap-6 xl:grid-cols-4">
-        <Card className="flex items-start gap-4 p-6">
-          <div className="inline-flex size-12 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
-            <MapPin className="size-5" aria-hidden="true" />
-          </div>
-          <div className="space-y-1">
-            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Total wards</span>
-            <strong className="block text-4xl font-semibold tracking-[-0.05em] text-panel-strong">
-              {isLoading ? "..." : overview?.totalWards ?? 0}
-            </strong>
-            <p className="text-sm text-panel-muted">Total wards monitored</p>
-          </div>
+        <Card className={getKpiCardClass("brand", mapFilter === "all")}>
+          <button
+            type="button"
+            className="flex h-full w-full items-start gap-4 rounded-panel p-6 text-left transition"
+            onClick={() => setMapFilter("all")}
+            onMouseEnter={() => setHoveredMapFilter("all")}
+            onMouseLeave={() => setHoveredMapFilter(null)}
+          >
+            <div className="inline-flex size-12 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+              <MapPin className="size-5" aria-hidden="true" />
+            </div>
+            <div className="space-y-1">
+              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Total wards</span>
+              <strong className="block text-4xl font-semibold tracking-[-0.05em] text-panel-strong">
+                {isLoading ? "..." : overview?.totalWards ?? 0}
+              </strong>
+              <p className="text-sm text-panel-muted">Reset map to all wards</p>
+            </div>
+          </button>
         </Card>
 
-        <Card className="flex items-start gap-4 p-6">
-          <div className="inline-flex size-12 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--danger)_12%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_20%,transparent)]">
-            <TriangleAlert className="size-5" aria-hidden="true" />
-          </div>
-          <div className="space-y-1">
-            <StatusBadge tone="danger" className="rounded-full px-3 py-1 tracking-[0.14em]">
-              Immediate action
-            </StatusBadge>
-            <strong className="block text-4xl font-semibold tracking-[-0.05em] text-panel-strong">
-              {isLoading ? "..." : overview?.highRiskWards.length ?? 0}
-            </strong>
-            <p className="text-sm text-panel-muted">High risk wards</p>
-          </div>
+        <Card className={getKpiCardClass("danger", mapFilter === "high")}>
+          <button
+            type="button"
+            className="flex h-full w-full items-start gap-4 rounded-panel p-6 text-left transition"
+            onClick={() => setMapFilter((current) => (current === "high" ? "all" : "high"))}
+            onMouseEnter={() => setHoveredMapFilter("high")}
+            onMouseLeave={() => setHoveredMapFilter(null)}
+          >
+            <div className="inline-flex size-12 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--danger)_12%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_20%,transparent)]">
+              <TriangleAlert className="size-5" aria-hidden="true" />
+            </div>
+            <div className="space-y-1">
+              <StatusBadge tone="danger" className="rounded-full px-3 py-1 tracking-[0.14em]">
+                Immediate action
+              </StatusBadge>
+              <strong className="block text-4xl font-semibold tracking-[-0.05em] text-panel-strong">
+                {isLoading ? "..." : overview?.highRiskWards.length ?? 0}
+              </strong>
+              <p className="text-sm text-panel-muted">Highlight high risk wards on map</p>
+            </div>
+          </button>
         </Card>
 
-        <Card className="flex items-start gap-4 p-6">
-          <div className="inline-flex size-12 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--warning)_12%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]">
-            <CircleAlert className="size-5" aria-hidden="true" />
-          </div>
-          <div className="space-y-1">
-            <StatusBadge tone="warning" className="rounded-full px-3 py-1 tracking-[0.14em]">
-              Derived review
-            </StatusBadge>
-            <strong className="block text-4xl font-semibold tracking-[-0.05em] text-panel-strong">
-              {isLoading ? "..." : overview?.mediumRiskWards.length ?? 0}
-            </strong>
-            <p className="text-sm text-panel-muted">Medium risk wards</p>
-          </div>
+        <Card className={getKpiCardClass("warning", mapFilter === "medium")}>
+          <button
+            type="button"
+            className="flex h-full w-full items-start gap-4 rounded-panel p-6 text-left transition"
+            onClick={() => setMapFilter((current) => (current === "medium" ? "all" : "medium"))}
+            onMouseEnter={() => setHoveredMapFilter("medium")}
+            onMouseLeave={() => setHoveredMapFilter(null)}
+          >
+            <div className="inline-flex size-12 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--warning)_12%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]">
+              <CircleAlert className="size-5" aria-hidden="true" />
+            </div>
+            <div className="space-y-1">
+              <StatusBadge tone="warning" className="rounded-full px-3 py-1 tracking-[0.14em]">
+                Derived review
+              </StatusBadge>
+              <strong className="block text-4xl font-semibold tracking-[-0.05em] text-panel-strong">
+                {isLoading ? "..." : overview?.mediumRiskWards.length ?? 0}
+              </strong>
+              <p className="text-sm text-panel-muted">Highlight medium risk wards on map</p>
+            </div>
+          </button>
         </Card>
 
-        <Card className="flex items-start gap-4 p-6">
-          <div className="inline-flex size-12 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-table-line)_70%,transparent)] text-panel-copy">
-            <Bell className="size-5" aria-hidden="true" />
-          </div>
-          <div className="space-y-1">
-            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">
-              {overview?.deliveredAlertRate ?? 0}% delivered from visible alerts
-            </span>
-            <strong className="block text-4xl font-semibold tracking-[-0.05em] text-panel-strong">
-              {isLoading ? "..." : overview?.alertsTodayCount ?? 0}
-            </strong>
-            <p className="text-sm text-panel-muted">Alerts today</p>
-          </div>
+        <Card className={getKpiCardClass("alerts", mapFilter === "alerts")}>
+          <button
+            type="button"
+            className="flex h-full w-full items-start gap-4 rounded-panel p-6 text-left transition"
+            onClick={() => setMapFilter((current) => (current === "alerts" ? "all" : "alerts"))}
+            onMouseEnter={() => setHoveredMapFilter("alerts")}
+            onMouseLeave={() => setHoveredMapFilter(null)}
+          >
+            <div className="inline-flex size-12 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-table-line)_70%,transparent)] text-panel-copy">
+              <Bell className="size-5" aria-hidden="true" />
+            </div>
+            <div className="space-y-1">
+              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">
+                {overview?.deliveredAlertRate ?? 0}% delivered from visible alerts
+              </span>
+              <strong className="block text-4xl font-semibold tracking-[-0.05em] text-panel-strong">
+                {isLoading ? "..." : overview?.alertsTodayCount ?? 0}
+              </strong>
+              <p className="text-sm text-panel-muted">Highlight active alert wards on map</p>
+            </div>
+          </button>
         </Card>
       </section>
+
+      <Card className="space-y-4 p-6">
+        <div className="flex flex-col gap-3">
+          <PageSectionHeader
+            title="Live Risk Hotspots"
+            description="Real-time ward-level risk and alert activity"
+          />
+          <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-panel-muted">
+            {([
+              { key: "all", label: "All wards", dot: "bg-panel-copy" },
+              { key: "high", label: "High risk", dot: "bg-[#DC2626]" },
+              { key: "medium", label: "Medium risk", dot: "bg-[#F59E0B]" },
+              { key: "low", label: "Low risk", dot: "bg-[#16A34A]" },
+              { key: "alerts", label: "Active alerts", dot: "bg-[#F97316]" },
+            ] as const).map((item) => {
+              const active = mapFilter === item.key;
+              const hovered = hoveredMapFilter === item.key;
+
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 transition ${getMapControlClass(active || hovered)}`}
+                  onClick={() => setMapFilter((current) => (current === item.key ? "all" : item.key))}
+                  onMouseEnter={() => setHoveredMapFilter(item.key)}
+                  onMouseLeave={() => setHoveredMapFilter(null)}
+                >
+                  <span className={`size-2.5 rounded-full ${item.dot}`} />
+                  {item.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="overflow-hidden rounded-[1.75rem] border border-panel-table-wrap bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--brand)_10%,transparent),transparent_38%),linear-gradient(135deg,color-mix(in_srgb,var(--panel)_94%,var(--background-fade)),var(--panel))] p-2">
+          <div className="h-[28rem] lg:h-[30rem]">
+            {overview?.wardMap?.features?.length ? (
+              <OverviewHotspotMap
+                features={overview.wardMap.features}
+                highlightedWardId={hotspotHighlightWardId}
+                activeFilter={mapFilter}
+                hoveredFilter={hoveredMapFilter}
+                lastUpdatedLabel={formatCompactRelativeMinutes(overview?.latestTimestamp ?? null)}
+                onSelectWard={(feature) => {
+                  setSelectedWardId(feature.properties.backend_ward_id ?? null);
+                }}
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center rounded-[1.35rem] border border-dashed border-panel-table-wrap px-6 text-center text-sm text-panel-muted">
+                Hotspot geography is not available for this scope yet.
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-panel-muted">
+          <span>Current map focus: {getMapFilterLabel(mapFilter)}</span>
+          <span>{selectedFeature ? `Selected ward: ${selectedFeature.properties.name}` : "Click a hotspot to update the attention panel."}</span>
+        </div>
+      </Card>
 
       <section className="grid gap-6 xl:grid-cols-[minmax(0,1.7fr)_minmax(320px,0.9fr)]">
         <Card className="space-y-5 p-6">
@@ -316,12 +498,78 @@ export default function OverviewPage() {
 
         <aside className="space-y-6">
           <Card className="space-y-5 p-6">
-            <PageSectionHeader title="Immediate Attention" />
+            <PageSectionHeader title={selectedFeature ? "Attention Focus" : "Immediate Attention"} />
 
             <div className="space-y-4">
               {isLoading ? (
                 <Card className="rounded-[1.5rem] p-4 shadow-none">
                   <p className="text-sm text-panel-muted">Loading priority wards...</p>
+                </Card>
+              ) : selectedFeature ? (
+                <Card
+                  className={getAttentionCardClass(selectedFeature.properties.risk_level, true)}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <strong className="text-lg font-semibold text-panel-strong">{selectedFeature.properties.name}</strong>
+                      <p className="text-sm text-panel-muted">
+                        {selectedFeature.properties.alert_count > 0
+                          ? "Selected hotspot from the live risk surface."
+                          : "Selected ward from the live risk surface."}
+                      </p>
+                    </div>
+                    <StatusBadge
+                      tone={getRiskBadgeTone(selectedFeature.properties.risk_level)}
+                      className="rounded-full px-3 py-1 tracking-[0.14em]"
+                    >
+                      {selectedFeature.properties.risk_level ?? "Unknown"}
+                    </StatusBadge>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 rounded-[1.2rem] border border-panel-table-wrap/80 bg-panel/60 p-4">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-panel-muted">Alerts</p>
+                      <strong className="mt-1 block text-2xl font-semibold text-panel-strong">
+                        {selectedFeature.properties.alert_count}
+                      </strong>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-panel-muted">Predicted cases</p>
+                      <strong className="mt-1 block text-2xl font-semibold text-panel-strong">
+                        {selectedFeature.properties.predicted_cases}
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-panel-muted">Why it matters</p>
+                      <p className="mt-1 text-sm text-panel-copy">{getFeatureAction(selectedFeature).why}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-panel-muted">Suggested action</p>
+                      <p className="mt-1 text-sm text-panel-copy">{getFeatureAction(selectedFeature).action}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-3 pt-1">
+                    {selectedFeature.properties.backend_ward_id ? (
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-2 rounded-full bg-[linear-gradient(180deg,#1d6fda_0%,#175fc2_100%)] px-4 py-2 text-sm font-semibold text-white shadow-[0_12px_24px_rgba(23,95,194,0.18)] transition hover:-translate-y-px"
+                        onClick={() => router.push(`/wards/${selectedFeature.properties.backend_ward_id}`)}
+                      >
+                        View ward
+                        <ArrowRight className="size-4" aria-hidden="true" />
+                      </button>
+                    ) : null}
+                    <Link
+                      href="/alerts"
+                      className="inline-flex items-center gap-2 rounded-full border border-panel-table-wrap px-4 py-2 text-sm font-semibold text-panel-strong transition hover:border-brand/40 hover:text-brand"
+                    >
+                      Review alerts
+                    </Link>
+                  </div>
                 </Card>
               ) : immediateAttention.length > 0 ? (
                 immediateAttention.map((ward, index) => (
@@ -351,7 +599,15 @@ export default function OverviewPage() {
                 ))
               ) : (
                 <Card className="rounded-[1.5rem] p-4 shadow-none">
-                  <p className="text-sm text-panel-muted">No high-risk wards are currently visible in your scope.</p>
+                  <p className="text-sm font-semibold text-panel-strong">System stable</p>
+                  <p className="mt-2 text-sm text-panel-muted">
+                    No high-risk wards are currently visible in your scope.
+                  </p>
+                  {topAlertWard ? (
+                    <p className="mt-3 text-sm text-panel-copy">
+                      Most active alert ward: <strong className="text-panel-strong">{topAlertWard.properties.name}</strong>
+                    </p>
+                  ) : null}
                 </Card>
               )}
             </div>
@@ -365,27 +621,6 @@ export default function OverviewPage() {
             </Link>
           </Card>
 
-          <Card className="space-y-4 p-6">
-            <div
-              className="flex min-h-[180px] items-center justify-center rounded-[1.75rem] border border-dashed border-[var(--dashboard-table-line)] bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--dashboard-sidebar-title)_10%,white),transparent_52%),radial-gradient(circle_at_bottom_right,color-mix(in_srgb,var(--warning)_10%,white),transparent_48%),var(--color-panel)] dark:bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--dashboard-sidebar-title)_22%,transparent),transparent_52%),radial-gradient(circle_at_bottom_right,color-mix(in_srgb,var(--warning)_20%,transparent),transparent_48%),var(--color-panel)]"
-              aria-hidden="true"
-            >
-              <span className="rounded-full bg-[color-mix(in_srgb,var(--dashboard-table-line)_70%,transparent)] px-4 py-2 text-sm font-semibold text-panel-copy">
-                {overview?.primaryCountyLabel ?? "County"}
-              </span>
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">
-                Live geographic monitor
-              </p>
-              <strong className="block text-lg font-semibold text-panel-strong">
-                {overview?.primaryCountyLabel ?? "Current scope"}
-              </strong>
-              <span className="text-sm text-panel-muted">
-                Map-ready boundary and hotspot overlays need backend geographic endpoints.
-              </span>
-            </div>
-          </Card>
         </aside>
       </section>
     </div>

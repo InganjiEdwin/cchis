@@ -29,64 +29,24 @@ type HoveredWard = {
   yPercent: number;
 };
 
-const MAP_CANVAS = "#F8FAFC";
-const MAP_GRID = "#CBD5E1";
-const SAFE_FILL = "#EEF6F2";
-const SAFE_FILL_HOVER = "#E3F1E9";
-const SAFE_STROKE = "#CBD5E1";
-const WATCH_FILL = "#FFF4E5";
-const WATCH_FILL_HOVER = "#FDE9C8";
-const WATCH_STROKE = "#F59E0B";
-const HIGH_FILL = "#FEE2E2";
-const HIGH_FILL_HOVER = "#FBCACA";
-const HIGH_STROKE = "#DC2626";
+const MAP_CANVAS = "var(--dashboard-panel-surface)";
+const MAP_GRID = "var(--dashboard-table-line)";
+const GOOD_FILL = "#EEF6F2";
+const GOOD_FILL_HOVER = "#E3F4EA";
+const LOW_FILL = "#FFF4E5";
+const LOW_FILL_HOVER = "#FDE8C8";
+const GAP_FILL = "#FEE2E2";
+const GAP_FILL_HOVER = "#FCD0D0";
 const UNMATCHED_FILL = "#F1F5F9";
 const UNMATCHED_FILL_HOVER = "#E2E8F0";
-const UNMATCHED_STROKE = "#94A3B8";
+const DEFAULT_STROKE = "#E2E8F0";
+const UNMATCHED_STROKE = "var(--dashboard-subtle-copy)";
 const HOVER_STROKE = "#2563EB";
-const SELECTED_STROKE = "#1D4ED8";
+const SELECTED_STROKE = "#2563EB";
 const SELECTED_FILL = "#DBEAFE";
-const COUNTY_OUTLINE = "#334155";
-
-function getRiskPalette(feature: WardMapFeature) {
-  if (!feature.properties.has_backend_ward) {
-    return {
-      fill: UNMATCHED_FILL,
-      fillHover: UNMATCHED_FILL_HOVER,
-      stroke: UNMATCHED_STROKE,
-      glow: SELECTED_FILL,
-      dashArray: "4 3",
-    };
-  }
-
-  if (feature.properties.risk_level === "HIGH") {
-    return {
-      fill: HIGH_FILL,
-      fillHover: HIGH_FILL_HOVER,
-      stroke: HIGH_STROKE,
-      glow: "#FECACA",
-      dashArray: undefined,
-    };
-  }
-
-  if (feature.properties.risk_level === "MEDIUM") {
-    return {
-      fill: WATCH_FILL,
-      fillHover: WATCH_FILL_HOVER,
-      stroke: WATCH_STROKE,
-      glow: "#FDE68A",
-      dashArray: undefined,
-    };
-  }
-
-  return {
-    fill: SAFE_FILL,
-    fillHover: SAFE_FILL_HOVER,
-    stroke: SAFE_STROKE,
-    glow: "#E0ECFF",
-    dashArray: undefined,
-  };
-}
+const COUNTY_OUTLINE = "var(--dashboard-copy)";
+const LOW_STROKE = "#F59E0B";
+const GAP_STROKE = "#DC2626";
 
 function flattenCoordinates(feature: WardMapFeature): Array<[number, number]> {
   if (feature.geometry.type === "Polygon") {
@@ -152,6 +112,106 @@ function getRiskLabel(feature: WardMapFeature) {
   return "Safe";
 }
 
+function getCoverageStatus(feature: WardMapFeature) {
+  if (!feature.properties.has_backend_ward) {
+    return {
+      label: "No data",
+      tone: "unmatched" as const,
+    };
+  }
+
+  const active = feature.properties.active_chv_count;
+  const total = feature.properties.chv_count;
+  const riskLevel = feature.properties.risk_level;
+
+  if (active === 0) {
+    return {
+      label: "Gap",
+      tone: "gap" as const,
+    };
+  }
+
+  if (riskLevel === "HIGH" && active <= 1) {
+    return {
+      label: "Gap",
+      tone: "gap" as const,
+    };
+  }
+
+  if ((riskLevel === "HIGH" && active <= 2) || (riskLevel === "MEDIUM" && active <= 1)) {
+    return {
+      label: "Low",
+      tone: "low" as const,
+    };
+  }
+
+  if (total > 0 && active / total < 0.5) {
+    return {
+      label: "Low",
+      tone: "low" as const,
+    };
+  }
+
+  return {
+    label: "Good",
+    tone: "good" as const,
+  };
+}
+
+function getCoveragePalette(feature: WardMapFeature) {
+  const coverageStatus = getCoverageStatus(feature);
+
+  if (coverageStatus.tone === "unmatched") {
+    return {
+      fill: UNMATCHED_FILL,
+      fillHover: UNMATCHED_FILL_HOVER,
+      stroke: UNMATCHED_STROKE,
+      accentStroke: UNMATCHED_STROKE,
+      dashArray: "4 3",
+      borderWidth: 1,
+      accentWidth: 0,
+      accentOpacity: 0,
+    };
+  }
+
+  if (coverageStatus.tone === "gap") {
+    return {
+      fill: GAP_FILL,
+      fillHover: GAP_FILL_HOVER,
+      stroke: DEFAULT_STROKE,
+      accentStroke: GAP_STROKE,
+      dashArray: undefined,
+      borderWidth: 1,
+      accentWidth: 2.2,
+      accentOpacity: 0.92,
+    };
+  }
+
+  if (coverageStatus.tone === "low") {
+    return {
+      fill: LOW_FILL,
+      fillHover: LOW_FILL_HOVER,
+      stroke: DEFAULT_STROKE,
+      accentStroke: LOW_STROKE,
+      dashArray: undefined,
+      borderWidth: 1,
+      accentWidth: 1.2,
+      accentOpacity: 0.82,
+    };
+  }
+
+  return {
+    fill: GOOD_FILL,
+    fillHover: GOOD_FILL_HOVER,
+    stroke: DEFAULT_STROKE,
+    accentStroke: "#22C55E",
+    dashArray: undefined,
+    borderWidth: 1,
+    accentWidth: 0,
+    accentOpacity: 0,
+  };
+}
+
 export function MigoriWardMap({
   features,
   selectedWardCode,
@@ -196,29 +256,26 @@ export function MigoriWardMap({
           const centroid = feature.properties.centroid
             ? projectPoint(feature.properties.centroid, bounds)
             : projectPoint(flattenCoordinates(feature)[0], bounds);
-          const palette = getRiskPalette(feature);
+          const palette = getCoveragePalette(feature);
+          const coverageStatus = getCoverageStatus(feature);
+          const selectedFill = isSelected ? SELECTED_FILL : isHovered ? palette.fillHover : palette.fill;
+          const interactiveStroke = isSelected ? SELECTED_STROKE : isHovered ? HOVER_STROKE : palette.stroke;
+          const interactiveStrokeWidth = isSelected ? 3 : isHovered ? 1.5 : palette.borderWidth;
 
           return (
             <g key={feature.properties.ward_code}>
               <path
                 d={geometryToPath(feature, bounds)}
-                fill={palette.glow}
-                className={cn("transition-opacity duration-200", isMuted ? "opacity-0" : "opacity-100")}
-                stroke="none"
-                transform={isSelected ? "scale(1.002)" : undefined}
-                style={{ transformOrigin: `${centroid[0]}px ${centroid[1]}px` }}
-              />
-              <path
-                d={geometryToPath(feature, bounds)}
-                fill={isSelected ? SELECTED_FILL : isHovered ? palette.fillHover : palette.fill}
-                stroke={isSelected ? SELECTED_STROKE : isHovered ? HOVER_STROKE : palette.stroke}
+                fill={selectedFill}
+                stroke={interactiveStroke}
                 className={cn(
                   "cursor-pointer transition-all duration-200",
                   isMuted ? "opacity-30" : isHovered || isSelected ? "opacity-100" : "opacity-95",
                 )}
-                strokeWidth={isSelected ? 2.5 : isHovered ? 1.5 : 1}
+                strokeWidth={interactiveStrokeWidth}
                 strokeDasharray={palette.dashArray}
                 vectorEffect="non-scaling-stroke"
+                style={isSelected ? { filter: "drop-shadow(0 0 8px rgba(37,99,235,0.18))" } : undefined}
                 onClick={() => onSelectWard?.(feature)}
                 onMouseLeave={() => setHoveredWard((current) => (current?.feature.properties.ward_code === feature.properties.ward_code ? null : current))}
                 onMouseMove={(event) => {
@@ -235,6 +292,20 @@ export function MigoriWardMap({
                   });
                 }}
               />
+              {palette.accentWidth > 0 ? (
+                <path
+                  d={geometryToPath(feature, bounds)}
+                  fill="none"
+                  stroke={palette.accentStroke}
+                  strokeWidth={isSelected ? palette.accentWidth + 0.25 : isHovered ? palette.accentWidth + 0.2 : palette.accentWidth}
+                  vectorEffect="non-scaling-stroke"
+                  className={cn(
+                    "pointer-events-none transition-opacity duration-200",
+                    isMuted ? "opacity-25" : "",
+                  )}
+                  opacity={isSelected ? 0.95 : isHovered ? Math.min(1, palette.accentOpacity + 0.08) : palette.accentOpacity}
+                />
+              ) : null}
               {isSelected ? (
                 <path
                   d={geometryToPath(feature, bounds)}
@@ -249,15 +320,6 @@ export function MigoriWardMap({
               ) : null}
               {isSelected || isHovered ? (
                 <>
-                  <circle
-                    cx={centroid[0]}
-                    cy={centroid[1]}
-                    r={isSelected ? 7 : 5}
-                    fill="#FFFFFF"
-                    stroke={isSelected ? SELECTED_STROKE : palette.stroke}
-                    strokeWidth={2}
-                    className={cn("pointer-events-none", isMuted && "opacity-40")}
-                  />
                   <text
                     x={centroid[0]}
                     y={centroid[1] - 14}
@@ -266,6 +328,20 @@ export function MigoriWardMap({
                   >
                     {feature.properties.name}
                   </text>
+                  {isSelected ? (
+                    <text
+                      x={centroid[0]}
+                      y={centroid[1] + 18}
+                      textAnchor="middle"
+                      className={cn(
+                        "pointer-events-none text-[15px] font-semibold",
+                        isMuted ? "opacity-40" : "",
+                      )}
+                      fill={coverageStatus.tone === "gap" ? GAP_STROKE : coverageStatus.tone === "low" ? LOW_STROKE : "#64748B"}
+                    >
+                      {coverageStatus.label} coverage
+                    </text>
+                  ) : null}
                 </>
               ) : null}
             </g>
@@ -288,14 +364,27 @@ export function MigoriWardMap({
 
       {hoveredWard ? (
         <div
-          className="pointer-events-none absolute z-20 w-52 rounded-2xl border border-[#CBD5E1] bg-white/95 p-3 text-xs shadow-[0_24px_80px_rgba(15,23,42,0.14)] backdrop-blur"
+          className="pointer-events-none absolute z-20 w-52 rounded-2xl border border-panel-table-wrap bg-panel/95 p-3 text-xs shadow-[0_24px_80px_rgba(15,23,42,0.24)] backdrop-blur"
           style={{
             left: `${hoveredWard.xPercent > 66 ? hoveredWard.xPercent - 26 : hoveredWard.xPercent + 4}%`,
             top: `${hoveredWard.yPercent > 62 ? hoveredWard.yPercent - 28 : hoveredWard.yPercent + 3}%`,
           }}
         >
           <p className="font-semibold text-panel-strong">{hoveredWard.feature.properties.name}</p>
-          <p className="mt-1 text-panel-muted">{getRiskLabel(hoveredWard.feature)}</p>
+          <p
+            className="mt-1 text-[11px] font-semibold uppercase tracking-[0.16em]"
+            style={{
+              color:
+                getCoverageStatus(hoveredWard.feature).tone === "gap"
+                  ? GAP_STROKE
+                  : getCoverageStatus(hoveredWard.feature).tone === "low"
+                    ? LOW_STROKE
+                    : "var(--dashboard-muted-copy)",
+            }}
+          >
+            Coverage {getCoverageStatus(hoveredWard.feature).label}
+          </p>
+          <p className="mt-1 text-panel-muted">{getRiskLabel(hoveredWard.feature)} risk</p>
           <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-panel-copy">
             <span>Active CHVs</span>
             <strong className="text-right text-panel-strong">{hoveredWard.feature.properties.active_chv_count}</strong>
