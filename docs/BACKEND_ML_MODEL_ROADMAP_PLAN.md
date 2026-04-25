@@ -40,25 +40,31 @@ This is why promotion discipline matters more than model prestige.
 
 ## Current Truth
 
-The current live backend baseline is:
+The current live scheduled backend baseline is:
 
 - `Logistic Regression`
 
-This is the only model currently wired into the backend risk pipeline and scheduled execution path.
+This remains the only model currently scheduled as the live alert-governing baseline.
 
 Code alignment today:
 
 - `backend/risk/ml/model.py`
-  - trains the logistic regression baseline
+  - trains logistic regression and Random Forest
 - `backend/risk/ml/pipeline.py`
-  - writes `algorithm_name="logistic-regression-baseline"`
-  - uses default `model_version="lr-v1"`
+  - defaults to logistic regression
+  - supports an explicit Random Forest benchmark path
 - `backend/risk/management/commands/run_risk_model.py`
-  - describes the command as running the baseline logistic regression model
+  - supports explicit algorithm selection and dual-model runs
 - `backend/core/settings.py`
-  - scheduled execution uses `model_version="lr-v1"`
+  - scheduled execution still uses `model_version="lr-v1"` with the logistic default path
 
-This means the backend is currently aligned with the proposal's first live baseline, but not yet with its broader early-phase benchmark strategy.
+This means the backend is now in a transitional state:
+
+- `Logistic Regression` is the live scheduled baseline
+- `Random Forest` exists as a backend benchmark-capable path
+- `Random Forest` is not yet promoted as the live scheduled model
+
+That is closer to the proposal's early-phase intent, but promotion discipline still needs to be documented explicitly.
 
 ---
 
@@ -481,6 +487,15 @@ Implementation should follow this sequence:
 4. `dashboard consumes only promoted outputs`
 
 This means benchmark models and retraining work must not outrun source freshness discipline or the explicit promotion of live model outputs.
+
+### Start condition for ML Phase 0
+
+Before beginning ML Phase 0, complete the small ETL hardening step for:
+
+- `scheduler / worker heartbeat`
+
+This is intentionally narrower than full multi-source ETL completion.
+The purpose is to ensure the current scheduled logistic baseline is audited on top of a minimally hardened orchestration surface, without blocking Phase 0 on every later data-domain expansion.
 
 ---
 
