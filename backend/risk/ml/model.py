@@ -74,11 +74,17 @@ def train_baseline_model(rows: list[WardFeatureRow]) -> LogisticRegression:
 def evaluate_model(model, rows: list[WardFeatureRow], algorithm: str = ALGORITHM_LOGISTIC_REGRESSION) -> dict:
     x_train, y_train = rows_to_matrix(rows)
     score = float(model.score(x_train, y_train))
-    return {
+    metrics = {
         "algorithm": algorithm,
         "training_accuracy": round(score, 4),
         "training_row_count": len(rows),
     }
+    if algorithm == ALGORITHM_RANDOM_FOREST and hasattr(model, "feature_importances_"):
+        metrics["feature_importances"] = {
+            key: float(round(value, 4))
+            for key, value in zip(FEATURE_KEYS, model.feature_importances_)
+        }
+    return metrics
 
 
 def evaluate_baseline_model(model: LogisticRegression, rows: list[WardFeatureRow]) -> dict:

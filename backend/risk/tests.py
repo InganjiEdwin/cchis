@@ -4054,6 +4054,37 @@ class SeedAndModelCommandTestCase(APITestCase):
         self.assertEqual(FeatureDataset.objects.filter(dataset_kind=FeatureDataset.KIND_TRAINING).count(), 1)
         self.assertEqual(FeatureDataset.objects.filter(dataset_kind=FeatureDataset.KIND_INFERENCE).count(), 1)
 
+    def test_run_random_forest_benchmark_command_creates_benchmark_only_outputs(self):
+        Ward.objects.create(
+            name="Ward RF One",
+            county="Migori",
+            sub_county="Rongo",
+            current_risk_level=Ward.RISK_LOW,
+            current_risk_score=0.20,
+            is_active=True,
+        )
+        Ward.objects.create(
+            name="Ward RF Two",
+            county="Migori",
+            sub_county="Nyatike",
+            current_risk_level=Ward.RISK_MEDIUM,
+            current_risk_score=0.55,
+            is_active=True,
+        )
+
+        call_command("run_random_forest_benchmark", "--month=4", "--model-version=rf-test-v1")
+
+        self.assertEqual(ModelRun.objects.filter(model_version="rf-test-v1", status=ModelRun.STATUS_SUCCESS).count(), 1)
+        model_run = ModelRun.objects.get(model_version="rf-test-v1")
+        self.assertEqual(model_run.algorithm_name, "random-forest-benchmark")
+        self.assertEqual(model_run.metadata["execution_context"], "manual_command")
+        self.assertEqual(model_run.metadata["run_purpose"], "benchmark_scoring")
+        self.assertEqual(model_run.metadata["promotion_target"], "benchmark_only")
+        self.assertFalse(model_run.metadata["alert_eligible"])
+        self.assertEqual(model_run.evaluation_metrics["algorithm"], "random_forest")
+        self.assertIn("feature_importances", model_run.evaluation_metrics)
+        self.assertEqual(RiskScore.objects.filter(model_run=model_run, source=RiskScore.SOURCE_MODEL).count(), 2)
+
     @patch("risk.tasks.trigger_alerts_task.delay", return_value=SimpleNamespace(id="task-123"))
     def test_run_risk_model_degraded_inputs_suppress_automatic_alerts(self, mock_delay):
         Ward.objects.create(
@@ -4249,6 +4280,14 @@ class SeedAndModelCommandTestCase(APITestCase):
         self.assertEqual(demo_run.metadata["run_purpose"], "demo_seed")
         self.assertEqual(demo_run.metadata["promotion_target"], "demo_only")
         self.assertFalse(demo_run.metadata["alert_eligible"])
+
+    @patch("risk.management.commands.run_random_forest_benchmark.run_random_forest_benchmark_task.delay")
+    def test_run_random_forest_benchmark_command_can_queue_task(self, mock_delay):
+        mock_delay.return_value = SimpleNamespace(id="rf-task-123")
+
+        call_command("run_random_forest_benchmark", "--month=4", "--model-version=rf-queued-v1", "--async")
+
+        mock_delay.assert_called_once_with(month=4, model_version="rf-queued-v1")
 
 
 class ETLOperationalTrustPolicyTestCase(APITestCase):

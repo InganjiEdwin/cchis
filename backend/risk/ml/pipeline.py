@@ -25,6 +25,22 @@ from .trust import alerts_allowed_for_snapshot, build_operational_trust_snapshot
 ml_logger = logging.getLogger("risk.ml")
 
 
+def _default_run_purpose(algorithm: str, requested_run_purpose: str | None) -> str:
+    if requested_run_purpose:
+        return requested_run_purpose
+    if algorithm == ALGORITHM_LOGISTIC_REGRESSION:
+        return "live_scoring"
+    return "benchmark_scoring"
+
+
+def _default_alert_algorithm(algorithm: str, requested_alert_algorithm: str | None) -> str | None:
+    if requested_alert_algorithm is not None:
+        return requested_alert_algorithm
+    if algorithm == ALGORITHM_LOGISTIC_REGRESSION:
+        return algorithm
+    return None
+
+
 def _persist_blocked_model_run(
     *,
     training_dataset,
@@ -208,7 +224,7 @@ def run_mock_prediction_pipeline(
     benchmark_model_version: str = "rf-v1",
     alert_algorithm: str | None = None,
     execution_context: str = "manual_command",
-    run_purpose: str = "live_scoring",
+    run_purpose: str | None = None,
 ) -> list[RiskScore]:
     wards = Ward.objects.filter(is_active=True).order_by("name")
     inference_dataset = build_inference_feature_dataset(wards, month=month)
@@ -218,8 +234,8 @@ def run_mock_prediction_pipeline(
     created_scores: list[RiskScore] = []
     ward_list = list(wards)
     benchmark_group_ref = uuid4().hex[:12] if dual_model else None
-    if alert_algorithm is None:
-        alert_algorithm = algorithm
+    alert_algorithm = _default_alert_algorithm(algorithm, alert_algorithm)
+    run_purpose = _default_run_purpose(algorithm, run_purpose)
     operational_trust = build_operational_trust_snapshot(inference_dataset.rainfall_ingestion_run)
 
     ml_logger.info(

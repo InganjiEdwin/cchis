@@ -35,6 +35,14 @@ class Command(BaseCommand):
         )
         parser.add_argument("--async", action="store_true", dest="run_async")
 
+    def _validate_version_discipline(self, *, algorithm: str, model_version: str, benchmark_algorithm: str, benchmark_version: str, dual_model: bool):
+        if algorithm == "logistic_regression" and not model_version.startswith("lr-"):
+            self.stderr.write(self.style.WARNING("Expected logistic regression model versions to start with 'lr-'"))
+        if algorithm == "random_forest" and not model_version.startswith("rf-"):
+            self.stderr.write(self.style.WARNING("Expected Random Forest model versions to start with 'rf-'"))
+        if dual_model and benchmark_algorithm == "random_forest" and not benchmark_version.startswith("rf-"):
+            self.stderr.write(self.style.WARNING("Expected Random Forest benchmark versions to start with 'rf-'"))
+
     def handle(self, *args, **options):
         month = options["month"]
         model_version = options["model_version"]
@@ -46,6 +54,13 @@ class Command(BaseCommand):
         benchmark_model_version = options["benchmark_version"]
         alert_algorithm = options["alert_algorithm"]
         run_async = options["run_async"]
+        self._validate_version_discipline(
+            algorithm=algorithm,
+            model_version=model_version,
+            benchmark_algorithm=benchmark_algorithm,
+            benchmark_version=benchmark_model_version,
+            dual_model=dual_model,
+        )
 
         if run_async:
             task = run_risk_model_task.delay(

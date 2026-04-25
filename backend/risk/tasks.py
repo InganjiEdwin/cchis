@@ -139,3 +139,34 @@ def run_risk_model_task(
         },
     )
     return len(created_scores)
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+def run_random_forest_benchmark_task(
+    self,
+    month: int | None = None,
+    model_version: str = "rf-v1",
+) -> int:
+    if month is None:
+        month = timezone.now().month
+
+    created_scores = run_mock_prediction_pipeline(
+        month=month,
+        model_version=model_version,
+        algorithm="random_forest",
+        trigger_alerts=False,
+        send_sms=False,
+        dual_model=False,
+        execution_context="benchmark_task",
+        run_purpose="benchmark_scoring",
+    )
+    logger.info(
+        "run_random_forest_benchmark_task_completed",
+        extra={
+            "scores_created": len(created_scores),
+            "model_version": model_version,
+            "algorithm": "random_forest",
+            "month": month,
+        },
+    )
+    return len(created_scores)
