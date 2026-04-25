@@ -732,9 +732,7 @@ def build_facility_forecasting_dashboard_summary(*, wards: list[Ward] | None = N
         ),
         "driving_ward_ids": driving_ward_ids,
         "preview_driving_ward_ids": preview_driving_ward_ids,
-        "blocked_product_surfaces": [
-            "none",
-        ],
+        "blocked_product_surfaces": [],
     }
 
 

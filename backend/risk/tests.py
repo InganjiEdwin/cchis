@@ -2819,6 +2819,7 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.data["metadata"]["facility_forecasting"]["source_kind"], "promoted_forecast")
         self.assertEqual(response.data["metadata"]["facility_forecasting"]["governance_mode"], "promoted")
         self.assertEqual(response.data["metadata"]["facility_forecasting"]["dashboard_truth_state"], "promoted")
+        self.assertEqual(response.data["metadata"]["facility_forecasting"]["blocked_product_surfaces"], [])
         self.assertIn(self.ward.id, response.data["metadata"]["facility_forecasting"]["driving_ward_ids"])
 
         north_kamagambo = next(
@@ -2854,6 +2855,7 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["metadata"]["facility_forecasting"]["source_kind"], "promoted_forecast")
         self.assertEqual(response.data["metadata"]["facility_forecasting"]["dashboard_truth_state"], "promoted")
+        self.assertEqual(response.data["metadata"]["facility_forecasting"]["blocked_product_surfaces"], [])
         self.assertIn(self.ward.id, response.data["metadata"]["facility_forecasting"]["driving_ward_ids"])
 
         north_kamagambo = next(

@@ -174,6 +174,7 @@ This audit closed that gap by adding:
 - promoted-forecast preference in facility intelligence over newer preview-only runs
 - promoted-state truth in preview and honesty-rule surfaces
 - promoted-forecast preference in dashboard/map summary over newer preview-only runs
+- promoted dashboard/map summaries now expose a truly empty `blocked_product_surfaces` list instead of a sentinel `"none"` value
 
 Evidence now exists in:
 
@@ -218,6 +219,11 @@ The most meaningful gap found in this audit was:
 - missing dashboard/map-facing facility forecast linkage
 
 That gap has now been closed in code and tested.
+
+On the latest fresh-audit pass, one smaller but still real contract-hygiene gap was also closed:
+
+- promoted dashboard summaries no longer represent an unblocked state as `["none"]`
+- they now return an actually empty blocked-surfaces list
 
 ## Remaining Honest Limits
 
