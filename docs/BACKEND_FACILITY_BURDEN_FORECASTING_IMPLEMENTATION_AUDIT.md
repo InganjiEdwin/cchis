@@ -133,6 +133,7 @@ Evidence exists in:
 - `build_facility_forecast_promotion_summary`
 - `GET /api/v1/risk/facility-forecasting/evaluation/`
 - `python manage.py evaluate_facility_burden_forecast`
+- `python manage.py promote_facility_burden_forecast`
 
 ### Verdict
 
@@ -166,22 +167,32 @@ This audit closed that gap by adding:
 - ward-map metadata block for facility forecasting
 - ward-level `drives_facility_pressure_preview`
 - ward-level facility forecast dashboard-truth-state field
+- explicit promoted forecast selection for dashboard/map consumption
+- a manual promotion command so promoted outputs can actually exist
 
 Evidence now exists in:
 
 - `backend/risk/map_data.py`
+- `backend/risk/facility_forecasting.py`
+- `backend/risk/management/commands/promote_facility_burden_forecast.py`
 - `risk.tests.RiskPermissionsTestCase.test_migori_ward_map_exposes_facility_forecast_dashboard_summary_honestly`
+- `risk.tests.RiskPermissionsTestCase.test_migori_ward_map_uses_promoted_facility_forecast_outputs_when_available`
 
 ### Important honesty note
 
-The plan language says `promoted outputs`, but the current backend still correctly blocks promotion.
+The backend now supports both:
+
+- preview-only facility forecasts
+- explicitly promoted facility forecasts
+
+By default, forecasts remain preview-only until promoted manually.
 
 So the implemented behavior is:
 
-- integrated into dashboard-facing backend surfaces
-- still clearly blocked from promoted truth
+- preview forecasts remain blocked from dashboard truth
+- promoted forecasts can now flow into dashboard/map-facing backend surfaces
 
-That is the correct conservative interpretation for the current state.
+That is the correct conservative implementation for the current state.
 
 ### Verdict
 

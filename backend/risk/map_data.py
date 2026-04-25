@@ -291,7 +291,9 @@ def build_migori_ward_map_summary(ward_queryset, *, limit_to_backend_wards: bool
         ward_risks = promoted_risk_scores(ward.risk_scores.all())[:4] if ward else []
         latest_risk = ward_risks[0] if ward_risks else None
         trend = _derive_risk_trend(ward_risks)
-        driving_preview_ward_ids = set(facility_forecasting.get("driving_ward_ids", []))
+        driving_promoted_ward_ids = set(facility_forecasting.get("driving_ward_ids", []))
+        driving_preview_ward_ids = set(facility_forecasting.get("preview_driving_ward_ids", []))
+        drives_promoted_facility_pressure = bool(ward and ward.id in driving_promoted_ward_ids)
         drives_facility_pressure_preview = bool(ward and ward.id in driving_preview_ward_ids)
         geometry_name_keys.add(normalized_name)
         if ward_code:
@@ -323,6 +325,7 @@ def build_migori_ward_map_summary(ward_queryset, *, limit_to_backend_wards: bool
                     "active_chv_count": active_chv_counts.get(ward.id, 0) if ward else 0,
                     "alert_count": alert_counts.get(ward.id, 0) if ward else 0,
                     "facility_count": facility_counts.get(ward.id, 0) if ward else 0,
+                    "drives_promoted_facility_pressure": drives_promoted_facility_pressure,
                     "drives_facility_pressure_preview": drives_facility_pressure_preview,
                     "facility_forecast_dashboard_truth_state": facility_forecasting["dashboard_truth_state"],
                 },

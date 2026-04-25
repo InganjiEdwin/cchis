@@ -2778,22 +2778,54 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         response = self.client.get(reverse("migori-ward-map"))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["metadata"]["facility_forecasting"]["source_kind"], "forecast_preview")
-        self.assertEqual(response.data["metadata"]["facility_forecasting"]["governance_mode"], "preview_only")
+        self.assertEqual(response.data["metadata"]["facility_forecasting"]["source_kind"], "preview_available_but_blocked")
+        self.assertEqual(response.data["metadata"]["facility_forecasting"]["governance_mode"], "preview_only_not_promoted")
         self.assertEqual(
             response.data["metadata"]["facility_forecasting"]["dashboard_truth_state"],
             "blocked_until_promotion",
         )
-        self.assertIn(self.ward.id, response.data["metadata"]["facility_forecasting"]["driving_ward_ids"])
+        self.assertIn(self.ward.id, response.data["metadata"]["facility_forecasting"]["preview_driving_ward_ids"])
+        self.assertEqual(response.data["metadata"]["facility_forecasting"]["driving_ward_ids"], [])
 
         north_kamagambo = next(
             feature for feature in response.data["features"] if feature["properties"]["name"] == self.ward.name
         )
+        self.assertFalse(north_kamagambo["properties"]["drives_promoted_facility_pressure"])
         self.assertTrue(north_kamagambo["properties"]["drives_facility_pressure_preview"])
         self.assertEqual(
             north_kamagambo["properties"]["facility_forecast_dashboard_truth_state"],
             "blocked_until_promotion",
         )
+
+    def test_migori_ward_map_uses_promoted_facility_forecast_outputs_when_available(self):
+        self.import_active_migori_geometry("test-admin-map-forecast-promoted-v1")
+        run = run_facility_burden_forecast_pipeline(
+            model_version="fnb-promoted-v1",
+            execution_context="test_case",
+            run_purpose="forecast_scoring",
+        )
+        call_command(
+            "promote_facility_burden_forecast",
+            run_id=run.id,
+            promoted_by="audit",
+            note="External audit promotion test",
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.get(reverse("migori-ward-map"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["metadata"]["facility_forecasting"]["source_kind"], "promoted_forecast")
+        self.assertEqual(response.data["metadata"]["facility_forecasting"]["governance_mode"], "promoted")
+        self.assertEqual(response.data["metadata"]["facility_forecasting"]["dashboard_truth_state"], "promoted")
+        self.assertIn(self.ward.id, response.data["metadata"]["facility_forecasting"]["driving_ward_ids"])
+
+        north_kamagambo = next(
+            feature for feature in response.data["features"] if feature["properties"]["name"] == self.ward.name
+        )
+        self.assertTrue(north_kamagambo["properties"]["drives_promoted_facility_pressure"])
+        self.assertTrue(north_kamagambo["properties"]["drives_facility_pressure_preview"])
+        self.assertEqual(north_kamagambo["properties"]["facility_forecast_dashboard_truth_state"], "promoted")
 
     def test_chv_list_requires_admin_or_supervisor(self):
         self.authenticate(self.chv_user.username)
@@ -3962,6 +3994,22 @@ class SeedAndModelCommandTestCase(APITestCase):
 
         delay_mock.assert_called_once_with(model_version="fnb-v2", horizon_days=7)
         self.assertIn("Queued facility burden forecast task", stdout.getvalue())
+
+    def test_promote_facility_burden_forecast_command_marks_run_as_promoted(self):
+        call_command("seed_demo_data")
+        call_command("run_facility_burden_forecast", model_version="fnb-vpromote")
+
+        call_command(
+            "promote_facility_burden_forecast",
+            model_version="fnb-vpromote",
+            promoted_by="auditor",
+            note="promotion-test",
+        )
+
+        run = FacilityForecastRun.objects.get(model_version="fnb-vpromote")
+        self.assertEqual(run.metadata["promotion_target"], "dashboard_readiness_promoted")
+        self.assertEqual(run.metadata["promoted_by"], "auditor")
+        self.assertEqual(run.metadata["promotion_note"], "promotion-test")
 
     def test_failed_facility_burden_forecast_run_is_persisted_with_failure_metadata(self):
         call_command("seed_demo_data")

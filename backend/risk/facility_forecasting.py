@@ -18,6 +18,8 @@ FACILITY_FORECAST_TARGET = "expected_suspected_cases_per_facility_7d"
 FACILITY_FORECAST_MODE_PROXY = "proxy_preforecast_from_current_readiness_contract"
 FACILITY_FORECAST_MODE_MODEL = "negative_binomial_baseline_preview"
 FACILITY_FORECAST_FEATURE_SCHEMA_VERSION = "facility-burden-v1"
+FACILITY_FORECAST_PROMOTION_TARGET_PREVIEW = "forecast_preview_only"
+FACILITY_FORECAST_PROMOTION_TARGET_DASHBOARD = "dashboard_readiness_promoted"
 FACILITY_FORECAST_FEATURE_KEYS = [
     "ward_risk_score",
     "ward_alert_count",
@@ -447,7 +449,7 @@ def run_facility_burden_forecast_pipeline(
         metadata={
             "execution_context": execution_context,
             "run_purpose": run_purpose,
-            "promotion_target": "forecast_preview_only",
+            "promotion_target": FACILITY_FORECAST_PROMOTION_TARGET_PREVIEW,
             "retraining_policy": "manual_promotion_only",
             "model_family": "facility_burden_forecasting",
             "baseline_model_status": "implemented_not_promoted",
@@ -532,6 +534,50 @@ def latest_facility_forecast_for_facility(facility: HealthFacility) -> FacilityF
     return facility.facility_forecasts.select_related("forecast_run").order_by("-generated_at").first()
 
 
+def is_promoted_facility_forecast_run(run: FacilityForecastRun | None) -> bool:
+    if run is None:
+        return False
+    return (run.metadata or {}).get("promotion_target") == FACILITY_FORECAST_PROMOTION_TARGET_DASHBOARD
+
+
+def latest_promoted_facility_forecast_for_facility(facility: HealthFacility) -> FacilityForecast | None:
+    return (
+        facility.facility_forecasts.select_related("forecast_run")
+        .filter(forecast_run__metadata__promotion_target=FACILITY_FORECAST_PROMOTION_TARGET_DASHBOARD)
+        .order_by("-generated_at")
+        .first()
+    )
+
+
+def promote_facility_forecast_run(
+    run: FacilityForecastRun,
+    *,
+    promoted_by: str | None = None,
+    note: str | None = None,
+) -> FacilityForecastRun:
+    for existing_run in FacilityForecastRun.objects.filter(
+        status=FacilityForecastRun.STATUS_SUCCESS,
+        metadata__promotion_target=FACILITY_FORECAST_PROMOTION_TARGET_DASHBOARD,
+    ).exclude(id=run.id):
+        existing_run.metadata = {
+            **(existing_run.metadata or {}),
+            "promotion_target": FACILITY_FORECAST_PROMOTION_TARGET_PREVIEW,
+            "demoted_at": timezone.now().isoformat(),
+            "demotion_reason": "superseded_by_new_promoted_run",
+        }
+        existing_run.save(update_fields=["metadata"])
+
+    run.metadata = {
+        **(run.metadata or {}),
+        "promotion_target": FACILITY_FORECAST_PROMOTION_TARGET_DASHBOARD,
+        "promoted_at": timezone.now().isoformat(),
+        "promoted_by": promoted_by,
+        "promotion_note": note or "",
+    }
+    run.save(update_fields=["metadata"])
+    return run
+
+
 def build_facility_forecasting_dashboard_summary(*, wards: list[Ward] | None = None) -> dict:
     ward_ids = {ward.id for ward in (wards or [])}
     forecasts = list(
@@ -550,10 +596,12 @@ def build_facility_forecasting_dashboard_summary(*, wards: list[Ward] | None = N
             "source_kind": "proxy_only",
             "governance_mode": "not_promoted",
             "dashboard_truth_state": "blocked_until_promotion",
-            "facility_preview_count": 0,
+            "promoted_facility_count": 0,
+            "preview_available_count": 0,
             "capacity_concern_count": 0,
             "watch_count": 0,
             "driving_ward_ids": [],
+            "preview_driving_ward_ids": [],
             "blocked_product_surfaces": [
                 "dashboard_readiness_warning",
                 "promoted_facility_summary",
@@ -569,29 +617,56 @@ def build_facility_forecasting_dashboard_summary(*, wards: list[Ward] | None = N
             if forecast.facility.ward_id in ward_ids or bool(ward_ids.intersection(set(forecast.driving_ward_ids or [])))
         ]
 
-    driving_ward_ids = sorted(
+    preview_driving_ward_ids = sorted(
         {
             ward_id
             for forecast in relevant_forecasts
             for ward_id in (forecast.driving_ward_ids or [])
         }
     )
+    promoted_forecasts = [forecast for forecast in relevant_forecasts if is_promoted_facility_forecast_run(forecast.forecast_run)]
+    driving_ward_ids = sorted(
+        {
+            ward_id
+            for forecast in promoted_forecasts
+            for ward_id in (forecast.driving_ward_ids or [])
+        }
+    )
+
+    if not promoted_forecasts:
+        return {
+            "source_kind": "preview_available_but_blocked",
+            "governance_mode": "preview_only_not_promoted",
+            "dashboard_truth_state": "blocked_until_promotion",
+            "promoted_facility_count": 0,
+            "preview_available_count": len(relevant_forecasts),
+            "capacity_concern_count": 0,
+            "watch_count": 0,
+            "driving_ward_ids": [],
+            "preview_driving_ward_ids": preview_driving_ward_ids,
+            "blocked_product_surfaces": [
+                "dashboard_readiness_warning",
+                "promoted_facility_summary",
+                "action_panel_facility_pressure",
+            ],
+        }
+
     return {
-        "source_kind": "forecast_preview",
-        "governance_mode": "preview_only",
-        "dashboard_truth_state": "blocked_until_promotion",
-        "facility_preview_count": len(relevant_forecasts),
+        "source_kind": "promoted_forecast",
+        "governance_mode": "promoted",
+        "dashboard_truth_state": "promoted",
+        "promoted_facility_count": len(promoted_forecasts),
+        "preview_available_count": len(relevant_forecasts),
         "capacity_concern_count": sum(
-            1 for forecast in relevant_forecasts if forecast.projected_readiness_state == FacilityForecast.READINESS_CAPACITY_CONCERN
+            1 for forecast in promoted_forecasts if forecast.projected_readiness_state == FacilityForecast.READINESS_CAPACITY_CONCERN
         ),
         "watch_count": sum(
-            1 for forecast in relevant_forecasts if forecast.projected_readiness_state == FacilityForecast.READINESS_WATCH
+            1 for forecast in promoted_forecasts if forecast.projected_readiness_state == FacilityForecast.READINESS_WATCH
         ),
         "driving_ward_ids": driving_ward_ids,
+        "preview_driving_ward_ids": preview_driving_ward_ids,
         "blocked_product_surfaces": [
-            "dashboard_readiness_warning",
-            "promoted_facility_summary",
-            "action_panel_facility_pressure",
+            "none",
         ],
     }
 
