@@ -78,6 +78,16 @@ Important limit:
 - broader audit/admin-style surfaces such as raw model-run and risk-score lists still expose non-promoted records
 - that is acceptable, but the roadmap must not imply that every read surface is promotion-filtered
 
+Additional verification after the stricter repeat audit:
+
+- dedicated test coverage now exists for:
+  - latest ward risk
+  - ward intelligence
+  - facility intelligence
+  - model-alignment endpoint when a benchmark model is present
+
+This closes the earlier proof gap where some of these claims were true by shared helper behavior but not all were directly asserted in tests.
+
 ### 5. Claim: a dedicated backend truth surface exists for product consumers
 
 Verdict:
@@ -186,6 +196,16 @@ Closed by:
 
 - clarifying that scheduled scoring exists now
 - clarifying that scheduled retraining does not
+
+5. Some scoped product-surface claims were implemented but not directly proven by dedicated tests.
+
+Closed by:
+
+- adding focused tests for:
+  - `latest-ward-risk`
+  - `ward-intelligence`
+  - `facility-intelligence`
+  - benchmark-visible `model-alignment`
 
 ## Remaining Honest Gaps
 

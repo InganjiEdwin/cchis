@@ -2565,6 +2565,159 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertIn("xgboost", response.data["future_candidate_models"])
         self.assertTrue(response.data["dashboard_policy"]["surface_only_promoted_outputs"])
 
+    def test_model_alignment_endpoint_exposes_current_benchmark_model_when_present(self):
+        benchmark_run = ModelRun.objects.create(
+            algorithm_name="random-forest-benchmark",
+            model_version="rf-alignment-v1",
+            status=ModelRun.STATUS_SUCCESS,
+            month=4,
+            feature_schema_version="baseline-v1",
+            feature_keys=self.model_run.feature_keys,
+            training_dataset_ref="rf-alignment-training",
+            inference_dataset_ref="rf-alignment-inference",
+            training_row_count=8,
+            inference_row_count=2,
+            evaluation_metrics={"training_accuracy": 0.93},
+            metadata={
+                "algorithm": "random_forest",
+                "promotion_target": "benchmark_only",
+                "execution_context": "manual_command",
+                "run_purpose": "benchmark_scoring",
+            },
+            completed_at=timezone.now(),
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("model-alignment"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["current_benchmark_model"]["algorithm"], "random_forest")
+        self.assertEqual(response.data["current_benchmark_model"]["model_version"], benchmark_run.model_version)
+
+    def test_latest_ward_risk_prefers_promoted_output_over_newer_benchmark_output(self):
+        benchmark_run = ModelRun.objects.create(
+            algorithm_name="random-forest-benchmark",
+            model_version="rf-latest-risk-v1",
+            status=ModelRun.STATUS_SUCCESS,
+            month=4,
+            feature_schema_version="baseline-v1",
+            feature_keys=self.model_run.feature_keys,
+            training_dataset_ref="rf-latest-risk-training",
+            inference_dataset_ref="rf-latest-risk-inference",
+            training_row_count=8,
+            inference_row_count=2,
+            evaluation_metrics={"training_accuracy": 0.94},
+            metadata={
+                "algorithm": "random_forest",
+                "promotion_target": "benchmark_only",
+                "execution_context": "manual_command",
+                "run_purpose": "benchmark_scoring",
+            },
+            completed_at=timezone.now(),
+        )
+        RiskScore.objects.create(
+            ward=self.ward,
+            model_run=benchmark_run,
+            score=0.98,
+            risk_level=Ward.RISK_HIGH,
+            rainfall_mm=160.0,
+            flood_indicator=0.95,
+            predicted_cases=22,
+            source=RiskScore.SOURCE_MODEL,
+            model_version="rf-latest-risk-v1",
+            generated_at=timezone.now(),
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("latest-ward-risk"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ward_payload = next(item for item in response.data if item["ward_id"] == self.ward.id)
+        self.assertEqual(ward_payload["risk_score"], self.risk_score.score)
+        self.assertEqual(ward_payload["predicted_cases"], self.risk_score.predicted_cases)
+
+    def test_ward_intelligence_prefers_promoted_output_over_newer_benchmark_output(self):
+        benchmark_run = ModelRun.objects.create(
+            algorithm_name="random-forest-benchmark",
+            model_version="rf-ward-intel-v1",
+            status=ModelRun.STATUS_SUCCESS,
+            month=4,
+            feature_schema_version="baseline-v1",
+            feature_keys=self.model_run.feature_keys,
+            training_dataset_ref="rf-ward-intel-training",
+            inference_dataset_ref="rf-ward-intel-inference",
+            training_row_count=8,
+            inference_row_count=2,
+            evaluation_metrics={"training_accuracy": 0.96},
+            metadata={
+                "algorithm": "random_forest",
+                "promotion_target": "benchmark_only",
+                "execution_context": "manual_command",
+                "run_purpose": "benchmark_scoring",
+            },
+            completed_at=timezone.now(),
+        )
+        RiskScore.objects.create(
+            ward=self.ward,
+            model_run=benchmark_run,
+            score=0.99,
+            risk_level=Ward.RISK_HIGH,
+            rainfall_mm=170.0,
+            flood_indicator=0.99,
+            predicted_cases=24,
+            source=RiskScore.SOURCE_MODEL,
+            model_version="rf-ward-intel-v1",
+            generated_at=timezone.now(),
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("ward-intelligence", kwargs={"pk": self.ward.id}))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["current_risk"]["model_version"], self.risk_score.model_version)
+        self.assertEqual(response.data["current_risk"]["predicted_cases"], self.risk_score.predicted_cases)
+
+    def test_facility_intelligence_prefers_promoted_output_over_newer_benchmark_output(self):
+        benchmark_run = ModelRun.objects.create(
+            algorithm_name="random-forest-benchmark",
+            model_version="rf-facility-v1",
+            status=ModelRun.STATUS_SUCCESS,
+            month=4,
+            feature_schema_version="baseline-v1",
+            feature_keys=self.model_run.feature_keys,
+            training_dataset_ref="rf-facility-training",
+            inference_dataset_ref="rf-facility-inference",
+            training_row_count=8,
+            inference_row_count=2,
+            evaluation_metrics={"training_accuracy": 0.92},
+            metadata={
+                "algorithm": "random_forest",
+                "promotion_target": "benchmark_only",
+                "execution_context": "manual_command",
+                "run_purpose": "benchmark_scoring",
+            },
+            completed_at=timezone.now(),
+        )
+        RiskScore.objects.create(
+            ward=self.ward,
+            model_run=benchmark_run,
+            score=0.97,
+            risk_level=Ward.RISK_HIGH,
+            rainfall_mm=155.0,
+            flood_indicator=0.88,
+            predicted_cases=21,
+            source=RiskScore.SOURCE_MODEL,
+            model_version="rf-facility-v1",
+            generated_at=timezone.now(),
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("facility-intelligence", kwargs={"pk": self.health_facility.id}))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["readiness"]["projected_cases"], self.risk_score.predicted_cases)
+        self.assertEqual(response.data["context"]["ward_risk_score"], self.risk_score.score)
+
     def test_migori_ward_map_exposes_recent_history_trend_when_multiple_runs_exist(self):
         self.import_active_migori_geometry("test-admin-map-history-v1")
         RiskScore.objects.create(
