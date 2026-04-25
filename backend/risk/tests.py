@@ -4134,8 +4134,99 @@ class SeedAndModelCommandTestCase(APITestCase):
             created_scores = run_mock_prediction_pipeline(month=4, model_version="lr-stale-v1")
 
         self.assertEqual(created_scores, [])
-        self.assertFalse(ModelRun.objects.filter(model_version="lr-stale-v1").exists())
+        self.assertTrue(ModelRun.objects.filter(model_version="lr-stale-v1").exists())
+        blocked_run = ModelRun.objects.get(model_version="lr-stale-v1")
+        self.assertEqual(blocked_run.status, ModelRun.STATUS_FAILED)
+        self.assertEqual(blocked_run.algorithm_name, "logistic-regression-baseline")
+        self.assertEqual(blocked_run.training_feature_dataset_id, training_dataset.id)
+        self.assertEqual(blocked_run.inference_feature_dataset_id, inference_dataset.id)
+        self.assertTrue(blocked_run.metadata["scoring_blocked_by_trust_policy"])
+        self.assertEqual(blocked_run.metadata["operational_trust"]["prediction_state"], TRUST_STATE_BLOCKED)
         self.assertFalse(RiskScore.objects.filter(model_version="lr-stale-v1").exists())
+
+    def test_operational_trust_blocks_dual_model_runs_with_auditable_modelrun_records(self):
+        ward = Ward.objects.create(
+            name="Blocked Dual Ward",
+            county="Migori",
+            sub_county="Rongo",
+            current_risk_level=Ward.RISK_LOW,
+            current_risk_score=0.10,
+            is_active=True,
+        )
+        stale_run = IngestionRun.objects.create(
+            run_type=IngestionRun.RUN_TYPE_RAINFALL,
+            status=IngestionRun.STATUS_SUCCESS,
+            source_mode="live",
+            source_kind=IngestionRun.SOURCE_KIND_LIVE,
+            source_name="open-meteo-forecast",
+            source_timestamp=timezone.now() - timedelta(hours=30),
+            freshness_state=IngestionRun.FRESHNESS_STALE,
+            fallback_used=False,
+            records_seen=1,
+            records_loaded=1,
+            completed_at=timezone.now(),
+        )
+        training_dataset = FeatureDataset.objects.create(
+            dataset_ref="training-test-phase5-dual",
+            dataset_kind=FeatureDataset.KIND_TRAINING,
+            schema_version="baseline-v1",
+            source_kind=FeatureDataset.SOURCE_KIND_SEEDED,
+            month=4,
+            feature_keys=["rainfall_mm", "flood_indicator", "historical_cases", "month", "seasonality", "population_proxy"],
+            row_count=2,
+            lineage_metadata={},
+        )
+        inference_dataset = FeatureDataset.objects.create(
+            dataset_ref="inference-test-phase5-dual",
+            dataset_kind=FeatureDataset.KIND_INFERENCE,
+            schema_version="baseline-v1",
+            source_kind=FeatureDataset.SOURCE_KIND_LIVE,
+            month=4,
+            feature_keys=["rainfall_mm", "flood_indicator", "historical_cases", "month", "seasonality", "population_proxy"],
+            row_count=1,
+            lineage_metadata={},
+        )
+        training_rows = [
+            WardFeatureRow(1, "Train A", 120.0, 0.8, 14, 4, 5400, 1),
+            WardFeatureRow(2, "Train B", 60.0, 0.3, 5, 4, 4700, 0),
+        ]
+        inference_rows = [
+            WardFeatureRow(ward.id, ward.name, 115.0, 0.78, 12, 4, 5000, None),
+        ]
+
+        with patch(
+            "risk.ml.pipeline.build_training_feature_dataset",
+            return_value=TrainingDataset(rows=training_rows, feature_dataset=training_dataset),
+        ), patch(
+            "risk.ml.pipeline.build_inference_feature_dataset",
+            return_value=InferenceDataset(
+                rows=inference_rows,
+                feature_dataset=inference_dataset,
+                rainfall_ingestion_run=stale_run,
+            ),
+        ):
+            created_scores = run_mock_prediction_pipeline(
+                month=4,
+                model_version="lr-stale-dual-v1",
+                dual_model=True,
+                benchmark_model_version="rf-stale-dual-v1",
+            )
+
+        self.assertEqual(created_scores, [])
+        self.assertEqual(
+            ModelRun.objects.filter(model_version__in=["lr-stale-dual-v1", "rf-stale-dual-v1"]).count(),
+            2,
+        )
+        primary_run = ModelRun.objects.get(model_version="lr-stale-dual-v1")
+        benchmark_run = ModelRun.objects.get(model_version="rf-stale-dual-v1")
+        self.assertEqual(primary_run.status, ModelRun.STATUS_FAILED)
+        self.assertEqual(benchmark_run.status, ModelRun.STATUS_FAILED)
+        self.assertEqual(primary_run.metadata["run_role"], "primary")
+        self.assertEqual(benchmark_run.metadata["run_role"], "benchmark")
+        self.assertEqual(primary_run.metadata["benchmark_group_ref"], benchmark_run.metadata["benchmark_group_ref"])
+        self.assertTrue(primary_run.metadata["scoring_blocked_by_trust_policy"])
+        self.assertTrue(benchmark_run.metadata["scoring_blocked_by_trust_policy"])
+        self.assertFalse(RiskScore.objects.filter(model_version__in=["lr-stale-dual-v1", "rf-stale-dual-v1"]).exists())
 
     def test_seed_demo_data_assigns_model_run_to_seeded_model_scores(self):
         call_command("seed_demo_data")

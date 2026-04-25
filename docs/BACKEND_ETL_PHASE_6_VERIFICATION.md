@@ -124,7 +124,7 @@ Implemented now:
 - delayed data degrades trust
 - fallback or seeded data blocks automatic alerting
 - stale live-source conditions block prediction generation
-- blocked runs log the trust-policy reason explicitly
+- blocked runs now persist failed `ModelRun` audit records with shared dataset lineage and trust metadata
 
 Conclusion:
 
@@ -190,14 +190,16 @@ Covered by tests for:
 - stale live source
 - degraded trust suppressing automatic alerts
 - blocked trust preventing scoring
+- blocked trust persisting auditable failed `ModelRun` records
+- blocked dual-model runs persisting both primary and benchmark failure records
 
 ## Honest Remaining Gaps
 
 1. The ETL backbone is strongest today for rainfall-driven prediction, not yet for the full multi-source proposal target.
 2. Population, settlement exposure, richer surveillance, flood, and vulnerability feeds remain planned rather than fully implemented.
-3. Blocked trust-policy runs currently return early instead of persisting a dedicated blocked `ModelRun` audit object.
-4. Schedule-gap trust is based on ingestion-run history, not yet on a fuller scheduler heartbeat or worker-health model.
-5. Facility-readiness ETL exists structurally, but richer real facility operations data is still needed for higher-confidence forecasting.
+3. Schedule-gap trust is based on ingestion-run history, not yet on a fuller scheduler heartbeat or worker-health model.
+4. Facility-readiness ETL exists structurally, but richer real facility operations data is still needed for higher-confidence forecasting.
+5. The backbone is still strongest for rainfall-governed prediction rather than the full eventual multi-source proposal footprint.
 
 ## Final Verification Verdict
 
@@ -209,6 +211,7 @@ The ETL backbone is now credible as an early operational foundation for:
 - feature lineage
 - dual-model readiness
 - freshness-aware trust governance
+- auditable blocked-run behavior
 - admin-first ops control
 
 It is not yet the full real-data completion of every proposal data domain, and this verification document should not be read as claiming that broader completion.

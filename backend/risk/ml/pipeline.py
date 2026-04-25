@@ -25,6 +25,58 @@ from .trust import alerts_allowed_for_snapshot, build_operational_trust_snapshot
 ml_logger = logging.getLogger("risk.ml")
 
 
+def _persist_blocked_model_run(
+    *,
+    training_dataset,
+    inference_dataset,
+    training_rows,
+    inference_rows,
+    algorithm: str,
+    model_version: str,
+    month: int,
+    benchmark_group_ref: str | None,
+    run_role: str,
+    alert_eligible: bool,
+    operational_trust: dict,
+    requested_trigger_alerts: bool,
+) -> ModelRun:
+    blocked_at = timezone.now()
+    return ModelRun.objects.create(
+        algorithm_name=algorithm_to_run_name(algorithm),
+        model_version=model_version,
+        status=ModelRun.STATUS_FAILED,
+        month=month,
+        feature_schema_version=FEATURE_SCHEMA_VERSION,
+        feature_keys=FEATURE_KEYS,
+        training_dataset_ref=training_dataset.feature_dataset.dataset_ref,
+        inference_dataset_ref=inference_dataset.feature_dataset.dataset_ref,
+        training_row_count=len(training_rows),
+        inference_row_count=len(inference_rows),
+        evaluation_metrics={
+            "blocked_by_trust_policy": True,
+            "blocked_at": blocked_at.isoformat(),
+        },
+        training_feature_dataset=training_dataset.feature_dataset,
+        inference_feature_dataset=inference_dataset.feature_dataset,
+        metadata={
+            "trigger_alerts": False,
+            "requested_trigger_alerts": requested_trigger_alerts,
+            "send_sms": False,
+            "algorithm": algorithm,
+            "run_role": run_role,
+            "benchmark_group_ref": benchmark_group_ref,
+            "alert_eligible": alert_eligible,
+            "dual_model_mode": benchmark_group_ref is not None,
+            "promotion_state": "promoted" if alert_eligible else "benchmark_only",
+            "operational_trust": operational_trust,
+            "automatic_alerts_blocked_by_trust_policy": requested_trigger_alerts,
+            "scoring_blocked_by_trust_policy": True,
+        },
+        rainfall_ingestion_run=inference_dataset.rainfall_ingestion_run,
+        completed_at=blocked_at,
+    )
+
+
 def _persist_model_outputs(
     *,
     wards: list[Ward],
@@ -177,6 +229,36 @@ def run_mock_prediction_pipeline(
                 "operational_trust": operational_trust,
             },
         )
+        with transaction.atomic():
+            _persist_blocked_model_run(
+                training_dataset=training_dataset,
+                inference_dataset=inference_dataset,
+                training_rows=training_rows,
+                inference_rows=inference_rows,
+                algorithm=algorithm,
+                model_version=model_version,
+                month=month,
+                benchmark_group_ref=benchmark_group_ref,
+                run_role="primary",
+                alert_eligible=alert_algorithm == algorithm,
+                operational_trust=operational_trust,
+                requested_trigger_alerts=trigger_alerts,
+            )
+            if dual_model:
+                _persist_blocked_model_run(
+                    training_dataset=training_dataset,
+                    inference_dataset=inference_dataset,
+                    training_rows=training_rows,
+                    inference_rows=inference_rows,
+                    algorithm=benchmark_algorithm,
+                    model_version=benchmark_model_version,
+                    month=month,
+                    benchmark_group_ref=benchmark_group_ref,
+                    run_role="benchmark",
+                    alert_eligible=alert_algorithm == benchmark_algorithm,
+                    operational_trust=operational_trust,
+                    requested_trigger_alerts=trigger_alerts,
+                )
         return []
 
     with transaction.atomic():
