@@ -4318,6 +4318,73 @@ class ETLOperationalTrustPolicyTestCase(APITestCase):
         self.assertEqual(snapshot["alert_state"], ALERT_STATE_BLOCKED)
         self.assertIn("source-stale", snapshot["reasons"])
 
+    def test_build_operational_trust_snapshot_marks_large_schedule_gap_as_degraded(self):
+        IngestionRun.objects.create(
+            run_type=IngestionRun.RUN_TYPE_RAINFALL,
+            status=IngestionRun.STATUS_SUCCESS,
+            source_mode="hybrid",
+            source_kind=IngestionRun.SOURCE_KIND_LIVE,
+            source_name="open-meteo-forecast",
+            source_timestamp=timezone.now() - timedelta(hours=36),
+            freshness_state=IngestionRun.FRESHNESS_FRESH,
+            fallback_used=False,
+            records_seen=1,
+            records_loaded=1,
+            completed_at=timezone.now() - timedelta(hours=36),
+        )
+        run = IngestionRun.objects.create(
+            run_type=IngestionRun.RUN_TYPE_RAINFALL,
+            status=IngestionRun.STATUS_SUCCESS,
+            source_mode="hybrid",
+            source_kind=IngestionRun.SOURCE_KIND_LIVE,
+            source_name="open-meteo-forecast",
+            source_timestamp=timezone.now(),
+            freshness_state=IngestionRun.FRESHNESS_FRESH,
+            fallback_used=False,
+            records_seen=1,
+            records_loaded=1,
+            completed_at=timezone.now(),
+        )
+
+        snapshot = build_operational_trust_snapshot(run)
+
+        self.assertEqual(snapshot["prediction_state"], TRUST_STATE_DEGRADED)
+        self.assertEqual(snapshot["alert_state"], ALERT_STATE_BLOCKED)
+        self.assertEqual(snapshot["schedule_state"], "delayed")
+        self.assertGreater(snapshot["schedule_gap_hours"], 30)
+        self.assertIn("scheduled-ingestion-gap", snapshot["reasons"])
+
+    @patch("risk.ml.trust.config")
+    def test_build_operational_trust_snapshot_marks_static_mode_as_degraded(self, mock_config):
+        def config_side_effect(key, *args, **kwargs):
+            if key == "RAINFALL_SOURCE_MODE":
+                return "static"
+            if key == "RAINFALL_INGESTION_DELAY_WARNING_HOURS":
+                return kwargs.get("default", 30)
+            return kwargs.get("default")
+
+        mock_config.side_effect = config_side_effect
+
+        run = IngestionRun.objects.create(
+            run_type=IngestionRun.RUN_TYPE_RAINFALL,
+            status=IngestionRun.STATUS_SUCCESS,
+            source_mode="static",
+            source_kind=IngestionRun.SOURCE_KIND_SEEDED,
+            source_name="static-csv",
+            source_timestamp=None,
+            freshness_state=IngestionRun.FRESHNESS_UNKNOWN,
+            fallback_used=False,
+            records_seen=1,
+            records_loaded=1,
+            completed_at=timezone.now(),
+        )
+
+        snapshot = build_operational_trust_snapshot(run)
+
+        self.assertEqual(snapshot["prediction_state"], TRUST_STATE_DEGRADED)
+        self.assertEqual(snapshot["alert_state"], ALERT_STATE_BLOCKED)
+        self.assertIn("static-mode-forced", snapshot["reasons"])
+
 
 class RainfallIngestionTestCase(APITestCase):
     @patch("risk.ml.ingestion.fetch_open_meteo_daily_precipitation")

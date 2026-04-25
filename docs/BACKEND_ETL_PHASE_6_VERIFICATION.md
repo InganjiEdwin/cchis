@@ -187,7 +187,9 @@ Covered by tests for:
 - fresh live source
 - delayed live source
 - fallback / seeded source
+- static-mode-forced source behavior
 - stale live source
+- scheduled-ingestion-gap degradation
 - degraded trust suppressing automatic alerts
 - blocked trust preventing scoring
 - blocked trust persisting auditable failed `ModelRun` records

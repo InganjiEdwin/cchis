@@ -75,8 +75,8 @@ Completed for the current rainfall-driven ETL and prediction path.
 ## Honest Remaining Gaps
 
 - trust policy is implemented first for rainfall-driven ETL, not yet for every future source domain
-- blocked runs currently log and return early rather than persisting a dedicated failed model-run audit object
 - schedule-gap detection is based on completed ingestion-run gaps, not a richer scheduler heartbeat model
+- full proposal-aligned source coverage is still broader than the currently implemented ETL backbone
 
 ## Conclusion
 
