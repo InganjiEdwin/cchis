@@ -3,6 +3,14 @@ from __future__ import annotations
 from risk.models import ModelRun
 
 
+REQUIRED_PROMOTION_EVIDENCE_KEYS = {
+    "out_of_time_score": "out_of_time_validation_missing",
+    "calibration_score": "calibration_evidence_missing",
+    "lead_time_days_supported": "lead_time_evidence_missing",
+    "temporal_validation_window_count": "temporal_robustness_evidence_missing",
+}
+
+
 def _run_summary(run: ModelRun) -> dict:
     metadata = run.metadata or {}
     evaluation_metrics = run.evaluation_metrics or {}
@@ -18,6 +26,20 @@ def _run_summary(run: ModelRun) -> dict:
         "promotion_target": metadata.get("promotion_target"),
         "evaluation_metrics": evaluation_metrics,
     }
+
+
+def _promotion_evidence_assessment(*, logistic_run: ModelRun, random_forest_run: ModelRun) -> dict:
+    logistic_metrics = logistic_run.evaluation_metrics or {}
+    random_forest_metrics = random_forest_run.evaluation_metrics or {}
+
+    evidence = {}
+    for key, blocker in REQUIRED_PROMOTION_EVIDENCE_KEYS.items():
+        evidence[key] = {
+            "logistic_regression": key in logistic_metrics,
+            "random_forest": key in random_forest_metrics,
+            "blocker": blocker,
+        }
+    return evidence
 
 
 def build_model_comparison_summary(
@@ -41,16 +63,16 @@ def build_model_comparison_summary(
     if comparison_validity != "comparable_inputs":
         promotion_blockers.append("feature_or_dataset_mismatch")
 
-    # Early-phase promotion must remain conservative until these dimensions are
-    # evaluated explicitly with real operational evidence rather than inferred.
-    promotion_blockers.extend(
-        [
-            "calibration_evidence_missing",
-            "lead_time_evidence_missing",
-            "temporal_robustness_evidence_missing",
-            "operational_promotion_review_pending",
-        ]
+    evidence_assessment = _promotion_evidence_assessment(
+        logistic_run=logistic_run,
+        random_forest_run=random_forest_run,
     )
+    for evidence in evidence_assessment.values():
+        if not (evidence["logistic_regression"] and evidence["random_forest"]):
+            promotion_blockers.append(evidence["blocker"])
+
+    promotion_blockers.append("operational_promotion_review_pending")
+    promotion_blockers = list(dict.fromkeys(promotion_blockers))
 
     decision = {
         "recommended_primary_model": "logistic_regression",
@@ -75,6 +97,7 @@ def build_model_comparison_summary(
             "interpretability_cost": "reviewed_conservatively",
             "operational_trustworthiness": "partially_reviewed",
         },
+        "evidence_assessment": evidence_assessment,
     }
 
     return {

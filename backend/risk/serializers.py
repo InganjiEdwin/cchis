@@ -344,6 +344,13 @@ class ModelRunSerializer(serializers.ModelSerializer):
         ]
 
 
+class ModelAlignmentSerializer(serializers.Serializer):
+    current_live_baseline = serializers.DictField()
+    current_benchmark_model = serializers.DictField()
+    future_candidate_models = serializers.ListField(child=serializers.CharField())
+    dashboard_policy = serializers.DictField()
+
+
 class AlertSerializer(serializers.ModelSerializer):
     ward_name = serializers.CharField(source="ward.name", read_only=True)
     risk_score = serializers.FloatField(source="risk_score.score", allow_null=True, read_only=True)

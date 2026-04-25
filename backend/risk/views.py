@@ -10,6 +10,7 @@ from accounts.permissions import IsAdminOrSupervisor, IsAdminSupervisorOrAnalyst
 
 from .tasks import trigger_alerts_task
 
+from .ml.alignment import get_live_model_alignment_summary
 from .models import Alert, CHV, HealthFacility, RiskScore, UssdSessionLog, Ward
 from .map_data import build_migori_ward_map_summary
 from .serializers import (
@@ -22,6 +23,7 @@ from .serializers import (
     CHVTriageResponseSerializer,
     FacilityIntelligenceSerializer,
     HealthFacilitySerializer,
+    ModelAlignmentSerializer,
     RiskScoreSerializer,
     TriggerAlertRequestSerializer,
     UssdSessionLogSerializer,
@@ -324,6 +326,15 @@ class MigoriWardMapAPIView(APIView):
             limit_to_backend_wards=not user_has_broad_dashboard_scope(request.user),
         )
         return Response(payload, status=status.HTTP_200_OK)
+
+
+class ModelAlignmentAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request):
+        payload = get_live_model_alignment_summary()
+        serializer = ModelAlignmentSerializer(payload)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class TriggerAlertsAPIView(APIView):

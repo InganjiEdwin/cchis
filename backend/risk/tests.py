@@ -2555,6 +2555,16 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["latest_model_version"], "v0-test")
 
+    def test_model_alignment_endpoint_exposes_backend_truth_surface(self):
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("model-alignment"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["current_live_baseline"]["algorithm"], "logistic_regression")
+        self.assertEqual(response.data["current_benchmark_model"]["algorithm"], None)
+        self.assertIn("xgboost", response.data["future_candidate_models"])
+        self.assertTrue(response.data["dashboard_policy"]["surface_only_promoted_outputs"])
+
     def test_migori_ward_map_exposes_recent_history_trend_when_multiple_runs_exist(self):
         self.import_active_migori_geometry("test-admin-map-history-v1")
         RiskScore.objects.create(
@@ -4379,6 +4389,8 @@ class SeedAndModelCommandTestCase(APITestCase):
         self.assertEqual(payload["random_forest"]["model_version"], "rf-compare-v1")
         self.assertTrue(payload["comparison"]["same_feature_schema"])
         self.assertIn("lead_time_evidence_missing", payload["decision"]["promotion_blockers"])
+        self.assertIn("out_of_time_validation_missing", payload["decision"]["promotion_blockers"])
+        self.assertFalse(payload["decision"]["evidence_assessment"]["calibration_score"]["logistic_regression"])
         self.assertEqual(payload["decision"]["retraining_task"], None)
 
     def test_build_model_comparison_summary_marks_input_mismatch_as_promotion_blocker(self):
