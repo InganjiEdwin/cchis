@@ -88,6 +88,14 @@ Additional verification after the stricter repeat audit:
 
 This closes the earlier proof gap where some of these claims were true by shared helper behavior but not all were directly asserted in tests.
 
+Additional precision after the second repeat audit:
+
+- the roadmap claim about product-facing truth surfaces is now backed both by:
+  - shared alignment helpers
+  - direct endpoint-level or snapshot-level tests
+
+This means the claim is no longer resting mainly on indirect reuse of backend selection logic.
+
 ### 5. Claim: a dedicated backend truth surface exists for product consumers
 
 Verdict:
