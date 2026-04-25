@@ -64,16 +64,20 @@ This means the backend is now in a transitional state:
 - `Random Forest` exists as a backend benchmark-capable path
 - `Random Forest` is not yet promoted as the live scheduled model
 
-That is closer to the proposal's early-phase intent, but promotion discipline still needs to be documented explicitly.
+That is closer to the proposal's early-phase intent, and promotion discipline is now both documented and partially enforced in backend comparison and alignment surfaces.
 
 Additional current truth after execution of Phases 0 to 5:
 
-- `XGBoost` and `LightGBM` now exist only as documented backend candidates
+- `XGBoost` and `LightGBM` now exist only as backend-owned readiness candidates
 - they are not runnable live defaults
 - they are not benchmark-promoted models
-- dashboard-facing ward and map surfaces now prefer promoted live outputs over newer benchmark-only or demo-only outputs
+- dashboard-facing ward, latest-risk, intelligence, facility, and map surfaces now prefer promoted live outputs over newer benchmark-only or demo-only outputs
 - no scheduled retraining task exists yet
 - retraining remains manual only
+- a dedicated backend truth surface now exists for product consumers:
+  - `/api/v1/risk/model-alignment/`
+- a dedicated backend comparison command now exists for promotion review:
+  - `compare_model_candidates`
 
 ### Current executed status
 
@@ -86,6 +90,10 @@ The following phase outputs now exist and should be treated as the audited recor
 - [BACKEND_ML_MODEL_PHASE_3_EVALUATION.md](/Users/edwininganji/VSCodeProjects/cchis/docs/BACKEND_ML_MODEL_PHASE_3_EVALUATION.md)
 - [BACKEND_ML_MODEL_PHASE_4_STATUS.md](/Users/edwininganji/VSCodeProjects/cchis/docs/BACKEND_ML_MODEL_PHASE_4_STATUS.md)
 - [BACKEND_ML_MODEL_PHASE_5_STATUS.md](/Users/edwininganji/VSCodeProjects/cchis/docs/BACKEND_ML_MODEL_PHASE_5_STATUS.md)
+
+The stricter claims-versus-implementation audit is recorded in:
+
+- [BACKEND_ML_MODEL_IMPLEMENTATION_AUDIT.md](/Users/edwininganji/VSCodeProjects/cchis/docs/BACKEND_ML_MODEL_IMPLEMENTATION_AUDIT.md)
 
 ### Current unresolved limitations
 
@@ -106,7 +114,7 @@ The roadmap must remain honest about the following residual limitations:
 The intended progression is:
 
 1. current live baseline = `Logistic Regression`
-2. next model to add = `Random Forest` benchmark
+2. next model after the live baseline = `Random Forest` benchmark
 3. later evolution = `XGBoost / LightGBM`
 
 This ordering should remain explicit in both backend planning and dashboard-facing prediction language.
@@ -114,7 +122,7 @@ This ordering should remain explicit in both backend planning and dashboard-faci
 The intended backend direction for early prediction work is:
 
 - `Logistic Regression` as the live baseline
-- `Random Forest` as the next real benchmark model
+- `Random Forest` as the benchmark model already landed in backend execution paths
 - eventual support for both models on comparable inference slices
 
 This is important because the project goal is not merely to score wards in the abstract.
@@ -253,7 +261,8 @@ The ML layer should not rely on ad hoc manual execution once it becomes operatio
 Early-phase orchestration should use:
 
 - Celery workers for model-execution jobs
-- Celery Beat for scheduled training / scoring jobs where appropriate
+- Celery Beat for scheduled scoring jobs
+- scheduled retraining only after a later phase explicitly implements it
 - management commands for manual reruns, benchmark runs, and backfills
 
 The plan should distinguish clearly between:
@@ -278,6 +287,9 @@ over:
 - candidate-only future model states
 
 This rule matters because product trust is broken if a newer benchmark run silently outranks the actual live baseline.
+
+Admin and audit surfaces may still expose broader run history, including benchmark-only and demo-only records.
+That is acceptable as long as those surfaces are not mistaken for operational truth surfaces.
 
 ---
 
@@ -585,6 +597,14 @@ Create:
 
 - `docs/BACKEND_ML_MODEL_PHASE_5_STATUS.md`
 
+### Implemented backend truth surfaces
+
+At the end of this phase, the backend should expose or preserve:
+
+- a product-facing truth surface for current live-versus-benchmark state
+- dashboard-facing selectors that prefer promoted outputs
+- broader admin and audit surfaces that still preserve non-promoted run history without promoting it accidentally
+
 ### Start condition for ML Phase 0
 
 Before beginning ML Phase 0, complete the small ETL hardening step for:
@@ -641,7 +661,7 @@ It is to be:
 That means the correct current statement is:
 
 - live baseline now = `Logistic Regression`
-- next model to add = `Random Forest` benchmark
+- next model after the live baseline = `Random Forest` benchmark, already landed as a backend benchmark path
 - later evolution = `XGBoost / LightGBM`
 
 And the correct early-phase target state is:
