@@ -26,6 +26,13 @@ FACILITY_FORECAST_FEATURE_KEYS = [
     "staffing_percent",
     "ors_estimate_percent",
 ]
+FACILITY_FORECAST_PROMOTION_BLOCKERS = [
+    "proxy_training_target_only",
+    "real_facility_case_history_missing",
+    "out_of_time_validation_missing",
+    "threshold_usefulness_review_incomplete",
+    "operational_promotion_review_pending",
+]
 
 
 @dataclass
@@ -75,6 +82,142 @@ def build_facility_forecasting_truth_audit() -> dict:
             "negative_binomial_not_yet_promoted": True,
             "current_readiness_is_proxy_backed": True,
             "dashboard_must_not_present_preview_as_promoted_forecast": True,
+        },
+    }
+
+
+def _latest_successful_facility_forecast_run() -> FacilityForecastRun | None:
+    return FacilityForecastRun.objects.filter(status=FacilityForecastRun.STATUS_SUCCESS).order_by("-started_at").first()
+
+
+def _run_summary(run: FacilityForecastRun) -> dict:
+    metadata = run.metadata or {}
+    return {
+        "model_version": run.model_version,
+        "algorithm_name": run.algorithm_name,
+        "status": run.status,
+        "horizon_days": run.horizon_days,
+        "feature_schema_version": run.feature_schema_version,
+        "feature_keys": run.feature_keys,
+        "target_definition": run.target_definition,
+        "training_row_count": run.training_row_count,
+        "inference_row_count": run.inference_row_count,
+        "evaluation_metrics": run.evaluation_metrics or {},
+        "execution_context": metadata.get("execution_context"),
+        "run_purpose": metadata.get("run_purpose"),
+        "promotion_target": metadata.get("promotion_target"),
+        "retraining_policy": metadata.get("retraining_policy"),
+        "target_mode": metadata.get("target_mode"),
+        "started_at": run.started_at,
+        "completed_at": run.completed_at,
+    }
+
+
+def build_facility_forecast_promotion_summary(run: FacilityForecastRun | None = None) -> dict:
+    run = run or _latest_successful_facility_forecast_run()
+    if run is None:
+        return {
+            "current_run": None,
+            "evaluation": {
+                "count_error_discipline": {"status": "not_available"},
+                "threshold_usefulness": {"status": "not_available"},
+                "operational_usefulness": {"status": "not_available"},
+                "stability_across_time_windows": {"status": "not_available"},
+                "explainability": {"status": "not_available"},
+            },
+            "decision": {
+                "recommended_state": "not_promoted",
+                "governance_mode": "not_yet_implemented",
+                "promotion_readiness": "not_ready_for_promotion",
+                "promotion_blockers": ["baseline_run_missing"],
+                "decision_reason": "No successful facility burden baseline run exists yet.",
+                "allowed_product_surfaces": ["truth_audit", "contract_definition"],
+                "blocked_product_surfaces": [
+                    "dashboard_readiness_warning",
+                    "promoted_facility_summary",
+                    "action_panel_facility_pressure",
+                ],
+            },
+        }
+
+    forecasts = list(run.forecasts.all())
+    readiness_counts = {
+        "low": sum(1 for forecast in forecasts if forecast.projected_readiness_state == FacilityForecast.READINESS_LOW),
+        "watch": sum(1 for forecast in forecasts if forecast.projected_readiness_state == FacilityForecast.READINESS_WATCH),
+        "capacity_concern": sum(
+            1 for forecast in forecasts if forecast.projected_readiness_state == FacilityForecast.READINESS_CAPACITY_CONCERN
+        ),
+    }
+    surge_threshold_coverage = sum(
+        1
+        for forecast in forecasts
+        if {"ors", "staffing", "observation_burden"}.issubset(set((forecast.surge_threshold_state or {}).keys()))
+    )
+    factor_coverage = sum(1 for forecast in forecasts if forecast.forecast_factors)
+    evaluation_metrics = run.evaluation_metrics or {}
+
+    count_error_status = "partial_proxy_only"
+    if "training_count_mae" in evaluation_metrics:
+        count_error_status = "measured_on_proxy_training_target"
+
+    threshold_status = "partial"
+    if surge_threshold_coverage == len(forecasts) and forecasts:
+        threshold_status = "derived_thresholds_present_but_not_operationally_reviewed"
+
+    operational_status = "partial"
+    if factor_coverage == len(forecasts) and forecasts:
+        operational_status = "forecast_factors_and_driving_wards_present"
+
+    explainability_status = "present" if forecasts else "not_available"
+
+    return {
+        "current_run": _run_summary(run),
+        "evaluation": {
+            "count_error_discipline": {
+                "status": count_error_status,
+                "training_count_mae": evaluation_metrics.get("training_count_mae"),
+                "target_mode": evaluation_metrics.get("target_mode"),
+            },
+            "threshold_usefulness": {
+                "status": threshold_status,
+                "forecast_count": len(forecasts),
+                "surge_threshold_coverage_count": surge_threshold_coverage,
+                "readiness_state_counts": readiness_counts,
+            },
+            "operational_usefulness": {
+                "status": operational_status,
+                "driving_ward_linkage_present": all(bool(forecast.driving_ward_ids) for forecast in forecasts) if forecasts else False,
+                "forecast_factor_coverage_count": factor_coverage,
+            },
+            "stability_across_time_windows": {
+                "status": "not_yet_established",
+                "blocker": "single_proxy_backbone_without_out_of_time_review",
+            },
+            "explainability": {
+                "status": explainability_status,
+                "factor_count_per_forecast": len(forecasts[0].forecast_factors) if forecasts else 0,
+                "algorithm_family": "negative_binomial_regression",
+            },
+        },
+        "decision": {
+            "recommended_state": "not_promoted",
+            "governance_mode": "preview_only",
+            "promotion_readiness": "not_ready_for_promotion",
+            "promotion_blockers": FACILITY_FORECAST_PROMOTION_BLOCKERS,
+            "decision_reason": (
+                "The Negative Binomial baseline is implemented and persisted, but promotion remains blocked because "
+                "the target is still proxy-derived and real facility burden evidence is incomplete."
+            ),
+            "allowed_product_surfaces": [
+                "facility_forecast_preview",
+                "ops_admin_review",
+                "forecast_evaluation_review",
+            ],
+            "blocked_product_surfaces": [
+                "dashboard_readiness_warning",
+                "promoted_facility_summary",
+                "action_panel_facility_pressure",
+            ],
         },
     }
 

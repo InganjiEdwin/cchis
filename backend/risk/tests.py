@@ -2935,11 +2935,14 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.data["forecasting_state"], "phase_0_truth_audited_phase_1_contract_defined")
         self.assertEqual(response.data["planned_baseline_model"], "negative_binomial_regression")
         self.assertIsNone(response.data["current_baseline_model"])
+        self.assertEqual(response.data["current_baseline_state"], "not_yet_implemented")
         self.assertIn("facility master record", response.data["truth_sources"]["direct_operational_truth"])
         self.assertIn(
             "negative_binomial_is_live",
             response.data["contract_definition"]["dashboard_not_allowed_to_imply_yet"],
         )
+        self.assertEqual(response.data["promotion_summary"]["decision"]["promotion_readiness"], "not_ready_for_promotion")
+        self.assertIn("baseline_run_missing", response.data["promotion_summary"]["decision"]["promotion_blockers"])
 
     def test_analyst_can_view_facility_forecast_preview(self):
         self.authenticate(self.analyst_user.username)
@@ -2988,6 +2991,25 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["forecasting_state"], "phase_2_baseline_implemented_not_promoted")
         self.assertEqual(response.data["current_baseline_model"], "negative-binomial-baseline")
+        self.assertEqual(response.data["current_baseline_state"], "implemented_not_promoted")
+        self.assertEqual(response.data["promotion_summary"]["decision"]["governance_mode"], "preview_only")
+        self.assertIn("proxy_training_target_only", response.data["promotion_summary"]["decision"]["promotion_blockers"])
+
+    def test_analyst_can_view_facility_forecasting_evaluation(self):
+        run_facility_burden_forecast_pipeline(
+            model_version="fnb-v1",
+            execution_context="test_case",
+            run_purpose="forecast_scoring",
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("facility-forecasting-evaluation"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["current_run"]["model_version"], "fnb-v1")
+        self.assertEqual(response.data["decision"]["promotion_readiness"], "not_ready_for_promotion")
+        self.assertEqual(response.data["decision"]["governance_mode"], "preview_only")
+        self.assertIn("dashboard_readiness_warning", response.data["decision"]["blocked_product_surfaces"])
 
     def test_supervisor_cannot_view_out_of_scope_facility_forecast_preview(self):
         self.authenticate(self.supervisor_user.username)
@@ -3888,6 +3910,18 @@ class SeedAndModelCommandTestCase(APITestCase):
         self.assertEqual(run.status, FacilityForecastRun.STATUS_FAILED)
         self.assertEqual(run.metadata["failure_reason"], "nb-fit-failed")
         self.assertEqual(FacilityForecast.objects.filter(forecast_run=run).count(), 0)
+
+    def test_evaluate_facility_burden_forecast_command_reports_not_promoted_decision(self):
+        call_command("seed_demo_data")
+        call_command("run_facility_burden_forecast", model_version="fnb-v1")
+
+        stdout = StringIO()
+        call_command("evaluate_facility_burden_forecast", stdout=stdout)
+        payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(payload["current_run"]["model_version"], "fnb-v1")
+        self.assertEqual(payload["decision"]["promotion_readiness"], "not_ready_for_promotion")
+        self.assertIn("proxy_training_target_only", payload["decision"]["promotion_blockers"])
 
     def test_reconcile_ward_codes_command_restores_canonical_codes(self):
         call_command("seed_kenya_administrative_areas", counties=["Migori"])

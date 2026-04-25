@@ -11,6 +11,7 @@ from accounts.permissions import IsAdminOrSupervisor, IsAdminSupervisorOrAnalyst
 from .tasks import trigger_alerts_task
 
 from .facility_forecasting import (
+    build_facility_forecast_promotion_summary,
     build_facility_forecasting_truth_audit,
     build_initial_facility_forecast_contract_definition,
     build_initial_facility_forecast_preview,
@@ -28,6 +29,7 @@ from .serializers import (
     CHVTriageResponseSerializer,
     FacilityIntelligenceSerializer,
     FacilityForecastPreviewSerializer,
+    FacilityForecastPromotionSummarySerializer,
     FacilityForecastingStatusSerializer,
     HealthFacilitySerializer,
     ModelAlignmentSerializer,
@@ -214,6 +216,7 @@ class FacilityForecastingStatusAPIView(APIView):
     def get(self, request):
         payload = build_facility_forecasting_truth_audit()
         payload["contract_definition"] = build_initial_facility_forecast_contract_definition()
+        payload["promotion_summary"] = build_facility_forecast_promotion_summary()
         serializer = FacilityForecastingStatusSerializer(payload)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -230,6 +233,15 @@ class HealthFacilityForecastPreviewAPIView(APIView):
 
         payload = build_initial_facility_forecast_preview(facility)
         serializer = FacilityForecastPreviewSerializer(payload)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class FacilityForecastingEvaluationAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request):
+        payload = build_facility_forecast_promotion_summary()
+        serializer = FacilityForecastPromotionSummarySerializer(payload)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 

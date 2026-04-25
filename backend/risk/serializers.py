@@ -535,10 +535,18 @@ class FacilityForecastPreviewSerializer(serializers.Serializer):
 class FacilityForecastingStatusSerializer(serializers.Serializer):
     forecasting_state = serializers.CharField()
     current_baseline_model = serializers.CharField(allow_null=True)
+    current_baseline_state = serializers.CharField(required=False)
     planned_baseline_model = serializers.CharField()
     truth_sources = serializers.DictField()
     honesty_rules = serializers.DictField()
     contract_definition = serializers.DictField(required=False)
+    promotion_summary = serializers.DictField(required=False)
+
+
+class FacilityForecastPromotionSummarySerializer(serializers.Serializer):
+    current_run = serializers.DictField(allow_null=True)
+    evaluation = serializers.DictField()
+    decision = serializers.DictField()
 
 
 class WardIntelligenceSerializer(serializers.Serializer):
