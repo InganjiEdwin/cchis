@@ -296,6 +296,10 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_BEAT_SCHEDULE = {
+    "etl-heartbeat": {
+        "task": "risk.tasks.record_etl_heartbeat_task",
+        "schedule": crontab(minute="*/10"),
+    },
     "daily-rainfall-ingestion-run": {
         "task": "risk.tasks.run_rainfall_ingestion_task",
         "schedule": crontab(hour=5, minute=30),

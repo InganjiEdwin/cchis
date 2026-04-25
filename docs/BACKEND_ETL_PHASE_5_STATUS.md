@@ -75,7 +75,7 @@ Completed for the current rainfall-driven ETL and prediction path.
 ## Honest Remaining Gaps
 
 - trust policy is implemented first for rainfall-driven ETL, not yet for every future source domain
-- schedule-gap detection is based on completed ingestion-run gaps, not a richer scheduler heartbeat model
+- scheduler and worker heartbeat now exist, but deeper worker-health evidence still remains limited
 - full proposal-aligned source coverage is still broader than the currently implemented ETL backbone
 
 ## Conclusion

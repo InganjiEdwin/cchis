@@ -5,11 +5,40 @@ from django.utils import timezone
 
 from risk.ml.ingestion import fetch_rainfall_for_wards
 from risk.ml.pipeline import run_mock_prediction_pipeline
-from risk.models import Alert, RiskScore, Ward
+from risk.models import Alert, ETLHeartbeat, RiskScore, Ward
 from risk.services import deliver_alert, trigger_alerts_for_riskscore
 
 
 logger = logging.getLogger("risk")
+
+
+@shared_task(bind=True)
+def record_etl_heartbeat_task(self) -> int:
+    task_name = "risk.tasks.record_etl_heartbeat_task"
+    recorded_at = timezone.now()
+    ETLHeartbeat.objects.bulk_create(
+        [
+            ETLHeartbeat(
+                component=ETLHeartbeat.COMPONENT_SCHEDULER,
+                task_name=task_name,
+                status=ETLHeartbeat.STATUS_OK,
+                details={"origin": "celery-beat"},
+                recorded_at=recorded_at,
+            ),
+            ETLHeartbeat(
+                component=ETLHeartbeat.COMPONENT_WORKER,
+                task_name=task_name,
+                status=ETLHeartbeat.STATUS_OK,
+                details={"origin": "celery-worker", "task_id": self.request.id},
+                recorded_at=recorded_at,
+            ),
+        ]
+    )
+    logger.info(
+        "record_etl_heartbeat_task_completed",
+        extra={"task_name": task_name, "recorded_at": recorded_at.isoformat()},
+    )
+    return 2
 
 
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})

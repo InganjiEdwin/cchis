@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import Alert, CHV, FeatureDataset, FeatureDatasetRow, HealthFacility, IngestionRun, ModelRun, RiskScore, SyncQueue, TriageSession, UssdSessionLog, Ward
+from .models import Alert, CHV, ETLHeartbeat, FeatureDataset, FeatureDatasetRow, HealthFacility, IngestionRun, ModelRun, RiskScore, SyncQueue, TriageSession, UssdSessionLog, Ward
 
 
 class WardSerializer(serializers.ModelSerializer):
@@ -232,6 +232,19 @@ class IngestionRunSerializer(serializers.ModelSerializer):
             "error_message",
             "started_at",
             "completed_at",
+        ]
+
+
+class ETLHeartbeatSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ETLHeartbeat
+        fields = [
+            "id",
+            "component",
+            "task_name",
+            "status",
+            "details",
+            "recorded_at",
         ]
 
 

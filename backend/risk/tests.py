@@ -94,6 +94,7 @@ from risk.views import USSDMenuAPIView
 from .models import (
     Alert,
     CHV,
+    ETLHeartbeat,
     FeatureDataset,
     FeatureDatasetRow,
     HealthFacility,
@@ -4236,8 +4237,8 @@ class SeedAndModelCommandTestCase(APITestCase):
 
 
 class ETLOperationalTrustPolicyTestCase(APITestCase):
-    def test_build_operational_trust_snapshot_classifies_fresh_live_run_as_normal(self):
-        run = IngestionRun.objects.create(
+    def _fresh_live_ingestion_run(self):
+        return IngestionRun.objects.create(
             run_type=IngestionRun.RUN_TYPE_RAINFALL,
             status=IngestionRun.STATUS_SUCCESS,
             source_mode="hybrid",
@@ -4251,12 +4252,41 @@ class ETLOperationalTrustPolicyTestCase(APITestCase):
             completed_at=timezone.now(),
         )
 
+    def test_build_operational_trust_snapshot_classifies_fresh_live_run_as_normal(self):
+        recorded_at = timezone.now()
+        ETLHeartbeat.objects.create(
+            component=ETLHeartbeat.COMPONENT_SCHEDULER,
+            task_name="risk.tasks.record_etl_heartbeat_task",
+            status=ETLHeartbeat.STATUS_OK,
+            recorded_at=recorded_at,
+        )
+        ETLHeartbeat.objects.create(
+            component=ETLHeartbeat.COMPONENT_WORKER,
+            task_name="risk.tasks.record_etl_heartbeat_task",
+            status=ETLHeartbeat.STATUS_OK,
+            recorded_at=recorded_at,
+        )
+        run = self._fresh_live_ingestion_run()
+
         snapshot = build_operational_trust_snapshot(run)
 
         self.assertEqual(snapshot["prediction_state"], TRUST_STATE_NORMAL)
         self.assertEqual(snapshot["alert_state"], ALERT_STATE_ALLOWED)
 
     def test_build_operational_trust_snapshot_marks_fallback_as_degraded(self):
+        recorded_at = timezone.now()
+        ETLHeartbeat.objects.create(
+            component=ETLHeartbeat.COMPONENT_SCHEDULER,
+            task_name="risk.tasks.record_etl_heartbeat_task",
+            status=ETLHeartbeat.STATUS_OK,
+            recorded_at=recorded_at,
+        )
+        ETLHeartbeat.objects.create(
+            component=ETLHeartbeat.COMPONENT_WORKER,
+            task_name="risk.tasks.record_etl_heartbeat_task",
+            status=ETLHeartbeat.STATUS_OK,
+            recorded_at=recorded_at,
+        )
         run = IngestionRun.objects.create(
             run_type=IngestionRun.RUN_TYPE_RAINFALL,
             status=IngestionRun.STATUS_PARTIAL,
@@ -4278,6 +4308,19 @@ class ETLOperationalTrustPolicyTestCase(APITestCase):
         self.assertIn("fallback-used", snapshot["reasons"])
 
     def test_build_operational_trust_snapshot_marks_delayed_live_source_for_review(self):
+        recorded_at = timezone.now()
+        ETLHeartbeat.objects.create(
+            component=ETLHeartbeat.COMPONENT_SCHEDULER,
+            task_name="risk.tasks.record_etl_heartbeat_task",
+            status=ETLHeartbeat.STATUS_OK,
+            recorded_at=recorded_at,
+        )
+        ETLHeartbeat.objects.create(
+            component=ETLHeartbeat.COMPONENT_WORKER,
+            task_name="risk.tasks.record_etl_heartbeat_task",
+            status=ETLHeartbeat.STATUS_OK,
+            recorded_at=recorded_at,
+        )
         run = IngestionRun.objects.create(
             run_type=IngestionRun.RUN_TYPE_RAINFALL,
             status=IngestionRun.STATUS_SUCCESS,
@@ -4298,6 +4341,19 @@ class ETLOperationalTrustPolicyTestCase(APITestCase):
         self.assertEqual(snapshot["alert_state"], ALERT_STATE_REVIEW_ONLY)
 
     def test_build_operational_trust_snapshot_blocks_stale_live_source(self):
+        recorded_at = timezone.now()
+        ETLHeartbeat.objects.create(
+            component=ETLHeartbeat.COMPONENT_SCHEDULER,
+            task_name="risk.tasks.record_etl_heartbeat_task",
+            status=ETLHeartbeat.STATUS_OK,
+            recorded_at=recorded_at,
+        )
+        ETLHeartbeat.objects.create(
+            component=ETLHeartbeat.COMPONENT_WORKER,
+            task_name="risk.tasks.record_etl_heartbeat_task",
+            status=ETLHeartbeat.STATUS_OK,
+            recorded_at=recorded_at,
+        )
         run = IngestionRun.objects.create(
             run_type=IngestionRun.RUN_TYPE_RAINFALL,
             status=IngestionRun.STATUS_SUCCESS,
@@ -4319,6 +4375,19 @@ class ETLOperationalTrustPolicyTestCase(APITestCase):
         self.assertIn("source-stale", snapshot["reasons"])
 
     def test_build_operational_trust_snapshot_marks_large_schedule_gap_as_degraded(self):
+        recorded_at = timezone.now()
+        ETLHeartbeat.objects.create(
+            component=ETLHeartbeat.COMPONENT_SCHEDULER,
+            task_name="risk.tasks.record_etl_heartbeat_task",
+            status=ETLHeartbeat.STATUS_OK,
+            recorded_at=recorded_at,
+        )
+        ETLHeartbeat.objects.create(
+            component=ETLHeartbeat.COMPONENT_WORKER,
+            task_name="risk.tasks.record_etl_heartbeat_task",
+            status=ETLHeartbeat.STATUS_OK,
+            recorded_at=recorded_at,
+        )
         IngestionRun.objects.create(
             run_type=IngestionRun.RUN_TYPE_RAINFALL,
             status=IngestionRun.STATUS_SUCCESS,
@@ -4384,6 +4453,53 @@ class ETLOperationalTrustPolicyTestCase(APITestCase):
         self.assertEqual(snapshot["prediction_state"], TRUST_STATE_DEGRADED)
         self.assertEqual(snapshot["alert_state"], ALERT_STATE_BLOCKED)
         self.assertIn("static-mode-forced", snapshot["reasons"])
+
+    def test_build_operational_trust_snapshot_degrades_when_heartbeat_missing(self):
+        run = self._fresh_live_ingestion_run()
+
+        snapshot = build_operational_trust_snapshot(run)
+
+        self.assertEqual(snapshot["prediction_state"], TRUST_STATE_DEGRADED)
+        self.assertEqual(snapshot["alert_state"], ALERT_STATE_BLOCKED)
+        self.assertIn("heartbeat-missing", snapshot["reasons"])
+
+    def test_build_operational_trust_snapshot_blocks_when_heartbeat_stale(self):
+        stale_time = timezone.now() - timedelta(minutes=90)
+        ETLHeartbeat.objects.create(
+            component=ETLHeartbeat.COMPONENT_SCHEDULER,
+            task_name="risk.tasks.record_etl_heartbeat_task",
+            status=ETLHeartbeat.STATUS_OK,
+            recorded_at=stale_time,
+        )
+        ETLHeartbeat.objects.create(
+            component=ETLHeartbeat.COMPONENT_WORKER,
+            task_name="risk.tasks.record_etl_heartbeat_task",
+            status=ETLHeartbeat.STATUS_OK,
+            recorded_at=stale_time,
+        )
+        run = self._fresh_live_ingestion_run()
+
+        snapshot = build_operational_trust_snapshot(run)
+
+        self.assertEqual(snapshot["prediction_state"], TRUST_STATE_BLOCKED)
+        self.assertEqual(snapshot["alert_state"], ALERT_STATE_BLOCKED)
+        self.assertIn("heartbeat-stale", snapshot["reasons"])
+
+
+class ETLHeartbeatTaskTestCase(APITestCase):
+    def test_record_etl_heartbeat_task_persists_scheduler_and_worker_records(self):
+        from risk.tasks import record_etl_heartbeat_task
+
+        count = record_etl_heartbeat_task.run()
+
+        self.assertEqual(count, 2)
+        self.assertEqual(ETLHeartbeat.objects.count(), 2)
+        self.assertTrue(
+            ETLHeartbeat.objects.filter(component=ETLHeartbeat.COMPONENT_SCHEDULER, status=ETLHeartbeat.STATUS_OK).exists()
+        )
+        self.assertTrue(
+            ETLHeartbeat.objects.filter(component=ETLHeartbeat.COMPONENT_WORKER, status=ETLHeartbeat.STATUS_OK).exists()
+        )
 
 
 class RainfallIngestionTestCase(APITestCase):

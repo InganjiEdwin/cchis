@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Alert, CHV, FeatureDataset, FeatureDatasetRow, HealthFacility, IngestionRun, ModelRun, RiskScore, SyncQueue, TriageSession, UssdSessionLog, Ward
+from .models import Alert, CHV, ETLHeartbeat, FeatureDataset, FeatureDatasetRow, HealthFacility, IngestionRun, ModelRun, RiskScore, SyncQueue, TriageSession, UssdSessionLog, Ward
 
 
 @admin.register(Ward)
@@ -63,6 +63,13 @@ class IngestionRunAdmin(admin.ModelAdmin):
     )
     search_fields = ("run_type", "status", "source_mode", "source_name", "error_message")
     list_filter = ("run_type", "status", "source_mode", "source_kind", "freshness_state", "started_at")
+
+
+@admin.register(ETLHeartbeat)
+class ETLHeartbeatAdmin(admin.ModelAdmin):
+    list_display = ("component", "task_name", "status", "recorded_at")
+    search_fields = ("component", "task_name", "status")
+    list_filter = ("component", "status", "recorded_at")
 
 
 @admin.register(ModelRun)

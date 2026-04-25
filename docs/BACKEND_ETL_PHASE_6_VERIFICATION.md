@@ -199,7 +199,7 @@ Covered by tests for:
 
 1. The ETL backbone is strongest today for rainfall-driven prediction, not yet for the full multi-source proposal target.
 2. Population, settlement exposure, richer surveillance, flood, and vulnerability feeds remain planned rather than fully implemented.
-3. Schedule-gap trust is based on ingestion-run history, not yet on a fuller scheduler heartbeat or worker-health model.
+3. The heartbeat layer now covers scheduler and worker presence, but deeper worker-health and queue-health evidence is still limited.
 4. Facility-readiness ETL exists structurally, but richer real facility operations data is still needed for higher-confidence forecasting.
 5. The backbone is still strongest for rainfall-governed prediction rather than the full eventual multi-source proposal footprint.
 

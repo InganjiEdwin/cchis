@@ -3,7 +3,7 @@ from __future__ import annotations
 from decouple import config
 from django.utils import timezone
 
-from risk.models import IngestionRun
+from risk.models import ETLHeartbeat, IngestionRun
 
 
 TRUST_STATE_NORMAL = "normal"
@@ -17,6 +17,11 @@ ALERT_STATE_BLOCKED = "blocked"
 SCHEDULE_STATE_FIRST_RUN = "first_run"
 SCHEDULE_STATE_ON_TIME = "on_time"
 SCHEDULE_STATE_DELAYED = "delayed"
+
+HEARTBEAT_STATE_FRESH = "fresh"
+HEARTBEAT_STATE_DELAYED = "delayed"
+HEARTBEAT_STATE_STALE = "stale"
+HEARTBEAT_STATE_UNKNOWN = "unknown"
 
 
 def _scheduled_gap_hours(run: IngestionRun | None) -> tuple[str, float | None]:
@@ -44,14 +49,57 @@ def _scheduled_gap_hours(run: IngestionRun | None) -> tuple[str, float | None]:
     return SCHEDULE_STATE_ON_TIME, gap_hours
 
 
+def _heartbeat_snapshot() -> dict:
+    scheduler = (
+        ETLHeartbeat.objects.filter(component=ETLHeartbeat.COMPONENT_SCHEDULER)
+        .order_by("-recorded_at")
+        .first()
+    )
+    worker = (
+        ETLHeartbeat.objects.filter(component=ETLHeartbeat.COMPONENT_WORKER)
+        .order_by("-recorded_at")
+        .first()
+    )
+    latest_seen = None
+    if scheduler and worker:
+        latest_seen = min(scheduler.recorded_at, worker.recorded_at)
+    elif scheduler:
+        latest_seen = scheduler.recorded_at
+    elif worker:
+        latest_seen = worker.recorded_at
+
+    heartbeat = {
+        "state": HEARTBEAT_STATE_UNKNOWN,
+        "scheduler_recorded_at": scheduler.recorded_at.isoformat() if scheduler else None,
+        "worker_recorded_at": worker.recorded_at.isoformat() if worker else None,
+        "age_minutes": None,
+    }
+    if latest_seen is None:
+        return heartbeat
+
+    age_minutes = round((timezone.now() - latest_seen).total_seconds() / 60, 2)
+    heartbeat["age_minutes"] = age_minutes
+    delayed_minutes = config("ETL_HEARTBEAT_DELAY_WARNING_MINUTES", cast=int, default=20)
+    stale_minutes = config("ETL_HEARTBEAT_STALE_MINUTES", cast=int, default=60)
+    if age_minutes <= delayed_minutes:
+        heartbeat["state"] = HEARTBEAT_STATE_FRESH
+    elif age_minutes <= stale_minutes:
+        heartbeat["state"] = HEARTBEAT_STATE_DELAYED
+    else:
+        heartbeat["state"] = HEARTBEAT_STATE_STALE
+    return heartbeat
+
+
 def build_operational_trust_snapshot(ingestion_run: IngestionRun | None) -> dict:
     source_mode = config("RAINFALL_SOURCE_MODE", default="hybrid").strip().lower()
+    heartbeat = _heartbeat_snapshot()
     snapshot = {
         "source_mode": source_mode,
         "prediction_state": TRUST_STATE_NORMAL,
         "alert_state": ALERT_STATE_ALLOWED,
         "schedule_state": SCHEDULE_STATE_FIRST_RUN,
         "schedule_gap_hours": None,
+        "heartbeat": heartbeat,
         "source_kind": ingestion_run.source_kind if ingestion_run else IngestionRun.SOURCE_KIND_UNKNOWN,
         "freshness_state": ingestion_run.freshness_state if ingestion_run else IngestionRun.FRESHNESS_UNKNOWN,
         "fallback_used": ingestion_run.fallback_used if ingestion_run else False,
@@ -111,6 +159,19 @@ def build_operational_trust_snapshot(ingestion_run: IngestionRun | None) -> dict
         snapshot["prediction_state"] = TRUST_STATE_DEGRADED
         snapshot["alert_state"] = ALERT_STATE_BLOCKED
         snapshot["reasons"].append("scheduled-ingestion-gap")
+
+    if heartbeat["state"] == HEARTBEAT_STATE_UNKNOWN and snapshot["prediction_state"] != TRUST_STATE_BLOCKED:
+        snapshot["prediction_state"] = TRUST_STATE_DEGRADED
+        snapshot["alert_state"] = ALERT_STATE_BLOCKED
+        snapshot["reasons"].append("heartbeat-missing")
+    elif heartbeat["state"] == HEARTBEAT_STATE_DELAYED and snapshot["prediction_state"] != TRUST_STATE_BLOCKED:
+        snapshot["prediction_state"] = TRUST_STATE_DEGRADED
+        snapshot["alert_state"] = ALERT_STATE_BLOCKED
+        snapshot["reasons"].append("heartbeat-delayed")
+    elif heartbeat["state"] == HEARTBEAT_STATE_STALE:
+        snapshot["prediction_state"] = TRUST_STATE_BLOCKED
+        snapshot["alert_state"] = ALERT_STATE_BLOCKED
+        snapshot["reasons"].append("heartbeat-stale")
 
     # Remove duplicates but keep ordering stable.
     snapshot["reasons"] = list(dict.fromkeys(snapshot["reasons"]))

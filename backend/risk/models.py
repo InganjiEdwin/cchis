@@ -218,6 +218,40 @@ class IngestionRun(models.Model):
         return f"{self.run_type} [{self.status}] {self.started_at}"
 
 
+class ETLHeartbeat(models.Model):
+    COMPONENT_SCHEDULER = "SCHEDULER"
+    COMPONENT_WORKER = "WORKER"
+    COMPONENT_CHOICES = [
+        (COMPONENT_SCHEDULER, "Scheduler"),
+        (COMPONENT_WORKER, "Worker"),
+    ]
+
+    STATUS_OK = "OK"
+    STATUS_WARN = "WARN"
+    STATUS_FAILED = "FAILED"
+    STATUS_CHOICES = [
+        (STATUS_OK, "OK"),
+        (STATUS_WARN, "Warn"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    component = models.CharField(max_length=20, choices=COMPONENT_CHOICES)
+    task_name = models.CharField(max_length=160)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_OK)
+    details = models.JSONField(default=dict, blank=True)
+    recorded_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["-recorded_at"]
+        indexes = [
+            models.Index(fields=["component", "recorded_at"]),
+            models.Index(fields=["status", "recorded_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.component} [{self.status}] {self.recorded_at}"
+
+
 class ModelRun(models.Model):
     STATUS_RUNNING = "RUNNING"
     STATUS_SUCCESS = "SUCCESS"

@@ -1095,6 +1095,16 @@ Implementation should follow this sequence:
 
 This is the guardrail against building polished downstream behavior on top of unstable ingestion or ungoverned model runs.
 
+### Immediate post-Phase-6 decision
+
+After ETL backbone completion and verification:
+
+1. implement `scheduler / worker heartbeat hardening`
+2. then begin `BACKEND_ML_MODEL_ROADMAP_PLAN.md` Phase 0
+
+Do **not** wait for every later real-data expansion domain before starting ML Phase 0.
+The heartbeat hardening step is the minimum additional ETL reliability work needed before freezing the live-baseline truth audit.
+
 ---
 
 ## Self-Critical Audit
