@@ -1,11 +1,13 @@
 "use client";
 
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Moon, Sun } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { useEffect, useState } from "react";
 
 import { cn } from "@/lib/cn";
+import { applyThemePreference, persistThemePreference } from "@/lib/theme-preference";
 
 export function PublicScreen({
   children,
@@ -55,6 +57,27 @@ export function PublicTopbar({
   showHelp?: boolean;
   extra?: ReactNode;
 }) {
+  const [effectiveTheme, setEffectiveTheme] = useState<"LIGHT" | "DARK">("LIGHT");
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    const themeAttribute = document.documentElement.getAttribute("data-theme");
+    setEffectiveTheme(themeAttribute === "dark" ? "DARK" : "LIGHT");
+  }, []);
+
+  function handleThemeToggle() {
+    const nextTheme = effectiveTheme === "DARK" ? "LIGHT" : "DARK";
+    setEffectiveTheme(nextTheme);
+    applyThemePreference(nextTheme);
+    persistThemePreference(nextTheme);
+  }
+
+  const themeToggleLabel = effectiveTheme === "DARK" ? "Switch to light mode" : "Switch to dark mode";
+  const ThemeToggleIcon = effectiveTheme === "DARK" ? Sun : Moon;
+
   return (
     <header className="flex items-center justify-between border-b border-[var(--forgot-topbar-line)] bg-[var(--forgot-topbar-surface)] px-5 py-4 backdrop-blur md:px-8">
       <Link href={brandHref} className="inline-flex items-center gap-2.5 text-lg font-semibold tracking-tight text-[var(--forgot-brand)]">
@@ -69,6 +92,15 @@ export function PublicTopbar({
       </Link>
       <div className="flex items-center gap-3">
         {extra}
+        <button
+          type="button"
+          onClick={handleThemeToggle}
+          aria-label={themeToggleLabel}
+          title={themeToggleLabel}
+          className="inline-flex size-10 items-center justify-center rounded-full border border-[var(--forgot-topbar-line)] bg-[color:var(--forgot-help-surface)] text-[var(--forgot-help-ink)] transition hover:text-[var(--forgot-link-hover)]"
+        >
+          <ThemeToggleIcon className="size-4" aria-hidden="true" />
+        </button>
         <Link href={backHref} className="text-sm font-medium text-[var(--forgot-link)] transition hover:text-[var(--forgot-link-hover)]">
           {backLabel}
         </Link>
@@ -151,7 +183,7 @@ export function BrandLockup({
   return (
     <div className="mb-5 flex flex-col items-center gap-2.5 text-center md:mb-6 md:gap-3">
       {image ? (
-        <div className="-mb-4 w-full max-w-[320px] md:-mb-5 md:max-w-[360px]">
+        <div className="w-full max-w-[320px] md:max-w-[360px]">
           <Image
             src="/brand/chis-full-colored.png"
             alt="Climate Health Intelligence System"
@@ -170,7 +202,7 @@ export function BrandLockup({
         </div>
       )}
       {subtitle ? (
-        <p className={cn("max-w-lg text-sm leading-snug text-[var(--login-description)]", image ? "pt-2" : "")}>
+        <p className={cn("max-w-lg text-sm leading-snug text-[var(--login-description)]", image ? "pt-4 md:pt-5" : "")}>
           {subtitle}
         </p>
       ) : null}

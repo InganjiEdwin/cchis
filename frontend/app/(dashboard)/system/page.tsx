@@ -6,13 +6,8 @@ import {
   Clock3,
   CloudRain,
   DatabaseZap,
-  Gauge,
   Logs,
-  PauseCircle,
-  PlayCircle,
   RefreshCcw,
-  RotateCcw,
-  ServerCog,
   ShieldAlert,
   ShieldCheck,
   Siren,
@@ -67,24 +62,42 @@ function formatEventTime(timestamp: string | null) {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+type SystemTone = "success" | "warning" | "danger" | "default";
+
 function describeFreshness(timestamp: string | null, thresholdMinutes: number) {
   if (!timestamp) {
     return {
       label: "No visible timestamp available",
       detail: "Awaiting visible records",
-      isStale: true,
-      tone: "danger" as const,
+      isMissing: true,
+      isStale: false,
+      state: "NO_VISIBLE_TIMESTAMP" as const,
+      tone: "default" as const,
     };
   }
 
-  const ageMinutes = Math.max(0, Math.round((Date.now() - new Date(timestamp).getTime()) / 60000));
+  const value = new Date(timestamp).getTime();
+  if (Number.isNaN(value)) {
+    return {
+      label: "Invalid timestamp",
+      detail: "Timestamp cannot be read",
+      isMissing: true,
+      isStale: false,
+      state: "INVALID_TIMESTAMP" as const,
+      tone: "default" as const,
+    };
+  }
+
+  const ageMinutes = Math.max(0, Math.round((Date.now() - value) / 60000));
 
   if (ageMinutes > thresholdMinutes * 2) {
     return {
       label: `${formatRelativeLabel(timestamp)} update`,
       detail: "Older visible data",
+      isMissing: false,
       isStale: true,
-      tone: "danger" as const,
+      state: "OLDER_VISIBLE_DATA" as const,
+      tone: "warning" as const,
     };
   }
 
@@ -92,7 +105,9 @@ function describeFreshness(timestamp: string | null, thresholdMinutes: number) {
     return {
       label: `${formatRelativeLabel(timestamp)} update`,
       detail: "Older than target window",
+      isMissing: false,
       isStale: true,
+      state: "OLDER_THAN_TARGET" as const,
       tone: "warning" as const,
     };
   }
@@ -100,22 +115,102 @@ function describeFreshness(timestamp: string | null, thresholdMinutes: number) {
   return {
     label: `${formatRelativeLabel(timestamp)} update`,
     detail: "Within target window",
+    isMissing: false,
     isStale: false,
+    state: "WITHIN_WINDOW" as const,
     tone: "success" as const,
   };
 }
 
-function toPipelineState(tone: "success" | "warning" | "danger" | "default") {
-  if (tone === "success") {
-    return "Within window";
+type FreshnessDescription = ReturnType<typeof describeFreshness>;
+
+function getConfidenceQualifier(freshness: FreshnessDescription) {
+  if (freshness.isMissing) {
+    return "Low confidence: no visible timestamp";
   }
-  if (tone === "warning") {
-    return "Review";
+  if (freshness.isStale) {
+    return "Low confidence: older visible data";
   }
-  if (tone === "danger") {
-    return "Outside window";
+  return null;
+}
+
+function getFreshnessStateLabel(freshness: FreshnessDescription) {
+  if (freshness.state === "NO_VISIBLE_TIMESTAMP") {
+    return "No visible timestamp";
   }
-  return "Pending";
+  if (freshness.state === "INVALID_TIMESTAMP") {
+    return "Timestamp unreadable";
+  }
+  if (freshness.state === "WITHIN_WINDOW") {
+    return "Current visible data";
+  }
+  return "Older visible data";
+}
+
+function getSystemStatus({
+  riskFreshness,
+  alertFreshness,
+  facilityFreshness,
+  chvFreshness,
+  failedAlerts,
+  alertBacklog,
+}: {
+  riskFreshness: FreshnessDescription;
+  alertFreshness: FreshnessDescription;
+  facilityFreshness: FreshnessDescription;
+  chvFreshness: FreshnessDescription;
+  failedAlerts: number;
+  alertBacklog: number;
+}) {
+  const freshnessItems = [riskFreshness, alertFreshness, facilityFreshness, chvFreshness];
+  const hasMissingTimestamp = freshnessItems.some((item) => item.isMissing);
+  const hasStaleVisibleData = freshnessItems.some((item) => item.isStale);
+
+  if (failedAlerts > 0) {
+    return {
+      state: "DEGRADED" as const,
+      label: "System status: Degraded",
+      detail: "Visible alert records include failed deliveries. Review alert delivery records before treating the system as calm.",
+      tone: "danger" as SystemTone,
+    };
+  }
+
+  if (hasMissingTimestamp) {
+    return {
+      state: "DATA_INCOMPLETE" as const,
+      label: "System status: Data incomplete",
+      detail:
+        alertBacklog > 0
+          ? "Some dashboard signals are missing visible timestamps, and visible alert records also include queued or retry-pending items. Use this view as operational visibility from dashboard records, not a full health monitor."
+          : "Some dashboard signals are missing visible timestamps. Use this view as operational visibility from dashboard records, not a full health monitor.",
+      tone: "default" as SystemTone,
+    };
+  }
+
+  if (hasStaleVisibleData) {
+    return {
+      state: "STALE_DATA" as const,
+      label: "System status: Stale data",
+      detail: "Some dashboard-backed records are older than their target freshness window.",
+      tone: "warning" as SystemTone,
+    };
+  }
+
+  if (alertBacklog > 0) {
+    return {
+      state: "REVIEW_NEEDED" as const,
+      label: "System status: Review needed",
+      detail: "Visible alert records include queued or retry-pending items. Review alert delivery before treating the view as calm.",
+      tone: "warning" as SystemTone,
+    };
+  }
+
+  return {
+    state: "OK" as const,
+    label: "System status: OK",
+    detail: "Dashboard-backed records are visible and within target freshness windows.",
+    tone: "success" as SystemTone,
+  };
 }
 
 type SystemEvent = {
@@ -141,6 +236,19 @@ export default function SystemPage() {
   const alertFreshness = describeFreshness(snapshot?.latestAlertTimestamp ?? null, 15);
   const facilityFreshness = describeFreshness(snapshot?.latestFacilityTimestamp ?? null, 1440);
   const chvFreshness = describeFreshness(snapshot?.latestChvTimestamp ?? null, 180);
+  const alertBacklog = (snapshot?.queuedAlerts ?? 0) + (snapshot?.retryPendingAlerts ?? 0);
+  const systemStatus = getSystemStatus({
+    riskFreshness,
+    alertFreshness,
+    facilityFreshness,
+    chvFreshness,
+    failedAlerts: snapshot?.failedAlerts ?? 0,
+    alertBacklog,
+  });
+  const riskConfidenceQualifier = getConfidenceQualifier(riskFreshness);
+  const alertConfidenceQualifier = getConfidenceQualifier(alertFreshness);
+  const facilityConfidenceQualifier = getConfidenceQualifier(facilityFreshness);
+  const chvConfidenceQualifier = getConfidenceQualifier(chvFreshness);
   const lastUpdatedLabel = isRefreshing
     ? "Refreshing..."
     : formatRelativeLabel(
@@ -151,7 +259,6 @@ export default function SystemPage() {
           null,
       );
 
-  const alertBacklog = (snapshot?.queuedAlerts ?? 0) + (snapshot?.retryPendingAlerts ?? 0);
   const statusCards = useMemo(
     () => [
       {
@@ -164,22 +271,41 @@ export default function SystemPage() {
       {
         title: "High-Risk Wards",
         value: isLoading ? "..." : `${snapshot?.highRiskWards ?? 0}`,
-        detail: "From visible ward risk classifications",
-        tone: (snapshot?.highRiskWards ?? 0) > 0 ? ("warning" as const) : ("success" as const),
+        detail: riskConfidenceQualifier ?? "From visible ward risk classifications",
+        tone:
+          riskFreshness.isMissing
+            ? ("default" as const)
+            : riskFreshness.isStale
+              ? ("warning" as const)
+              : (snapshot?.highRiskWards ?? 0) > 0
+                ? ("warning" as const)
+                : ("success" as const),
         icon: <Siren className="size-5" aria-hidden="true" />,
       },
       {
         title: "Alert Backlog",
         value: isLoading ? "..." : `${alertBacklog}`,
-        detail: `${snapshot?.failedAlerts ?? 0} failed deliveries in visible records`,
-        tone: (snapshot?.failedAlerts ?? 0) > 0 ? ("danger" as const) : alertBacklog > 0 ? ("warning" as const) : ("success" as const),
+        detail: alertConfidenceQualifier ?? `${snapshot?.failedAlerts ?? 0} failed deliveries in visible records`,
+        tone:
+          (snapshot?.failedAlerts ?? 0) > 0
+            ? ("danger" as const)
+            : alertFreshness.isMissing
+              ? ("default" as const)
+              : alertFreshness.isStale || alertBacklog > 0
+                ? ("warning" as const)
+                : ("success" as const),
         icon: <BellRing className="size-5" aria-hidden="true" />,
       },
       {
         title: "CHV Sync Summary",
         value: isLoading ? "..." : `${snapshot?.onlineChvs ?? 0}/${snapshot?.activeChvs ?? 0}`,
-        detail: `${snapshot?.delayedChvs ?? 0} delayed, ${snapshot?.offlineChvs ?? 0} offline in visible CHV records`,
-        tone: (snapshot?.offlineChvs ?? 0) > 0 ? ("warning" as const) : ("success" as const),
+        detail: chvConfidenceQualifier ?? `${snapshot?.delayedChvs ?? 0} delayed, ${snapshot?.offlineChvs ?? 0} offline in visible CHV records`,
+        tone:
+          chvFreshness.isMissing
+            ? ("default" as const)
+            : chvFreshness.isStale || (snapshot?.offlineChvs ?? 0) > 0
+              ? ("warning" as const)
+              : ("success" as const),
         icon: <ShieldCheck className="size-5" aria-hidden="true" />,
       },
     ],
@@ -194,6 +320,15 @@ export default function SystemPage() {
       snapshot?.onlineChvs,
       snapshot?.visibleWards,
       snapshot?.wardsWithFreshRisk,
+      alertConfidenceQualifier,
+      chvConfidenceQualifier,
+      alertFreshness.isMissing,
+      alertFreshness.isStale,
+      chvFreshness.isMissing,
+      chvFreshness.isStale,
+      riskConfidenceQualifier,
+      riskFreshness.isMissing,
+      riskFreshness.isStale,
     ],
   );
 
@@ -201,33 +336,44 @@ export default function SystemPage() {
     () => [
       {
         title: "Risk Scoring Feed",
-        subtitle: `${snapshot?.wardsWithFreshRisk ?? 0}/${snapshot?.visibleWards ?? 0} wards expose generated risk timestamps`,
+        evidence: `${snapshot?.wardsWithFreshRisk ?? 0}/${snapshot?.visibleWards ?? 0} ward risk records expose generated timestamps`,
         status: riskFreshness.label,
         detail: riskFreshness.detail,
+        stateLabel: getFreshnessStateLabel(riskFreshness),
+        lastVisible: snapshot?.latestRiskTimestamp ? `Last visible: ${formatRelativeLabel(snapshot.latestRiskTimestamp)}` : "No last visible timestamp",
         tone: riskFreshness.tone,
         icon: <CloudRain className="size-4" aria-hidden="true" />,
       },
       {
         title: "Alert Delivery Feed",
-        subtitle: `${snapshot?.visibleAlerts ?? 0} alerts visible, ${alertBacklog} queued or retry-pending`,
-        status: alertFreshness.label,
-        detail: alertFreshness.detail,
-        tone: alertFreshness.tone,
+        evidence: `${snapshot?.visibleAlerts ?? 0} alert records visible; ${alertBacklog} queued or retry-pending`,
+        status:
+          (snapshot?.failedAlerts ?? 0) > 0
+            ? `${snapshot?.failedAlerts ?? 0} failed delivery records`
+            : alertFreshness.label,
+        detail: (snapshot?.failedAlerts ?? 0) > 0 ? "Visible delivery failure" : alertFreshness.detail,
+        stateLabel: (snapshot?.failedAlerts ?? 0) > 0 ? "Delivery failure" : getFreshnessStateLabel(alertFreshness),
+        lastVisible: snapshot?.latestAlertTimestamp ? `Last visible: ${formatRelativeLabel(snapshot.latestAlertTimestamp)}` : "No last visible timestamp",
+        tone: (snapshot?.failedAlerts ?? 0) > 0 ? ("danger" as const) : alertFreshness.tone,
         icon: <BellRing className="size-4" aria-hidden="true" />,
       },
       {
         title: "Facility Registry",
-        subtitle: `${snapshot?.visibleFacilities ?? 0} facility records are visible`,
+        evidence: `${snapshot?.visibleFacilities ?? 0} facility records visible`,
         status: facilityFreshness.label,
         detail: facilityFreshness.detail,
+        stateLabel: getFreshnessStateLabel(facilityFreshness),
+        lastVisible: snapshot?.latestFacilityTimestamp ? `Last visible: ${formatRelativeLabel(snapshot.latestFacilityTimestamp)}` : "No last visible timestamp",
         tone: facilityFreshness.tone,
         icon: <DatabaseZap className="size-4" aria-hidden="true" />,
       },
       {
         title: "CHV Operations Feed",
-        subtitle: `${snapshot?.syncPayloads24h ?? 0} sync payloads, ${snapshot?.ussdSessions24h ?? 0} USSD sessions in the last 24h`,
+        evidence: `${snapshot?.syncPayloads24h ?? 0} sync payloads and ${snapshot?.ussdSessions24h ?? 0} USSD sessions in the last 24h`,
         status: chvFreshness.label,
         detail: chvFreshness.detail,
+        stateLabel: getFreshnessStateLabel(chvFreshness),
+        lastVisible: snapshot?.latestChvTimestamp ? `Last visible: ${formatRelativeLabel(snapshot.latestChvTimestamp)}` : "No last visible timestamp",
         tone: chvFreshness.tone,
         icon: <Waves className="size-4" aria-hidden="true" />,
       },
@@ -236,16 +382,25 @@ export default function SystemPage() {
       alertBacklog,
       alertFreshness.detail,
       alertFreshness.label,
+      alertFreshness.state,
       alertFreshness.tone,
       chvFreshness.detail,
       chvFreshness.label,
+      chvFreshness.state,
       chvFreshness.tone,
       facilityFreshness.detail,
       facilityFreshness.label,
+      facilityFreshness.state,
       facilityFreshness.tone,
       riskFreshness.detail,
       riskFreshness.label,
+      riskFreshness.state,
       riskFreshness.tone,
+      snapshot?.failedAlerts,
+      snapshot?.latestAlertTimestamp,
+      snapshot?.latestChvTimestamp,
+      snapshot?.latestFacilityTimestamp,
+      snapshot?.latestRiskTimestamp,
       snapshot?.syncPayloads24h,
       snapshot?.ussdSessions24h,
       snapshot?.visibleAlerts,
@@ -255,75 +410,17 @@ export default function SystemPage() {
     ],
   );
 
-  const pipelines = useMemo(
-    () => [
-      {
-        name: "Risk Scoring Coverage",
-        state:
-          snapshot && snapshot.visibleWards > 0
-            ? `${snapshot.wardsWithFreshRisk}/${snapshot.visibleWards} wards have recent model records`
-            : "Awaiting ward risk records",
-        tone:
-          !snapshot || snapshot.visibleWards === 0
-            ? ("default" as const)
-            : snapshot.wardsWithFreshRisk === snapshot.visibleWards && !riskFreshness.isStale
-              ? ("success" as const)
-              : riskFreshness.isStale
-                ? ("warning" as const)
-                : ("default" as const),
-      },
-      {
-        name: "Alert Delivery Queue",
-        state: `${snapshot?.queuedAlerts ?? 0} queued, ${snapshot?.retryPendingAlerts ?? 0} retrying, ${snapshot?.failedAlerts ?? 0} failed`,
-        tone:
-          (snapshot?.failedAlerts ?? 0) > 0
-            ? ("danger" as const)
-            : alertBacklog > 0
-              ? ("warning" as const)
-              : ("success" as const),
-      },
-      {
-        name: "CHV Sync Ingest",
-        state: `${snapshot?.onlineChvs ?? 0} online, ${snapshot?.delayedChvs ?? 0} delayed, ${snapshot?.offlineChvs ?? 0} offline`,
-        tone:
-          (snapshot?.offlineChvs ?? 0) > 0
-            ? ("warning" as const)
-            : (snapshot?.onlineChvs ?? 0) > 0
-              ? ("success" as const)
-              : ("default" as const),
-      },
-      {
-        name: "Facility Registry Freshness",
-        state: facilityFreshness.label,
-        tone:
-          facilityFreshness.tone === "danger"
-            ? ("danger" as const)
-            : facilityFreshness.tone === "warning"
-              ? ("warning" as const)
-              : ("success" as const),
-      },
-    ],
-    [
-      alertBacklog,
-      alertFreshness.isStale,
-      facilityFreshness.label,
-      facilityFreshness.tone,
-      riskFreshness.isStale,
-      snapshot,
-    ],
-  );
-
   const observedChannels = useMemo(
     () => [
       {
-        group: "Alert delivery backends",
+        group: "Alert delivery records",
         name:
           snapshot?.deliveryBackends.length
             ? snapshot.deliveryBackends
                 .slice(0, 2)
                 .map((item) => item.name)
                 .join(", ")
-            : "No alert backend observed",
+            : "No delivery records observed",
         note: snapshot?.deliveryBackends.length
           ? `${snapshot.deliveryBackends.reduce((sum, item) => sum + item.count, 0)} alerts sampled through delivery metadata`
           : "Awaiting alert activity",
@@ -340,26 +437,27 @@ export default function SystemPage() {
       {
         group: "USSD traffic (24h)",
         name: `${snapshot?.ussdSessions24h ?? 0} sessions`,
-        note: "From backend USSD session logs",
+        note: "From visible USSD session records",
         tone: (snapshot?.ussdSessions24h ?? 0) > 0 ? ("success" as const) : ("default" as const),
         icon: <BellRing className="size-4" aria-hidden="true" />,
       },
       {
         group: "Facility registry",
         name: `${snapshot?.visibleFacilities ?? 0} facility records`,
-        note: facilityFreshness.detail,
+        note: facilityConfidenceQualifier ?? facilityFreshness.detail,
         tone:
-          facilityFreshness.tone === "danger"
-            ? ("danger" as const)
-            : facilityFreshness.tone === "warning"
-              ? ("warning" as const)
-              : ("success" as const),
+          facilityFreshness.tone === "warning"
+            ? ("warning" as const)
+            : facilityFreshness.tone === "success"
+              ? ("success" as const)
+              : ("default" as const),
         icon: <DatabaseZap className="size-4" aria-hidden="true" />,
       },
     ],
     [
       facilityFreshness.detail,
       facilityFreshness.tone,
+      facilityConfidenceQualifier,
       snapshot?.deliveryBackends,
       snapshot?.referrals24h,
       snapshot?.syncPayloads24h,
@@ -453,11 +551,12 @@ export default function SystemPage() {
   return (
     <div className="space-y-6">
       <DashboardTopbar
-        title="System Summary"
-        subtitle="Read-only system summary from dashboard records"
+        title="System Status"
+        subtitle="Read-only system status from dashboard records"
         lastUpdatedLabel={lastUpdatedLabel}
         lastUpdatedTone={
-          riskFreshness.isStale || alertFreshness.isStale || facilityFreshness.isStale || chvFreshness.isStale
+          systemStatus.state !== "OK" &&
+          (riskFreshness.isStale || alertFreshness.isStale || facilityFreshness.isStale || chvFreshness.isStale)
             ? "stale"
             : "default"
         }
@@ -469,13 +568,80 @@ export default function SystemPage() {
       <RoleGate
         allowedRoles={["ADMIN", "ANALYST"]}
         title="System page is role-restricted"
-        message="Only Admin and Analyst roles should access this read-only system summary page."
+        message="Only Admin and Analyst roles should access this read-only system status page."
       >
         {error ? (
           <StatusBanner tone="danger" icon={<AlertTriangle aria-hidden="true" />}>
             {error}
           </StatusBanner>
         ) : null}
+
+        <Card
+          className={cn(
+            "rounded-[2rem] px-5 py-5 sm:px-6",
+            systemStatus.tone === "success" &&
+              "border-[color-mix(in_srgb,var(--success)_24%,transparent)] bg-[color-mix(in_srgb,var(--success)_7%,var(--panel))]",
+            systemStatus.tone === "warning" &&
+              "border-[color-mix(in_srgb,var(--warning)_28%,transparent)] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))]",
+            systemStatus.tone === "danger" &&
+              "border-[color-mix(in_srgb,var(--danger)_28%,transparent)] bg-[color-mix(in_srgb,var(--danger)_8%,var(--panel))]",
+            systemStatus.tone === "default" &&
+              "border-[color-mix(in_srgb,var(--dashboard-subtle-copy)_24%,transparent)] bg-[color-mix(in_srgb,var(--dashboard-subtle-copy)_7%,var(--panel))]",
+          )}
+        >
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex items-start gap-4">
+              <span
+                className={cn(
+                  "inline-flex size-11 shrink-0 items-center justify-center rounded-2xl",
+                  systemStatus.tone === "success" &&
+                    "bg-[color-mix(in_srgb,var(--success)_16%,transparent)] text-[color:var(--success)]",
+                  systemStatus.tone === "warning" &&
+                    "bg-[color-mix(in_srgb,var(--warning)_16%,transparent)] text-[color:var(--warning)]",
+                  systemStatus.tone === "danger" &&
+                    "bg-[color-mix(in_srgb,var(--danger)_16%,transparent)] text-[color:var(--danger)]",
+                  systemStatus.tone === "default" &&
+                    "bg-[color-mix(in_srgb,var(--dashboard-subtle-copy)_15%,transparent)] text-panel-muted",
+                )}
+              >
+                {systemStatus.tone === "success" ? (
+                  <ShieldCheck className="size-5" aria-hidden="true" />
+                ) : systemStatus.tone === "danger" ? (
+                  <AlertTriangle className="size-5" aria-hidden="true" />
+                ) : systemStatus.tone === "warning" ? (
+                  <Clock3 className="size-5" aria-hidden="true" />
+                ) : (
+                  <DatabaseZap className="size-5" aria-hidden="true" />
+                )}
+              </span>
+              <div>
+                <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-panel-subtle">
+                  System status
+                </p>
+                <h2 className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-panel-strong">
+                  {isLoading ? "Checking dashboard records" : systemStatus.label.replace("System status: ", "")}
+                </h2>
+                <p className="mt-2 max-w-3xl text-sm text-panel-muted">
+                  {isLoading ? "Loading visible dashboard-backed records before assigning a status." : systemStatus.detail}
+                </p>
+              </div>
+            </div>
+            <StatusBadge
+              tone={
+                systemStatus.tone === "danger"
+                  ? "danger"
+                  : systemStatus.tone === "warning"
+                    ? "warning"
+                    : systemStatus.tone === "success"
+                      ? "success"
+                      : "default"
+              }
+              className="w-fit px-3 py-1 tracking-[0.14em]"
+            >
+              {systemStatus.state.replaceAll("_", " ")}
+            </StatusBadge>
+          </div>
+        </Card>
 
         <section className="grid gap-4 xl:grid-cols-4">
           {statusCards.map((card) => (
@@ -521,13 +687,13 @@ export default function SystemPage() {
           ))}
         </section>
 
-        <section className="grid gap-6 xl:grid-cols-[minmax(0,1.55fr)_20rem]">
+        <section>
           <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <PageSectionHeader
                 className="gap-1"
                 title="Data Freshness"
-                description="These signals are based on backend timestamps, not infrastructure probe data."
+                description="These signals are based on visible record timestamps, not live health checks."
               />
               <Button
                 variant="secondary"
@@ -537,7 +703,7 @@ export default function SystemPage() {
                 }}
               >
                 <RefreshCcw className="mr-2 size-4" aria-hidden="true" />
-                Refresh view
+                Refresh visible records
               </Button>
             </div>
 
@@ -552,7 +718,9 @@ export default function SystemPage() {
                     feed.tone === "warning" &&
                       "border-[color-mix(in_srgb,var(--warning)_18%,white)] bg-[color-mix(in_srgb,var(--warning)_8%,white)] dark:border-[color-mix(in_srgb,var(--warning)_26%,transparent)] dark:bg-[color-mix(in_srgb,var(--warning)_12%,transparent)]",
                     feed.tone === "danger" &&
-                      "border-[color-mix(in_srgb,var(--danger)_18%,white)] bg-[color-mix(in_srgb,var(--danger)_8%,white)] dark:border-[color-mix(in_srgb,var(--danger)_26%,transparent)] dark:bg-[color-mix(in_srgb,var(--danger)_12%,transparent)]",
+                      "border-[color-mix(in_srgb,var(--danger)_20%,white)] bg-[color-mix(in_srgb,var(--danger)_8%,white)] dark:border-[color-mix(in_srgb,var(--danger)_28%,transparent)] dark:bg-[color-mix(in_srgb,var(--danger)_12%,transparent)]",
+                    feed.tone === "default" &&
+                      "border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)]",
                   )}
                 >
                   <div className="flex items-start gap-3">
@@ -565,24 +733,31 @@ export default function SystemPage() {
                           "bg-[color-mix(in_srgb,var(--warning)_14%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]",
                         feed.tone === "danger" &&
                           "bg-[color-mix(in_srgb,var(--danger)_14%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_20%,transparent)]",
+                        feed.tone === "default" &&
+                          "bg-[color-mix(in_srgb,var(--dashboard-subtle-copy)_14%,var(--panel))] text-panel-muted",
                       )}
                     >
                       {feed.icon}
                     </span>
                     <div>
                       <strong className="block text-sm font-semibold text-panel-strong">{feed.title}</strong>
-                      <p className="mt-1 text-xs text-panel-muted">{feed.subtitle}</p>
+                      <p className="mt-1 text-xs text-panel-muted">{feed.evidence}</p>
+                      <p className="mt-1 text-[0.68rem] font-medium text-panel-subtle">{feed.lastVisible}</p>
                     </div>
                   </div>
 
                   <div className="space-y-1 text-right">
                     <div className="text-sm font-semibold text-panel-strong">{feed.status}</div>
+                    <div className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-panel-subtle">
+                      {feed.stateLabel}
+                    </div>
                     <div
                       className={cn(
                         "text-[0.68rem] font-semibold uppercase tracking-[0.14em]",
                         feed.tone === "success" && "text-[color:var(--success)]",
                         feed.tone === "warning" && "text-[color:var(--warning)]",
                         feed.tone === "danger" && "text-[color:var(--danger)]",
+                        feed.tone === "default" && "text-panel-muted",
                       )}
                     >
                       {feed.detail}
@@ -592,115 +767,39 @@ export default function SystemPage() {
               ))}
             </div>
           </Card>
+        </section>
 
-          <Card className="rounded-[2rem] border-none bg-[linear-gradient(180deg,#165fbe_0%,#0f56b0_100%)] px-5 py-5 text-white shadow-[0_20px_40px_rgba(15,86,176,0.28)]">
-            <div className="flex items-center gap-3">
-              <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-white/12 text-white">
-                <ServerCog className="size-5" aria-hidden="true" />
-              </span>
-              <div>
-                <h2 className="text-xl font-semibold tracking-[-0.03em]">Unavailable Controls</h2>
-                <p className="mt-1 text-sm text-white/74">These controls remain unavailable until backend job-control routes exist.</p>
+        <section>
+          <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+              <PageSectionHeader
+                className="gap-1"
+                title="Observed Activity"
+                description="Activity appears only where dashboard-backed records exist."
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <StatusBadge tone="default" className="px-3 py-1 tracking-[0.14em]">
+                  Read-only
+                </StatusBadge>
+                <StatusBadge tone="default" className="px-3 py-1 tracking-[0.14em]">
+                  Dashboard records
+                </StatusBadge>
               </div>
             </div>
 
-            <div className="mt-5 space-y-3">
-              {[
-                { label: "Retry jobs unavailable", icon: <RotateCcw className="size-4" aria-hidden="true" /> },
-                { label: "Manual risk scoring unavailable", icon: <Gauge className="size-4" aria-hidden="true" /> },
-                { label: "Alert pause unavailable", icon: <PauseCircle className="size-4" aria-hidden="true" /> },
-              ].map((action) => (
-                <button
-                  key={action.label}
-                  type="button"
-                  disabled
-                  className="flex w-full cursor-not-allowed items-center justify-between rounded-[1.25rem] border border-white/12 bg-white/10 px-4 py-3 text-left opacity-70"
-                >
-                  <span className="flex items-center gap-3">
-                    <span className="inline-flex size-9 items-center justify-center rounded-xl bg-white/10">
-                      {action.icon}
-                    </span>
-                    <span className="text-sm font-semibold">{action.label}</span>
-                  </span>
-                  <PlayCircle className="size-4 text-white/80" aria-hidden="true" />
-                </button>
-              ))}
-            </div>
-
-            <div className="mt-5 rounded-[1.25rem] border border-white/10 bg-black/10 px-4 py-4">
-              <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-white/60">Limitation</p>
-              <p className="mt-2 text-sm font-semibold">Read-only system page</p>
-              <p className="mt-1 text-xs text-white/64">
-                This page shows system summaries from backend records. Manual control actions remain unavailable until owned by real APIs.
-              </p>
-            </div>
-          </Card>
-        </section>
-
-        <section className="grid gap-6 xl:grid-cols-2">
-          <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
-            <PageSectionHeader
-              className="gap-1"
-              title="Pipeline Summary"
-              description="Status comes from visible records, not scheduler telemetry."
-            />
-
-            <div className="mt-5 space-y-3">
-              {pipelines.map((pipeline) => (
-                <div key={pipeline.name} className="flex items-center justify-between gap-4 rounded-[1.2rem] px-1 py-1">
-                  <div className="flex items-center gap-3">
-                    <span
-                      className={cn(
-                        "size-2.5 rounded-full",
-                        pipeline.tone === "success" && "bg-[color:var(--success)]",
-                        pipeline.tone === "warning" && "bg-[color:var(--warning)]",
-                        pipeline.tone === "danger" && "bg-[color:var(--danger)]",
-                        pipeline.tone === "default" && "bg-[var(--dashboard-subtle-copy)]",
-                      )}
-                    />
-                    <span className="text-sm font-medium text-panel-copy">{pipeline.name}</span>
-                  </div>
-                  <StatusBadge
-                    tone={
-                      pipeline.tone === "danger"
-                        ? "danger"
-                        : pipeline.tone === "warning"
-                          ? "warning"
-                          : pipeline.tone === "success"
-                            ? "success"
-                            : "default"
-                    }
-                    className="px-3 py-1 tracking-[0.14em]"
-                  >
-                    {toPipelineState(pipeline.tone)}
-                  </StatusBadge>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
-            <PageSectionHeader
-              className="gap-1"
-              title="Observed Channels"
-              description="Activity appears only where a backend source already exists."
-            />
-
-            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+            <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               {observedChannels.map((integration) => (
-                <div key={`${integration.group}-${integration.name}`} className="rounded-[1.35rem] border border-panel-table-wrap px-4 py-4">
+                <div key={`${integration.group}-${integration.name}`} className="rounded-[1.25rem] border border-panel-table-wrap px-3.5 py-3.5">
                   <div className="flex items-start justify-between gap-3">
                     <span
                       className={cn(
-                        "inline-flex size-9 items-center justify-center rounded-xl",
+                        "inline-flex size-8 items-center justify-center rounded-xl",
                         integration.tone === "success" &&
                           "bg-[color-mix(in_srgb,var(--success)_14%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_20%,transparent)]",
                         integration.tone === "warning" &&
                           "bg-[color-mix(in_srgb,var(--warning)_14%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]",
-                        integration.tone === "danger" &&
-                          "bg-[color-mix(in_srgb,var(--danger)_14%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_20%,transparent)]",
                         integration.tone === "default" &&
-                          "bg-[color-mix(in_srgb,var(--dashboard-subtle-copy)_16%,white)] text-panel-muted",
+                          "bg-[color-mix(in_srgb,var(--dashboard-subtle-copy)_14%,var(--panel))] text-panel-muted dark:bg-[color-mix(in_srgb,var(--dashboard-subtle-copy)_18%,transparent)]",
                       )}
                     >
                       {integration.icon}
@@ -710,12 +809,11 @@ export default function SystemPage() {
                         "mt-1 size-2 rounded-full",
                         integration.tone === "success" && "bg-[color:var(--success)]",
                         integration.tone === "warning" && "bg-[color:var(--warning)]",
-                        integration.tone === "danger" && "bg-[color:var(--danger)]",
                         integration.tone === "default" && "bg-[var(--dashboard-subtle-copy)]",
                       )}
                     />
                   </div>
-                  <p className="mt-4 text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-panel-subtle">
+                  <p className="mt-3 text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">
                     {integration.group}
                   </p>
                   <strong className="mt-1 block text-sm font-semibold text-panel-strong">{integration.name}</strong>
@@ -724,7 +822,6 @@ export default function SystemPage() {
                       "mt-2 text-xs font-medium",
                       integration.tone === "success" && "text-[color:var(--success)]",
                       integration.tone === "warning" && "text-[color:var(--warning)]",
-                      integration.tone === "danger" && "text-[color:var(--danger)]",
                       integration.tone === "default" && "text-panel-muted",
                     )}
                   >
@@ -733,72 +830,110 @@ export default function SystemPage() {
                 </div>
               ))}
             </div>
+
+            <div className="mt-6">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-panel-subtle">
+                    Latest record summaries
+                  </p>
+                  <p className="mt-1 text-xs text-panel-muted">Summaries are derived from dashboard records, not raw service logs.</p>
+                </div>
+                <span className="inline-flex items-center gap-2 text-xs font-medium text-panel-muted">
+                  <Logs className="size-4" aria-hidden="true" />
+                  {systemEvents.length > 0 ? `${Math.min(systemEvents.length, 5)} visible summaries` : "No visible summaries"}
+                </span>
+              </div>
+
+              <div className="mt-3 overflow-hidden rounded-[1.4rem] border border-panel-table-wrap">
+                <div className="divide-y divide-[var(--dashboard-table-line)]">
+                  {systemEvents.length > 0 ? (
+                    systemEvents.slice(0, 5).map((event, index) => (
+                      <div key={`${event.level}-${index}`} className="grid gap-3 px-4 py-3 md:grid-cols-[4.5rem_5rem_minmax(0,1fr)] md:items-center">
+                        <div className="text-xs font-medium text-panel-muted">{formatEventTime(event.time)}</div>
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={cn(
+                              "h-7 w-1 rounded-full",
+                              event.tone === "success" && "bg-[color:var(--success)]",
+                              event.tone === "warning" && "bg-[color:var(--warning)]",
+                              event.tone === "danger" && "bg-[color:var(--danger)]",
+                            )}
+                          />
+                          <StatusBadge
+                            tone={event.tone === "danger" ? "danger" : event.tone === "warning" ? "warning" : "success"}
+                            className="px-2.5 py-1 tracking-[0.14em]"
+                          >
+                            {event.level}
+                          </StatusBadge>
+                        </div>
+                        <div className="text-sm text-panel-copy">{event.message}</div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="px-4 py-6 text-sm text-panel-muted">No dashboard-backed record summaries are available for this view yet.</div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5 flex flex-wrap items-center gap-4 text-sm text-panel-muted">
+              <span className="inline-flex items-center gap-2">
+                <Clock3 className="size-4" aria-hidden="true" />
+                Alert freshness: {alertFreshness.detail}
+              </span>
+              <span className="inline-flex items-center gap-2">
+                <ShieldAlert className="size-4" aria-hidden="true" />
+                No manual controls are exposed on this page.
+              </span>
+            </div>
           </Card>
         </section>
 
-        <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-            <PageSectionHeader
-              className="gap-1"
-              title="Observed Record Stream"
-              description="This is a record summary, not a raw infrastructure log sink."
-            />
-            <div className="flex flex-wrap items-center gap-2">
-              <StatusBadge tone="default" className="px-3 py-1 tracking-[0.14em]">
+        <section>
+          <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <PageSectionHeader
+                className="gap-1"
+                title="Current capability mode"
+                description="This page is read-only until explicit control contracts exist."
+              />
+              <StatusBadge tone="default" className="w-fit px-3 py-1 tracking-[0.14em]">
                 Read-only
               </StatusBadge>
-              <StatusBadge tone="default" className="px-3 py-1 tracking-[0.14em]">
-                Record summary
-              </StatusBadge>
             </div>
-          </div>
 
-          <div className="mt-5 overflow-hidden rounded-[1.4rem] border border-panel-table-wrap">
-            <div className="divide-y divide-[var(--dashboard-table-line)]">
-              {systemEvents.length > 0 ? (
-                systemEvents.map((event, index) => (
-                  <div key={`${event.level}-${index}`} className="grid gap-3 px-4 py-3 md:grid-cols-[5.5rem_5.5rem_minmax(0,1fr)] md:items-center">
-                    <div className="text-xs font-medium text-panel-muted">{formatEventTime(event.time)}</div>
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={cn(
-                          "h-8 w-1 rounded-full",
-                          event.tone === "success" && "bg-[color:var(--success)]",
-                          event.tone === "warning" && "bg-[color:var(--warning)]",
-                          event.tone === "danger" && "bg-[color:var(--danger)]",
-                        )}
-                      />
-                      <StatusBadge
-                        tone={event.tone === "danger" ? "danger" : event.tone === "warning" ? "warning" : "success"}
-                        className="px-2.5 py-1 tracking-[0.14em]"
-                      >
-                        {event.level}
-                      </StatusBadge>
-                    </div>
-                    <div className="text-sm text-panel-copy">{event.message}</div>
-                  </div>
-                ))
-              ) : (
-                <div className="px-4 py-6 text-sm text-panel-muted">No events are available for this view yet.</div>
-              )}
+            <div className="mt-5 grid gap-4 lg:grid-cols-2">
+              <div className="rounded-[1.35rem] border border-panel-table-wrap px-4 py-4">
+                <div className="flex items-center gap-3">
+                  <span className="inline-flex size-9 items-center justify-center rounded-xl bg-[color-mix(in_srgb,var(--success)_14%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_20%,transparent)]">
+                    <ShieldCheck className="size-4" aria-hidden="true" />
+                  </span>
+                  <h3 className="text-sm font-semibold text-panel-strong">Supported here</h3>
+                </div>
+                <ul className="mt-4 space-y-2 text-sm text-panel-muted">
+                  <li>View dashboard-backed system status.</li>
+                  <li>Refresh visible records.</li>
+                  <li>Inspect visible data freshness and record summaries.</li>
+                </ul>
+              </div>
+
+              <div className="rounded-[1.35rem] border border-panel-table-wrap px-4 py-4">
+                <div className="flex items-center gap-3">
+                  <span className="inline-flex size-9 items-center justify-center rounded-xl bg-[color-mix(in_srgb,var(--dashboard-subtle-copy)_14%,var(--panel))] text-panel-muted">
+                    <ShieldAlert className="size-4" aria-hidden="true" />
+                  </span>
+                  <h3 className="text-sm font-semibold text-panel-strong">Not supported here</h3>
+                </div>
+                <ul className="mt-4 space-y-2 text-sm text-panel-muted">
+                  <li>Background-processing retry controls.</li>
+                  <li>Manual risk-scoring controls.</li>
+                  <li>Alert delivery pause controls.</li>
+                </ul>
+              </div>
             </div>
-          </div>
-
-          <div className="mt-5 flex flex-wrap items-center gap-4 text-sm text-panel-muted">
-            <span className="inline-flex items-center gap-2">
-              <Logs className="size-4" aria-hidden="true" />
-              Event summaries come from dashboard records.
-            </span>
-            <span className="inline-flex items-center gap-2">
-              <Clock3 className="size-4" aria-hidden="true" />
-              Alert freshness: {alertFreshness.detail}
-            </span>
-            <span className="inline-flex items-center gap-2">
-              <ShieldAlert className="size-4" aria-hidden="true" />
-              Unsupported infra probes remain unavailable until backend contracts exist.
-            </span>
-          </div>
-        </Card>
+          </Card>
+        </section>
       </RoleGate>
     </div>
   );

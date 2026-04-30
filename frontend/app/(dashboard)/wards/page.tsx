@@ -6,7 +6,6 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  MapPinned,
   Search,
   ShieldAlert,
   TriangleAlert,
@@ -14,7 +13,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAuth } from "@/components/auth-provider";
 import { DashboardTopbar } from "@/components/dashboard-topbar";
@@ -27,6 +26,7 @@ import { getLatestTimestamp } from "@/lib/freshness";
 import { useWardsQuery } from "@/queries/use-wards-query";
 
 type SortOption = "RISK_DESC" | "RISK_ASC" | "UPDATED_DESC" | "NAME_ASC";
+type TriggerFilter = "ALL" | "TRIGGER_ACTIVE" | "AWAITING_ACTION" | "RESOLVED";
 
 const ROWS_PER_PAGE = 5;
 const COUNTY_SCOPE = "Migori";
@@ -55,6 +55,20 @@ function parseSortParam(value: string | null): SortOption {
   }
 }
 
+function parseTriggerParam(value: string | null): TriggerFilter {
+  switch (value) {
+    case "trigger_active":
+      return "TRIGGER_ACTIVE";
+    case "awaiting_action":
+      return "AWAITING_ACTION";
+    case "resolved":
+      return "RESOLVED";
+    case "all":
+    default:
+      return "ALL";
+  }
+}
+
 function parsePageParam(value: string | null) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 1) {
@@ -74,6 +88,20 @@ function formatSortParam(value: SortOption) {
     case "RISK_DESC":
     default:
       return "risk_desc";
+  }
+}
+
+function formatTriggerParam(value: TriggerFilter) {
+  switch (value) {
+    case "TRIGGER_ACTIVE":
+      return "trigger_active";
+    case "AWAITING_ACTION":
+      return "awaiting_action";
+    case "RESOLVED":
+      return "resolved";
+    case "ALL":
+    default:
+      return "all";
   }
 }
 
@@ -189,6 +217,44 @@ function getRiskBadgeTone(level: string) {
   return "default" as const;
 }
 
+function getTriggerStateLabel(value: TriggerFilter) {
+  switch (value) {
+    case "TRIGGER_ACTIVE":
+      return "Trigger active";
+    case "AWAITING_ACTION":
+      return "Awaiting action";
+    case "RESOLVED":
+      return "Resolved";
+    case "ALL":
+    default:
+      return "All";
+  }
+}
+
+function getQueueTriggerStateLabel(value: string) {
+  switch (value) {
+    case "TRIGGER_ACTIVE":
+      return "Trigger active";
+    case "REVIEW_PENDING":
+      return "Awaiting review";
+    case "ACTION_IN_PROGRESS":
+      return "Action in progress";
+    case "RESOLVED":
+      return "Resolved";
+    case "NONE":
+    default:
+      return "No active trigger";
+  }
+}
+
+function getQueueTriggerStateTone(value: string) {
+  if (value === "REVIEW_PENDING") return "warning" as const;
+  if (value === "ACTION_IN_PROGRESS") return "danger" as const;
+  if (value === "TRIGGER_ACTIVE") return "success" as const;
+  if (value === "RESOLVED") return "success" as const;
+  return "default" as const;
+}
+
 export default function WardsPage() {
   const router = useRouter();
   const pathname = usePathname();
@@ -198,13 +264,17 @@ export default function WardsPage() {
   const [search, setSearch] = useState("");
   const [selectedSubCounty, setSelectedSubCounty] = useState("ALL");
   const [selectedRisk, setSelectedRisk] = useState("ALL");
+  const [triggerFilter, setTriggerFilter] = useState<TriggerFilter>("ALL");
   const [sortBy, setSortBy] = useState<SortOption>("RISK_DESC");
   const [page, setPage] = useState(1);
+  const [hasSyncedFromUrl, setHasSyncedFromUrl] = useState(false);
+  const hasAppliedInitialFilterState = useRef(false);
 
   useEffect(() => {
     const q = searchParams.get("q")?.trim() ?? "";
     const risk = parseRiskParam(searchParams.get("risk"));
     const subCounty = searchParams.get("sub_county")?.trim() || "ALL";
+    const trigger = parseTriggerParam(searchParams.get("trigger"));
     const sort = parseSortParam(searchParams.get("sort"));
     const nextPage = parsePageParam(searchParams.get("page"));
 
@@ -212,8 +282,10 @@ export default function WardsPage() {
     setSearch(q);
     setSelectedRisk(risk);
     setSelectedSubCounty(subCounty);
+    setTriggerFilter(trigger);
     setSortBy(sort);
     setPage(nextPage);
+    setHasSyncedFromUrl(true);
   }, [searchParams]);
 
   useEffect(() => {
@@ -225,10 +297,23 @@ export default function WardsPage() {
   }, [searchInput]);
 
   useEffect(() => {
+    if (!hasSyncedFromUrl) {
+      return;
+    }
+
+    if (!hasAppliedInitialFilterState.current) {
+      hasAppliedInitialFilterState.current = true;
+      return;
+    }
+
     setPage(1);
-  }, [search, selectedSubCounty, selectedRisk, sortBy]);
+  }, [hasSyncedFromUrl, search, selectedSubCounty, selectedRisk, triggerFilter, sortBy]);
 
   useEffect(() => {
+    if (!hasSyncedFromUrl) {
+      return;
+    }
+
     const nextParams = new URLSearchParams(searchParams.toString());
 
     if (search) nextParams.set("q", search);
@@ -236,6 +321,9 @@ export default function WardsPage() {
 
     if (selectedRisk !== "ALL") nextParams.set("risk", selectedRisk);
     else nextParams.delete("risk");
+
+    if (triggerFilter !== "ALL") nextParams.set("trigger", formatTriggerParam(triggerFilter));
+    else nextParams.delete("trigger");
 
     nextParams.set("scope", COUNTY_SCOPE);
 
@@ -253,7 +341,7 @@ export default function WardsPage() {
     if (currentQuery !== nextQuery) {
       router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
     }
-  }, [page, pathname, router, search, searchParams, selectedRisk, selectedSubCounty, sortBy]);
+  }, [hasSyncedFromUrl, page, pathname, router, search, searchParams, selectedRisk, selectedSubCounty, sortBy, triggerFilter]);
 
   const wardsQuery = useWardsQuery({
     county: COUNTY_SCOPE,
@@ -278,25 +366,37 @@ export default function WardsPage() {
 
   const filteredItems = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
-    return items.filter((item) => {
+    return items
+      .filter((item) => {
       if (!normalizedSearch) return true;
       return item.name.toLowerCase().includes(normalizedSearch);
-    });
-  }, [items, search]);
+      })
+      .filter((item) => {
+        if (triggerFilter === "ALL") return true;
+        if (triggerFilter === "TRIGGER_ACTIVE") {
+          return item.triggerState === "TRIGGER_ACTIVE";
+        }
+        if (triggerFilter === "AWAITING_ACTION") {
+          return item.requiresAction;
+        }
+        if (triggerFilter === "RESOLVED") {
+          return item.triggerState === "RESOLVED";
+        }
+        return true;
+      });
+  }, [items, search, triggerFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / ROWS_PER_PAGE));
   const currentPage = Math.min(page, totalPages);
   const paginationItems = buildPaginationItems(currentPage, totalPages);
   const pageItems = filteredItems.slice((currentPage - 1) * ROWS_PER_PAGE, currentPage * ROWS_PER_PAGE);
-  const latestWardTimestamp = getLatestTimestamp(items.map((item) => item.updatedAt));
-  const highRiskItems = filteredItems.filter((item) => item.riskLevel === "HIGH");
-  const averageCountyRisk =
-    filteredItems.length > 0
-      ? filteredItems.reduce((sum, item) => sum + normalizeRiskScore(item.riskScore), 0) / filteredItems.length
-      : 0;
+  const latestWardTimestamp = getLatestTimestamp(filteredItems.map((item) => item.updatedAt));
+  const wardsRequiringAction = filteredItems.filter((item) => item.requiresAction);
+  const workflowActiveWards = filteredItems.filter((item) => item.triggerState !== "NONE" && item.triggerState !== "RESOLVED");
+  const alertsPendingCount = filteredItems.reduce((sum, item) => sum + item.deliveryConcernCount, 0);
   const isStale = isStaleTimestamp(latestWardTimestamp);
   const hasActiveFilters =
-    Boolean(search.trim()) || selectedSubCounty !== "ALL" || selectedRisk !== "ALL" || sortBy !== "RISK_DESC";
+    Boolean(search.trim()) || selectedSubCounty !== "ALL" || selectedRisk !== "ALL" || triggerFilter !== "ALL" || sortBy !== "RISK_DESC";
 
   const topbarTimestampLabel = isRefreshing
     ? "Refreshing..."
@@ -308,6 +408,7 @@ export default function WardsPage() {
     setSearch("");
     setSelectedRisk("ALL");
     setSelectedSubCounty("ALL");
+    setTriggerFilter("ALL");
     setSortBy("RISK_DESC");
   }
 
@@ -315,6 +416,7 @@ export default function WardsPage() {
     if (search.trim()) return "No wards match your search.";
     if (selectedSubCounty !== "ALL") return "No wards found in this sub-county.";
     if (selectedRisk !== "ALL") return "No wards match the selected risk filter.";
+    if (triggerFilter !== "ALL") return `No wards match the ${getTriggerStateLabel(triggerFilter).toLowerCase()} filter.`;
     if (hasActiveFilters) return "No wards match the current filters.";
     return "No ward risk data is available yet.";
   }
@@ -352,10 +454,10 @@ export default function WardsPage() {
       <Card className="flex flex-col gap-5 p-6 lg:flex-row lg:items-start lg:justify-between">
         <div className="space-y-2">
           <h1 className="text-[clamp(1.9rem,1.2rem+1vw,2.5rem)] font-semibold tracking-[-0.05em] text-panel-strong">
-            Ward Risk Monitoring
+            Ward Action Queue
           </h1>
           <p className="max-w-3xl text-sm text-panel-muted">
-            Review the latest recorded ward risk across administrative wards in Migori County.
+            Identify wards requiring attention and review the latest climate-health risk and trigger state across Migori County.
           </p>
         </div>
 
@@ -446,33 +548,88 @@ export default function WardsPage() {
               </button>
             ) : null}
           </div>
-          <StatusBadge tone={isStale ? "warning" : "success"} className="rounded-full px-3 py-1.5 tracking-[0.14em]">
-            {isStale ? "Data freshness warning" : "Feed timestamps in range"}
-          </StatusBadge>
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusBadge tone={isStale ? "warning" : "success"} className="rounded-full px-3 py-1.5 tracking-[0.14em]">
+              {isStale ? "Data freshness warning" : "Feed timestamps in range"}
+            </StatusBadge>
+            {isStale ? (
+              <span className="text-sm text-panel-muted">Some risk scores may be outdated — review before acting.</span>
+            ) : null}
+          </div>
         </div>
       </Card>
 
       <Card className="space-y-5 p-6">
-        <PageSectionHeader
-          title="Ward Risk List"
-          description="Latest ward records merged from ward and risk feeds"
-          actions={
-            <label className="grid gap-2">
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Sort by</span>
-              <div className="relative min-w-[220px]">
-                <select
-                  value={sortBy}
-                  onChange={(event) => setSortBy(event.target.value as SortOption)}
-                  className="h-11 w-full appearance-none rounded-pill border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 pr-10 text-sm font-medium text-panel-copy outline-none transition focus:border-[var(--dashboard-icon-button-border)]"
-                >
-                  <option value="RISK_DESC">Risk score (highest first)</option>
-                  <option value="RISK_ASC">Risk score (lowest first)</option>
-                  <option value="UPDATED_DESC">Last updated</option>
-                  <option value="NAME_ASC">Ward name (A-Z)</option>
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-4 top-1/2 size-4 -translate-y-1/2 text-panel-muted" />
+        {wardsRequiringAction.length > 0 ? (
+          <div className="flex flex-col gap-3 rounded-[1.4rem] border border-[color-mix(in_srgb,var(--warning)_24%,white)] bg-[color-mix(in_srgb,var(--warning)_7%,white)] px-4 py-4 dark:border-[color-mix(in_srgb,var(--warning)_28%,transparent)] dark:bg-[color-mix(in_srgb,var(--warning)_12%,transparent)] md:flex-row md:items-center md:justify-between">
+            <div className="flex items-start gap-3">
+              <span className="inline-flex size-10 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--warning)_14%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_18%,transparent)]">
+                <TriangleAlert className="size-5" aria-hidden="true" />
+              </span>
+              <div className="space-y-1">
+                <p className="text-sm font-semibold uppercase tracking-[0.16em] text-[color:var(--warning)]">Action queue signal</p>
+                <p className="text-base font-semibold text-panel-strong">
+                  {wardsRequiringAction.length} ward{wardsRequiringAction.length === 1 ? "" : "s"}{" "}
+                  {wardsRequiringAction.length === 1 ? "requires" : "require"} action now
+                </p>
+                <p className="text-sm text-panel-muted">
+                  Review wards awaiting trigger action or delivery follow-up before lower-priority monitoring work.
+                </p>
               </div>
-            </label>
+            </div>
+            <button
+              type="button"
+              className="inline-flex items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--login-link-hover)]"
+              onClick={() => {
+                setTriggerFilter("AWAITING_ACTION");
+                setPage(1);
+              }}
+            >
+              Review queue
+              <ChevronRight className="size-4" aria-hidden="true" />
+            </button>
+          </div>
+        ) : null}
+
+        <PageSectionHeader
+          title="Ward Action Queue"
+          description="Latest ward records merged from risk, workflow, and alert signals"
+          actions={
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="grid gap-2">
+                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Trigger state</span>
+                <div className="relative min-w-[220px]">
+                  <select
+                    value={triggerFilter}
+                    onChange={(event) => setTriggerFilter(event.target.value as TriggerFilter)}
+                    className="h-11 w-full appearance-none rounded-pill border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 pr-10 text-sm font-medium text-panel-copy outline-none transition focus:border-[var(--dashboard-icon-button-border)]"
+                  >
+                    <option value="ALL">All</option>
+                    <option value="TRIGGER_ACTIVE">Trigger active</option>
+                    <option value="AWAITING_ACTION">Awaiting action</option>
+                    <option value="RESOLVED">Resolved</option>
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-4 top-1/2 size-4 -translate-y-1/2 text-panel-muted" />
+                </div>
+              </label>
+
+              <label className="grid gap-2">
+                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Sort by</span>
+                <div className="relative min-w-[220px]">
+                  <select
+                    value={sortBy}
+                    onChange={(event) => setSortBy(event.target.value as SortOption)}
+                    className="h-11 w-full appearance-none rounded-pill border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 pr-10 text-sm font-medium text-panel-copy outline-none transition focus:border-[var(--dashboard-icon-button-border)]"
+                  >
+                    <option value="RISK_DESC">Risk score (highest first)</option>
+                    <option value="RISK_ASC">Risk score (lowest first)</option>
+                    <option value="UPDATED_DESC">Last updated</option>
+                    <option value="NAME_ASC">Ward name (A-Z)</option>
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-4 top-1/2 size-4 -translate-y-1/2 text-panel-muted" />
+                </div>
+              </label>
+            </div>
           }
         />
 
@@ -482,7 +639,7 @@ export default function WardsPage() {
               <table className="min-w-full border-collapse">
                 <thead>
                   <tr>
-                    {["Ward name", "County", "Risk level", "Risk score", "Last updated", "Actions"].map((label) => (
+                    {["Ward name", "Trigger state", "Risk level", "Risk score", "Expected cases (7d)", "Last updated", "Actions"].map((label) => (
                       <th
                         key={label}
                         className="border-b border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_30%,transparent)] px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted"
@@ -504,7 +661,7 @@ export default function WardsPage() {
                           </div>
                         </div>
                       </td>
-                      {Array.from({ length: 5 }, (_, cellIndex) => (
+                      {Array.from({ length: 6 }, (_, cellIndex) => (
                         <td
                           key={`cell-${cellIndex}`}
                           className="border-b border-[var(--dashboard-table-line)] px-4 py-4 last:border-b-0"
@@ -526,7 +683,7 @@ export default function WardsPage() {
                 <table className="min-w-full border-collapse text-left">
                   <thead>
                     <tr>
-                      {["Ward name", "County", "Risk level", "Risk score", "Last updated", "Actions"].map((label) => (
+                      {["Ward name", "Trigger state", "Risk level", "Risk score", "Expected cases (7d)", "Last updated", "Actions"].map((label) => (
                         <th
                           key={label}
                           className="border-b border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_30%,transparent)] px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted"
@@ -559,8 +716,13 @@ export default function WardsPage() {
                             </div>
                           </div>
                         </td>
-                        <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm text-panel-copy last:border-b-0">
-                          {item.county}
+                        <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm last:border-b-0">
+                          <StatusBadge
+                            tone={getQueueTriggerStateTone(item.triggerState)}
+                            className="rounded-full px-3 py-1 tracking-[0.14em]"
+                          >
+                            {getQueueTriggerStateLabel(item.triggerState)}
+                          </StatusBadge>
                         </td>
                         <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm last:border-b-0">
                           <StatusBadge
@@ -587,6 +749,9 @@ export default function WardsPage() {
                           </div>
                         </td>
                         <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm text-panel-copy last:border-b-0">
+                          {typeof item.predictedCases === "number" ? item.predictedCases : "—"}
+                        </td>
+                        <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm text-panel-copy last:border-b-0">
                           {formatCompactRelativeMinutes(item.updatedAt)}
                         </td>
                         <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm last:border-b-0">
@@ -598,7 +763,7 @@ export default function WardsPage() {
                             }
                             className="inline-flex items-center gap-2 font-semibold text-brand transition hover:text-[var(--login-link-hover)]"
                           >
-                            View details
+                            {item.requiresAction ? "Review" : "View details"}
                             <ChevronRight className="size-4" aria-hidden="true" />
                           </Link>
                         </td>
@@ -672,39 +837,41 @@ export default function WardsPage() {
       <section className="grid gap-6 xl:grid-cols-3">
         <Card className="space-y-4 p-6">
           <div className="flex items-center justify-between gap-3">
-            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">High-risk wards</span>
+            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Wards requiring action</span>
             <ShieldAlert className="size-5 text-[color:var(--danger)]" aria-hidden="true" />
           </div>
           <strong className="block text-4xl font-semibold tracking-[-0.05em] text-panel-strong">
-            {isLoading ? "..." : String(highRiskItems.length).padStart(2, "0")}
+            {isLoading ? "..." : String(wardsRequiringAction.length).padStart(2, "0")}
           </strong>
           <p className="text-sm text-panel-muted">
-            {isLoading ? "Loading filtered ward count..." : `${highRiskItems.length} visible in the current ward list`}
+            {isLoading ? "Loading queue summary..." : `${wardsRequiringAction.length} visible in the current queue require review or follow-up`}
           </p>
         </Card>
 
         <Card className="space-y-4 p-6">
           <div className="flex items-center justify-between gap-3">
-            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Average visible risk score</span>
-            <MapPinned className="size-5 text-brand" aria-hidden="true" />
-          </div>
-          <strong className="block text-4xl font-semibold tracking-[-0.05em] text-panel-strong">
-            {isLoading ? "..." : `${averageCountyRisk.toFixed(1)}/100`}
-          </strong>
-          <p className="text-sm text-panel-muted">
-            {averageCountyRisk >= 70 ? "Elevated risk across the current ward list" : "Lower risk across the current ward list"}
-          </p>
-        </Card>
-
-        <Card className="space-y-4 p-6">
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Visible ward rows</span>
+            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Workflow-active wards</span>
             <TriangleAlert className="size-5 text-[color:var(--warning)]" aria-hidden="true" />
           </div>
           <strong className="block text-4xl font-semibold tracking-[-0.05em] text-panel-strong">
-            {isLoading ? "..." : `${filteredItems.length}`}
+            {isLoading ? "..." : String(workflowActiveWards.length).padStart(2, "0")}
           </strong>
-          <p className="text-sm text-panel-muted">{getCoverageLabel(filteredItems.length, items.length)}</p>
+          <p className="text-sm text-panel-muted">
+            {isLoading ? "Loading workflow state..." : `${workflowActiveWards.length} visible wards currently have an in-flight trigger workflow`}
+          </p>
+        </Card>
+
+        <Card className="space-y-4 p-6">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Alerts pending</span>
+            <TriangleAlert className="size-5 text-[color:var(--warning)]" aria-hidden="true" />
+          </div>
+          <strong className="block text-4xl font-semibold tracking-[-0.05em] text-panel-strong">
+            {isLoading ? "..." : String(alertsPendingCount).padStart(2, "0")}
+          </strong>
+          <p className="text-sm text-panel-muted">
+            {isLoading ? "Loading delivery concerns..." : `${alertsPendingCount} retry-pending or failed deliveries are linked to the visible wards`}
+          </p>
         </Card>
       </section>
     </div>

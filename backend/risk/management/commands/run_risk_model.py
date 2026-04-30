@@ -43,6 +43,13 @@ class Command(BaseCommand):
         if dual_model and benchmark_algorithm == "random_forest" and not benchmark_version.startswith("rf-"):
             self.stderr.write(self.style.WARNING("Expected Random Forest benchmark versions to start with 'rf-'"))
 
+    def _default_run_purpose(self, *, algorithm: str, dual_model: bool) -> str:
+        if dual_model:
+            return "live_scoring"
+        if algorithm == "random_forest":
+            return "benchmark_scoring"
+        return "live_scoring"
+
     def handle(self, *args, **options):
         month = options["month"]
         model_version = options["model_version"]
@@ -61,6 +68,7 @@ class Command(BaseCommand):
             benchmark_version=benchmark_model_version,
             dual_model=dual_model,
         )
+        run_purpose = self._default_run_purpose(algorithm=algorithm, dual_model=dual_model)
 
         if run_async:
             task = run_risk_model_task.delay(
@@ -74,7 +82,7 @@ class Command(BaseCommand):
                 benchmark_model_version=benchmark_model_version,
                 alert_algorithm=alert_algorithm,
                 execution_context="manual_task",
-                run_purpose="live_scoring",
+                run_purpose=run_purpose,
             )
             self.stdout.write(
                 self.style.SUCCESS(
@@ -94,7 +102,7 @@ class Command(BaseCommand):
             benchmark_model_version=benchmark_model_version,
             alert_algorithm=alert_algorithm,
             execution_context="manual_command",
-            run_purpose="live_scoring",
+            run_purpose=run_purpose,
         )
 
         self.stdout.write(

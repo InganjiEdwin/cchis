@@ -13,6 +13,12 @@ export const queryKeys = {
     all: () => ["alerts"] as const,
     list: (filters: Record<string, string | number | boolean | null | undefined>) => ["alerts", filters] as const,
     detail: (alertId: string | number) => ["alert", alertId] as const,
+    trigger: {
+      context: (wardId: string | number) => ["alerts", "trigger", "context", wardId] as const,
+      preview: (wardId: string | number, triggerType: string, messageOverride: string | null = null) =>
+        ["alerts", "trigger", "preview", wardId, triggerType, messageOverride] as const,
+      requestStatus: (requestId: string) => ["alerts", "trigger", "request-status", requestId] as const,
+    },
   },
   overview: {
     root: () => ["overview"] as const,
@@ -22,6 +28,14 @@ export const queryKeys = {
   },
   chvs: {
     root: () => ["chvs"] as const,
+    activity: (publicId: string) => ["chvs", "activity", publicId] as const,
+    messages: (publicId: string) => ["chvs", "messages", publicId] as const,
+    coverageRequests: {
+      all: () => ["chvs", "coverage-requests"] as const,
+      list: (filters: Record<string, string | number | boolean | null | undefined>) =>
+        ["chvs", "coverage-requests", filters] as const,
+      detail: (publicId: string) => ["chvs", "coverage-requests", publicId] as const,
+    },
   },
   maps: {
     wards: () => ["maps", "wards"] as const,

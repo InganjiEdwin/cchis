@@ -16,10 +16,10 @@ export async function GET(request: Request) {
   try {
     const [wards, latestRisks, alerts, queuedAlerts, retryAlerts, failedAlerts, deliveredAlerts, facilities, chvOperations] =
       await Promise.all([
-      fetchBackendJson<PaginatedResponse<WardSummary>>("/wards/?page_size=1", {
+      fetchBackendJson<PaginatedResponse<WardSummary>>("/wards/?page_size=100&county=Migori", {
         cookieHeader,
       }),
-      fetchBackendJson<LatestWardRisk[]>("/risk-score/latest/", {
+      fetchBackendJson<LatestWardRisk[]>("/risk-score/latest/?county=Migori", {
         cookieHeader,
       }),
       fetchBackendJson<PaginatedResponse<AlertRecord>>("/alerts/?page_size=20&ordering=-created_at", {

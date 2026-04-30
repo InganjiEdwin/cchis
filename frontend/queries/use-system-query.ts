@@ -64,7 +64,7 @@ export function useSystemQuery({ enabled = true }: { enabled?: boolean } = {}) {
 
       const deliveryBackends = Array.from(
         data.alerts.results.reduce((accumulator, alert) => {
-          const name = alert.delivery_backend || "unassigned-backend";
+          const name = alert.delivery_backend || "Unassigned delivery source";
           accumulator.set(name, (accumulator.get(name) ?? 0) + 1);
           return accumulator;
         }, new Map<string, number>()),

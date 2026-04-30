@@ -5,7 +5,17 @@ import { useQuery } from "@tanstack/react-query";
 import {
   fetchOverviewDataViaBff,
   type AlertRecord,
+  type OverviewDecisionSummary,
+  type OverviewFacilityReadinessSummary,
+  type OverviewFreshnessSummary,
+  type OverviewMapGuidance,
+  type OverviewMissionMetrics,
+  type OverviewSimulationReadiness,
+  type OverviewTemporalMetrics,
+  type OverviewTriggerLinkageSummary,
+  type OverviewTriggerEvent,
   type LatestWardRisk,
+  type OverviewStateModel,
   type WardMapResponse,
   type WardSummary,
 } from "@/lib/dashboard";
@@ -23,7 +33,24 @@ export type OverviewViewModel = {
   deliveredAlertRate: number;
   latestTimestamp: string | null;
   primaryCountyLabel: string;
+  overviewState: OverviewStateModel;
+  decisionSummary: OverviewDecisionSummary;
+  triggerReviewQueue: OverviewTriggerEvent[];
+  freshness: OverviewFreshnessSummary;
+  temporalMetrics: OverviewTemporalMetrics;
+  missionMetrics: OverviewMissionMetrics;
+  mapGuidance: OverviewMapGuidance;
+  triggerLinkage: OverviewTriggerLinkageSummary;
+  facilityReadiness: OverviewFacilityReadinessSummary;
+  simulationReadiness: OverviewSimulationReadiness;
 };
+
+function getOperationalAlertStatusRank(status: AlertRecord["status"]) {
+  if (status === "RETRY_PENDING") return 0;
+  if (status === "FAILED") return 1;
+  if (status === "QUEUED") return 2;
+  return 3;
+}
 
 function startOfTodayIso() {
   const date = new Date();
@@ -36,6 +63,16 @@ function buildOverviewViewModel(
   latestRisks: LatestWardRisk[],
   alerts: AlertRecord[],
   wardMap: WardMapResponse | null,
+  overviewState: OverviewStateModel,
+  decisionSummary: OverviewDecisionSummary,
+  triggerReviewQueue: OverviewTriggerEvent[],
+  freshness: OverviewFreshnessSummary,
+  temporalMetrics: OverviewTemporalMetrics,
+  missionMetrics: OverviewMissionMetrics,
+  mapGuidance: OverviewMapGuidance,
+  triggerLinkage: OverviewTriggerLinkageSummary,
+  facilityReadiness: OverviewFacilityReadinessSummary,
+  simulationReadiness: OverviewSimulationReadiness,
 ): OverviewViewModel {
   const highRiskWards = latestRisks
     .filter((item) => item.risk_level === "HIGH")
@@ -57,18 +94,36 @@ function buildOverviewViewModel(
   }, new Map<string, number>());
   const primaryCountyLabel =
     [...countyCounts.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] ?? "Operational";
+  const prioritizedRecentAlerts = [...alerts].sort((left, right) => {
+    const statusDiff = getOperationalAlertStatusRank(left.status) - getOperationalAlertStatusRank(right.status);
+    if (statusDiff !== 0) {
+      return statusDiff;
+    }
+
+    return new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
+  });
 
   return {
     wards,
     totalWards: wards.length ? Math.max(wards.length, latestRisks.length) : latestRisks.length,
     highRiskWards,
     mediumRiskWards,
-    recentAlerts: alerts.slice(0, 5),
+    recentAlerts: prioritizedRecentAlerts.slice(0, 10),
     wardMap,
     alertsTodayCount,
     deliveredAlertRate,
     latestTimestamp,
     primaryCountyLabel: primaryCountyLabel === "Operational" ? "Migori" : primaryCountyLabel,
+    overviewState,
+    decisionSummary,
+    triggerReviewQueue,
+    freshness,
+    temporalMetrics,
+    missionMetrics,
+    mapGuidance,
+    triggerLinkage,
+    facilityReadiness,
+    simulationReadiness,
   };
 }
 
@@ -81,7 +136,22 @@ export function useOverviewQuery({ enabled = true }: { enabled?: boolean } = {})
       const migoriWardIds = new Set(migoriWards.map((ward) => ward.id));
       const migoriRisks = data.latestRisks.filter((risk) => migoriWardIds.has(risk.ward_id));
       const migoriAlerts = data.alerts.results.filter((alert) => migoriWardIds.has(alert.ward));
-      const model = buildOverviewViewModel(migoriWards, migoriRisks, migoriAlerts, data.wardMap ?? null);
+      const model = buildOverviewViewModel(
+        migoriWards,
+        migoriRisks,
+        migoriAlerts,
+        data.wardMap ?? null,
+        data.overviewState,
+        data.decisionSummary,
+        data.triggerReviewQueue,
+        data.freshness,
+        data.temporalMetrics,
+        data.missionMetrics,
+        data.mapGuidance,
+        data.triggerLinkage,
+        data.facilityReadiness,
+        data.simulationReadiness,
+      );
 
       return {
         ...model,

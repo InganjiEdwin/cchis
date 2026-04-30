@@ -2,7 +2,22 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { fetchAlertByIdViaBff, type AlertIntelligenceCapabilities, type AlertIntelligenceClassification, type AlertIntelligenceDelivery, type AlertIntelligenceFreshness, type AlertIntelligenceRiskContext, type AlertIntelligenceStateItem, type AlertIntelligenceTimelineEntry, type AlertRecord, type WardDetailSummary } from "@/lib/dashboard";
+import {
+  fetchAlertByIdViaBff,
+  type AlertIntelligenceCapabilities,
+  type AlertIntelligenceClassification,
+  type AlertIntelligenceDelivery,
+  type AlertIntelligenceFreshness,
+  type AlertIntelligenceLifecycle,
+  type AlertIntelligenceMessageSource,
+  type AlertIntelligenceRecommendedAction,
+  type AlertIntelligenceResponseSummary,
+  type AlertIntelligenceRiskContext,
+  type AlertIntelligenceStateItem,
+  type AlertIntelligenceTimelineEntry,
+  type AlertRecord,
+  type WardDetailSummary,
+} from "@/lib/dashboard";
 import { queryKeys } from "@/lib/query-keys";
 
 type AlertDetailData = {
@@ -10,7 +25,14 @@ type AlertDetailData = {
   ward_detail: WardDetailSummary | null;
   classification: AlertIntelligenceClassification;
   risk_context: AlertIntelligenceRiskContext;
+  lifecycle: AlertIntelligenceLifecycle;
   delivery: AlertIntelligenceDelivery;
+  delivery_summary: AlertIntelligenceDelivery;
+  message_source: AlertIntelligenceMessageSource;
+  chv_response_summary: AlertIntelligenceResponseSummary;
+  facility_response_summary: AlertIntelligenceResponseSummary;
+  recommended_next_action: AlertIntelligenceRecommendedAction;
+  last_updated_at: string | null;
   current_state: AlertIntelligenceStateItem[];
   freshness: AlertIntelligenceFreshness;
   timeline: AlertIntelligenceTimelineEntry[];

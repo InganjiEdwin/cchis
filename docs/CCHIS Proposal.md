@@ -275,6 +275,79 @@ sources:
 > ● health facility locations and service readiness information ●
 > population and vulnerability indicators
 
+**Known** **data** **source** **strategy**
+
+At pilot stage, CCHIS will rely on a mixed-source acquisition strategy
+rather than assuming that every input already exists as a clean live
+API. The source plan is intentionally pragmatic:
+
+> ● **rainfall** **data:** the initial operational rainfall feed will use
+> `Open-Meteo` forecast and precipitation data where live retrieval is
+> available, with controlled fallback to seeded static rainfall CSV data
+> or default rainfall tables if live access fails
+>
+> ● **flood** **and** **hydrometeorological** **proxies:** early flood
+> exposure signals may be derived from rainfall thresholds, local flood
+> proxy rules, and later richer geospatial or humanitarian exposure
+> layers rather than a single authoritative live flood API
+>
+> ● **surveillance** **and** **historical** **disease** **data:** the
+> strongest early sources are expected to be county or partner reporting
+> spreadsheets, `DHIS2` exports, and later authenticated `DHIS2` API
+> integration where institutional access is available
+>
+> ● **facility** **readiness** **data:** early facility preparedness and
+> service-state inputs are likely to come from partner CSV or Excel
+> snapshot files, facility-administered uploads, and later authenticated
+> partner-system integrations such as `DHIS2`, `OpenMRS`, or logistics
+> platforms where available
+>
+> ● **population** **and** **exposure** **data:** official Kenya
+> population releases from `KNBS`, open gridded population layers such
+> as `WorldPop`, and open geospatial context from `OpenStreetMap` or
+> `Overpass` will be used to build exposure and vulnerability features
+
+This is important because the platform is being designed for real-world
+low-resource deployment. In practice, some streams will begin as file
+imports or partner exports before they mature into repeatable API-based
+integrations.
+
+**Data** **sources** **we** **expect** **to** **be** **weak** **from**
+**day** **one**
+
+The proposal should be explicit that not all inputs will start at equal
+strength. The following sources are expected to be weaker, more
+incomplete, or more proxy-heavy during the early pilot:
+
+> ● **historical** **ward-level** **cholera** **labels:** these may be
+> sparse, delayed, underreported, or available only through aggregate
+> spreadsheets rather than clean ward-time case histories
+>
+> ● **real-time** **facility** **readiness** **signals:** staffing,
+> stock, referral pressure, and service disruption data are unlikely to
+> exist as fully automated live feeds at the beginning and may initially
+> rely on periodic snapshots or controlled manual updates
+>
+> ● **flood** **exposure** **signals:** in the first phase, these are
+> likely to be proxy-derived from rainfall, geography, and simple
+> threshold logic rather than a fully validated flood-observation
+> service
+>
+> ● **population** **vulnerability** **and** **WASH** **indicators:**
+> some of these may initially come from coarse or aggregated sources and
+> should not be interpreted as exact ward-level administrative truth
+>
+> ● **CHV** **and** **field** **signals:** these are useful for local
+> situational awareness and timeliness, but they should be treated as
+> support evidence rather than confirmed outbreak truth unless formally
+> reconciled with public-health reporting
+
+The only source family already positioned to be comparatively stronger
+from day one is rainfall ingestion, because it can draw on an external
+live weather source with explicit fallback handling. Even there, the
+proposal should remain honest that fallback and seeded paths are still
+part of the operational design.
+
 **2.** **Data** **Processing** **and** **Feature** **Engineering**
 **Layer**
 
@@ -1390,6 +1463,25 @@ pipelines include cleaning, interpolation, and feature engineering to
 improve usability of imperfect datasets. As the system is deployed,
 locally generated data from CHVs and health facilities will be used to
 progressively improve model accuracy and localization.
+
+From the first deployment, the project will explicitly classify some
+inputs as weaker evidence rather than hiding that uncertainty. In
+particular:
+
+> ● rainfall will be relatively stronger because it can use live
+> `Open-Meteo` retrieval with auditable fallback
+>
+> ● surveillance labels may initially depend on `DHIS2` exports, county
+> spreadsheets, and other batch data rather than clean live APIs
+>
+> ● facility readiness may begin with snapshot files and manual
+> operational updates rather than fully automated system-of-record feeds
+>
+> ● flood, WASH, and vulnerability measures may begin as derived or
+> aggregated proxies rather than direct operational truth
+
+This truth-grading approach helps ensure that early pilots remain useful
+without overstating the certainty of the underlying data.
 
 **8.2** **Model** **Accuracy** **and** **Predictive** **Uncertainty**
 

@@ -215,6 +215,13 @@ Closed by:
   - `facility-intelligence`
   - benchmark-visible `model-alignment`
 
+6. Standalone Random Forest runs launched through the generic `run_risk_model` command were still labeled with `run_purpose = live_scoring`.
+
+Closed by:
+
+- updating `run_risk_model` to assign `benchmark_scoring` when Random Forest is run as a standalone non-dual-model path
+- adding a direct regression test for the generic-command Random Forest benchmark contract
+
 ## Remaining Honest Gaps
 
 1. Real out-of-time validation metrics are still not persisted.

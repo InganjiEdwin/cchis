@@ -2,15 +2,21 @@ import json
 import os
 import tempfile
 import time
+import uuid
 from io import StringIO
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from asgiref.sync import async_to_sync, sync_to_async
+from channels.testing import WebsocketCommunicator
+from django.contrib import admin
 from django.contrib.admin.sites import AdminSite
 from django.contrib.auth import get_user_model
 from django.contrib.gis.geos import Point
 from django.conf import settings
+from django.core.exceptions import ValidationError
+from django.db import IntegrityError, transaction
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.core.cache import cache
@@ -28,7 +34,7 @@ from accounts.admin import AccessRequestAdmin
 from accounts.models import AccessRequest, AuthAuditEvent, PasswordResetToken, PreAuthToken
 from accounts.turnstile import TurnstileVerificationResult
 from accounts.two_factor import generate_current_totp_code, generate_totp_secret
-from communications.providers import MailgunEmailProvider, StubEmailProvider, get_email_provider
+from communications.providers import EmailDeliveryResult, MailgunEmailProvider, StubEmailProvider, get_email_provider
 from communications.services import send_email
 from accounts.views import (
     ChangePasswordAPIView,
@@ -86,19 +92,37 @@ from risk.interoperability import (
     ward_location_crosswalk_key,
 )
 from risk.providers import DeliveryResult, StubSmsProvider, get_sms_provider
+from risk.admin import CHVCoverageRequestAdmin, CHVCoverageRequestAlertLinkInline
+from risk.serializers import IngestionRunSerializer
 from risk.services import create_alerts_for_riskscore, deliver_alert
-from risk.services import build_facility_intelligence_snapshot
+from risk.services import build_facility_intelligence_snapshot, build_facility_readiness_decision_summary
 from risk.tasks import deliver_alert_task, trigger_alerts_task
+from rest_framework_simplejwt.tokens import AccessToken
 
 
 def started_at_ms(offset_ms: int = 2000) -> int:
     return int(time.time() * 1000) - offset_ms
 from risk.views import USSDMenuAPIView
+from core.asgi import application
 
 from .models import (
     Alert,
+    AlertWorkflowState,
     CHV,
+    CHVAssignment,
+    CHVCoverageRequest,
+    CHVCoverageRequestAlertLink,
+    CHVCoverageRequestEmailDelivery,
+    CHVCoverageRequestEvent,
+    CHVMessage,
+    DashboardNotification,
+    DashboardNotificationEvent,
     ETLHeartbeat,
+    FacilityContact,
+    FacilityReadinessEscalation,
+    FacilityReadinessReview,
+    FacilityReadinessReviewEvent,
+    FacilityReadinessUpdateRequest,
     FeatureDataset,
     FeatureDatasetRow,
     FacilityForecast,
@@ -189,7 +213,16 @@ class AuthenticatedAPITestCase(APITestCase):
             training_row_count=8,
             inference_row_count=2,
             evaluation_metrics={"training_accuracy": 1.0},
-            metadata={"source": "test"},
+            metadata={
+                "source": "test",
+                "algorithm": "logistic_regression",
+                "promotion_target": "live_baseline",
+                "promotion_state": "promoted",
+                "run_purpose": "live_scoring",
+                "execution_context": "test_fixture",
+                "alert_eligible": True,
+                "retraining_policy": "manual_promotion_only",
+            },
             completed_at=timezone.now(),
         )
 
@@ -501,19 +534,6 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
             ward=self.ward,
         )
         self.authenticate(analyst.username)
-
-        setup_response = self.client.post(reverse("auth-2fa-setup"), {}, format="json")
-        self.assertEqual(setup_response.status_code, status.HTTP_200_OK)
-
-        confirm_response = self.client.post(
-            reverse("auth-2fa-setup-confirm"),
-            {"code": generate_current_totp_code(setup_response.data["manual_entry_key"])},
-            format="json",
-        )
-
-        self.assertEqual(confirm_response.status_code, status.HTTP_200_OK)
-        self.assertTrue(confirm_response.data["enrollment_completed"])
-        self.assertTrue(confirm_response.data["user"]["is_totp_enabled"])
 
     def test_verify_2fa_returns_tokens_for_valid_code(self):
         secret = self.admin_user.totp_secret
@@ -2412,8 +2432,64 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.data["trend"]["mode"], "derived_from_recent_history")
         self.assertEqual(response.data["driver_summary"]["mode"], "derived_from_latest_record")
         self.assertEqual(response.data["guidance_summary"]["mode"], "static_risk_playbook")
+        self.assertEqual(response.data["workflow"]["status"], "TRIGGER_ACTIVE")
+        self.assertEqual(response.data["workflow"]["status_label"], "Trigger active")
+        self.assertEqual(response.data["decision_summary"]["action_required"], False)
+        self.assertEqual(response.data["decision_summary"]["primary_cta_kind"], "REVIEW_TRIGGER")
+        self.assertEqual(response.data["header_context"]["trigger_state"], "TRIGGER_ACTIVE")
+        self.assertEqual(response.data["header_context"]["freshness_state"], "FRESH")
         self.assertGreaterEqual(len(response.data["risk_history"]), 2)
         self.assertEqual(response.data["freshness"]["alert_count"], 1)
+
+    def test_ward_intelligence_marks_review_pending_workflow_as_action_required(self):
+        self.ward.alerts.all().delete()
+        self.ward.current_risk_level = Ward.RISK_HIGH
+        self.ward.current_risk_score = 0.87
+        self.ward.save(update_fields=["current_risk_level", "current_risk_score", "updated_at"])
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("ward-intelligence", kwargs={"pk": self.ward.id}))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["workflow"]["status"], "REVIEW_PENDING")
+        self.assertEqual(response.data["workflow"]["status_label"], "Awaiting review")
+        self.assertEqual(response.data["workflow"]["eligible_actions"][0], "REVIEW_TRIGGER")
+        self.assertEqual(response.data["decision_summary"]["action_required"], True)
+        self.assertEqual(response.data["decision_summary"]["headline"], "Action required. Review active alerts and trigger status.")
+        self.assertEqual(response.data["decision_summary"]["primary_cta_kind"], "REVIEW_TRIGGER")
+        self.assertEqual(response.data["decision_summary"]["next_steps"][0], "Review trigger")
+        self.assertEqual(response.data["header_context"]["trigger_state"], "REVIEW_PENDING")
+        self.assertEqual(response.data["header_context"]["expected_cases_7d"], self.risk_score.predicted_cases)
+
+    def test_ward_intelligence_exposes_none_state_when_no_trigger_is_active(self):
+        self.ward.alerts.all().delete()
+        self.ward.current_risk_level = Ward.RISK_LOW
+        self.ward.current_risk_score = 0.22
+        self.ward.save(update_fields=["current_risk_level", "current_risk_score", "updated_at"])
+        RiskScore.objects.create(
+            ward=self.ward,
+            model_run=self.model_run,
+            score=0.22,
+            risk_level=Ward.RISK_LOW,
+            rainfall_mm=18.0,
+            flood_indicator=0.0,
+            predicted_cases=1,
+            source=RiskScore.SOURCE_MODEL,
+            model_version="v0-test",
+            generated_at=timezone.now() + timedelta(minutes=1),
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("ward-intelligence", kwargs={"pk": self.ward.id}))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["workflow"]["status"], "NONE")
+        self.assertEqual(response.data["workflow"]["status_label"], "No active trigger")
+        self.assertIn("OPEN_TRIGGER_FLOW", response.data["workflow"]["eligible_actions"])
+        self.assertEqual(response.data["decision_summary"]["action_required"], False)
+        self.assertEqual(response.data["decision_summary"]["primary_cta_kind"], "OPEN_TRIGGER_FLOW")
+        self.assertEqual(response.data["decision_summary"]["next_steps"][0], "Open Trigger Flow")
+        self.assertEqual(response.data["header_context"]["trigger_state"], "NONE")
 
     def test_supervisor_cannot_view_out_of_scope_ward_intelligence(self):
         self.authenticate(self.supervisor_user.username)
@@ -2500,7 +2576,27 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(north_kamagambo["properties"]["active_chv_count"], 1)
         self.assertEqual(north_kamagambo["properties"]["alert_count"], 1)
         self.assertEqual(north_kamagambo["properties"]["facility_count"], 1)
+        self.assertEqual(north_kamagambo["properties"]["current_risk_level"], self.ward.current_risk_level)
+        self.assertEqual(north_kamagambo["properties"]["current_risk_score"], self.ward.current_risk_score)
         self.assertEqual(north_kamagambo["properties"]["risk_level"], Ward.RISK_HIGH)
+        self.assertTrue(north_kamagambo["properties"]["prediction"]["available"])
+        self.assertEqual(north_kamagambo["properties"]["prediction"]["horizon_days"], 7)
+        self.assertEqual(
+            north_kamagambo["properties"]["prediction"]["predicted_risk_level"],
+            self.risk_score.risk_level,
+        )
+        self.assertEqual(
+            north_kamagambo["properties"]["prediction"]["predicted_risk_score"],
+            self.risk_score.score,
+        )
+        self.assertEqual(
+            north_kamagambo["properties"]["prediction"]["predicted_cases"],
+            self.risk_score.predicted_cases,
+        )
+        self.assertEqual(
+            north_kamagambo["properties"]["prediction"]["prediction_model_version"],
+            self.risk_score.model_version,
+        )
         self.assertEqual(north_kamagambo["properties"]["trend"]["direction"], "up")
         self.assertEqual(north_kamagambo["properties"]["trend"]["delta_points"], 14)
         self.assertEqual(
@@ -2923,12 +3019,16 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         )
 
         self.authenticate(self.admin_user.username)
-        response = self.client.get(reverse("chv-operations"))
+        with patch("risk.services.resolve_chv_message_mode", return_value="SEND"), patch(
+            "risk.services.resolve_chv_message_delivery_kind", return_value="SIMULATED"
+        ):
+            response = self.client.get(reverse("chv-operations"))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 1)
         row = response.data[0]
         self.assertEqual(row["id"], self.chv.id)
+        self.assertEqual(str(row["public_id"]), str(self.chv.public_id))
         self.assertEqual(row["operational_status"], "ACTIVE")
         self.assertEqual(row["sync_health"], "ONLINE")
         self.assertEqual(row["triage_sessions_24h"], 1)
@@ -2937,6 +3037,10 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(row["ussd_sessions_24h"], 1)
         self.assertEqual(row["ward_alerts_total"], 1)
         self.assertEqual(row["ward_alerts_delivered"], 1)
+        self.assertTrue(row["can_message"])
+        self.assertEqual(row["message_mode"], "SEND")
+        self.assertEqual(row["message_delivery_kind"], "SIMULATED")
+        self.assertTrue(row["can_view_activity"])
 
     def test_supervisor_chv_operations_snapshot_is_scoped_to_assigned_ward(self):
         CHV.objects.create(
@@ -2954,6 +3058,180 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]["ward"], self.other_ward.id)
 
+    def test_admin_can_view_chv_activity_history(self):
+        CHVMessage.objects.create(
+            chv=self.chv,
+            ward=self.ward,
+            sent_by=self.admin_user,
+            channel=CHVMessage.CHANNEL_SMS,
+            message_body="Simulated message",
+            status=CHVMessage.STATUS_SENT,
+            delivery_kind=CHVMessage.DELIVERY_KIND_SIMULATED,
+            delivery_backend="stub",
+            provider_reference="stub-123",
+        )
+        request_record = CHVCoverageRequest.objects.create(
+            ward=self.ward,
+            requested_by=self.admin_user,
+            status=CHVCoverageRequest.STATUS_APPROVED,
+            priority=CHVCoverageRequest.PRIORITY_HIGH,
+            reason="Coverage request ready for assignment.",
+            requested_chv_count=1,
+        )
+        assignment = CHVAssignment.objects.create(
+            coverage_request=request_record,
+            ward=self.ward,
+            chv=self.chv,
+            assigned_by=self.admin_user,
+            status=CHVAssignment.STATUS_ACTIVE,
+        )
+        CHVCoverageRequestEvent.objects.create(
+            coverage_request=request_record,
+            assignment=assignment,
+            actor=self.admin_user,
+            action=CHVCoverageRequestEvent.ACTION_ASSIGNMENT_CREATED,
+            new_status=CHVCoverageRequest.STATUS_APPROVED,
+            detail="Assigned to North Kamagambo coverage request.",
+        )
+        Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="dashboard",
+            message="Ward alert",
+            status=Alert.STATUS_DELIVERED,
+        )
+        SyncQueue.objects.create(
+            source_device_id="device-1",
+            client_submission_id="sync-001",
+            phone_number=self.chv.phone_number,
+            ward=self.ward,
+            payload={"client_submission_id": "sync-001"},
+            status=SyncQueue.STATUS_PROCESSED,
+            processed_at=timezone.now(),
+        )
+        TriageSession.objects.create(
+            channel="API",
+            phone_number=self.chv.phone_number,
+            ward=self.ward,
+            referral_facility=self.health_facility,
+            recommendation="Refer now",
+            referral_needed=True,
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.get(reverse("chv-activity", args=[self.chv.public_id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(len(response.data), 4)
+        categories = {event["category"] for event in response.data}
+        self.assertIn("MESSAGE", categories)
+        self.assertIn("ASSIGNMENT", categories)
+        self.assertIn("ALERT", categories)
+        self.assertIn("SYNC", categories)
+        message_event = next(event for event in response.data if event["category"] == "MESSAGE")
+        self.assertEqual(message_event["metadata"]["delivery_kind"], "SIMULATED")
+        self.assertEqual(message_event["metadata"]["delivery_backend"], "stub")
+        assignment_event = next(event for event in response.data if event["category"] == "ASSIGNMENT")
+        self.assertEqual(assignment_event["title"], "Assigned to coverage request")
+        self.assertEqual(assignment_event["source"], "Coverage request workflow")
+
+    @patch("risk.services.send_sms")
+    def test_admin_can_send_chv_message_via_existing_sms_service(self, mock_send_sms):
+        mock_send_sms.return_value = DeliveryResult(
+            success=True,
+            external_id="sms-123",
+            error="",
+            provider="stub",
+        )
+
+        self.authenticate(self.admin_user.username)
+        with patch("risk.services.resolve_chv_message_mode", return_value="SEND"):
+            response = self.client.post(
+                reverse("chv-message-list-create", args=[self.chv.public_id]),
+                {"message_body": "Please check in with the ward team.", "channel": "SMS"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["status"], "SENT")
+        self.assertEqual(response.data["delivery_kind"], "SIMULATED")
+        self.assertEqual(response.data["delivery_backend"], "stub")
+        self.assertEqual(response.data["provider_reference"], "sms-123")
+        self.assertEqual(CHVMessage.objects.count(), 1)
+        message_record = CHVMessage.objects.get()
+        self.assertEqual(message_record.sent_by, self.admin_user)
+        self.assertEqual(message_record.status, CHVMessage.STATUS_SENT)
+        self.assertEqual(message_record.delivery_kind, CHVMessage.DELIVERY_KIND_SIMULATED)
+        self.assertEqual(message_record.delivery_backend, "stub")
+        mock_send_sms.assert_called_once_with(self.chv.phone_number, "Please check in with the ward team.")
+
+    def test_admin_can_queue_chv_message_when_live_send_is_unavailable(self):
+        self.authenticate(self.admin_user.username)
+        with patch("risk.services.resolve_chv_message_mode", return_value="QUEUE_ONLY"):
+            response = self.client.post(
+                reverse("chv-message-list-create", args=[self.chv.public_id]),
+                {"message_body": "Please check in with the ward team.", "channel": "SMS"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["status"], "QUEUED")
+        self.assertEqual(response.data["delivery_kind"], "QUEUE_ONLY")
+        self.assertEqual(response.data["delivery_backend"], "")
+        self.assertEqual(response.data["provider_reference"], "")
+        self.assertEqual(CHVMessage.objects.count(), 1)
+        self.assertEqual(CHVMessage.objects.get().status, CHVMessage.STATUS_QUEUED)
+        self.assertEqual(CHVMessage.objects.get().delivery_kind, CHVMessage.DELIVERY_KIND_QUEUE_ONLY)
+
+    def test_admin_cannot_create_chv_message_when_messaging_is_unavailable(self):
+        self.authenticate(self.admin_user.username)
+        with patch("risk.services.resolve_chv_message_mode", return_value="UNAVAILABLE"):
+            response = self.client.post(
+                reverse("chv-message-list-create", args=[self.chv.public_id]),
+                {"message_body": "Please check in with the ward team.", "channel": "SMS"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(CHVMessage.objects.count(), 0)
+        self.assertEqual(str(response.data["detail"]), "Messaging is not available in this environment.")
+
+    def test_field_operator_cannot_access_chv_activity_or_messaging_endpoints(self):
+        self.authenticate(self.chv_user.username)
+
+        activity_response = self.client.get(reverse("chv-activity", args=[self.chv.public_id]))
+        messages_response = self.client.get(reverse("chv-message-list-create", args=[self.chv.public_id]))
+
+        self.assertEqual(activity_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(messages_response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_admin_can_access_activity_and_messages_for_inactive_chv_visible_in_registry_scope(self):
+        inactive_chv = CHV.objects.create(
+            name="Inactive CHV",
+            phone_number="+254700000222",
+            ward=self.ward,
+            is_active=False,
+            language="en",
+        )
+        CHVMessage.objects.create(
+            chv=inactive_chv,
+            ward=self.ward,
+            sent_by=self.admin_user,
+            channel=CHVMessage.CHANNEL_SMS,
+            message_body="Historical message",
+            status=CHVMessage.STATUS_QUEUED,
+            delivery_kind=CHVMessage.DELIVERY_KIND_QUEUE_ONLY,
+        )
+
+        self.authenticate(self.admin_user.username)
+        activity_response = self.client.get(reverse("chv-activity", args=[inactive_chv.public_id]))
+        messages_response = self.client.get(reverse("chv-message-list-create", args=[inactive_chv.public_id]))
+
+        self.assertEqual(activity_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(messages_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(messages_response.data[0]["message_body"], "Historical message")
+
     def test_analyst_can_list_facilities(self):
         self.authenticate(self.analyst_user.username)
         response = self.client.get(reverse("facility-list"))
@@ -2963,6 +3241,126 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["id"], self.health_facility.id)
         self.assertEqual(results[0]["ward_name"], self.ward.name)
+        self.assertIn("decision_summary", response.data)
+        self.assertEqual(response.data["decision_summary"]["state"], "DEGRADED_CONFIDENCE")
+        self.assertEqual(response.data["decision_summary"]["confidence"], "DEGRADED")
+        self.assertIn("top_priorities", response.data["decision_summary"])
+        self.assertNotIn("primary_cta_kind", response.data["decision_summary"])
+        self.assertNotIn("can_dispatch", response.data["decision_summary"])
+        self.assertIn("workflow_states", response.data)
+        self.assertEqual(response.data["workflow_states"][0]["facility_id"], self.health_facility.id)
+        self.assertFalse(response.data["workflow_states"][0]["has_active_review"])
+        self.assertEqual(response.data["workflow_states"][0]["label"], "No review signals")
+
+    def test_facility_list_exposes_compact_workflow_states(self):
+        contact = FacilityContact.objects.create(
+            facility=self.health_facility,
+            name="Facility In-Charge",
+            role="Nurse in charge",
+            phone="+254720100001",
+            preferred_channel=FacilityContact.CHANNEL_SMS,
+            is_verified=True,
+            is_active=True,
+            source="trusted_facility_registry",
+            source_reference="facility-list-workflow-contact",
+            verified_at=timezone.now(),
+        )
+        review = FacilityReadinessReview.objects.create(
+            facility=self.health_facility,
+            ward=self.health_facility.ward,
+            status=FacilityReadinessReview.STATUS_OPEN,
+            severity=FacilityReadinessReview.SEVERITY_MEDIUM,
+            reason_codes=["STALE_INPUTS"],
+            decision_summary_snapshot={"state": "DEGRADED_CONFIDENCE"},
+            created_by=self.admin_user,
+        )
+        update_request = FacilityReadinessUpdateRequest.objects.create(
+            review=review,
+            facility=self.health_facility,
+            contact=contact,
+            requested_by=self.admin_user,
+            channel=FacilityReadinessUpdateRequest.CHANNEL_SMS,
+            message_body="Please send updated readiness information.",
+            status=FacilityReadinessUpdateRequest.STATUS_QUEUED,
+        )
+        escalation = FacilityReadinessEscalation.objects.create(
+            review=review,
+            facility=self.health_facility,
+            ward=self.health_facility.ward,
+            status=FacilityReadinessEscalation.STATUS_OPEN,
+            severity=FacilityReadinessEscalation.SEVERITY_MEDIUM,
+            reason="County review requested.",
+            created_by=self.admin_user,
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.get(reverse("facility-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        workflow_state = response.data["workflow_states"][0]
+        self.assertEqual(workflow_state["facility_id"], self.health_facility.id)
+        self.assertTrue(workflow_state["has_active_review"])
+        self.assertEqual(workflow_state["review_public_id"], str(review.public_id))
+        self.assertEqual(workflow_state["review_status"], FacilityReadinessReview.STATUS_OPEN)
+        self.assertTrue(workflow_state["has_active_update_request"])
+        self.assertEqual(workflow_state["update_request_public_id"], str(update_request.public_id))
+        self.assertEqual(workflow_state["update_request_status"], FacilityReadinessUpdateRequest.STATUS_QUEUED)
+        self.assertTrue(workflow_state["has_active_escalation"])
+        self.assertEqual(workflow_state["escalation_public_id"], str(escalation.public_id))
+        self.assertEqual(workflow_state["escalation_status"], FacilityReadinessEscalation.STATUS_OPEN)
+        self.assertEqual(workflow_state["label"], "Escalated")
+        self.assertEqual(workflow_state["tone"], "warning")
+
+    @patch("risk.services.build_facility_intelligence_snapshot")
+    def test_facility_list_decision_summary_uses_full_filtered_queryset_not_current_page(self, snapshot_mock):
+        second_facility = HealthFacility.objects.create(
+            name="Zulu Review Health Centre",
+            facility_code="TEST-HF-003B",
+            ward=self.other_ward,
+            facility_type=HealthFacility.TYPE_HEALTH_CENTER,
+            ownership=HealthFacility.OWNERSHIP_PUBLIC,
+            level=HealthFacility.LEVEL_3,
+            is_active=True,
+        )
+
+        snapshot_map = {
+            self.health_facility.id: {
+                "readiness": {
+                    "ors_estimate_percent": 94,
+                    "staffing_percent": 94,
+                    "surge_risk": "LOW",
+                    "projected_cases": 1,
+                    "backing_source": "promoted_forecast",
+                },
+                "context": {"ward_risk_score": 0.14, "ward_alert_count": 0},
+                "forecasting": {"source_kind": "promoted_forecast"},
+                "freshness": {"is_stale": False},
+            },
+            second_facility.id: {
+                "readiness": {
+                    "ors_estimate_percent": 18,
+                    "staffing_percent": 35,
+                    "surge_risk": "EXTREME",
+                    "projected_cases": 19,
+                    "backing_source": "forecast_preview",
+                },
+                "context": {"ward_risk_score": 0.83, "ward_alert_count": 2},
+                "forecasting": {"source_kind": "forecast_preview"},
+                "freshness": {"is_stale": False},
+            },
+        }
+
+        snapshot_mock.side_effect = lambda facility, stale_threshold_minutes=120: snapshot_map[facility.id]
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("facility-list"), {"page_size": 1, "ordering": "name"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = get_results(response)
+        self.assertEqual(len(results), 1)
+        self.assertNotEqual(results[0]["id"], second_facility.id)
+        self.assertEqual(response.data["decision_summary"]["state"], "REVIEW")
+        self.assertEqual(response.data["decision_summary"]["top_priorities"][0]["facility_id"], second_facility.id)
 
     def test_supervisor_only_sees_facilities_for_assigned_ward(self):
         other_facility = HealthFacility.objects.create(
@@ -3002,15 +3400,902 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["facility"]["id"], self.health_facility.id)
-        self.assertEqual(response.data["readiness"]["mode"], "calculated_from_facility_identity_and_ward_risk")
-        self.assertEqual(response.data["readiness"]["backing_source"], "proxy")
-        self.assertEqual(response.data["readiness"]["dashboard_truth_state"], "proxy_only")
+        self.assertEqual(response.data["readiness"]["mode"], "unavailable_until_direct_snapshot_or_promoted_forecast")
+        self.assertEqual(response.data["readiness"]["backing_source"], "unavailable")
+        self.assertEqual(response.data["readiness"]["dashboard_truth_state"], "unavailable")
         self.assertEqual(response.data["context"]["map_mode"], "shared_ward_geometry_contract")
         self.assertEqual(response.data["context"]["driving_ward_ids"], [self.ward.id])
-        self.assertEqual(response.data["forecasting"]["source_kind"], "proxy_only")
-        self.assertEqual(response.data["forecasting"]["dashboard_truth_state"], "proxy_only")
+        self.assertEqual(response.data["forecasting"]["source_kind"], "unavailable")
+        self.assertEqual(response.data["forecasting"]["dashboard_truth_state"], "unavailable")
+        self.assertEqual(response.data["decision_summary"]["state"], "DEGRADED_CONFIDENCE")
+        self.assertEqual(response.data["decision_summary"]["confidence"], "DEGRADED")
+        self.assertEqual(response.data["decision_summary"]["confidence_reason"], "weak_proxy_inputs")
+        self.assertEqual(response.data["decision_summary"]["top_priorities"][0]["facility_id"], self.health_facility.id)
+        self.assertIn("WEAK_PROXY_INPUTS", response.data["decision_summary"]["top_priorities"][0]["reason_codes"])
         self.assertGreaterEqual(len(response.data["timeline"]), 2)
-        self.assertFalse(response.data["capabilities"]["can_dispatch"])
+        self.assertNotIn("can_dispatch", response.data["capabilities"])
+        self.assertNotIn("can_open_chat", response.data["capabilities"])
+        self.assertNotIn("can_notify_chvs", response.data["capabilities"])
+        self.assertNotIn("can_escalate_county", response.data["capabilities"])
+        self.assertNotIn("can_view_dispatch_history", response.data["capabilities"])
+        self.assertIsNone(response.data["contact"])
+        self.assertFalse(response.data["capabilities"]["has_verified_contact"])
+        self.assertFalse(response.data["capabilities"]["can_open_readiness_review"])
+        self.assertFalse(response.data["capabilities"]["can_request_facility_update"])
+        self.assertEqual(response.data["capabilities"]["mode"], "contract_backed_readiness_workflows")
+
+    def test_facility_intelligence_does_not_treat_legacy_contact_phone_as_verified_contact(self):
+        self.authenticate(self.admin_user.username)
+        response = self.client.get(reverse("facility-intelligence", args=[self.health_facility.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(self.health_facility.contact_phone, "+254720100001")
+        self.assertIsNone(response.data["contact"])
+        self.assertFalse(response.data["capabilities"]["has_verified_contact"])
+        self.assertTrue(response.data["capabilities"]["can_open_readiness_review"])
+        self.assertFalse(response.data["capabilities"]["can_request_facility_update"])
+
+    def test_facility_intelligence_exposes_verified_contact_capability_for_admin(self):
+        contact = FacilityContact.objects.create(
+            facility=self.health_facility,
+            name="Facility In-Charge",
+            role="Nurse in charge",
+            phone="+254720100001",
+            preferred_channel=FacilityContact.CHANNEL_SMS,
+            is_verified=True,
+            is_active=True,
+            source="trusted_facility_registry",
+            source_reference="facility-contact-test-001",
+            verified_at=timezone.now(),
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.get(reverse("facility-intelligence", args=[self.health_facility.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["contact"]["public_id"], str(contact.public_id))
+        self.assertEqual(response.data["contact"]["display_label"], "Facility In-Charge")
+        self.assertEqual(response.data["contact"]["phone_last4"], "0001")
+        self.assertNotIn("phone", response.data["contact"])
+        self.assertTrue(response.data["capabilities"]["has_verified_contact"])
+        self.assertTrue(response.data["capabilities"]["can_view_contacts"])
+        self.assertFalse(response.data["capabilities"]["has_active_review"])
+        self.assertTrue(response.data["capabilities"]["can_open_readiness_review"])
+        self.assertFalse(response.data["capabilities"]["can_request_facility_update"])
+        self.assertFalse(response.data["capabilities"]["has_active_update_request"])
+
+    def test_facility_intelligence_exposes_active_review_and_unlocks_update_capability(self):
+        FacilityContact.objects.create(
+            facility=self.health_facility,
+            name="Facility In-Charge",
+            role="Nurse in charge",
+            phone="+254720100001",
+            preferred_channel=FacilityContact.CHANNEL_SMS,
+            is_verified=True,
+            is_active=True,
+            source="trusted_facility_registry",
+            source_reference="facility-contact-test-review",
+            verified_at=timezone.now(),
+        )
+        review = FacilityReadinessReview.objects.create(
+            facility=self.health_facility,
+            ward=self.health_facility.ward,
+            status=FacilityReadinessReview.STATUS_OPEN,
+            severity=FacilityReadinessReview.SEVERITY_MEDIUM,
+            reason_codes=["STALE_INPUTS"],
+            decision_summary_snapshot={"state": "DEGRADED_CONFIDENCE"},
+            created_by=self.admin_user,
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.get(reverse("facility-intelligence", args=[self.health_facility.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["active_review"]["public_id"], str(review.public_id))
+        self.assertTrue(response.data["capabilities"]["has_active_review"])
+        self.assertFalse(response.data["capabilities"]["can_open_readiness_review"])
+        self.assertIsNone(response.data["active_update_request"])
+        self.assertFalse(response.data["capabilities"]["has_active_update_request"])
+        self.assertTrue(response.data["capabilities"]["can_request_facility_update"])
+
+    def test_facility_intelligence_keeps_update_request_locked_for_unverified_contact(self):
+        FacilityContact.objects.create(
+            facility=self.health_facility,
+            name="Unverified Contact",
+            role="Facility contact",
+            phone="+254720100001",
+            preferred_channel=FacilityContact.CHANNEL_SMS,
+            is_verified=False,
+            is_active=True,
+            source="trusted_facility_registry",
+            source_reference="facility-contact-test-unverified",
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.get(reverse("facility-intelligence", args=[self.health_facility.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(response.data["contact"])
+        self.assertFalse(response.data["capabilities"]["has_verified_contact"])
+        self.assertFalse(response.data["capabilities"]["can_request_facility_update"])
+
+    def test_facility_intelligence_keeps_update_request_read_only_for_analyst_even_with_verified_contact(self):
+        FacilityContact.objects.create(
+            facility=self.health_facility,
+            name="Facility In-Charge",
+            role="Nurse in charge",
+            phone="+254720100001",
+            preferred_channel=FacilityContact.CHANNEL_SMS,
+            is_verified=True,
+            is_active=True,
+            source="trusted_facility_registry",
+            source_reference="facility-contact-test-analyst",
+            verified_at=timezone.now(),
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("facility-intelligence", args=[self.health_facility.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNotNone(response.data["contact"])
+        self.assertTrue(response.data["capabilities"]["has_verified_contact"])
+        self.assertFalse(response.data["capabilities"]["can_request_facility_update"])
+
+    def test_facility_intelligence_exposes_linked_alert_navigation_metadata(self):
+        alert = Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="ops-dashboard",
+            message="Review Got Kachola readiness pressure.",
+            status=Alert.STATUS_RETRY_PENDING,
+            delivery_backend="dashboard",
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.get(reverse("facility-intelligence", args=[self.health_facility.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["capabilities"]["can_open_linked_alert"])
+        self.assertEqual(len(response.data["linked_alerts"]), 1)
+        linked_alert = response.data["linked_alerts"][0]
+        self.assertEqual(linked_alert["id"], alert.id)
+        self.assertEqual(linked_alert["public_id"], str(alert.public_id))
+        self.assertEqual(linked_alert["ward_id"], self.ward.id)
+        self.assertEqual(linked_alert["dashboard_url"], f"/alerts/{alert.id}")
+        self.assertEqual(linked_alert["api_url"], f"/api/v1/alerts/{alert.id}/")
+        self.assertEqual(linked_alert["intelligence_api_url"], f"/api/v1/alerts/{alert.id}/intelligence/")
+        self.assertEqual(linked_alert["filtered_alerts_url"], f"/alerts?ward_id={self.ward.id}")
+
+    def test_facility_intelligence_exposes_chv_operations_deep_link_for_active_ward_chvs(self):
+        self.authenticate(self.admin_user.username)
+        response = self.client.get(reverse("facility-intelligence", args=[self.health_facility.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        chv_operations = response.data["chv_operations"]
+        self.assertTrue(chv_operations["available"])
+        self.assertEqual(chv_operations["ward_id"], self.ward.id)
+        self.assertEqual(chv_operations["ward_name"], self.ward.name)
+        self.assertEqual(chv_operations["active_chv_count"], 1)
+        self.assertEqual(chv_operations["total_chv_count"], 1)
+        self.assertEqual(chv_operations["api_url"], f"/api/v1/chvs/operations/?ward_id={self.ward.id}")
+        self.assertEqual(chv_operations["dashboard_url"], f"/chvs?ward_id={self.ward.id}#chv-registry")
+        self.assertEqual(chv_operations["mode"], "chv_operations_deep_link_only")
+        self.assertTrue(response.data["capabilities"]["can_open_chv_operations"])
+        self.assertNotIn("can_notify_ward_chvs", response.data["capabilities"])
+
+    def test_facility_intelligence_keeps_chv_operations_unavailable_without_active_ward_chvs(self):
+        self.chv.is_active = False
+        self.chv.save(update_fields=["is_active"])
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.get(reverse("facility-intelligence", args=[self.health_facility.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data["chv_operations"]["available"])
+        self.assertEqual(response.data["chv_operations"]["active_chv_count"], 0)
+        self.assertEqual(response.data["chv_operations"]["total_chv_count"], 1)
+        self.assertFalse(response.data["capabilities"]["can_open_chv_operations"])
+        self.assertNotIn("can_notify_ward_chvs", response.data["capabilities"])
+
+    def test_chv_operations_api_accepts_reuse_ward_filter(self):
+        CHV.objects.create(
+            name="Other Ward CHV",
+            phone_number="+254700000077",
+            ward=self.other_ward,
+            is_active=True,
+            language="en",
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.get(reverse("chv-operations"), {"ward_id": self.ward.id})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["ward"], self.ward.id)
+
+    def test_admin_can_create_facility_readiness_review(self):
+        self.authenticate(self.admin_user.username)
+        response = self.client.post(
+            reverse("facility-readiness-review-create", args=[self.health_facility.id]),
+            {"notes": "Review stale readiness inputs."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["facility"], self.health_facility.id)
+        self.assertEqual(response.data["ward"], self.ward.id)
+        self.assertEqual(response.data["status"], FacilityReadinessReview.STATUS_OPEN)
+        self.assertIn("WEAK_PROXY_INPUTS", response.data["reason_codes"])
+        self.assertEqual(FacilityReadinessReview.objects.count(), 1)
+        review = FacilityReadinessReview.objects.get()
+        self.assertEqual(review.created_by, self.admin_user)
+        self.assertEqual(review.notes, "Review stale readiness inputs.")
+        self.assertEqual(review.events.count(), 1)
+        self.assertEqual(review.events.first().action, FacilityReadinessReviewEvent.ACTION_CREATED)
+
+    def test_duplicate_active_facility_readiness_review_is_rejected(self):
+        FacilityReadinessReview.objects.create(
+            facility=self.health_facility,
+            ward=self.ward,
+            status=FacilityReadinessReview.STATUS_OPEN,
+            severity=FacilityReadinessReview.SEVERITY_LOW,
+            created_by=self.admin_user,
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.post(
+            reverse("facility-readiness-review-create", args=[self.health_facility.id]),
+            {"notes": "Duplicate review"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(FacilityReadinessReview.objects.count(), 1)
+
+    def test_analyst_cannot_create_facility_readiness_review(self):
+        self.authenticate(self.analyst_user.username)
+        response = self.client.post(
+            reverse("facility-readiness-review-create", args=[self.health_facility.id]),
+            {"notes": "Analyst should not mutate reviews."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(FacilityReadinessReview.objects.count(), 0)
+
+    def test_supervisor_can_create_facility_readiness_review_for_assigned_ward_only(self):
+        other_facility = HealthFacility.objects.create(
+            name="North Kadem Health Centre",
+            facility_code="TEST-HF-REVIEW-002",
+            ward=self.other_ward,
+            facility_type=HealthFacility.TYPE_HEALTH_CENTER,
+            ownership=HealthFacility.OWNERSHIP_PUBLIC,
+            level=HealthFacility.LEVEL_3,
+            is_active=True,
+        )
+
+        self.authenticate(self.supervisor_user.username)
+        in_scope_response = self.client.post(
+            reverse("facility-readiness-review-create", args=[other_facility.id]),
+            {"notes": "Supervisor ward review."},
+            format="json",
+        )
+        out_of_scope_response = self.client.post(
+            reverse("facility-readiness-review-create", args=[self.health_facility.id]),
+            {"notes": "Out of scope review."},
+            format="json",
+        )
+
+        self.assertEqual(in_scope_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(out_of_scope_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(FacilityReadinessReview.objects.count(), 1)
+        self.assertEqual(FacilityReadinessReview.objects.get().facility, other_facility)
+
+    def test_admin_can_mark_facility_readiness_review_as_reviewed(self):
+        review = FacilityReadinessReview.objects.create(
+            facility=self.health_facility,
+            ward=self.ward,
+            status=FacilityReadinessReview.STATUS_OPEN,
+            severity=FacilityReadinessReview.SEVERITY_LOW,
+            created_by=self.admin_user,
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.post(
+            reverse("facility-readiness-review-acknowledge", args=[review.public_id]),
+            {"notes": "Reviewed during morning check."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], FacilityReadinessReview.STATUS_ACKNOWLEDGED)
+        review.refresh_from_db()
+        self.assertIsNotNone(review.acknowledged_at)
+        self.assertEqual(review.notes, "Reviewed during morning check.")
+        self.assertEqual(review.events.count(), 1)
+        self.assertEqual(review.events.first().action, FacilityReadinessReviewEvent.ACTION_ACKNOWLEDGED)
+
+    def test_admin_can_resolve_facility_readiness_review(self):
+        review = FacilityReadinessReview.objects.create(
+            facility=self.health_facility,
+            ward=self.ward,
+            status=FacilityReadinessReview.STATUS_ACKNOWLEDGED,
+            severity=FacilityReadinessReview.SEVERITY_LOW,
+            created_by=self.admin_user,
+            acknowledged_at=timezone.now(),
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.patch(
+            reverse("facility-readiness-review-detail", args=[review.public_id]),
+            {"status": FacilityReadinessReview.STATUS_RESOLVED, "notes": "No further review needed."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], FacilityReadinessReview.STATUS_RESOLVED)
+        review.refresh_from_db()
+        self.assertIsNotNone(review.resolved_at)
+        self.assertEqual(review.events.count(), 1)
+        self.assertEqual(review.events.first().action, FacilityReadinessReviewEvent.ACTION_RESOLVED)
+
+        intelligence_response = self.client.get(reverse("facility-intelligence", args=[self.health_facility.id]))
+        self.assertEqual(intelligence_response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(intelligence_response.data["active_review"])
+        self.assertFalse(intelligence_response.data["capabilities"]["has_active_review"])
+
+    def test_analyst_can_view_but_not_update_facility_readiness_review(self):
+        review = FacilityReadinessReview.objects.create(
+            facility=self.health_facility,
+            ward=self.ward,
+            status=FacilityReadinessReview.STATUS_OPEN,
+            severity=FacilityReadinessReview.SEVERITY_LOW,
+            created_by=self.admin_user,
+        )
+
+        self.authenticate(self.analyst_user.username)
+        detail_response = self.client.get(reverse("facility-readiness-review-detail", args=[review.public_id]))
+        patch_response = self.client.patch(
+            reverse("facility-readiness-review-detail", args=[review.public_id]),
+            {"status": FacilityReadinessReview.STATUS_RESOLVED},
+            format="json",
+        )
+
+        self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(patch_response.status_code, status.HTTP_403_FORBIDDEN)
+        review.refresh_from_db()
+        self.assertEqual(review.status, FacilityReadinessReview.STATUS_OPEN)
+
+    def test_admin_can_create_facility_update_request_for_active_review_with_verified_contact(self):
+        FacilityContact.objects.create(
+            facility=self.health_facility,
+            name="Facility In-Charge",
+            role="Nurse in charge",
+            phone="+254720100001",
+            preferred_channel=FacilityContact.CHANNEL_SMS,
+            is_verified=True,
+            is_active=True,
+            source="trusted_facility_registry",
+            source_reference="facility-contact-update-request",
+            verified_at=timezone.now(),
+        )
+        review = FacilityReadinessReview.objects.create(
+            facility=self.health_facility,
+            ward=self.ward,
+            status=FacilityReadinessReview.STATUS_OPEN,
+            severity=FacilityReadinessReview.SEVERITY_LOW,
+            reason_codes=["STALE_INPUTS"],
+            created_by=self.admin_user,
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.post(
+            reverse("facility-readiness-update-request-create", args=[review.public_id]),
+            {"message_body": "Please update ORS and staffing status."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["review"], review.id)
+        self.assertEqual(response.data["facility"], self.health_facility.id)
+        self.assertEqual(response.data["status"], FacilityReadinessUpdateRequest.STATUS_QUEUED)
+        self.assertEqual(response.data["message_body"], "Please update ORS and staffing status.")
+        self.assertEqual(FacilityReadinessUpdateRequest.objects.count(), 1)
+        update_request = FacilityReadinessUpdateRequest.objects.get()
+        self.assertEqual(update_request.requested_by, self.admin_user)
+        self.assertEqual(update_request.channel, FacilityReadinessUpdateRequest.CHANNEL_SMS)
+        self.assertEqual(review.events.count(), 1)
+        self.assertEqual(review.events.first().action, FacilityReadinessReviewEvent.ACTION_UPDATE_REQUEST_CREATED)
+        self.assertEqual(
+            review.events.first().metadata["update_request_public_id"],
+            str(update_request.public_id),
+        )
+
+        intelligence_response = self.client.get(reverse("facility-intelligence", args=[self.health_facility.id]))
+        self.assertEqual(intelligence_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(intelligence_response.data["active_update_request"]["public_id"], str(update_request.public_id))
+        self.assertTrue(intelligence_response.data["capabilities"]["has_active_update_request"])
+        self.assertFalse(intelligence_response.data["capabilities"]["can_request_facility_update"])
+
+    def test_facility_update_request_uses_default_body_and_queued_status(self):
+        FacilityContact.objects.create(
+            facility=self.health_facility,
+            name="Facility In-Charge",
+            phone="+254720100001",
+            preferred_channel=FacilityContact.CHANNEL_SMS,
+            is_verified=True,
+            is_active=True,
+            source="trusted_facility_registry",
+            source_reference="facility-contact-default-request",
+            verified_at=timezone.now(),
+        )
+        review = FacilityReadinessReview.objects.create(
+            facility=self.health_facility,
+            ward=self.ward,
+            status=FacilityReadinessReview.STATUS_OPEN,
+            severity=FacilityReadinessReview.SEVERITY_LOW,
+            reason_codes=["STALE_INPUTS"],
+            created_by=self.admin_user,
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.post(
+            reverse("facility-readiness-update-request-create", args=[review.public_id]),
+            {},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["status"], FacilityReadinessUpdateRequest.STATUS_QUEUED)
+        self.assertIn(self.health_facility.name, response.data["message_body"])
+        self.assertIn("ORS stock", response.data["message_body"])
+
+    def test_facility_update_request_requires_verified_contact(self):
+        review = FacilityReadinessReview.objects.create(
+            facility=self.health_facility,
+            ward=self.ward,
+            status=FacilityReadinessReview.STATUS_OPEN,
+            severity=FacilityReadinessReview.SEVERITY_LOW,
+            created_by=self.admin_user,
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.post(
+            reverse("facility-readiness-update-request-create", args=[review.public_id]),
+            {"message_body": "Please update readiness inputs."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(FacilityReadinessUpdateRequest.objects.count(), 0)
+
+    def test_facility_update_request_requires_active_review(self):
+        FacilityContact.objects.create(
+            facility=self.health_facility,
+            name="Facility In-Charge",
+            phone="+254720100001",
+            preferred_channel=FacilityContact.CHANNEL_SMS,
+            is_verified=True,
+            is_active=True,
+            source="trusted_facility_registry",
+            source_reference="facility-contact-closed-review",
+            verified_at=timezone.now(),
+        )
+        review = FacilityReadinessReview.objects.create(
+            facility=self.health_facility,
+            ward=self.ward,
+            status=FacilityReadinessReview.STATUS_RESOLVED,
+            severity=FacilityReadinessReview.SEVERITY_LOW,
+            created_by=self.admin_user,
+            resolved_at=timezone.now(),
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.post(
+            reverse("facility-readiness-update-request-create", args=[review.public_id]),
+            {"message_body": "Closed reviews cannot request updates."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(FacilityReadinessUpdateRequest.objects.count(), 0)
+
+    def test_duplicate_active_facility_update_request_is_rejected(self):
+        contact = FacilityContact.objects.create(
+            facility=self.health_facility,
+            name="Facility In-Charge",
+            phone="+254720100001",
+            preferred_channel=FacilityContact.CHANNEL_SMS,
+            is_verified=True,
+            is_active=True,
+            source="trusted_facility_registry",
+            source_reference="facility-contact-duplicate-request",
+            verified_at=timezone.now(),
+        )
+        review = FacilityReadinessReview.objects.create(
+            facility=self.health_facility,
+            ward=self.ward,
+            status=FacilityReadinessReview.STATUS_OPEN,
+            severity=FacilityReadinessReview.SEVERITY_LOW,
+            created_by=self.admin_user,
+        )
+        FacilityReadinessUpdateRequest.objects.create(
+            review=review,
+            facility=self.health_facility,
+            contact=contact,
+            requested_by=self.admin_user,
+            channel=FacilityReadinessUpdateRequest.CHANNEL_SMS,
+            message_body="Existing active request.",
+            status=FacilityReadinessUpdateRequest.STATUS_QUEUED,
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.post(
+            reverse("facility-readiness-update-request-create", args=[review.public_id]),
+            {"message_body": "Duplicate request."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(FacilityReadinessUpdateRequest.objects.count(), 1)
+
+    def test_analyst_cannot_create_facility_update_request(self):
+        FacilityContact.objects.create(
+            facility=self.health_facility,
+            name="Facility In-Charge",
+            phone="+254720100001",
+            preferred_channel=FacilityContact.CHANNEL_SMS,
+            is_verified=True,
+            is_active=True,
+            source="trusted_facility_registry",
+            source_reference="facility-contact-analyst-update-request",
+            verified_at=timezone.now(),
+        )
+        review = FacilityReadinessReview.objects.create(
+            facility=self.health_facility,
+            ward=self.ward,
+            status=FacilityReadinessReview.STATUS_OPEN,
+            severity=FacilityReadinessReview.SEVERITY_LOW,
+            created_by=self.admin_user,
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.post(
+            reverse("facility-readiness-update-request-create", args=[review.public_id]),
+            {"message_body": "Analyst should not mutate update requests."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(FacilityReadinessUpdateRequest.objects.count(), 0)
+
+    def test_supervisor_can_create_facility_update_request_for_assigned_ward_only(self):
+        other_facility = HealthFacility.objects.create(
+            name="North Kadem Update Facility",
+            facility_code="TEST-HF-UPDATE-002",
+            ward=self.other_ward,
+            facility_type=HealthFacility.TYPE_HEALTH_CENTER,
+            ownership=HealthFacility.OWNERSHIP_PUBLIC,
+            level=HealthFacility.LEVEL_3,
+            is_active=True,
+        )
+        FacilityContact.objects.create(
+            facility=other_facility,
+            name="North Kadem Facility In-Charge",
+            phone="+254720100002",
+            preferred_channel=FacilityContact.CHANNEL_SMS,
+            is_verified=True,
+            is_active=True,
+            source="trusted_facility_registry",
+            source_reference="facility-contact-supervisor-update",
+            verified_at=timezone.now(),
+        )
+        in_scope_review = FacilityReadinessReview.objects.create(
+            facility=other_facility,
+            ward=self.other_ward,
+            status=FacilityReadinessReview.STATUS_OPEN,
+            severity=FacilityReadinessReview.SEVERITY_LOW,
+            created_by=self.admin_user,
+        )
+        out_of_scope_review = FacilityReadinessReview.objects.create(
+            facility=self.health_facility,
+            ward=self.ward,
+            status=FacilityReadinessReview.STATUS_OPEN,
+            severity=FacilityReadinessReview.SEVERITY_LOW,
+            created_by=self.admin_user,
+        )
+
+        self.authenticate(self.supervisor_user.username)
+        in_scope_response = self.client.post(
+            reverse("facility-readiness-update-request-create", args=[in_scope_review.public_id]),
+            {"message_body": "Supervisor ward update request."},
+            format="json",
+        )
+        out_of_scope_response = self.client.post(
+            reverse("facility-readiness-update-request-create", args=[out_of_scope_review.public_id]),
+            {"message_body": "Out of scope update request."},
+            format="json",
+        )
+
+        self.assertEqual(in_scope_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(out_of_scope_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(FacilityReadinessUpdateRequest.objects.count(), 1)
+        self.assertEqual(FacilityReadinessUpdateRequest.objects.get().facility, other_facility)
+
+    def test_facility_intelligence_exposes_county_escalation_capability_for_admin(self):
+        review = FacilityReadinessReview.objects.create(
+            facility=self.health_facility,
+            ward=self.ward,
+            status=FacilityReadinessReview.STATUS_OPEN,
+            severity=FacilityReadinessReview.SEVERITY_MEDIUM,
+            reason_codes=["STALE_INPUTS"],
+            created_by=self.admin_user,
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.get(reverse("facility-intelligence", args=[self.health_facility.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["active_review"]["public_id"], str(review.public_id))
+        self.assertIsNone(response.data["active_escalation"])
+        self.assertTrue(response.data["capabilities"]["has_county_review_queue"])
+        self.assertTrue(response.data["capabilities"]["can_escalate_county_review"])
+        self.assertFalse(response.data["capabilities"]["has_active_escalation"])
+
+    def test_supervisor_cannot_create_county_review_escalation(self):
+        review = FacilityReadinessReview.objects.create(
+            facility=self.health_facility,
+            ward=self.ward,
+            status=FacilityReadinessReview.STATUS_OPEN,
+            severity=FacilityReadinessReview.SEVERITY_MEDIUM,
+            created_by=self.admin_user,
+        )
+
+        self.authenticate(self.supervisor_user.username)
+        response = self.client.post(
+            reverse("facility-readiness-escalation-create", args=[review.public_id]),
+            {"reason": "Supervisor should not escalate county review."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(FacilityReadinessEscalation.objects.count(), 0)
+
+    def test_admin_can_create_county_review_escalation_for_active_review(self):
+        review = FacilityReadinessReview.objects.create(
+            facility=self.health_facility,
+            ward=self.ward,
+            status=FacilityReadinessReview.STATUS_OPEN,
+            severity=FacilityReadinessReview.SEVERITY_MEDIUM,
+            reason_codes=["STALE_INPUTS"],
+            created_by=self.admin_user,
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.post(
+            reverse("facility-readiness-escalation-create", args=[review.public_id]),
+            {"reason": "County should review stale readiness inputs."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["review"], review.id)
+        self.assertEqual(response.data["facility"], self.health_facility.id)
+        self.assertEqual(response.data["ward"], self.ward.id)
+        self.assertEqual(response.data["status"], FacilityReadinessEscalation.STATUS_OPEN)
+        self.assertEqual(response.data["severity"], FacilityReadinessEscalation.SEVERITY_MEDIUM)
+        self.assertEqual(FacilityReadinessEscalation.objects.count(), 1)
+        escalation = FacilityReadinessEscalation.objects.get()
+        self.assertEqual(escalation.created_by, self.admin_user)
+        self.assertEqual(escalation.reason, "County should review stale readiness inputs.")
+        self.assertEqual(review.events.count(), 1)
+        self.assertEqual(review.events.first().action, FacilityReadinessReviewEvent.ACTION_ESCALATION_CREATED)
+        self.assertEqual(review.events.first().metadata["escalation_public_id"], str(escalation.public_id))
+
+        intelligence_response = self.client.get(reverse("facility-intelligence", args=[self.health_facility.id]))
+        self.assertEqual(intelligence_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(intelligence_response.data["active_escalation"]["public_id"], str(escalation.public_id))
+        self.assertTrue(intelligence_response.data["capabilities"]["has_active_escalation"])
+        self.assertFalse(intelligence_response.data["capabilities"]["can_escalate_county_review"])
+
+    def test_county_review_escalation_requires_active_review(self):
+        review = FacilityReadinessReview.objects.create(
+            facility=self.health_facility,
+            ward=self.ward,
+            status=FacilityReadinessReview.STATUS_RESOLVED,
+            severity=FacilityReadinessReview.SEVERITY_LOW,
+            created_by=self.admin_user,
+            resolved_at=timezone.now(),
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.post(
+            reverse("facility-readiness-escalation-create", args=[review.public_id]),
+            {"reason": "Closed reviews cannot be escalated."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(FacilityReadinessEscalation.objects.count(), 0)
+
+    def test_duplicate_active_county_review_escalation_is_rejected(self):
+        review = FacilityReadinessReview.objects.create(
+            facility=self.health_facility,
+            ward=self.ward,
+            status=FacilityReadinessReview.STATUS_OPEN,
+            severity=FacilityReadinessReview.SEVERITY_LOW,
+            created_by=self.admin_user,
+        )
+        FacilityReadinessEscalation.objects.create(
+            review=review,
+            facility=self.health_facility,
+            ward=self.ward,
+            status=FacilityReadinessEscalation.STATUS_OPEN,
+            severity=FacilityReadinessEscalation.SEVERITY_LOW,
+            reason="Existing active county review escalation.",
+            created_by=self.admin_user,
+        )
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.post(
+            reverse("facility-readiness-escalation-create", args=[review.public_id]),
+            {"reason": "Duplicate escalation."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(FacilityReadinessEscalation.objects.count(), 1)
+
+    def test_admin_can_acknowledge_and_resolve_county_review_escalation(self):
+        review = FacilityReadinessReview.objects.create(
+            facility=self.health_facility,
+            ward=self.ward,
+            status=FacilityReadinessReview.STATUS_OPEN,
+            severity=FacilityReadinessReview.SEVERITY_HIGH,
+            created_by=self.admin_user,
+        )
+        escalation = FacilityReadinessEscalation.objects.create(
+            review=review,
+            facility=self.health_facility,
+            ward=self.ward,
+            status=FacilityReadinessEscalation.STATUS_OPEN,
+            severity=FacilityReadinessEscalation.SEVERITY_HIGH,
+            reason="County review needed.",
+            created_by=self.admin_user,
+        )
+
+        self.authenticate(self.admin_user.username)
+        acknowledge_response = self.client.patch(
+            reverse("facility-readiness-escalation-detail", args=[escalation.public_id]),
+            {"status": FacilityReadinessEscalation.STATUS_ACKNOWLEDGED, "notes": "County desk has taken this."},
+            format="json",
+        )
+        resolve_response = self.client.patch(
+            reverse("facility-readiness-escalation-detail", args=[escalation.public_id]),
+            {"status": FacilityReadinessEscalation.STATUS_RESOLVED, "notes": "County review completed."},
+            format="json",
+        )
+
+        self.assertEqual(acknowledge_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(acknowledge_response.data["status"], FacilityReadinessEscalation.STATUS_ACKNOWLEDGED)
+        self.assertEqual(acknowledge_response.data["assigned_to"], self.admin_user.id)
+        self.assertEqual(resolve_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(resolve_response.data["status"], FacilityReadinessEscalation.STATUS_RESOLVED)
+        escalation.refresh_from_db()
+        self.assertEqual(escalation.assigned_to, self.admin_user)
+        self.assertEqual(escalation.acknowledged_by, self.admin_user)
+        self.assertIsNotNone(escalation.acknowledged_at)
+        self.assertIsNotNone(escalation.resolved_at)
+        self.assertEqual(
+            list(review.events.values_list("action", flat=True)),
+            [
+                FacilityReadinessReviewEvent.ACTION_ESCALATION_ACKNOWLEDGED,
+                FacilityReadinessReviewEvent.ACTION_ESCALATION_RESOLVED,
+            ],
+        )
+
+    def test_analyst_can_view_county_review_queue_but_not_mutate(self):
+        review = FacilityReadinessReview.objects.create(
+            facility=self.health_facility,
+            ward=self.ward,
+            status=FacilityReadinessReview.STATUS_OPEN,
+            severity=FacilityReadinessReview.SEVERITY_LOW,
+            created_by=self.admin_user,
+        )
+        escalation = FacilityReadinessEscalation.objects.create(
+            review=review,
+            facility=self.health_facility,
+            ward=self.ward,
+            status=FacilityReadinessEscalation.STATUS_OPEN,
+            severity=FacilityReadinessEscalation.SEVERITY_LOW,
+            reason="Visible county review queue item.",
+            created_by=self.admin_user,
+        )
+
+        self.authenticate(self.analyst_user.username)
+        list_response = self.client.get(reverse("facility-readiness-escalation-list"))
+        detail_response = self.client.get(reverse("facility-readiness-escalation-detail", args=[escalation.public_id]))
+        patch_response = self.client.patch(
+            reverse("facility-readiness-escalation-detail", args=[escalation.public_id]),
+            {"status": FacilityReadinessEscalation.STATUS_ACKNOWLEDGED},
+            format="json",
+        )
+
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        list_results = get_results(list_response)
+        self.assertEqual(len(list_results), 1)
+        self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(patch_response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_county_review_queue_filters_assignment_state(self):
+        in_scope_review = FacilityReadinessReview.objects.create(
+            facility=self.health_facility,
+            ward=self.ward,
+            status=FacilityReadinessReview.STATUS_OPEN,
+            severity=FacilityReadinessReview.SEVERITY_LOW,
+            created_by=self.admin_user,
+        )
+        other_facility = HealthFacility.objects.create(
+            name="County Queue Assigned Facility",
+            facility_code="TEST-HF-ESC-002",
+            ward=self.other_ward,
+            facility_type=HealthFacility.TYPE_HEALTH_CENTER,
+            ownership=HealthFacility.OWNERSHIP_PUBLIC,
+            level=HealthFacility.LEVEL_3,
+            is_active=True,
+        )
+        assigned_review = FacilityReadinessReview.objects.create(
+            facility=other_facility,
+            ward=self.other_ward,
+            status=FacilityReadinessReview.STATUS_OPEN,
+            severity=FacilityReadinessReview.SEVERITY_LOW,
+            created_by=self.admin_user,
+        )
+        FacilityReadinessEscalation.objects.create(
+            review=in_scope_review,
+            facility=self.health_facility,
+            ward=self.ward,
+            status=FacilityReadinessEscalation.STATUS_OPEN,
+            severity=FacilityReadinessEscalation.SEVERITY_LOW,
+            reason="Unassigned county review queue item.",
+            created_by=self.admin_user,
+        )
+        FacilityReadinessEscalation.objects.create(
+            review=assigned_review,
+            facility=other_facility,
+            ward=self.other_ward,
+            status=FacilityReadinessEscalation.STATUS_ACKNOWLEDGED,
+            severity=FacilityReadinessEscalation.SEVERITY_LOW,
+            reason="Assigned county review queue item.",
+            created_by=self.admin_user,
+            assigned_to=self.admin_user,
+            acknowledged_by=self.admin_user,
+            acknowledged_at=timezone.now(),
+        )
+
+        self.authenticate(self.admin_user.username)
+        all_response = self.client.get(reverse("facility-readiness-escalation-list"))
+        unassigned_response = self.client.get(
+            reverse("facility-readiness-escalation-list"),
+            {"assignment": "unassigned"},
+        )
+        mine_response = self.client.get(
+            reverse("facility-readiness-escalation-list"),
+            {"assignment": "mine"},
+        )
+
+        self.assertEqual(all_response.status_code, status.HTTP_200_OK)
+        all_results = get_results(all_response)
+        self.assertEqual(len(all_results), 2)
+        self.assertEqual(unassigned_response.status_code, status.HTTP_200_OK)
+        unassigned_results = get_results(unassigned_response)
+        self.assertEqual(len(unassigned_results), 1)
+        self.assertIsNone(unassigned_results[0]["assigned_to"])
+        self.assertEqual(mine_response.status_code, status.HTTP_200_OK)
+        mine_results = get_results(mine_response)
+        self.assertEqual(len(mine_results), 1)
+        self.assertEqual(mine_results[0]["assigned_to"], self.admin_user.id)
 
     def test_facility_intelligence_distinguishes_forecast_preview_from_proxy_readiness(self):
         run_facility_burden_forecast_pipeline(
@@ -3033,6 +4318,8 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.data["context"]["driving_ward_ids"], [self.ward.id])
         self.assertGreaterEqual(len(response.data["context"]["action_reasoning"]), 2)
         self.assertEqual(response.data["freshness"]["mode"], "derived_from_forecast_or_facility_timestamp")
+        self.assertEqual(response.data["decision_summary"]["confidence"], "NORMAL")
+        self.assertIsNone(response.data["decision_summary"]["confidence_reason"])
         self.assertEqual(response.data["timeline"][0]["id"].startswith("facility-forecast-"), True)
 
     def test_facility_intelligence_prefers_promoted_facility_forecast_over_newer_preview_run(self):
@@ -3085,6 +4372,493 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(in_scope_response.status_code, status.HTTP_200_OK)
         self.assertEqual(in_scope_response.data["facility"]["id"], other_facility.id)
         self.assertEqual(out_of_scope_response.status_code, status.HTTP_404_NOT_FOUND)
+
+    @patch("risk.services.build_facility_intelligence_snapshot")
+    def test_facility_readiness_decision_summary_ranks_stale_high_difference_first(self, snapshot_mock):
+        second_facility = HealthFacility.objects.create(
+            name="North Kadem Health Centre",
+            facility_code="TEST-HF-004",
+            ward=self.other_ward,
+            facility_type=HealthFacility.TYPE_HEALTH_CENTER,
+            ownership=HealthFacility.OWNERSHIP_PUBLIC,
+            level=HealthFacility.LEVEL_3,
+            is_active=True,
+        )
+        calm_ward = Ward.objects.create(
+            name="Got Kachola",
+            county="Migori",
+            sub_county="Nyatike",
+            current_risk_level=Ward.RISK_LOW,
+            current_risk_score=0.18,
+            is_active=True,
+        )
+        calm_facility = HealthFacility.objects.create(
+            name="Got Kachola Dispensary",
+            facility_code="TEST-HF-005",
+            ward=calm_ward,
+            facility_type=HealthFacility.TYPE_DISPENSARY,
+            ownership=HealthFacility.OWNERSHIP_PUBLIC,
+            level=HealthFacility.LEVEL_2,
+            is_active=True,
+        )
+
+        snapshot_map = {
+            self.health_facility.id: {
+                "readiness": {
+                    "ors_estimate_percent": 22,
+                    "staffing_percent": 40,
+                    "surge_risk": "EXTREME",
+                    "projected_cases": 21,
+                    "backing_source": "forecast_preview",
+                },
+                "context": {"ward_risk_score": 0.86, "ward_alert_count": 2},
+                "forecasting": {"source_kind": "forecast_preview"},
+                "freshness": {"is_stale": True},
+            },
+            second_facility.id: {
+                "readiness": {
+                    "ors_estimate_percent": 58,
+                    "staffing_percent": 72,
+                    "surge_risk": "MODERATE",
+                    "projected_cases": 9,
+                    "backing_source": "forecast_preview",
+                },
+                "context": {"ward_risk_score": 0.62, "ward_alert_count": 1},
+                "forecasting": {"source_kind": "forecast_preview"},
+                "freshness": {"is_stale": False},
+            },
+            calm_facility.id: {
+                "readiness": {
+                    "ors_estimate_percent": 90,
+                    "staffing_percent": 90,
+                    "surge_risk": "LOW",
+                    "projected_cases": 2,
+                    "backing_source": "forecast_preview",
+                },
+                "context": {"ward_risk_score": 0.18, "ward_alert_count": 0},
+                "forecasting": {"source_kind": "promoted_forecast"},
+                "freshness": {"is_stale": False},
+            },
+        }
+
+        snapshot_mock.side_effect = lambda facility, stale_threshold_minutes=120: snapshot_map[facility.id]
+
+        summary = build_facility_readiness_decision_summary(
+            [self.health_facility, second_facility, calm_facility]
+        )
+
+        self.assertEqual(summary["state"], "DEGRADED_CONFIDENCE")
+        self.assertEqual(summary["confidence"], "DEGRADED")
+        self.assertEqual(summary["confidence_reason"], "stale_inputs")
+        self.assertEqual([item["facility_id"] for item in summary["top_priorities"]], [self.health_facility.id, second_facility.id])
+        self.assertIn("HIGH_READINESS_DIFFERENCE", summary["top_priorities"][0]["reason_codes"])
+        self.assertIn("STALE_INPUTS", summary["top_priorities"][0]["reason_codes"])
+        self.assertIn("MODERATE_READINESS_DIFFERENCE", summary["top_priorities"][1]["reason_codes"])
+
+    @patch("risk.services.build_facility_intelligence_snapshot")
+    def test_facility_readiness_decision_summary_returns_review_state_when_confidence_is_normal(self, snapshot_mock):
+        second_facility = HealthFacility.objects.create(
+            name="North Kadem Health Centre",
+            facility_code="TEST-HF-006",
+            ward=self.other_ward,
+            facility_type=HealthFacility.TYPE_HEALTH_CENTER,
+            ownership=HealthFacility.OWNERSHIP_PUBLIC,
+            level=HealthFacility.LEVEL_3,
+            is_active=True,
+        )
+
+        snapshot_map = {
+            self.health_facility.id: {
+                "readiness": {
+                    "ors_estimate_percent": 60,
+                    "staffing_percent": 74,
+                    "surge_risk": "MODERATE",
+                    "projected_cases": 10,
+                    "backing_source": "forecast_preview",
+                },
+                "context": {"ward_risk_score": 0.86, "ward_alert_count": 1},
+                "forecasting": {"source_kind": "forecast_preview"},
+                "freshness": {"is_stale": False},
+            },
+            second_facility.id: {
+                "readiness": {
+                    "ors_estimate_percent": 88,
+                    "staffing_percent": 92,
+                    "surge_risk": "LOW",
+                    "projected_cases": 3,
+                    "backing_source": "promoted_forecast",
+                },
+                "context": {"ward_risk_score": 0.18, "ward_alert_count": 0},
+                "forecasting": {"source_kind": "promoted_forecast"},
+                "freshness": {"is_stale": False},
+            },
+        }
+
+        snapshot_mock.side_effect = lambda facility, stale_threshold_minutes=120: snapshot_map[facility.id]
+
+        summary = build_facility_readiness_decision_summary([self.health_facility, second_facility])
+
+        self.assertEqual(summary["state"], "REVIEW")
+        self.assertEqual(summary["confidence"], "NORMAL")
+        self.assertIsNone(summary["confidence_reason"])
+        self.assertEqual(summary["total_review_facility_count"], 1)
+        self.assertEqual(summary["top_priorities"][0]["facility_id"], self.health_facility.id)
+        self.assertIn("MODERATE_READINESS_DIFFERENCE", summary["top_priorities"][0]["reason_codes"])
+
+    @patch("risk.services.build_facility_intelligence_snapshot")
+    def test_facility_readiness_decision_summary_returns_calm_state_when_no_review_priority_exists(self, snapshot_mock):
+        calm_ward = Ward.objects.create(
+            name="South Sakwa",
+            county="Migori",
+            sub_county="Nyatike",
+            current_risk_level=Ward.RISK_LOW,
+            current_risk_score=0.14,
+            is_active=True,
+        )
+        calm_facility = HealthFacility.objects.create(
+            name="South Sakwa Dispensary",
+            facility_code="TEST-HF-007",
+            ward=calm_ward,
+            facility_type=HealthFacility.TYPE_DISPENSARY,
+            ownership=HealthFacility.OWNERSHIP_PUBLIC,
+            level=HealthFacility.LEVEL_2,
+            is_active=True,
+        )
+
+        snapshot_mock.return_value = {
+            "readiness": {
+                "ors_estimate_percent": 94,
+                "staffing_percent": 94,
+                "surge_risk": "LOW",
+                "projected_cases": 1,
+                "backing_source": "promoted_forecast",
+            },
+            "context": {"ward_risk_score": 0.14, "ward_alert_count": 0},
+            "forecasting": {"source_kind": "promoted_forecast"},
+            "freshness": {"is_stale": False},
+        }
+
+        summary = build_facility_readiness_decision_summary([calm_facility])
+
+        self.assertEqual(summary["state"], "CALM")
+        self.assertEqual(summary["confidence"], "NORMAL")
+        self.assertIsNone(summary["confidence_reason"])
+        self.assertEqual(summary["total_review_facility_count"], 0)
+        self.assertEqual(summary["top_priorities"], [])
+        self.assertEqual(summary["related_surfaces"]["has_linked_alerts"], False)
+
+    @patch("risk.services.build_facility_intelligence_snapshot")
+    def test_facility_readiness_decision_summary_counts_unique_linked_alerts_across_loaded_scope(self, snapshot_mock):
+        same_ward_facility = HealthFacility.objects.create(
+            name="North Kamagambo Annex Dispensary",
+            facility_code="TEST-HF-007B",
+            ward=self.ward,
+            facility_type=HealthFacility.TYPE_DISPENSARY,
+            ownership=HealthFacility.OWNERSHIP_PUBLIC,
+            level=HealthFacility.LEVEL_2,
+            is_active=True,
+        )
+
+        Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="ops",
+            message="Ward alert one",
+            status=Alert.STATUS_DELIVERED,
+        )
+        Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_SMS,
+            recipient="254700000001",
+            message="Ward alert two",
+            status=Alert.STATUS_QUEUED,
+        )
+
+        snapshot_map = {
+            self.health_facility.id: {
+                "readiness": {
+                    "ors_estimate_percent": 94,
+                    "staffing_percent": 94,
+                    "surge_risk": "LOW",
+                    "projected_cases": 1,
+                    "backing_source": "promoted_forecast",
+                },
+                "context": {"ward_risk_score": 0.14, "ward_alert_count": 2},
+                "forecasting": {"source_kind": "promoted_forecast"},
+                "freshness": {"is_stale": False},
+            },
+            same_ward_facility.id: {
+                "readiness": {
+                    "ors_estimate_percent": 92,
+                    "staffing_percent": 91,
+                    "surge_risk": "LOW",
+                    "projected_cases": 1,
+                    "backing_source": "promoted_forecast",
+                },
+                "context": {"ward_risk_score": 0.14, "ward_alert_count": 2},
+                "forecasting": {"source_kind": "promoted_forecast"},
+                "freshness": {"is_stale": False},
+            },
+        }
+
+        snapshot_mock.side_effect = lambda facility, stale_threshold_minutes=120: snapshot_map[facility.id]
+
+        summary = build_facility_readiness_decision_summary([self.health_facility, same_ward_facility])
+
+        self.assertTrue(summary["related_surfaces"]["has_linked_alerts"])
+        self.assertEqual(summary["related_surfaces"]["linked_alert_count"], 2)
+
+    @patch("risk.services.build_facility_intelligence_snapshot")
+    def test_facility_readiness_decision_summary_exposes_total_review_count_beyond_top_priority_cap(self, snapshot_mock):
+        second_facility = HealthFacility.objects.create(
+            name="Beta Review Facility",
+            facility_code="TEST-HF-008B",
+            ward=self.other_ward,
+            facility_type=HealthFacility.TYPE_HEALTH_CENTER,
+            ownership=HealthFacility.OWNERSHIP_PUBLIC,
+            level=HealthFacility.LEVEL_3,
+            is_active=True,
+        )
+        third_ward = Ward.objects.create(
+            name="Suna East",
+            county="Migori",
+            sub_county="Suna East",
+            current_risk_level=Ward.RISK_HIGH,
+            current_risk_score=0.8,
+            is_active=True,
+        )
+        third_facility = HealthFacility.objects.create(
+            name="Gamma Review Facility",
+            facility_code="TEST-HF-008C",
+            ward=third_ward,
+            facility_type=HealthFacility.TYPE_HEALTH_CENTER,
+            ownership=HealthFacility.OWNERSHIP_PUBLIC,
+            level=HealthFacility.LEVEL_3,
+            is_active=True,
+        )
+
+        snapshot_map = {
+            self.health_facility.id: {
+                "readiness": {
+                    "ors_estimate_percent": 18,
+                    "staffing_percent": 35,
+                    "surge_risk": "EXTREME",
+                    "projected_cases": 19,
+                    "backing_source": "forecast_preview",
+                },
+                "context": {"ward_risk_score": 0.83, "ward_alert_count": 2},
+                "forecasting": {"source_kind": "forecast_preview"},
+                "freshness": {"is_stale": False},
+            },
+            second_facility.id: {
+                "readiness": {
+                    "ors_estimate_percent": 22,
+                    "staffing_percent": 42,
+                    "surge_risk": "EXTREME",
+                    "projected_cases": 17,
+                    "backing_source": "forecast_preview",
+                },
+                "context": {"ward_risk_score": 0.79, "ward_alert_count": 1},
+                "forecasting": {"source_kind": "forecast_preview"},
+                "freshness": {"is_stale": False},
+            },
+            third_facility.id: {
+                "readiness": {
+                    "ors_estimate_percent": 27,
+                    "staffing_percent": 48,
+                    "surge_risk": "MODERATE",
+                    "projected_cases": 13,
+                    "backing_source": "forecast_preview",
+                },
+                "context": {"ward_risk_score": 0.76, "ward_alert_count": 0},
+                "forecasting": {"source_kind": "forecast_preview"},
+                "freshness": {"is_stale": False},
+            },
+        }
+
+        snapshot_mock.side_effect = lambda facility, stale_threshold_minutes=120: snapshot_map[facility.id]
+
+        summary = build_facility_readiness_decision_summary([self.health_facility, second_facility, third_facility])
+
+        self.assertEqual(summary["total_review_facility_count"], 3)
+        self.assertEqual(len(summary["top_priorities"]), 2)
+
+    @patch("risk.services.build_facility_intelligence_snapshot")
+    def test_facility_readiness_decision_summary_downgrades_for_stale_and_weak_proxy_inputs(self, snapshot_mock):
+        weak_facility = HealthFacility.objects.create(
+            name="Weak Proxy Facility",
+            facility_code="TEST-HF-008",
+            ward=self.other_ward,
+            facility_type=HealthFacility.TYPE_HEALTH_CENTER,
+            ownership=HealthFacility.OWNERSHIP_PUBLIC,
+            level=HealthFacility.LEVEL_3,
+            is_active=True,
+        )
+
+        snapshot_map = {
+            self.health_facility.id: {
+                "readiness": {
+                    "ors_estimate_percent": 25,
+                    "staffing_percent": 45,
+                    "surge_risk": "EXTREME",
+                    "projected_cases": 17,
+                    "backing_source": "unavailable",
+                },
+                "context": {"ward_risk_score": 0.86, "ward_alert_count": 1},
+                "forecasting": {"source_kind": "unavailable"},
+                "freshness": {"is_stale": True},
+            },
+            weak_facility.id: {
+                "readiness": {
+                    "ors_estimate_percent": 80,
+                    "staffing_percent": 82,
+                    "surge_risk": "LOW",
+                    "projected_cases": 3,
+                    "backing_source": "forecast_preview",
+                },
+                "context": {"ward_risk_score": 0.22, "ward_alert_count": 0},
+                "forecasting": {"source_kind": "forecast_preview"},
+                "freshness": {"is_stale": False},
+            },
+        }
+
+        snapshot_mock.side_effect = lambda facility, stale_threshold_minutes=120: snapshot_map[facility.id]
+
+        summary = build_facility_readiness_decision_summary([self.health_facility, weak_facility])
+
+        self.assertEqual(summary["state"], "DEGRADED_CONFIDENCE")
+        self.assertEqual(summary["confidence"], "DEGRADED")
+        self.assertEqual(summary["confidence_reason"], "stale_and_weak_proxy_inputs")
+        self.assertEqual(summary["top_priorities"][0]["facility_id"], self.health_facility.id)
+        self.assertIn("STALE_INPUTS", summary["top_priorities"][0]["reason_codes"])
+        self.assertIn("WEAK_PROXY_INPUTS", summary["top_priorities"][0]["reason_codes"])
+
+    @patch("risk.services.build_facility_intelligence_snapshot")
+    def test_facility_readiness_decision_summary_preserves_priority_bucket_order(self, snapshot_mock):
+        high_difference = HealthFacility.objects.create(
+            name="High Difference Facility",
+            facility_code="TEST-HF-009",
+            ward=self.other_ward,
+            facility_type=HealthFacility.TYPE_HEALTH_CENTER,
+            ownership=HealthFacility.OWNERSHIP_PUBLIC,
+            level=HealthFacility.LEVEL_3,
+            is_active=True,
+        )
+        forecast_pressure = HealthFacility.objects.create(
+            name="Forecast Pressure Facility",
+            facility_code="TEST-HF-010",
+            ward=self.other_ward,
+            facility_type=HealthFacility.TYPE_HEALTH_CENTER,
+            ownership=HealthFacility.OWNERSHIP_PUBLIC,
+            level=HealthFacility.LEVEL_3,
+            is_active=True,
+        )
+        ward_risk_only = HealthFacility.objects.create(
+            name="Ward Risk Only Facility",
+            facility_code="TEST-HF-011",
+            ward=self.other_ward,
+            facility_type=HealthFacility.TYPE_HEALTH_CENTER,
+            ownership=HealthFacility.OWNERSHIP_PUBLIC,
+            level=HealthFacility.LEVEL_3,
+            is_active=True,
+        )
+
+        snapshot_map = {
+            self.health_facility.id: {
+                "readiness": {
+                    "ors_estimate_percent": 22,
+                    "staffing_percent": 44,
+                    "surge_risk": "EXTREME",
+                    "projected_cases": 19,
+                    "backing_source": "forecast_preview",
+                },
+                "context": {"ward_risk_score": 0.86, "ward_alert_count": 2},
+                "forecasting": {"source_kind": "forecast_preview"},
+                "freshness": {"is_stale": True},
+            },
+            high_difference.id: {
+                "readiness": {
+                    "ors_estimate_percent": 28,
+                    "staffing_percent": 52,
+                    "surge_risk": "EXTREME",
+                    "projected_cases": 15,
+                    "backing_source": "forecast_preview",
+                },
+                "context": {"ward_risk_score": 0.55, "ward_alert_count": 0},
+                "forecasting": {"source_kind": "forecast_preview"},
+                "freshness": {"is_stale": False},
+            },
+            forecast_pressure.id: {
+                "readiness": {
+                    "ors_estimate_percent": 72,
+                    "staffing_percent": 86,
+                    "surge_risk": "MODERATE",
+                    "projected_cases": 11,
+                    "backing_source": "forecast_preview",
+                },
+                "context": {"ward_risk_score": 0.32, "ward_alert_count": 0},
+                "forecasting": {"source_kind": "forecast_preview"},
+                "freshness": {"is_stale": False},
+            },
+            ward_risk_only.id: {
+                "readiness": {
+                    "ors_estimate_percent": 92,
+                    "staffing_percent": 94,
+                    "surge_risk": "LOW",
+                    "projected_cases": 4,
+                    "backing_source": "promoted_forecast",
+                },
+                "context": {"ward_risk_score": 0.63, "ward_alert_count": 0},
+                "forecasting": {"source_kind": "promoted_forecast"},
+                "freshness": {"is_stale": False},
+            },
+        }
+
+        snapshot_mock.side_effect = lambda facility, stale_threshold_minutes=120: snapshot_map[facility.id]
+
+        summary = build_facility_readiness_decision_summary(
+            [self.health_facility, high_difference, forecast_pressure, ward_risk_only],
+            max_priorities=4,
+        )
+
+        self.assertEqual(
+            [item["facility_id"] for item in summary["top_priorities"]],
+            [self.health_facility.id, high_difference.id, forecast_pressure.id, ward_risk_only.id],
+        )
+        self.assertEqual(
+            [item["priority_label"] for item in summary["top_priorities"]],
+            ["Top review priority", "Next review priority", "Next review priority", "Next review priority"],
+        )
+
+    @patch("risk.services.build_facility_intelligence_snapshot")
+    def test_facility_readiness_decision_summary_reason_codes_are_stable_and_deduplicated(self, snapshot_mock):
+        snapshot_mock.return_value = {
+            "readiness": {
+                "ors_estimate_percent": 24,
+                "staffing_percent": 40,
+                "surge_risk": "EXTREME",
+                "projected_cases": 20,
+                "backing_source": "unavailable",
+            },
+            "context": {"ward_risk_score": 0.86, "ward_alert_count": 3},
+            "forecasting": {"source_kind": "unavailable"},
+            "freshness": {"is_stale": True},
+        }
+
+        first = build_facility_readiness_decision_summary([self.health_facility])
+        second = build_facility_readiness_decision_summary([self.health_facility])
+
+        expected_codes = [
+            "HIGH_READINESS_DIFFERENCE",
+            "STALE_INPUTS",
+            "WEAK_PROXY_INPUTS",
+            "ELEVATED_WARD_RISK",
+            "MULTIPLE_ALERTS_IN_WARD",
+        ]
+        self.assertEqual(first["top_priorities"][0]["reason_codes"], expected_codes)
+        self.assertEqual(second["top_priorities"][0]["reason_codes"], expected_codes)
 
     def test_analyst_can_view_facility_forecasting_status(self):
         self.authenticate(self.analyst_user.username)
@@ -3155,6 +4929,35 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         response = self.client.get(reverse("facility-forecast-preview", args=[self.health_facility.id]))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["baseline_model_status"],
+            "negative_binomial_promoted_for_dashboard_readiness",
+        )
+
+    def test_facility_forecast_preview_prefers_promoted_run_over_newer_preview_run(self):
+        promoted_run = run_facility_burden_forecast_pipeline(
+            model_version="fnb-preview-promoted-v1",
+            execution_context="test_case",
+            run_purpose="forecast_scoring",
+        )
+        call_command(
+            "promote_facility_burden_forecast",
+            run_id=promoted_run.id,
+            promoted_by="auditor",
+            note="preview-precedence-test",
+            allow_blocked_promotion=True,
+        )
+        run_facility_burden_forecast_pipeline(
+            model_version="fnb-preview-newer-v2",
+            execution_context="test_case",
+            run_purpose="forecast_scoring",
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("facility-forecast-preview", args=[self.health_facility.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["model_version"], "fnb-preview-promoted-v1")
         self.assertEqual(
             response.data["baseline_model_status"],
             "negative_binomial_promoted_for_dashboard_readiness",
@@ -3378,8 +5181,42 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.data["alert"]["id"], alert.id)
         self.assertEqual(response.data["classification"]["mode"], "derived_from_record_text")
         self.assertEqual(response.data["delivery"]["mode"], "backend_record_fields")
+        self.assertEqual(response.data["message_source"]["mode"], "unavailable")
+        self.assertEqual(response.data["lifecycle"]["status"], "active")
+        self.assertEqual(response.data["delivery_summary"]["attempt_count"], 1)
+        self.assertIn("coverage_label", response.data["chv_response_summary"])
+        self.assertIn("coverage_label", response.data["facility_response_summary"])
+        self.assertIn("label", response.data["recommended_next_action"])
+        self.assertEqual(response.data["timeline"][2]["category"], "communication")
         self.assertGreaterEqual(len(response.data["timeline"]), 4)
         self.assertFalse(response.data["capabilities"]["can_resend"])
+
+    def test_alert_intelligence_surfaces_operator_edited_message_source(self):
+        alert = Alert.objects.create(
+            ward=self.other_ward,
+            risk_score=self.other_risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="dashboard",
+            message="Please visit households in Alpha Ward today.",
+            status=Alert.STATUS_DELIVERED,
+            delivery_backend="internal-dashboard",
+            guided_request_metadata={
+                "selected_trigger_type": "FOLLOW_UP_REVIEW",
+                "message_mode": "operator_edited",
+                "message_preview_used": "Please visit households in Alpha Ward today.",
+            },
+            attempt_count=1,
+            max_attempts=1,
+            sent_at=timezone.now(),
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("alert-intelligence", args=[alert.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["message_source"]["mode"], "operator_edited")
+        self.assertEqual(response.data["message_source"]["label"], "Edited by operator")
+        self.assertEqual(response.data["message_source"]["trigger_type"], "FOLLOW_UP_REVIEW")
 
     def test_supervisor_can_view_alert_detail_for_assigned_ward_only(self):
         in_scope_alert = Alert.objects.create(
@@ -3435,18 +5272,437 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         out_of_scope_response = self.client.get(reverse("alert-intelligence", args=[out_of_scope_alert.id]))
         self.assertEqual(out_of_scope_response.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_notification_list_materializes_backend_owned_notifications(self):
+        self.authenticate(self.analyst_user.username)
+
+        response = self.client.get(reverse("notification-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(response.data["unread_count"], 1)
+        self.assertEqual(response.data["highest_unread_severity"], DashboardNotification.SEVERITY_CRITICAL)
+        self.assertEqual(response.data["system_status"], "ACTION_REQUIRED")
+        high_risk_notification = next(
+            item for item in response.data["results"] if item["type"] == DashboardNotification.TYPE_WARD_RISK_HIGH
+        )
+        self.assertEqual(high_risk_notification["category"], "trigger_review")
+        self.assertIsNone(high_risk_notification["group_key"])
+        self.assertEqual(high_risk_notification["href"], f"/overview?trigger_review={self.ward.id}")
+        feed_notification = next(
+            item for item in response.data["results"] if item["type"] == DashboardNotification.TYPE_FEED_STALE
+        )
+        self.assertEqual(feed_notification["category"], "system_health")
+        self.assertEqual(feed_notification["group_key"], "data_freshness")
+        self.assertTrue(any(item["state"] == DashboardNotification.STATE_NEW for item in response.data["results"]))
+
+        page_size_response = self.client.get(reverse("notification-list"), {"page_size": 100})
+        self.assertEqual(page_size_response.status_code, status.HTTP_200_OK)
+        self.assertLessEqual(len(page_size_response.data["results"]), 100)
+
+    def test_notification_seen_transition_persists_and_records_audit_event(self):
+        self.authenticate(self.analyst_user.username)
+        list_response = self.client.get(reverse("notification-list"))
+        notification = next(
+            item for item in list_response.data["results"] if item["type"] == DashboardNotification.TYPE_WARD_RISK_HIGH
+        )
+
+        response = self.client.post(
+            reverse("notification-seen", kwargs={"public_id": notification["public_id"]}),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["state"], DashboardNotification.STATE_SEEN)
+        stored = DashboardNotification.objects.get(public_id=notification["public_id"])
+        self.assertEqual(stored.state, DashboardNotification.STATE_SEEN)
+        self.assertTrue(
+            DashboardNotificationEvent.objects.filter(
+                notification=stored,
+                action=DashboardNotificationEvent.ACTION_SEEN,
+                actor=self.analyst_user,
+            ).exists()
+        )
+
+    def test_supervisor_notification_list_honors_ward_scope(self):
+        RiskScore.objects.create(
+            ward=self.other_ward,
+            model_run=self.model_run,
+            score=0.88,
+            risk_level=Ward.RISK_HIGH,
+            rainfall_mm=99.0,
+            flood_indicator=0.7,
+            predicted_cases=14,
+            source=RiskScore.SOURCE_MODEL,
+            model_version="v0-test",
+            generated_at=timezone.now() + timedelta(minutes=1),
+        )
+
+        self.authenticate(self.supervisor_user.username)
+        response = self.client.get(reverse("notification-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        titles = [item["title"] for item in response.data["results"]]
+        self.assertIn("North Kadem: action required", titles)
+        self.assertNotIn("North Kamagambo: action required", titles)
+
+    def test_notification_stream_token_endpoint_issues_short_lived_stream_token(self):
+        self.authenticate(self.analyst_user.username)
+
+        response = self.client.get(reverse("notification-stream-token"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["websocket_path"], "/ws/notifications/stream/")
+        self.assertEqual(response.data["expires_in_seconds"], 300)
+
+        validated = AccessToken(response.data["token"])
+        self.assertEqual(validated["purpose"], "dashboard_notifications_stream")
+        self.assertEqual(validated["role"], self.analyst_user.role)
+
+    def test_model_run_list_exposes_latest_runs(self):
+        self.authenticate(self.analyst_user.username)
+
+        response = self.client.get(reverse("model-run-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["id"], self.model_run.id)
+        self.assertEqual(response.data["results"][0]["model_version"], self.model_run.model_version)
+
+    def test_risk_score_list_supports_generated_time_filters(self):
+        self.authenticate(self.analyst_user.username)
+        older_run = ModelRun.objects.create(
+            algorithm_name="logistic-regression-baseline",
+            model_version="v0-older",
+            status=ModelRun.STATUS_SUCCESS,
+            completed_at=timezone.now() - timedelta(days=2),
+        )
+        older_score = RiskScore.objects.create(
+            ward=self.other_ward,
+            model_run=older_run,
+            score=0.41,
+            risk_level=Ward.RISK_LOW,
+            rainfall_mm=20.0,
+            flood_indicator=0.1,
+            predicted_cases=2,
+            source=RiskScore.SOURCE_MODEL,
+            model_version="v0-older",
+            generated_at=timezone.now() - timedelta(days=2),
+        )
+
+        response = self.client.get(
+            reverse("risk-score-list"),
+            {"generated_before": (timezone.now() - timedelta(days=1)).isoformat()},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_ids = {item["id"] for item in response.data["results"]}
+        self.assertIn(older_score.id, returned_ids)
+        self.assertNotIn(self.other_risk_score.id, returned_ids)
+
+    def test_alert_list_supports_created_time_filters(self):
+        self.authenticate(self.analyst_user.username)
+        recent_alert = Alert.objects.create(
+            ward=self.other_ward,
+            risk_score=self.other_risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="Ops desk",
+            message="Recent alert window",
+            status=Alert.STATUS_QUEUED,
+            delivery_backend="dashboard",
+            external_id="recent-alert",
+        )
+        older_alert = Alert.objects.create(
+            ward=self.other_ward,
+            risk_score=self.other_risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="Ops desk",
+            message="Older alert window",
+            status=Alert.STATUS_DELIVERED,
+            delivery_backend="dashboard",
+            external_id="older-alert",
+            sent_at=timezone.now() - timedelta(days=2),
+        )
+        older_created_at = timezone.now() - timedelta(days=2)
+        Alert.objects.filter(pk=older_alert.pk).update(created_at=older_created_at)
+        older_alert.refresh_from_db()
+
+        response = self.client.get(
+            reverse("alert-list"),
+            {"created_before": (timezone.now() - timedelta(days=1)).isoformat()},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_ids = {item["id"] for item in response.data["results"]}
+        self.assertIn(older_alert.id, returned_ids)
+        self.assertNotIn(recent_alert.id, returned_ids)
+
+    @override_settings(
+        CHANNEL_LAYERS={
+            "default": {
+                "BACKEND": "channels.layers.InMemoryChannelLayer",
+            }
+        }
+    )
+    async def _exercise_notification_websocket_lifecycle(self):
+        list_response = await sync_to_async(self.client.get)(reverse("notification-list"))
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        notification = next(
+            item for item in list_response.data["results"] if item["type"] == DashboardNotification.TYPE_WARD_RISK_HIGH
+        )
+
+        token = AccessToken.for_user(self.analyst_user)
+        token["purpose"] = "dashboard_notifications_stream"
+        token["role"] = self.analyst_user.role
+        token["ward_id"] = self.analyst_user.ward_id
+
+        communicator = WebsocketCommunicator(
+            application,
+            f"/ws/notifications/stream/?token={token}",
+        )
+        connected, _ = await communicator.connect()
+        self.assertTrue(connected)
+
+        initial = await communicator.receive_json_from()
+        self.assertEqual(initial["event"], "notification.connected")
+        self.assertEqual(initial["highest_unread_severity"], DashboardNotification.SEVERITY_CRITICAL)
+        self.assertEqual(initial["system_status"], "ACTION_REQUIRED")
+        self.assertTrue(any(feed["id"] == "risks" for feed in initial["feeds"]))
+        self.assertEqual(initial["freshness"]["last_model_run_at"], self.model_run.completed_at.isoformat())
+        self.assertEqual(initial["freshness"]["freshness_state"], "fresh")
+
+        seen_response = await sync_to_async(self.client.post)(
+            reverse("notification-seen", kwargs={"public_id": notification["public_id"]}),
+            format="json",
+        )
+        self.assertEqual(seen_response.status_code, status.HTTP_200_OK)
+
+        event = await communicator.receive_json_from()
+        self.assertEqual(event["event"], "notification.updated")
+        self.assertEqual(event["notification"]["public_id"], notification["public_id"])
+        self.assertEqual(event["notification"]["state"], DashboardNotification.STATE_SEEN)
+        self.assertEqual(event["highest_unread_severity"], DashboardNotification.SEVERITY_WARNING)
+        self.assertEqual(event["system_status"], "DATA_FRESHNESS_DEGRADED")
+        self.assertTrue(any(feed["id"] == "risks" for feed in event["feeds"]))
+        self.assertIn("freshness", event)
+
+        await communicator.disconnect()
+
+    def test_alert_workflow_list_materializes_persisted_workflow_state(self):
+        self.authenticate(self.analyst_user.username)
+
+        response = self.client.get(reverse("alert-workflow-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(response.data["count"], 1)
+        workflow = next(item for item in response.data["results"] if item["ward_id"] == self.ward.id)
+        self.assertIn(workflow["decision_mode"], {"risk_only", "triggered"})
+        self.assertIn("rules_basis", workflow)
+        self.assertTrue(AlertWorkflowState.objects.filter(ward=self.ward).exists())
+
+    def test_scenario_simulation_run_endpoint_creates_non_production_run(self):
+        self.authenticate(self.analyst_user.username)
+
+        response = self.client.post(
+            reverse("scenario-simulation-run"),
+            {"scenario_id": "RAINFALL_INCREASE", "rainfall_uplift_percent": 20},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["scenario_id"], "RAINFALL_INCREASE")
+        self.assertEqual(response.data["summary"]["non_production"], True)
+        self.assertGreaterEqual(len(response.data["ward_results"]), 1)
+
+    def test_trigger_alert_context_returns_guided_backend_context(self):
+        self.authenticate(self.supervisor_user.username)
+
+        response = self.client.get(reverse("trigger-alert-context"), {"ward_id": self.other_ward.id}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["ward"]["id"], self.other_ward.id)
+        self.assertEqual(response.data["risk"]["level"], self.other_risk_score.risk_level)
+        self.assertIn("why_this_might_need_an_alert", response.data["system_context"])
+        self.assertIn("recommended_trigger_type", response.data["system_context"])
+        self.assertIn("confidence_label", response.data["system_context"])
+        expected_labels = {
+            "NONE": "No active trigger",
+            "TRIGGER_ACTIVE": "Trigger active",
+            "REVIEW_PENDING": "Awaiting review",
+            "ACTION_IN_PROGRESS": "Action in progress",
+            "RESOLVED": "Resolved",
+        }
+        self.assertEqual(
+            response.data["system_context"]["trigger_status_label"],
+            expected_labels[response.data["workflow"]["status"]],
+        )
+        self.assertEqual(response.data["recipient_preview"]["chv_count"], CHV.objects.filter(ward=self.other_ward, is_active=True).count())
+
+    def test_trigger_alert_context_uses_no_active_delivery_for_resolved_no_alert_state(self):
+        self.authenticate(self.supervisor_user.username)
+        self.other_ward.current_risk_level = Ward.RISK_LOW
+        self.other_ward.current_risk_score = 0.18
+        self.other_ward.save(update_fields=["current_risk_level", "current_risk_score", "updated_at"])
+        RiskScore.objects.create(
+            ward=self.other_ward,
+            model_run=self.model_run,
+            score=0.18,
+            risk_level=Ward.RISK_LOW,
+            rainfall_mm=12.0,
+            flood_indicator=0.05,
+            predicted_cases=0,
+            source=RiskScore.SOURCE_MODEL,
+            model_version="v0-test",
+        )
+
+        response = self.client.get(reverse("trigger-alert-context"), {"ward_id": self.other_ward.id}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["workflow"]["status"], "RESOLVED")
+        self.assertEqual(response.data["workflow"]["alert_delivery_state"], "no_active_delivery")
+        self.assertEqual(response.data["workflow"]["alert_delivery_label"], "No active delivery")
+        self.assertEqual(response.data["system_context"]["trigger_status_label"], "No active trigger")
+
+    def test_trigger_alert_preview_returns_backend_generated_message(self):
+        self.authenticate(self.supervisor_user.username)
+
+        response = self.client.post(
+            reverse("trigger-alert-preview"),
+            {"ward_id": self.other_ward.id, "trigger_type": "FOLLOW_UP_REVIEW"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["message_mode"], "backend_generated")
+        self.assertTrue(response.data["supports_editing"])
+        self.assertIn(self.other_ward.name, response.data["message_preview"])
+        self.assertEqual(response.data["recipient_preview"]["chv_count"], CHV.objects.filter(ward=self.other_ward, is_active=True).count())
+
+    def test_trigger_alert_preview_accepts_message_override(self):
+        self.authenticate(self.supervisor_user.username)
+
+        response = self.client.post(
+            reverse("trigger-alert-preview"),
+            {
+                "ward_id": self.other_ward.id,
+                "trigger_type": "FOLLOW_UP_REVIEW",
+                "message_override": "  Custom field review message for Alpha team.  ",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["message_mode"], "operator_edited")
+        self.assertEqual(response.data["message_preview"], "Custom field review message for Alpha team.")
+
     @patch("risk.views.trigger_alerts_task.delay", return_value=SimpleNamespace(id="task-123"))
     def test_supervisor_can_queue_alert_trigger(self, mock_delay):
         self.authenticate(self.supervisor_user.username)
         response = self.client.post(
             reverse("trigger-alerts"),
-            {"ward_id": self.other_ward.id, "send_sms": True},
+            {
+                "ward_id": self.other_ward.id,
+                "send_sms": True,
+                "trigger_type": "FOLLOW_UP_REVIEW",
+                "message_override": "Please visit households in Alpha Ward today.",
+            },
             format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
         self.assertEqual(response.data["task_id"], "task-123")
+        self.assertIsNotNone(response.data["request_id"])
+        self.assertIsNone(response.data["alert_id"])
+        self.assertEqual(response.data["ward_id"], self.other_ward.id)
+        self.assertEqual(response.data["ward_name"], self.other_ward.name)
+        self.assertEqual(response.data["risk_level"], self.other_risk_score.risk_level)
+        self.assertEqual(response.data["risk_score"], self.other_risk_score.score)
+        self.assertEqual(response.data["predicted_cases"], self.other_risk_score.predicted_cases)
+        self.assertTrue(response.data["send_sms"])
+        self.assertEqual(response.data["trigger_type"], "FOLLOW_UP_REVIEW")
+        self.assertEqual(response.data["message_mode"], "operator_edited")
+        self.assertEqual(response.data["last_risk_update_at"], self.other_risk_score.generated_at)
+        self.assertEqual(response.data["trigger_linkage_state"], "linked_existing_workflow")
+        self.assertEqual(
+            response.data["estimated_chv_recipient_count"],
+            CHV.objects.filter(ward=self.other_ward, is_active=True).count(),
+        )
+        self.assertEqual(response.data["message"], "Alert request queued successfully.")
+        self.assertIsNotNone(response.data["queued_at"])
+        workflow = AlertWorkflowState.objects.get(ward=self.other_ward)
+        event = workflow.events.first()
+        self.assertIsNotNone(event)
+        self.assertEqual(event.metadata["selected_trigger_type"], "FOLLOW_UP_REVIEW")
+        self.assertEqual(event.metadata["send_sms"], True)
+        self.assertEqual(event.metadata["message_mode"], "operator_edited")
+        self.assertEqual(event.metadata["message_preview_used"], "Please visit households in Alpha Ward today.")
+        self.assertEqual(event.metadata["request_id"], response.data["request_id"])
         mock_delay.assert_called_once()
+        _, kwargs = mock_delay.call_args
+        self.assertEqual(kwargs["trigger_type"], "FOLLOW_UP_REVIEW")
+        self.assertEqual(kwargs["message_override"], "Please visit households in Alpha Ward today.")
+        self.assertEqual(kwargs["guided_request_metadata"]["message_mode"], "operator_edited")
+        self.assertEqual(kwargs["guided_request_metadata"]["request_id"], response.data["request_id"])
+
+    def test_trigger_alert_requires_explicit_ward_context(self):
+        self.authenticate(self.supervisor_user.username)
+        response = self.client.post(
+            reverse("trigger-alerts"),
+            {"risk_level": Ward.RISK_HIGH, "send_sms": False},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("ward_id", response.data)
+
+    @patch("risk.views.trigger_alerts_task.delay", return_value=SimpleNamespace(id="task-123"))
+    def test_trigger_request_status_returns_pending_before_alert_materialization(self, mock_delay):
+        self.authenticate(self.supervisor_user.username)
+        response = self.client.post(
+            reverse("trigger-alerts"),
+            {"ward_id": self.other_ward.id, "send_sms": False},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        request_id = response.data["request_id"]
+
+        status_response = self.client.get(
+            reverse("trigger-alert-request-status", kwargs={"request_id": request_id})
+        )
+
+        self.assertEqual(status_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(status_response.data["status"], "PENDING_CREATION")
+        self.assertIsNone(status_response.data["alert_id"])
+        self.assertEqual(status_response.data["ward_id"], self.other_ward.id)
+        self.assertEqual(status_response.data["created_alert_count"], 0)
+
+    def test_trigger_request_status_returns_materialized_alert_after_creation(self):
+        request_id = "11111111-1111-1111-1111-111111111111"
+        create_alerts_for_riskscore(
+            self.other_risk_score,
+            send_sms_enabled=True,
+            trigger_type="FOLLOW_UP_REVIEW",
+            guided_request_metadata={
+                "request_id": request_id,
+                "selected_trigger_type": "FOLLOW_UP_REVIEW",
+                "message_mode": "backend_generated",
+            },
+        )
+
+        self.authenticate(self.supervisor_user.username)
+        status_response = self.client.get(
+            reverse("trigger-alert-request-status", kwargs={"request_id": request_id})
+        )
+
+        matching_alerts = Alert.objects.filter(guided_request_metadata__request_id=request_id)
+        self.assertEqual(status_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(status_response.data["status"], "MATERIALIZED")
+        self.assertIsNotNone(status_response.data["alert_id"])
+        self.assertEqual(status_response.data["ward_id"], self.other_ward.id)
+        self.assertEqual(status_response.data["created_alert_count"], matching_alerts.count())
+        self.assertEqual(
+            status_response.data["sms_alert_count"],
+            matching_alerts.filter(channel=Alert.CHANNEL_SMS).count(),
+        )
 
     @patch("risk.views.trigger_alerts_task.delay", return_value=SimpleNamespace(id="task-123"))
     def test_supervisor_cannot_trigger_alerts_outside_assigned_ward(self, mock_delay):
@@ -3481,7 +5737,12 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.data["detail"], "No matching risk score found.")
 
     def test_create_alerts_for_riskscore_creates_dashboard_and_queued_sms_alerts(self):
-        alerts = create_alerts_for_riskscore(self.risk_score, send_sms_enabled=True)
+        alerts = create_alerts_for_riskscore(
+            self.risk_score,
+            send_sms_enabled=True,
+            trigger_type="FOLLOW_UP_REVIEW",
+            message_override="Please review field conditions in Ward One.",
+        )
 
         self.assertEqual(len(alerts), 2)
         dashboard_alert = next(alert for alert in alerts if alert.channel == Alert.CHANNEL_DASHBOARD)
@@ -3490,10 +5751,29 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(dashboard_alert.status, Alert.STATUS_DELIVERED)
         self.assertEqual(dashboard_alert.delivery_backend, "internal-dashboard")
         self.assertEqual(dashboard_alert.attempt_count, 1)
+        self.assertEqual(dashboard_alert.message, "Please review field conditions in Ward One.")
+        self.assertEqual(dashboard_alert.guided_request_metadata, {})
         self.assertEqual(sms_alert.status, Alert.STATUS_QUEUED)
         self.assertEqual(sms_alert.delivery_backend, "stub")
         self.assertEqual(sms_alert.attempt_count, 0)
         self.assertEqual(sms_alert.max_attempts, 3)
+        self.assertEqual(sms_alert.message, "Please review field conditions in Ward One.")
+
+    def test_create_alerts_for_riskscore_persists_guided_request_metadata_on_alerts(self):
+        alerts = create_alerts_for_riskscore(
+            self.risk_score,
+            send_sms_enabled=True,
+            trigger_type="FOLLOW_UP_REVIEW",
+            guided_request_metadata={
+                "selected_trigger_type": "FOLLOW_UP_REVIEW",
+                "message_mode": "operator_edited",
+                "message_preview_used": "Please review field conditions in Ward One.",
+            },
+        )
+
+        for alert in alerts:
+            self.assertEqual(alert.guided_request_metadata["selected_trigger_type"], "FOLLOW_UP_REVIEW")
+            self.assertEqual(alert.guided_request_metadata["message_mode"], "operator_edited")
 
     @patch("risk.services.send_sms")
     def test_deliver_alert_marks_sms_delivered_on_success(self, mock_send_sms):
@@ -4108,19 +6388,62 @@ class SeedAndModelCommandTestCase(APITestCase):
 
         self.assertEqual(second_counts, first_counts)
 
+    def test_seed_demo_data_command_can_seed_single_named_scenario_bundle(self):
+        call_command("seed_demo_data", scenario_bundle="delivery_failure_concern")
+
+        seeded_alerts = Alert.objects.filter(external_id__startswith="seed-scenario-")
+        self.assertEqual(seeded_alerts.count(), 2)
+        self.assertTrue(seeded_alerts.filter(status=Alert.STATUS_FAILED).exists())
+        self.assertTrue(seeded_alerts.filter(status=Alert.STATUS_RETRY_PENDING).exists())
+        self.assertTrue(
+            RiskScore.objects.filter(notes__icontains="delivery_failure_concern", model_version="v0-demo").exists()
+        )
+
+    def test_seed_demo_data_command_lists_named_scenario_bundles(self):
+        stdout = StringIO()
+
+        call_command("seed_demo_data", list_scenario_bundles=True, stdout=stdout)
+
+        rendered = stdout.getvalue()
+        self.assertIn("decision_layer_full_suite", rendered)
+        self.assertIn("stable_baseline", rendered)
+        self.assertIn("localized_watch_cluster", rendered)
+        self.assertIn("escalating_triggered_hotspot", rendered)
+        self.assertIn("delivery_failure_concern", rendered)
+        self.assertIn("facility_capacity_pressure", rendered)
+
     def test_run_facility_burden_forecast_command_persists_forecast_run_and_rows(self):
         call_command("seed_demo_data")
 
         call_command("run_facility_burden_forecast", model_version="fnb-v1")
 
         run = FacilityForecastRun.objects.get(model_version="fnb-v1")
+        training_dataset = FeatureDataset.objects.get(dataset_ref=run.metadata["training_dataset_ref"])
+        inference_dataset = FeatureDataset.objects.get(dataset_ref=run.metadata["inference_dataset_ref"])
+
         self.assertEqual(run.status, FacilityForecastRun.STATUS_SUCCESS)
         self.assertEqual(run.algorithm_name, "negative-binomial-baseline")
         self.assertEqual(run.metadata["execution_context"], "manual_command")
         self.assertEqual(run.metadata["promotion_target"], "forecast_preview_only")
+        self.assertEqual(run.metadata["training_feature_dataset_id"], training_dataset.id)
+        self.assertEqual(run.metadata["inference_feature_dataset_id"], inference_dataset.id)
         self.assertEqual(run.evaluation_metrics["target_mode"], "proxy_derived_facility_burden")
         self.assertGreater(run.training_row_count, 0)
         self.assertEqual(run.inference_row_count, HealthFacility.objects.filter(is_active=True).count())
+        self.assertEqual(training_dataset.dataset_kind, FeatureDataset.KIND_TRAINING)
+        self.assertEqual(training_dataset.schema_version, "facility-burden-v1")
+        self.assertEqual(training_dataset.row_count, run.training_row_count)
+        self.assertEqual(inference_dataset.dataset_kind, FeatureDataset.KIND_INFERENCE)
+        self.assertEqual(inference_dataset.schema_version, "facility-burden-v1")
+        self.assertEqual(inference_dataset.row_count, run.inference_row_count)
+        self.assertEqual(FeatureDatasetRow.objects.filter(dataset=training_dataset).count(), training_dataset.row_count)
+        self.assertEqual(FeatureDatasetRow.objects.filter(dataset=inference_dataset).count(), inference_dataset.row_count)
+        self.assertTrue(
+            FeatureDatasetRow.objects.filter(dataset=training_dataset, label__isnull=False).exists()
+        )
+        self.assertFalse(
+            FeatureDatasetRow.objects.filter(dataset=inference_dataset, label__isnull=False).exists()
+        )
         self.assertEqual(FacilityForecast.objects.filter(forecast_run=run).count(), run.inference_row_count)
 
     def test_run_facility_burden_forecast_command_async_queues_task(self):
@@ -4713,6 +7036,37 @@ class SeedAndModelCommandTestCase(APITestCase):
         self.assertEqual(model_run.evaluation_metrics["algorithm"], "random_forest")
         self.assertIn("feature_importances", model_run.evaluation_metrics)
         self.assertEqual(RiskScore.objects.filter(model_run=model_run, source=RiskScore.SOURCE_MODEL).count(), 2)
+
+    def test_run_risk_model_random_forest_standalone_is_labeled_as_benchmark_scoring(self):
+        Ward.objects.create(
+            name="Ward RF Generic One",
+            county="Migori",
+            sub_county="Rongo",
+            current_risk_level=Ward.RISK_LOW,
+            current_risk_score=0.20,
+            is_active=True,
+        )
+        Ward.objects.create(
+            name="Ward RF Generic Two",
+            county="Migori",
+            sub_county="Nyatike",
+            current_risk_level=Ward.RISK_MEDIUM,
+            current_risk_score=0.55,
+            is_active=True,
+        )
+
+        call_command(
+            "run_risk_model",
+            "--month=4",
+            "--model-version=rf-generic-v1",
+            "--algorithm=random_forest",
+        )
+
+        model_run = ModelRun.objects.get(model_version="rf-generic-v1")
+        self.assertEqual(model_run.algorithm_name, "random-forest-benchmark")
+        self.assertEqual(model_run.metadata["run_purpose"], "benchmark_scoring")
+        self.assertEqual(model_run.metadata["promotion_target"], "benchmark_only")
+        self.assertFalse(model_run.metadata["alert_eligible"])
 
     @patch("risk.tasks.trigger_alerts_task.delay", return_value=SimpleNamespace(id="task-123"))
     def test_run_risk_model_degraded_inputs_suppress_automatic_alerts(self, mock_delay):
@@ -5353,6 +7707,25 @@ class RainfallIngestionTestCase(APITestCase):
         fetch_rainfall_for_ward("North Kamagambo")
         run = IngestionRun.objects.get()
         self.assertEqual(run.source_kind, IngestionRun.SOURCE_KIND_SEEDED)
+
+    def test_ingestion_run_serializer_exposes_operator_note(self):
+        run = IngestionRun.objects.create(
+            run_type=IngestionRun.RUN_TYPE_RAINFALL,
+            status=IngestionRun.STATUS_PARTIAL,
+            source_mode="hybrid",
+            source_kind=IngestionRun.SOURCE_KIND_HYBRID,
+            source_name="open-meteo-forecast",
+            freshness_state=IngestionRun.FRESHNESS_DELAYED,
+            fallback_used=True,
+            records_seen=4,
+            records_loaded=3,
+            records_rejected=1,
+            operator_note="Backfill accepted after provider retry.",
+        )
+
+        payload = IngestionRunSerializer(run).data
+
+        self.assertEqual(payload["operator_note"], "Backfill accepted after provider retry.")
         self.assertGreaterEqual(run.records_seen, 1)
         self.assertGreaterEqual(run.records_loaded, 1)
 
@@ -5446,3 +7819,1090 @@ class CanonicalETLNormalizationTestCase(AuthenticatedAPITestCase):
         self.assertIsNotNone(canonical.readiness_state)
         self.assertIsNotNone(canonical.readiness_score)
         self.assertEqual(canonical.source_name, "facility-intelligence-snapshot")
+
+
+class ZZZNotificationWebsocketLifecycleIsolationTest(AuthenticatedAPITestCase):
+    @override_settings(
+        CHANNEL_LAYERS={
+            "default": {
+                "BACKEND": "channels.layers.InMemoryChannelLayer",
+            }
+        }
+    )
+    def test_notification_websocket_receives_lifecycle_updates(self):
+        self.authenticate(self.analyst_user.username)
+        async_to_sync(self._exercise_notification_websocket_lifecycle)()
+
+    async def _exercise_notification_websocket_lifecycle(self):
+        list_response = await sync_to_async(self.client.get)(reverse("notification-list"))
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        notification = next(
+            item for item in list_response.data["results"] if item["type"] == DashboardNotification.TYPE_WARD_RISK_HIGH
+        )
+
+        token = AccessToken.for_user(self.analyst_user)
+        token["purpose"] = "dashboard_notifications_stream"
+        token["role"] = self.analyst_user.role
+        token["ward_id"] = self.analyst_user.ward_id
+
+        communicator = WebsocketCommunicator(
+            application,
+            f"/ws/notifications/stream/?token={token}",
+        )
+        connected, _ = await communicator.connect()
+        self.assertTrue(connected)
+
+        initial = await communicator.receive_json_from()
+        self.assertEqual(initial["event"], "notification.connected")
+        self.assertTrue(any(feed["id"] == "risks" for feed in initial["feeds"]))
+        self.assertEqual(initial["freshness"]["last_model_run_at"], self.model_run.completed_at.isoformat())
+        self.assertEqual(initial["freshness"]["freshness_state"], "fresh")
+
+        seen_response = await sync_to_async(self.client.post)(
+            reverse("notification-seen", kwargs={"public_id": notification["public_id"]}),
+            format="json",
+        )
+        self.assertEqual(seen_response.status_code, status.HTTP_200_OK)
+
+        event = await communicator.receive_json_from()
+        self.assertEqual(event["event"], "notification.updated")
+        self.assertEqual(event["notification"]["public_id"], notification["public_id"])
+        self.assertEqual(event["notification"]["state"], DashboardNotification.STATE_SEEN)
+        self.assertTrue(any(feed["id"] == "risks" for feed in event["feeds"]))
+        self.assertIn("freshness", event)
+
+        await communicator.disconnect()
+
+
+class CHVCoverageWorkflowModelTestCase(AuthenticatedAPITestCase):
+    def test_chv_coverage_workflow_models_are_registered_in_admin(self):
+        registry = admin.site._registry
+
+        self.assertIn(CHVCoverageRequest, registry)
+        self.assertIn(CHVCoverageRequestAlertLink, registry)
+        self.assertIn(CHVAssignment, registry)
+        self.assertIn(CHVCoverageRequestEvent, registry)
+
+    def test_admin_creation_requires_requesting_user(self):
+        model_admin = admin.site._registry[CHVCoverageRequest]
+        request = RequestFactory().post("/admin/risk/chvcoveragerequest/add/")
+        request.user = self.admin_user
+        request_record = CHVCoverageRequest(
+            ward=self.ward,
+            requested_by=None,
+            priority=CHVCoverageRequest.PRIORITY_MEDIUM,
+            reason="Coverage gap detected.",
+            requested_chv_count=1,
+        )
+
+        with self.assertRaises(ValidationError):
+            model_admin.save_model(request, request_record, form=SimpleNamespace(changed_data=[]), change=False)
+
+    def test_admin_creation_blocks_alert_driven_request_without_linkage_workflow(self):
+        model_admin = admin.site._registry[CHVCoverageRequest]
+        request = RequestFactory().post("/admin/risk/chvcoveragerequest/add/")
+        request.user = self.admin_user
+        request_record = CHVCoverageRequest(
+            ward=self.ward,
+            requested_by=self.admin_user,
+            priority=CHVCoverageRequest.PRIORITY_MEDIUM,
+            reason="Coverage gap detected from alert context.",
+            requested_chv_count=1,
+            trigger_source=CHVCoverageRequest.TRIGGER_SOURCE_ALERT_DRIVEN,
+        )
+
+        with self.assertRaises(ValidationError):
+            model_admin.save_model(request, request_record, form=SimpleNamespace(changed_data=[]), change=False)
+
+    def test_admin_cannot_rewrite_trigger_source_after_creation(self):
+        model_admin = admin.site._registry[CHVCoverageRequest]
+        request = RequestFactory().post("/admin/risk/chvcoveragerequest/change/")
+        request.user = self.admin_user
+        request_record = CHVCoverageRequest.objects.create(
+            ward=self.ward,
+            requested_by=self.admin_user,
+            status=CHVCoverageRequest.STATUS_OPEN,
+            priority=CHVCoverageRequest.PRIORITY_MEDIUM,
+            reason="Manual request should stay manual.",
+            requested_chv_count=1,
+            trigger_source=CHVCoverageRequest.TRIGGER_SOURCE_MANUAL,
+        )
+        request_record.trigger_source = CHVCoverageRequest.TRIGGER_SOURCE_ALERT_DRIVEN
+
+        with self.assertRaises(ValidationError):
+            model_admin.save_model(
+                request,
+                request_record,
+                form=SimpleNamespace(changed_data=["trigger_source"]),
+                change=True,
+            )
+
+    def test_admin_alert_linkage_inline_is_review_only(self):
+        model_admin = admin.site._registry[CHVCoverageRequest]
+        inline = CHVCoverageRequestAlertLinkInline(CHVCoverageRequest, admin.site)
+        request = RequestFactory().get("/admin/risk/chvcoveragerequest/change/")
+        request.user = self.admin_user
+
+        self.assertFalse(inline.has_add_permission(request))
+        self.assertFalse(inline.has_delete_permission(request))
+        self.assertIn("alert", inline.readonly_fields)
+        self.assertIn("linked_by", inline.readonly_fields)
+
+    def test_only_one_live_coverage_request_per_ward_is_allowed(self):
+        CHVCoverageRequest.objects.create(
+            ward=self.ward,
+            requested_by=self.admin_user,
+            status=CHVCoverageRequest.STATUS_OPEN,
+            priority=CHVCoverageRequest.PRIORITY_HIGH,
+            reason="Coverage gap detected.",
+            requested_chv_count=1,
+        )
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                CHVCoverageRequest.objects.create(
+                    ward=self.ward,
+                    requested_by=self.admin_user,
+                    status=CHVCoverageRequest.STATUS_APPROVED,
+                    priority=CHVCoverageRequest.PRIORITY_HIGH,
+                    reason="Second live request should fail.",
+                    requested_chv_count=1,
+                )
+
+    def test_non_live_coverage_request_can_exist_after_resolved_request(self):
+        CHVCoverageRequest.objects.create(
+            ward=self.ward,
+            requested_by=self.admin_user,
+            status=CHVCoverageRequest.STATUS_RESOLVED,
+            priority=CHVCoverageRequest.PRIORITY_MEDIUM,
+            reason="Resolved prior request.",
+            requested_chv_count=1,
+        )
+
+        second = CHVCoverageRequest.objects.create(
+            ward=self.ward,
+            requested_by=self.admin_user,
+            status=CHVCoverageRequest.STATUS_OPEN,
+            priority=CHVCoverageRequest.PRIORITY_HIGH,
+            reason="New live request after resolution.",
+            requested_chv_count=1,
+        )
+
+        self.assertEqual(second.status, CHVCoverageRequest.STATUS_OPEN)
+
+    def test_only_one_active_assignment_per_request_is_allowed(self):
+        request_record = CHVCoverageRequest.objects.create(
+            ward=self.ward,
+            requested_by=self.admin_user,
+            status=CHVCoverageRequest.STATUS_APPROVED,
+            priority=CHVCoverageRequest.PRIORITY_HIGH,
+            reason="Request ready for assignment.",
+            requested_chv_count=1,
+        )
+
+        CHVAssignment.objects.create(
+            coverage_request=request_record,
+            ward=self.ward,
+            chv=self.chv,
+            assigned_by=self.admin_user,
+            status=CHVAssignment.STATUS_ACTIVE,
+        )
+
+        second_chv = CHV.objects.create(
+            name="John CHV",
+            phone_number="+254700000099",
+            ward=self.ward,
+            is_active=True,
+            language="en",
+        )
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                CHVAssignment.objects.create(
+                    coverage_request=request_record,
+                    ward=self.ward,
+                    chv=second_chv,
+                    assigned_by=self.admin_user,
+                    status=CHVAssignment.STATUS_ACTIVE,
+                )
+
+    def test_only_one_link_per_alert_and_request_is_allowed(self):
+        request_record = CHVCoverageRequest.objects.create(
+            ward=self.ward,
+            requested_by=self.admin_user,
+            status=CHVCoverageRequest.STATUS_OPEN,
+            priority=CHVCoverageRequest.PRIORITY_HIGH,
+            reason="Alert-linked request.",
+            requested_chv_count=1,
+            trigger_source=CHVCoverageRequest.TRIGGER_SOURCE_ALERT_DRIVEN,
+        )
+        alert = Alert.objects.create(
+            ward=self.ward,
+            risk_score=None,
+            channel=Alert.CHANNEL_SMS,
+            recipient="CHVs",
+            message="Coverage follow-up recommended.",
+            status=Alert.STATUS_DELIVERED,
+        )
+
+        CHVCoverageRequestAlertLink.objects.create(
+            coverage_request=request_record,
+            alert=alert,
+            linked_by=self.admin_user,
+        )
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                CHVCoverageRequestAlertLink.objects.create(
+                    coverage_request=request_record,
+                    alert=alert,
+                    linked_by=self.admin_user,
+                )
+
+
+class CHVCoverageWorkflowApiTestCase(AuthenticatedAPITestCase):
+    def test_admin_can_create_and_view_coverage_request_detail(self):
+        self.authenticate(self.admin_user.username)
+
+        create_response = self.client.post(
+            reverse("chv-coverage-request-list-create"),
+            {
+                "ward_id": self.ward.id,
+                "priority": CHVCoverageRequest.PRIORITY_HIGH,
+                "reason": "Coverage gap detected: 0 active CHVs recorded in this ward.",
+                "requested_chv_count": 1,
+                "notes": "Field review requested.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(create_response.data["status"], CHVCoverageRequest.STATUS_OPEN)
+        self.assertEqual(create_response.data["trigger_source"], CHVCoverageRequest.TRIGGER_SOURCE_MANUAL)
+        self.assertEqual(create_response.data["requested_by_username"], self.admin_user.username)
+        self.assertEqual(len(create_response.data["events"]), 1)
+        self.assertEqual(create_response.data["events"][0]["action"], CHVCoverageRequestEvent.ACTION_CREATED)
+
+        detail_response = self.client.get(
+            reverse("chv-coverage-request-detail", kwargs={"public_id": create_response.data["public_id"]})
+        )
+
+        self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(detail_response.data["ward_name"], self.ward.name)
+        self.assertEqual(detail_response.data["priority"], CHVCoverageRequest.PRIORITY_HIGH)
+
+    def test_admin_can_create_alert_driven_request_with_linked_alerts(self):
+        self.authenticate(self.admin_user.username)
+        alert = Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_SMS,
+            recipient="CHVs",
+            message="Coverage follow-up recommended from alert context.",
+            status=Alert.STATUS_DELIVERED,
+        )
+
+        create_response = self.client.post(
+            reverse("chv-coverage-request-list-create"),
+            {
+                "ward_id": self.ward.id,
+                "priority": CHVCoverageRequest.PRIORITY_HIGH,
+                "reason": "Coverage follow-up requested from linked alert context.",
+                "requested_chv_count": 1,
+                "trigger_source": CHVCoverageRequest.TRIGGER_SOURCE_ALERT_DRIVEN,
+                "linked_alert_public_ids": [str(alert.public_id)],
+            },
+            format="json",
+        )
+
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(create_response.data["trigger_source"], CHVCoverageRequest.TRIGGER_SOURCE_ALERT_DRIVEN)
+        self.assertEqual(create_response.data["linked_alert_public_ids"], [str(alert.public_id)])
+        self.assertEqual(len(create_response.data["linked_alerts_summary"]), 1)
+        self.assertEqual(create_response.data["linked_alerts_summary"][0]["alert_public_id"], str(alert.public_id))
+        self.assertEqual(create_response.data["linked_alerts_summary"][0]["alert_id"], alert.id)
+        event_actions = [event["action"] for event in create_response.data["events"]]
+        self.assertIn(CHVCoverageRequestEvent.ACTION_ALERT_LINKAGE_ATTACHED, event_actions)
+        self.assertIn(CHVCoverageRequestEvent.ACTION_CREATED, event_actions)
+        attachment_event = next(
+            event for event in create_response.data["events"]
+            if event["action"] == CHVCoverageRequestEvent.ACTION_ALERT_LINKAGE_ATTACHED
+        )
+        self.assertEqual(attachment_event["metadata"]["linked_alert_public_ids"], [str(alert.public_id)])
+
+    def test_admin_can_prefill_alert_driven_request_from_alert_context(self):
+        self.authenticate(self.admin_user.username)
+        alert = Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="Operations",
+            message="Alert-linked CHV coverage review recommended.",
+            status=Alert.STATUS_DELIVERED,
+        )
+
+        response = self.client.post(
+            reverse("chv-coverage-request-from-alert-prefill"),
+            {"alert_public_ids": [str(alert.public_id)]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["mode"], "CREATE_READY")
+        self.assertIsNone(response.data["existing_request"])
+        self.assertEqual(response.data["create_defaults"]["ward_id"], self.ward.id)
+        self.assertEqual(response.data["create_defaults"]["ward_public_id"], str(self.ward.public_id))
+        self.assertEqual(response.data["create_defaults"]["trigger_source"], CHVCoverageRequest.TRIGGER_SOURCE_ALERT_DRIVEN)
+        self.assertEqual(response.data["create_defaults"]["priority"], CHVCoverageRequest.PRIORITY_HIGH)
+        self.assertEqual(response.data["create_defaults"]["linked_alert_public_ids"], [str(alert.public_id)])
+        self.assertEqual(response.data["create_defaults"]["linked_alerts_summary"][0]["alert_public_id"], str(alert.public_id))
+
+    def test_prefill_returns_existing_live_request_for_same_ward(self):
+        self.authenticate(self.admin_user.username)
+        alert = Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_SMS,
+            recipient="CHVs",
+            message="Existing request should be returned.",
+            status=Alert.STATUS_DELIVERED,
+        )
+        existing_request = CHVCoverageRequest.objects.create(
+            ward=self.ward,
+            requested_by=self.admin_user,
+            status=CHVCoverageRequest.STATUS_OPEN,
+            priority=CHVCoverageRequest.PRIORITY_HIGH,
+            reason="Existing live request.",
+            requested_chv_count=1,
+        )
+
+        response = self.client.post(
+            reverse("chv-coverage-request-from-alert-prefill"),
+            {"alert_public_ids": [str(alert.public_id)]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["mode"], "EXISTING_LIVE_REQUEST")
+        self.assertIsNone(response.data["create_defaults"])
+        self.assertEqual(response.data["existing_request"]["public_id"], str(existing_request.public_id))
+        existing_request.refresh_from_db()
+        attachment_event = existing_request.events.filter(
+            action=CHVCoverageRequestEvent.ACTION_ALERT_LINKAGE_ATTACHED
+        ).latest("created_at")
+        redirect_event = existing_request.events.filter(
+            action=CHVCoverageRequestEvent.ACTION_ALERT_LINKAGE_REDIRECTED
+        ).latest("created_at")
+        self.assertEqual(
+            attachment_event.metadata["linked_alert_public_ids"],
+            [str(alert.public_id)],
+        )
+        self.assertEqual(attachment_event.metadata["attachment_mode"], "EXISTING_REQUEST")
+        self.assertEqual(
+            redirect_event.detail,
+            "Alert-linked request attempt resolved to the existing live coverage request.",
+        )
+        self.assertEqual(
+            redirect_event.metadata["linked_alert_public_ids"],
+            [str(alert.public_id)],
+        )
+        self.assertEqual(redirect_event.metadata["resolution"], "EXISTING_LIVE_REQUEST")
+
+    def test_prefill_redirect_persists_new_alert_linkage_on_existing_request(self):
+        self.authenticate(self.admin_user.username)
+        alert = Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_SMS,
+            recipient="CHVs",
+            message="Redirect should still persist linked alert context.",
+            status=Alert.STATUS_DELIVERED,
+        )
+        existing_request = CHVCoverageRequest.objects.create(
+            ward=self.ward,
+            requested_by=self.admin_user,
+            status=CHVCoverageRequest.STATUS_OPEN,
+            priority=CHVCoverageRequest.PRIORITY_HIGH,
+            reason="Existing manual live request.",
+            requested_chv_count=1,
+            trigger_source=CHVCoverageRequest.TRIGGER_SOURCE_MANUAL,
+        )
+
+        response = self.client.post(
+            reverse("chv-coverage-request-from-alert-prefill"),
+            {"alert_public_ids": [str(alert.public_id)]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["mode"], "EXISTING_LIVE_REQUEST")
+        self.assertEqual(response.data["existing_request"]["trigger_source"], CHVCoverageRequest.TRIGGER_SOURCE_MANUAL)
+        self.assertEqual(response.data["existing_request"]["linked_alert_public_ids"], [str(alert.public_id)])
+        self.assertEqual(
+            response.data["existing_request"]["linked_alerts_summary"][0]["alert_public_id"],
+            str(alert.public_id),
+        )
+        existing_request.refresh_from_db()
+        self.assertTrue(existing_request.linked_alert_links.filter(alert=alert).exists())
+        redirect_event = existing_request.events.filter(
+            action=CHVCoverageRequestEvent.ACTION_ALERT_LINKAGE_REDIRECTED
+        ).latest("created_at")
+        attachment_event = existing_request.events.filter(
+            action=CHVCoverageRequestEvent.ACTION_ALERT_LINKAGE_ATTACHED
+        ).latest("created_at")
+        self.assertEqual(
+            redirect_event.metadata["attached_alert_public_ids"],
+            [str(alert.public_id)],
+        )
+        self.assertEqual(
+            attachment_event.metadata["linked_alert_public_ids"],
+            [str(alert.public_id)],
+        )
+
+    def test_prefill_rejects_mixed_ward_alerts(self):
+        self.authenticate(self.admin_user.username)
+        first_alert = Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_SMS,
+            recipient="CHVs",
+            message="Ward one alert.",
+            status=Alert.STATUS_DELIVERED,
+        )
+        second_alert = Alert.objects.create(
+            ward=self.other_ward,
+            risk_score=self.other_risk_score,
+            channel=Alert.CHANNEL_SMS,
+            recipient="CHVs",
+            message="Ward two alert.",
+            status=Alert.STATUS_DELIVERED,
+        )
+
+        response = self.client.post(
+            reverse("chv-coverage-request-from-alert-prefill"),
+            {"alert_public_ids": [str(first_alert.public_id), str(second_alert.public_id)]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "Linked alerts must all belong to the same ward.")
+
+    def test_analyst_cannot_prefill_alert_driven_request(self):
+        alert = Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="Operations",
+            message="Analyst cannot create CHV request.",
+            status=Alert.STATUS_DELIVERED,
+        )
+        self.authenticate(self.analyst_user.username)
+
+        response = self.client.post(
+            reverse("chv-coverage-request-from-alert-prefill"),
+            {"alert_public_ids": [str(alert.public_id)]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_supervisor_prefill_rejects_alert_outside_permitted_scope(self):
+        alert = Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="Operations",
+            message="Out-of-scope alert.",
+            status=Alert.STATUS_DELIVERED,
+        )
+        self.authenticate(self.supervisor_user.username)
+
+        response = self.client.post(
+            reverse("chv-coverage-request-from-alert-prefill"),
+            {"alert_public_ids": [str(alert.public_id)]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "One or more linked alerts could not be found in your permitted scope.")
+
+    def test_alert_driven_request_requires_linked_alerts(self):
+        self.authenticate(self.admin_user.username)
+
+        response = self.client.post(
+            reverse("chv-coverage-request-list-create"),
+            {
+                "ward_id": self.ward.id,
+                "priority": CHVCoverageRequest.PRIORITY_HIGH,
+                "reason": "Coverage follow-up requested from linked alert context.",
+                "requested_chv_count": 1,
+                "trigger_source": CHVCoverageRequest.TRIGGER_SOURCE_ALERT_DRIVEN,
+                "linked_alert_public_ids": [],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("linked_alert_public_ids", response.data)
+
+    def test_alert_driven_request_rejects_out_of_scope_or_unknown_alerts(self):
+        other_ward = Ward.objects.create(
+            name="Scoped Other Ward",
+            county="Migori",
+            sub_county="Suna",
+            ward_code="OT-002",
+            public_id=uuid.uuid4(),
+            is_active=True,
+        )
+        other_alert = Alert.objects.create(
+            ward=other_ward,
+            risk_score=None,
+            channel=Alert.CHANNEL_SMS,
+            recipient="CHVs",
+            message="Out-of-scope alert.",
+            status=Alert.STATUS_DELIVERED,
+        )
+        self.authenticate(self.supervisor_user.username)
+
+        response = self.client.post(
+            reverse("chv-coverage-request-list-create"),
+            {
+                "ward_id": self.other_ward.id,
+                "priority": CHVCoverageRequest.PRIORITY_HIGH,
+                "reason": "Coverage follow-up requested from linked alert context.",
+                "requested_chv_count": 1,
+                "trigger_source": CHVCoverageRequest.TRIGGER_SOURCE_ALERT_DRIVEN,
+                "linked_alert_public_ids": [str(other_alert.public_id)],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "One or more linked alerts could not be found in your permitted scope.")
+
+    def test_alert_driven_request_rejects_alerts_from_different_ward(self):
+        other_ward = Ward.objects.create(
+            name="Alert Other Ward",
+            county="Migori",
+            sub_county="Suna",
+            ward_code="OT-003",
+            public_id=uuid.uuid4(),
+            is_active=True,
+        )
+        other_alert = Alert.objects.create(
+            ward=other_ward,
+            risk_score=None,
+            channel=Alert.CHANNEL_SMS,
+            recipient="CHVs",
+            message="Different ward alert.",
+            status=Alert.STATUS_DELIVERED,
+        )
+        self.authenticate(self.admin_user.username)
+
+        response = self.client.post(
+            reverse("chv-coverage-request-list-create"),
+            {
+                "ward_id": self.ward.id,
+                "priority": CHVCoverageRequest.PRIORITY_HIGH,
+                "reason": "Coverage follow-up requested from linked alert context.",
+                "requested_chv_count": 1,
+                "trigger_source": CHVCoverageRequest.TRIGGER_SOURCE_ALERT_DRIVEN,
+                "linked_alert_public_ids": [str(other_alert.public_id)],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "Linked alerts must belong to the same ward as the coverage request.")
+
+    @patch("risk.views.create_chv_coverage_request", side_effect=IntegrityError("duplicate live request"))
+    def test_duplicate_live_request_race_returns_truthful_400(self, mock_create_request):
+        self.authenticate(self.admin_user.username)
+
+        response = self.client.post(
+            reverse("chv-coverage-request-list-create"),
+            {
+                "ward_id": self.ward.id,
+                "priority": CHVCoverageRequest.PRIORITY_HIGH,
+                "reason": "Concurrent duplicate request should not surface as a server error.",
+                "requested_chv_count": 1,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "A live CHV coverage request already exists for this ward.")
+        mock_create_request.assert_called_once()
+
+    def test_direct_alert_driven_duplicate_attaches_alerts_to_existing_request(self):
+        self.authenticate(self.admin_user.username)
+        existing_request = CHVCoverageRequest.objects.create(
+            ward=self.ward,
+            requested_by=self.admin_user,
+            status=CHVCoverageRequest.STATUS_OPEN,
+            priority=CHVCoverageRequest.PRIORITY_HIGH,
+            reason="Existing live request.",
+            requested_chv_count=1,
+        )
+        alert = Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_SMS,
+            recipient="CHVs",
+            message="Duplicate direct create should still attach this alert.",
+            status=Alert.STATUS_DELIVERED,
+        )
+
+        response = self.client.post(
+            reverse("chv-coverage-request-list-create"),
+            {
+                "ward_id": self.ward.id,
+                "priority": CHVCoverageRequest.PRIORITY_HIGH,
+                "reason": "Coverage follow-up requested from linked alert context.",
+                "requested_chv_count": 1,
+                "trigger_source": CHVCoverageRequest.TRIGGER_SOURCE_ALERT_DRIVEN,
+                "linked_alert_public_ids": [str(alert.public_id)],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "A live CHV coverage request already exists for this ward.")
+        self.assertEqual(response.data["existing_request_public_id"], str(existing_request.public_id))
+        existing_request.refresh_from_db()
+        self.assertTrue(existing_request.linked_alert_links.filter(alert=alert).exists())
+        attachment_event = existing_request.events.filter(
+            action=CHVCoverageRequestEvent.ACTION_ALERT_LINKAGE_ATTACHED
+        ).latest("created_at")
+        redirect_event = existing_request.events.filter(
+            action=CHVCoverageRequestEvent.ACTION_ALERT_LINKAGE_REDIRECTED
+        ).latest("created_at")
+        self.assertEqual(attachment_event.metadata["linked_alert_public_ids"], [str(alert.public_id)])
+        self.assertEqual(attachment_event.metadata["attachment_mode"], "EXISTING_REQUEST")
+        self.assertEqual(redirect_event.metadata["linked_alert_public_ids"], [str(alert.public_id)])
+        self.assertEqual(redirect_event.metadata["source_api"], "DIRECT_CREATE")
+
+    def test_request_list_can_filter_by_linked_alert_presence(self):
+        alert = Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_SMS,
+            recipient="CHVs",
+            message="Linked alert for filter coverage.",
+            status=Alert.STATUS_DELIVERED,
+        )
+        manual_request = CHVCoverageRequest.objects.create(
+            ward=self.other_ward,
+            requested_by=self.admin_user,
+            status=CHVCoverageRequest.STATUS_RESOLVED,
+            priority=CHVCoverageRequest.PRIORITY_MEDIUM,
+            reason="Manual request without linked alerts.",
+            requested_chv_count=1,
+        )
+        alert_request = CHVCoverageRequest.objects.create(
+            ward=self.ward,
+            requested_by=self.admin_user,
+            status=CHVCoverageRequest.STATUS_RESOLVED,
+            priority=CHVCoverageRequest.PRIORITY_HIGH,
+            reason="Alert-driven request with linkage.",
+            requested_chv_count=1,
+            trigger_source=CHVCoverageRequest.TRIGGER_SOURCE_ALERT_DRIVEN,
+        )
+        CHVCoverageRequestAlertLink.objects.create(
+            coverage_request=alert_request,
+            alert=alert,
+            linked_by=self.admin_user,
+        )
+        self.authenticate(self.admin_user.username)
+
+        linked_response = self.client.get(
+            reverse("chv-coverage-request-list-create"),
+            {"has_linked_alerts": "true"},
+        )
+        unlinked_response = self.client.get(
+            reverse("chv-coverage-request-list-create"),
+            {"has_linked_alerts": "false"},
+        )
+
+        self.assertEqual(linked_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(unlinked_response.status_code, status.HTTP_200_OK)
+        self.assertEqual([item["public_id"] for item in linked_response.data["results"]], [str(alert_request.public_id)])
+        self.assertIn(str(manual_request.public_id), [item["public_id"] for item in unlinked_response.data["results"]])
+        self.assertNotIn(str(alert_request.public_id), [item["public_id"] for item in unlinked_response.data["results"]])
+
+    def test_analyst_can_list_requests_but_cannot_create(self):
+        CHVCoverageRequest.objects.create(
+            ward=self.ward,
+            requested_by=self.admin_user,
+            status=CHVCoverageRequest.STATUS_OPEN,
+            priority=CHVCoverageRequest.PRIORITY_HIGH,
+            reason="Existing request",
+            requested_chv_count=1,
+        )
+        self.authenticate(self.analyst_user.username)
+
+        list_response = self.client.get(reverse("chv-coverage-request-list-create"))
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(list_response.data["count"], 1)
+
+        create_response = self.client.post(
+            reverse("chv-coverage-request-list-create"),
+            {
+                "ward_id": self.ward.id,
+                "priority": CHVCoverageRequest.PRIORITY_HIGH,
+                "reason": "Analyst should not create this.",
+                "requested_chv_count": 1,
+            },
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_supervisor_cannot_create_request_for_out_of_scope_ward(self):
+        self.authenticate(self.supervisor_user.username)
+
+        response = self.client.post(
+            reverse("chv-coverage-request-list-create"),
+            {
+                "ward_id": self.ward.id,
+                "priority": CHVCoverageRequest.PRIORITY_HIGH,
+                "reason": "Out of scope request",
+                "requested_chv_count": 1,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.data["detail"], "Ward not found.")
+
+    def test_reject_requires_reason(self):
+        self.authenticate(self.admin_user.username)
+        request_record = CHVCoverageRequest.objects.create(
+            ward=self.ward,
+            requested_by=self.admin_user,
+            status=CHVCoverageRequest.STATUS_OPEN,
+            priority=CHVCoverageRequest.PRIORITY_HIGH,
+            reason="Needs decision",
+            requested_chv_count=1,
+        )
+
+        response = self.client.post(
+            reverse("chv-coverage-request-reject", kwargs={"public_id": request_record.public_id}),
+            {"reason": ""},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "A rejection reason is required.")
+
+    def test_cannot_assign_until_request_is_approved(self):
+        self.authenticate(self.admin_user.username)
+        request_record = CHVCoverageRequest.objects.create(
+            ward=self.ward,
+            requested_by=self.admin_user,
+            status=CHVCoverageRequest.STATUS_OPEN,
+            priority=CHVCoverageRequest.PRIORITY_HIGH,
+            reason="Pending approval",
+            requested_chv_count=1,
+        )
+
+        response = self.client.post(
+            reverse("chv-coverage-request-assign", kwargs={"public_id": request_record.public_id}),
+            {"chv_id": self.chv.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "Only approved coverage requests can receive CHV assignments.")
+
+    def test_cannot_assign_chv_from_different_ward(self):
+        other_ward = Ward.objects.create(
+            name="Other Ward",
+            county="Migori",
+            sub_county="Suna",
+            ward_code="OT-001",
+            public_id=uuid.uuid4(),
+            is_active=True,
+        )
+        other_chv = CHV.objects.create(
+            name="Atieno",
+            phone_number="+254700999001",
+            language="en",
+            ward=other_ward,
+            is_active=True,
+        )
+        self.authenticate(self.admin_user.username)
+        request_record = CHVCoverageRequest.objects.create(
+            ward=self.ward,
+            requested_by=self.admin_user,
+            status=CHVCoverageRequest.STATUS_APPROVED,
+            priority=CHVCoverageRequest.PRIORITY_HIGH,
+            reason="Ready for assignment",
+            requested_chv_count=1,
+        )
+
+        response = self.client.post(
+            reverse("chv-coverage-request-assign", kwargs={"public_id": request_record.public_id}),
+            {"chv_id": other_chv.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["detail"],
+            "Only CHVs linked to the requested ward can be assigned from this workflow.",
+        )
+
+    def test_admin_can_approve_assign_complete_and_resolve_request(self):
+        self.authenticate(self.admin_user.username)
+        request_record = CHVCoverageRequest.objects.create(
+            ward=self.ward,
+            requested_by=self.admin_user,
+            status=CHVCoverageRequest.STATUS_OPEN,
+            priority=CHVCoverageRequest.PRIORITY_HIGH,
+            reason="Workflow path",
+            requested_chv_count=1,
+        )
+
+        approve_response = self.client.post(
+            reverse("chv-coverage-request-approve", kwargs={"public_id": request_record.public_id}),
+            {"reason": "Approved for field deployment."},
+            format="json",
+        )
+        self.assertEqual(approve_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(approve_response.data["status"], CHVCoverageRequest.STATUS_APPROVED)
+
+        assign_response = self.client.post(
+            reverse("chv-coverage-request-assign", kwargs={"public_id": request_record.public_id}),
+            {"chv_id": self.chv.id, "notes": "Deploy immediately."},
+            format="json",
+        )
+        self.assertEqual(assign_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(assign_response.data["status"], CHVCoverageRequest.STATUS_IN_PROGRESS)
+        self.assertEqual(len(assign_response.data["assignments"]), 1)
+        assignment_public_id = assign_response.data["assignments"][0]["public_id"]
+
+        complete_response = self.client.post(
+            reverse("chv-assignment-complete", kwargs={"public_id": assignment_public_id}),
+            {"notes": "Assignment completed on the ground."},
+            format="json",
+        )
+        self.assertEqual(complete_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(complete_response.data["status"], CHVCoverageRequest.STATUS_APPROVED)
+
+        resolve_response = self.client.post(
+            reverse("chv-coverage-request-resolve", kwargs={"public_id": request_record.public_id}),
+            {"reason": "Coverage restored."},
+            format="json",
+        )
+        self.assertEqual(resolve_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(resolve_response.data["status"], CHVCoverageRequest.STATUS_RESOLVED)
+        self.assertGreaterEqual(len(resolve_response.data["events"]), 4)
+        self.assertEqual(resolve_response.data["sla_status"], "NOT_APPLICABLE")
+
+
+class CHVCoverageWorkflowNotificationTestCase(AuthenticatedAPITestCase):
+    @patch("risk.notifications.send_email")
+    def test_approval_creates_dashboard_notification_and_records_email_attempt(self, mock_send_email):
+        mock_send_email.return_value = EmailDeliveryResult(success=True, external_id="email-123", error="", provider="stub", status_code=200)
+        self.authenticate(self.admin_user.username)
+        request_record = CHVCoverageRequest.objects.create(
+            ward=self.ward,
+            requested_by=self.supervisor_user,
+            status=CHVCoverageRequest.STATUS_OPEN,
+            priority=CHVCoverageRequest.PRIORITY_HIGH,
+            reason="Needs approval",
+            requested_chv_count=1,
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                reverse("chv-coverage-request-approve", kwargs={"public_id": request_record.public_id}),
+                {"reason": "Approved for deployment."},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        notification = DashboardNotification.objects.get(
+            type=DashboardNotification.TYPE_CHV_COVERAGE_REQUEST_STATUS,
+            source_object_id=str(request_record.public_id),
+        )
+        self.assertEqual(notification.recipient_user, self.supervisor_user)
+        self.assertEqual(notification.metadata["coverage_request_status"], CHVCoverageRequest.STATUS_APPROVED)
+
+        delivery = CHVCoverageRequestEmailDelivery.objects.get(coverage_request=request_record)
+        self.assertEqual(delivery.status, CHVCoverageRequestEmailDelivery.STATUS_SENT)
+        self.assertEqual(delivery.delivery_backend, "stub")
+        self.assertEqual(delivery.external_id, "email-123")
+        mock_send_email.assert_called_once()
+        _, kwargs = mock_send_email.call_args
+        self.assertIn(f"{settings.FRONTEND_APP_URL}/chvs/requests/{request_record.public_id}", kwargs["text_body"])
+        self.assertIn(f'href="{settings.FRONTEND_APP_URL}/chvs/requests/{request_record.public_id}"', kwargs["html_body"])
+        self.assertNotIn("opened from alert context", notification.body.lower())
+
+    @patch("risk.notifications.send_email")
+    def test_assignment_completion_creates_notification_and_email_attempt(self, mock_send_email):
+        mock_send_email.return_value = EmailDeliveryResult(success=True, external_id="email-456", error="", provider="stub", status_code=200)
+        self.authenticate(self.admin_user.username)
+        request_record = CHVCoverageRequest.objects.create(
+            ward=self.ward,
+            requested_by=self.supervisor_user,
+            status=CHVCoverageRequest.STATUS_APPROVED,
+            priority=CHVCoverageRequest.PRIORITY_HIGH,
+            reason="Ready for assignment",
+            requested_chv_count=1,
+        )
+        assignment = CHVAssignment.objects.create(
+            coverage_request=request_record,
+            ward=self.ward,
+            chv=self.chv,
+            assigned_by=self.admin_user,
+            status=CHVAssignment.STATUS_ACTIVE,
+        )
+        request_record.status = CHVCoverageRequest.STATUS_IN_PROGRESS
+        request_record.save(update_fields=["status", "updated_at"])
+
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                reverse("chv-assignment-complete", kwargs={"public_id": assignment.public_id}),
+                {"notes": "Finished field response."},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        notification = DashboardNotification.objects.get(
+            type=DashboardNotification.TYPE_CHV_COVERAGE_REQUEST_STATUS,
+            metadata__coverage_event_action=CHVCoverageRequestEvent.ACTION_ASSIGNMENT_COMPLETED,
+        )
+        self.assertEqual(notification.recipient_user, self.supervisor_user)
+        request_record.refresh_from_db()
+        self.assertEqual(request_record.status, CHVCoverageRequest.STATUS_APPROVED)
+
+        delivery = CHVCoverageRequestEmailDelivery.objects.get(event__action=CHVCoverageRequestEvent.ACTION_ASSIGNMENT_COMPLETED)
+        self.assertEqual(delivery.status, CHVCoverageRequestEmailDelivery.STATUS_SENT)
+        mock_send_email.assert_called_once()
+
+    @patch("risk.notifications.send_email")
+    def test_alert_driven_approval_mentions_alert_origin_truthfully(self, mock_send_email):
+        mock_send_email.return_value = EmailDeliveryResult(success=True, external_id="email-321", error="", provider="stub", status_code=200)
+        self.authenticate(self.admin_user.username)
+        request_record = CHVCoverageRequest.objects.create(
+            ward=self.ward,
+            requested_by=self.supervisor_user,
+            status=CHVCoverageRequest.STATUS_OPEN,
+            priority=CHVCoverageRequest.PRIORITY_HIGH,
+            reason="Needs approval from alert context",
+            requested_chv_count=1,
+            trigger_source=CHVCoverageRequest.TRIGGER_SOURCE_ALERT_DRIVEN,
+        )
+        alert = Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_SMS,
+            recipient="CHVs",
+            message="Coverage follow-up recommended from alert context.",
+            status=Alert.STATUS_DELIVERED,
+        )
+        CHVCoverageRequestAlertLink.objects.create(
+            coverage_request=request_record,
+            alert=alert,
+            linked_by=self.admin_user,
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                reverse("chv-coverage-request-approve", kwargs={"public_id": request_record.public_id}),
+                {"reason": "Approved for deployment."},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        notification = DashboardNotification.objects.get(
+            type=DashboardNotification.TYPE_CHV_COVERAGE_REQUEST_STATUS,
+            source_object_id=str(request_record.public_id),
+        )
+        self.assertIn("opened from alert context", notification.body.lower())
+        self.assertIn(str(alert.public_id), notification.body)
+
+        delivery = CHVCoverageRequestEmailDelivery.objects.get(coverage_request=request_record)
+        self.assertEqual(delivery.status, CHVCoverageRequestEmailDelivery.STATUS_SENT)
+        mock_send_email.assert_called_once()
+        _, kwargs = mock_send_email.call_args
+        self.assertIn("opened from alert context", kwargs["text_body"].lower())
+        self.assertIn(str(alert.public_id), kwargs["text_body"])
+
+    @patch("risk.notifications.send_email")
+    def test_assignment_cancellation_creates_notification_and_email_attempt(self, mock_send_email):
+        mock_send_email.return_value = EmailDeliveryResult(success=True, external_id="email-654", error="", provider="stub", status_code=200)
+        self.authenticate(self.admin_user.username)
+        request_record = CHVCoverageRequest.objects.create(
+            ward=self.ward,
+            requested_by=self.supervisor_user,
+            status=CHVCoverageRequest.STATUS_IN_PROGRESS,
+            priority=CHVCoverageRequest.PRIORITY_HIGH,
+            reason="Assignment active",
+            requested_chv_count=1,
+        )
+        assignment = CHVAssignment.objects.create(
+            coverage_request=request_record,
+            ward=self.ward,
+            chv=self.chv,
+            assigned_by=self.admin_user,
+            status=CHVAssignment.STATUS_ACTIVE,
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                reverse("chv-assignment-cancel", kwargs={"public_id": assignment.public_id}),
+                {"notes": "Assignment cancelled after review."},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], CHVCoverageRequest.STATUS_APPROVED)
+        notification = DashboardNotification.objects.get(
+            type=DashboardNotification.TYPE_CHV_COVERAGE_REQUEST_STATUS,
+            metadata__coverage_event_action=CHVCoverageRequestEvent.ACTION_ASSIGNMENT_CANCELLED,
+        )
+        self.assertEqual(notification.recipient_user, self.supervisor_user)
+
+        delivery = CHVCoverageRequestEmailDelivery.objects.get(event__action=CHVCoverageRequestEvent.ACTION_ASSIGNMENT_CANCELLED)
+        self.assertEqual(delivery.status, CHVCoverageRequestEmailDelivery.STATUS_SENT)
+        mock_send_email.assert_called_once()
+
+    @patch("risk.notifications.send_email")
+    def test_admin_status_change_uses_same_notification_and_email_flow(self, mock_send_email):
+        mock_send_email.return_value = EmailDeliveryResult(success=True, external_id="email-789", error="", provider="stub", status_code=200)
+        request_record = CHVCoverageRequest.objects.create(
+            ward=self.ward,
+            requested_by=self.supervisor_user,
+            status=CHVCoverageRequest.STATUS_OPEN,
+            priority=CHVCoverageRequest.PRIORITY_MEDIUM,
+            reason="Admin flow",
+            requested_chv_count=1,
+        )
+        admin_site = AdminSite()
+        model_admin = CHVCoverageRequestAdmin(CHVCoverageRequest, admin_site)
+        request = RequestFactory().post("/admin/risk/chvcoveragerequest/")
+        request.user = self.admin_user
+
+        request_record.status = CHVCoverageRequest.STATUS_APPROVED
+        request_record.review_decision_reason = "Approved from admin."
+        form = SimpleNamespace(changed_data=["status", "review_decision_reason"])
+
+        with self.captureOnCommitCallbacks(execute=True):
+            model_admin.save_model(request, request_record, form, change=True)
+
+        request_record.refresh_from_db()
+        self.assertEqual(request_record.status, CHVCoverageRequest.STATUS_APPROVED)
+        self.assertEqual(
+            DashboardNotification.objects.filter(
+                type=DashboardNotification.TYPE_CHV_COVERAGE_REQUEST_STATUS,
+                source_object_id=str(request_record.public_id),
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            CHVCoverageRequestEmailDelivery.objects.filter(coverage_request=request_record).count(),
+            1,
+        )
+        mock_send_email.assert_called_once()

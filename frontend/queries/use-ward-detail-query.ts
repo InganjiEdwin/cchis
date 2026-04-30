@@ -12,6 +12,7 @@ import {
   type WardIntelligenceGuidanceItem,
   type WardMapFeature,
   type WardIntelligenceTrend,
+  type WardIntelligenceRouteResponse,
 } from "@/lib/dashboard";
 import { queryKeys } from "@/lib/query-keys";
 
@@ -24,9 +25,13 @@ export type WardDetailState = {
   county: string;
   subCounty: string;
   riskLevel: WardRiskLevel;
+  triggerState: WardIntelligenceRouteResponse["header_context"]["trigger_state"];
+  actionRequired: boolean;
+  primaryCtaKind: WardIntelligenceRouteResponse["decision_summary"]["primary_cta_kind"];
   riskScore: number | null;
   predictedCases: number;
   updatedAt: string | null;
+  lastAlertAt: string | null;
   source: string | null;
   modelVersion: string | null;
   modelRunStatus: string | null;
@@ -39,6 +44,9 @@ export type WardDetailState = {
   riskHistory: RiskScoreRecord[];
   relatedAlerts: AlertRecord[];
   wardMapFeature: WardMapFeature | null;
+  workflow: WardIntelligenceRouteResponse["workflow"];
+  decisionSummary: WardIntelligenceRouteResponse["decision_summary"];
+  headerContext: WardIntelligenceRouteResponse["header_context"];
 };
 
 type UseWardDetailQueryParams = {
@@ -58,6 +66,33 @@ export function useWardDetailQuery({ wardId, enabled = true }: UseWardDetailQuer
       const relatedAlerts = response.related_alerts;
       const wardMapFeature =
         wardMap.features.find((feature) => feature.properties.backend_ward_id === wardId) ?? null;
+      const workflow = response.workflow ?? null;
+      const triggerState = workflow?.status ?? "NONE";
+      const headerContext = response.header_context ?? {
+        last_alert_at: relatedAlerts[0]?.created_at ?? null,
+        latest_record_at:
+          response.current_risk.generated_at ??
+          response.ward.latest_generated_at ??
+          response.ward.updated_at ??
+          null,
+        freshness_state: response.freshness.is_stale ? ("STALE" as const) : ("FRESH" as const),
+        trigger_state: triggerState,
+        expected_cases_7d:
+          response.current_risk.predicted_cases ??
+          response.ward.predicted_cases ??
+          0,
+        risk_score:
+          response.current_risk.risk_score ??
+          response.ward.current_risk_score ??
+          null,
+      };
+      const decisionSummary = response.decision_summary ?? {
+        action_required: false,
+        headline: "Ward decision summary unavailable.",
+        why: "No operator decision summary is available from the current ward records.",
+        next_steps: ["View full alert history"],
+        primary_cta_kind: "VIEW_ALERT_HISTORY" as const,
+      };
 
       return {
         wardId,
@@ -65,14 +100,27 @@ export function useWardDetailQuery({ wardId, enabled = true }: UseWardDetailQuer
         wardCode: response.ward.ward_code ?? null,
         county: response.ward.county,
         subCounty: response.ward.sub_county,
+        triggerState: headerContext.trigger_state,
+        actionRequired: decisionSummary.action_required,
+        primaryCtaKind: decisionSummary.primary_cta_kind,
         riskLevel: response.current_risk.risk_level ?? response.ward.current_risk_level ?? "UNKNOWN",
-        riskScore: response.current_risk.risk_score ?? response.ward.current_risk_score ?? null,
-        predictedCases: response.current_risk.predicted_cases ?? response.ward.predicted_cases ?? 0,
+        riskScore:
+          headerContext.risk_score ??
+          response.current_risk.risk_score ??
+          response.ward.current_risk_score ??
+          null,
+        predictedCases:
+          headerContext.expected_cases_7d ??
+          response.current_risk.predicted_cases ??
+          response.ward.predicted_cases ??
+          0,
         updatedAt:
+          headerContext.latest_record_at ??
           response.current_risk.generated_at ??
           response.ward.latest_generated_at ??
           response.ward.updated_at ??
           null,
+        lastAlertAt: headerContext.last_alert_at,
         source: response.current_risk.source ?? response.ward.latest_source ?? null,
         modelVersion: response.current_risk.model_version ?? response.ward.latest_model_version ?? null,
         modelRunStatus: response.current_risk.model_run_status ?? null,
@@ -85,6 +133,9 @@ export function useWardDetailQuery({ wardId, enabled = true }: UseWardDetailQuer
         riskHistory,
         relatedAlerts,
         wardMapFeature,
+        workflow,
+        decisionSummary,
+        headerContext,
       };
     },
     enabled,

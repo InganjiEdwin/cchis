@@ -212,6 +212,21 @@ function getCoveragePalette(feature: WardMapFeature) {
   };
 }
 
+function getWardLabelLines(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+
+  if (parts.length <= 1) {
+    return [name];
+  }
+
+  if (parts.length === 2) {
+    return [parts[0], parts[1]];
+  }
+
+  const midpoint = Math.ceil(parts.length / 2);
+  return [parts.slice(0, midpoint).join(" "), parts.slice(midpoint).join(" ")];
+}
+
 export function MigoriWardMap({
   features,
   selectedWardCode,
@@ -256,6 +271,7 @@ export function MigoriWardMap({
           const centroid = feature.properties.centroid
             ? projectPoint(feature.properties.centroid, bounds)
             : projectPoint(flattenCoordinates(feature)[0], bounds);
+          const labelLines = getWardLabelLines(feature.properties.name);
           const palette = getCoveragePalette(feature);
           const coverageStatus = getCoverageStatus(feature);
           const selectedFill = isSelected ? SELECTED_FILL : isHovered ? palette.fillHover : palette.fill;
@@ -322,16 +338,29 @@ export function MigoriWardMap({
                 <>
                   <text
                     x={centroid[0]}
-                    y={centroid[1] - 14}
+                    y={centroid[1] - (labelLines.length > 1 ? 18 : 14)}
                     textAnchor="middle"
-                    className={cn("pointer-events-none fill-panel-strong text-[22px] font-semibold", isMuted && "opacity-40")}
+                    className={cn("pointer-events-none font-semibold", isMuted && "opacity-40")}
+                    fill={isSelected || isHovered ? "#0F172A" : "var(--dashboard-copy)"}
+                    stroke={isSelected || isHovered ? "rgba(255,255,255,0.92)" : "transparent"}
+                    strokeWidth={isSelected ? 5 : isHovered ? 4 : 0}
+                    paintOrder="stroke"
                   >
-                    {feature.properties.name}
+                    {labelLines.map((line, index) => (
+                      <tspan
+                        key={`${feature.properties.ward_code}-label-${index}`}
+                        x={centroid[0]}
+                        dy={index === 0 ? 0 : 18}
+                        fontSize={labelLines.length > 1 ? 18 : 22}
+                      >
+                        {line}
+                      </tspan>
+                    ))}
                   </text>
                   {isSelected ? (
                     <text
                       x={centroid[0]}
-                      y={centroid[1] + 18}
+                      y={centroid[1] + (labelLines.length > 1 ? 26 : 18)}
                       textAnchor="middle"
                       className={cn(
                         "pointer-events-none text-[15px] font-semibold",

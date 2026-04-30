@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   ArrowUpRight,
   Bell,
+  CheckCircle2,
   ChevronRight,
   Clock3,
   Droplets,
@@ -28,12 +29,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { cn } from "@/lib/cn";
 import type { AlertRecord, RiskScoreRecord, WardIntelligenceDriverItem } from "@/lib/dashboard";
 import { canTriggerAlerts } from "@/lib/roles";
-import {
-  type WardDetailState,
-  useWardDetailQuery,
-} from "@/queries/use-ward-detail-query";
-
-const STALE_THRESHOLD_MINUTES = 120;
+import { type WardDetailState, useWardDetailQuery } from "@/queries/use-ward-detail-query";
 
 function normalizeRiskScore(score: number | null) {
   if (typeof score !== "number" || !Number.isFinite(score)) {
@@ -53,7 +49,7 @@ function formatRiskScore(score: number | null) {
 }
 
 function formatRelativeMinutes(timestamp: string | null) {
-  if (!timestamp) return "No recent update";
+  if (!timestamp) return "Unavailable";
 
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return "Invalid timestamp";
@@ -72,21 +68,12 @@ function formatRelativeMinutes(timestamp: string | null) {
 }
 
 function formatOperationalTime(timestamp: string | null) {
-  if (!timestamp) return "No timestamp";
+  if (!timestamp) return "Unavailable";
 
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return "Invalid timestamp";
 
   return `${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} (${formatRelativeMinutes(timestamp)})`;
-}
-
-function isStaleTimestamp(timestamp: string | null) {
-  if (!timestamp) return true;
-
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return true;
-
-  return (Date.now() - date.getTime()) / 60000 > STALE_THRESHOLD_MINUTES;
 }
 
 function formatRiskLevel(riskLevel: WardDetailState["riskLevel"]) {
@@ -156,6 +143,98 @@ function getRiskBadgeTone(level: WardDetailState["riskLevel"]) {
   return "default" as const;
 }
 
+function getTriggerTone(triggerState: WardDetailState["triggerState"]) {
+  if (triggerState === "ACTION_IN_PROGRESS" || triggerState === "REVIEW_PENDING") return "warning" as const;
+  if (triggerState === "TRIGGER_ACTIVE" || triggerState === "RESOLVED") return "success" as const;
+  return "default" as const;
+}
+
+function formatTriggerState(triggerState: WardDetailState["triggerState"]) {
+  if (triggerState === "NONE") return "No active trigger";
+  if (triggerState === "TRIGGER_ACTIVE") return "Trigger active";
+  if (triggerState === "REVIEW_PENDING") return "Awaiting review";
+  if (triggerState === "ACTION_IN_PROGRESS") return "Action in progress";
+  return toTitleCase(triggerState);
+}
+
+function getRecommendedActionState(detail: WardDetailState) {
+  const hasRecentAlerts = detail.relatedAlerts.length > 0 || (detail.workflow?.active_alert_count ?? 0) > 0;
+  if (detail.triggerState === "NONE") {
+    return {
+      primaryAction: "Review alert history",
+      why: hasRecentAlerts
+        ? "No active trigger is present, but this ward has recent alerts."
+        : "No active trigger is present and the latest ward record remains in routine monitoring.",
+      nextSteps: hasRecentAlerts
+        ? ["Review full alert history", "Continue routine surveillance", "Open trigger flow only if conditions change"]
+        : ["Continue routine surveillance", "Review full alert history", "Open trigger flow only if conditions change"],
+    };
+  }
+
+  return {
+    primaryAction: detail.workflow?.recommended_action ?? detail.decisionSummary.headline,
+    why: detail.decisionSummary.why,
+    nextSteps: detail.decisionSummary.next_steps,
+  };
+}
+
+function getDecisionCheckpointCopy(detail: WardDetailState | null) {
+  if (!detail) {
+    return {
+      headline: "Decision summary not available yet.",
+      why: "Use recent alerts and freshness status to guide review.",
+      context: "Context: Ward monitoring view",
+    };
+  }
+
+  if (detail.triggerState === "NONE" && !detail.actionRequired) {
+    return {
+      headline: "No decision required at this time.",
+      why: "This ward is under routine monitoring.",
+      context: "Context: Routine monitoring (no active escalation)",
+    };
+  }
+
+  return {
+    headline: detail.decisionSummary.headline,
+    why: detail.decisionSummary.why,
+    context: "Context: Active ward decision checkpoint",
+  };
+}
+
+function getFreshnessTone(isStale: boolean) {
+  return isStale ? ("warning" as const) : ("success" as const);
+}
+
+function getAlertTone(alert: AlertRecord) {
+  if (alert.status === "DELIVERED") return "success" as const;
+  if (alert.status === "FAILED") return "danger" as const;
+  return "warning" as const;
+}
+
+function getAlertSummary(alert: AlertRecord) {
+  const parts = [
+    `Via ${toTitleCase(alert.channel)}`,
+    toTitleCase(alert.status),
+  ];
+
+  if (typeof alert.risk_score === "number") {
+    parts.push(`Risk ${Math.round(normalizeRiskScore(alert.risk_score))}/100`);
+  }
+
+  return parts.join(" • ");
+}
+
+function LoadingBlocks({ count = 3, className = "h-16 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" }) {
+  return (
+    <div className="space-y-3" aria-hidden="true">
+      {Array.from({ length: count }, (_, index) => (
+        <div key={index} className={className} />
+      ))}
+    </div>
+  );
+}
+
 export default function WardDetailPage() {
   const params = useParams<{ id: string }>();
   const searchParams = useSearchParams();
@@ -169,13 +248,8 @@ export default function WardDetailPage() {
   const detail = wardDetailQuery.data ?? null;
   const isLoading = wardDetailQuery.isPending;
   const isRefreshing = wardDetailQuery.isFetching;
-  const isHistoryLoading = wardDetailQuery.isPending;
-  const isAlertsLoading = wardDetailQuery.isPending;
   const error = wardDetailQuery.error instanceof Error ? wardDetailQuery.error.message : null;
-  const historyError = null;
-  const alertsError = null;
-
-  const isStale = isStaleTimestamp(detail?.updatedAt ?? null);
+  const isStale = detail?.freshness.is_stale ?? true;
   const topbarTimestampLabel = isRefreshing
     ? "Refreshing..."
     : `${formatOperationalTime(detail?.updatedAt ?? null)}${isStale ? " · Stale" : ""}`;
@@ -187,8 +261,28 @@ export default function WardDetailPage() {
   };
   const drivers = detail?.driverItems ?? [];
   const recommendations = detail?.guidanceItems ?? [];
-  const latestAlert = detail?.relatedAlerts[0] ?? null;
   const wardMapFeatures = detail?.wardMapFeature ? [detail.wardMapFeature] : [];
+  const canTriggerFromPage = currentUser ? canTriggerAlerts(currentUser.role) : false;
+  const hasLowSignalState = Boolean(
+    detail &&
+      detail.riskLevel === "LOW" &&
+      detail.triggerState === "NONE" &&
+      !detail.actionRequired &&
+      drivers.length === 0 &&
+      detail.riskHistory.length === 0,
+  );
+  const shouldShowTriggerPanelPrimary = Boolean(
+    detail &&
+      canTriggerFromPage &&
+      (detail.primaryCtaKind === "OPEN_TRIGGER_FLOW" || detail.primaryCtaKind === "REVIEW_TRIGGER"),
+  );
+  const primaryTriggerButtonLabel = detail?.primaryCtaKind === "REVIEW_TRIGGER" ? "Review trigger" : "Open Trigger Flow";
+  const primaryTriggerCloseLabel = detail?.primaryCtaKind === "REVIEW_TRIGGER" ? "Close trigger review" : "Close trigger flow";
+  const shouldShowAlertHistoryPrimary = !shouldShowTriggerPanelPrimary;
+  const shouldShowSecondaryTriggerFlow =
+    Boolean(detail) && canTriggerFromPage && detail?.triggerState === "NONE" && detail.primaryCtaKind !== "OPEN_TRIGGER_FLOW";
+  const recommendedActionState = detail ? getRecommendedActionState(detail) : null;
+  const decisionCheckpointCopy = getDecisionCheckpointCopy(detail);
 
   if (!currentUser) {
     return null;
@@ -198,7 +292,7 @@ export default function WardDetailPage() {
     <div className="space-y-6">
       <DashboardTopbar
         title="Ward Detail"
-        subtitle={detail ? `${detail.county} County ward view` : "Migori County ward view"}
+        subtitle={detail ? `${detail.county} County ward decision console` : "Migori County ward decision console"}
         lastUpdatedLabel={topbarTimestampLabel}
         lastUpdatedTone={isStale ? "stale" : "default"}
         onRefresh={() => {
@@ -213,49 +307,154 @@ export default function WardDetailPage() {
         </div>
       ) : null}
 
-      <Card className="space-y-5 p-6 md:p-7">
-        <Link
-          href={returnTo}
-          className="inline-flex items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--login-link-hover)]"
-        >
-          <ArrowLeft className="size-4" aria-hidden="true" />
-          Back to wards
-        </Link>
+      <Card className="space-y-6 overflow-hidden p-6 md:p-7">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-4">
+            <Link
+              href={returnTo}
+              className="inline-flex items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--login-link-hover)]"
+            >
+              <ArrowLeft className="size-4" aria-hidden="true" />
+              Back to wards
+            </Link>
 
-        <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-[clamp(2rem,1.2rem+1vw,3rem)] font-semibold tracking-[-0.05em] text-panel-strong">
-              {isLoading ? "Loading ward detail..." : detail?.wardName ?? "Ward detail"}
-            </h1>
-            {!isLoading ? (
-              <>
-                <StatusBadge
-                  tone={getRiskBadgeTone(detail?.riskLevel ?? "UNKNOWN")}
-                  className="rounded-full px-3 py-1.5 tracking-[0.14em]"
-                >
-                  {formatRiskLevel(detail?.riskLevel ?? "UNKNOWN")}
-                </StatusBadge>
-                <span className="rounded-full border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_30%,transparent)] px-3 py-1.5 text-sm font-semibold text-panel-copy">
-                  Risk score: {formatRiskScore(detail?.riskScore ?? null)}
-                </span>
-                <span className="text-sm text-panel-muted">
-                  Last alert: {latestAlert ? formatRelativeMinutes(latestAlert.created_at) : "No recent alerts"}
-                </span>
-              </>
-            ) : null}
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <h1 className="text-[clamp(2rem,1.2rem+1vw,3rem)] font-semibold tracking-[-0.05em] text-panel-strong">
+                  {isLoading ? "Loading ward detail..." : detail?.wardName ?? "Ward detail"}
+                </h1>
+                {!isLoading ? (
+                  <>
+                    <StatusBadge
+                      tone={getRiskBadgeTone(detail?.riskLevel ?? "UNKNOWN")}
+                      className="rounded-full px-3 py-1.5 tracking-[0.14em]"
+                    >
+                      {formatRiskLevel(detail?.riskLevel ?? "UNKNOWN")}
+                    </StatusBadge>
+                    <StatusBadge
+                      tone={getTriggerTone(detail?.triggerState ?? "NONE")}
+                      className="rounded-full px-3 py-1.5 tracking-[0.14em]"
+                    >
+                      {formatTriggerState(detail?.triggerState ?? "NONE")}
+                    </StatusBadge>
+                    <StatusBadge
+                      tone={getFreshnessTone(detail?.freshness.is_stale ?? true)}
+                      className="rounded-full px-3 py-1.5 tracking-[0.14em]"
+                    >
+                      {detail?.freshness.is_stale ? "Stale data" : "Fresh data"}
+                    </StatusBadge>
+                  </>
+                ) : null}
+              </div>
+
+              <p className="text-sm text-panel-muted">
+                {isLoading
+                  ? "Preparing the latest ward risk context."
+                  : detail
+                    ? `${detail.subCounty || "Unassigned sub-county"}, ${detail.county} County${detail.wardCode ? ` • ${detail.wardCode}` : ""}`
+                    : "Ward-level risk monitoring."}
+              </p>
+
+              <div className="max-w-3xl space-y-2">
+                <p className="text-lg font-semibold tracking-[-0.02em] text-panel-strong">
+                  {isLoading ? "Loading decision summary..." : decisionCheckpointCopy.headline}
+                </p>
+                <p className="text-sm leading-6 text-panel-muted">
+                  {isLoading ? "Checking current trigger state, alert activity, and freshness." : decisionCheckpointCopy.why}
+                </p>
+                {!isLoading ? <p className="text-xs font-medium uppercase tracking-[0.16em] text-panel-subtle">{decisionCheckpointCopy.context}</p> : null}
+              </div>
+            </div>
           </div>
 
-          <p className="text-sm text-panel-muted">
-            {isLoading
-              ? "Preparing the latest ward risk context."
-              : detail
-                ? `${detail.subCounty || "Unassigned sub-county"}, ${detail.county} County`
-                : "Ward-level risk monitoring."}
-          </p>
+          <div className="w-full max-w-md space-y-3 lg:pl-6">
+            {detail ? (
+              shouldShowTriggerPanelPrimary ? (
+                <TriggerAlertPanel
+                  buttonLabel={primaryTriggerButtonLabel}
+                  closeLabel={primaryTriggerCloseLabel}
+                  buttonClassName="inline-flex h-12 w-full items-center justify-center gap-2 rounded-pill bg-[var(--login-submit-start)] px-5 text-base font-semibold text-white shadow-[var(--login-submit-shadow)] transition hover:bg-[var(--login-submit-end)] hover:shadow-[var(--login-submit-shadow-hover)]"
+                  fixedWard={{
+                    id: detail.wardId,
+                    name: detail.wardName,
+                    county: detail.county,
+                    subCounty: detail.subCounty,
+                    riskLevel: detail.riskLevel,
+                    riskScore: detail.riskScore,
+                    predictedCases: detail.predictedCases,
+                    updatedAt: detail.updatedAt,
+                  }}
+                />
+              ) : (
+                <div className="flex items-start gap-2 rounded-[1.25rem] border border-[color-mix(in_srgb,var(--warning)_18%,white)] bg-[color-mix(in_srgb,var(--warning)_8%,white)] px-4 py-3 text-sm font-medium text-[color:var(--warning)] dark:border-[color-mix(in_srgb,var(--warning)_24%,var(--panel-border))] dark:bg-[color-mix(in_srgb,var(--warning)_14%,var(--panel))] dark:text-[color-mix(in_srgb,var(--warning)_78%,white)]">
+                  <AlertTriangle className="mt-0.5 inline-flex size-4 shrink-0" aria-hidden="true" />
+                  <span>
+                    {canTriggerFromPage
+                      ? "Current next step: review alert history. Open trigger flow only if conditions change."
+                      : "Recommended action is visible, but this role cannot start or review trigger work from this page."}
+                  </span>
+                </div>
+              )
+            ) : null}
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Link
+                href="/alerts"
+                className={cn(
+                  "inline-flex h-11 w-full items-center justify-center gap-2 whitespace-nowrap rounded-pill px-5 text-sm font-semibold transition sm:col-span-2",
+                  shouldShowAlertHistoryPrimary
+                    ? "bg-[var(--login-submit-start)] text-white shadow-[var(--login-submit-shadow)] hover:bg-[var(--login-submit-end)] hover:shadow-[var(--login-submit-shadow-hover)]"
+                    : "border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] text-panel-strong hover:bg-[color-mix(in_srgb,var(--dashboard-table-line)_34%,transparent)]",
+                )}
+              >
+                View full alert history
+                <ChevronRight className="size-4" aria-hidden="true" />
+              </Link>
+
+              {shouldShowSecondaryTriggerFlow ? (
+                <TriggerAlertPanel
+                  buttonLabel="Open trigger flow"
+                  closeLabel="Close trigger flow"
+                  buttonClassName="inline-flex h-11 w-full items-center justify-center gap-2 rounded-pill border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-5 text-sm font-semibold text-panel-strong transition hover:bg-[color-mix(in_srgb,var(--dashboard-table-line)_34%,transparent)]"
+                  fixedWard={{
+                    id: detail.wardId,
+                    name: detail.wardName,
+                    county: detail.county,
+                    subCounty: detail.subCounty,
+                    riskLevel: detail.riskLevel,
+                    riskScore: detail.riskScore,
+                    predictedCases: detail.predictedCases,
+                    updatedAt: detail.updatedAt,
+                  }}
+                />
+              ) : null}
+            </div>
+
+            <p className="text-xs leading-5 text-panel-muted">
+              Trigger review and alert handling may continue in dedicated flows. This page keeps the next truthful step visible without implying all execution completes here.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {[
+            ["Risk score", isLoading ? "Loading..." : formatRiskScore(detail?.riskScore ?? null)],
+            ["Expected cases", isLoading ? "Loading..." : detail ? String(detail.predictedCases) : "Unavailable"],
+            ["Last alert", isLoading ? "Loading..." : detail?.lastAlertAt ? formatRelativeMinutes(detail.lastAlertAt) : "No recent alerts"],
+            ["Latest record", isLoading ? "Loading..." : formatOperationalTime(detail?.updatedAt ?? null)],
+          ].map(([label, value]) => (
+            <div
+              key={label}
+              className="rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_20%,transparent)] px-4 py-4"
+            >
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">{label}</p>
+              <p className="mt-2 text-lg font-semibold text-panel-strong">{value}</p>
+            </div>
+          ))}
         </div>
       </Card>
 
-      <section className="grid gap-6 xl:grid-cols-[minmax(0,1.55fr)_minmax(320px,0.85fr)]">
+      <section className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.9fr)]">
         <div className="space-y-6">
           <Card className="space-y-5 p-6">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -263,7 +462,14 @@ export default function WardDetailPage() {
                 <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--warning)_12%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]">
                   <ShieldAlert className="size-5" aria-hidden="true" />
                 </span>
-                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Observed signals</h3>
+                <div className="space-y-1">
+                  <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">
+                    {hasLowSignalState ? "Risk signals & trend" : "Observed signals"}
+                  </h3>
+                  <p className="text-sm text-panel-muted">
+                    {hasLowSignalState ? "Single low-signal checkpoint for this ward." : "Live facts from the latest ward records."}
+                  </p>
+                </div>
               </div>
               <div
                 className={cn(
@@ -281,12 +487,16 @@ export default function WardDetailPage() {
             </div>
 
             {isLoading ? (
-              <div className="space-y-3" aria-hidden="true">
-                <div className="h-16 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
-                <div className="h-16 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
-                <div className="h-16 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
+              <LoadingBlocks count={3} />
+            ) : hasLowSignalState ? (
+              <div className="rounded-[1.5rem] border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+                <p className="text-sm font-semibold text-panel-strong">No active signals or trends detected.</p>
+                <p className="mt-1 text-sm text-panel-muted">This ward is currently under routine monitoring.</p>
+                <p className="mt-1 text-sm text-panel-muted">
+                  Latest record: {detail?.updatedAt ? formatOperationalTime(detail.updatedAt) : "Unavailable"}
+                </p>
               </div>
-            ) : (
+            ) : drivers.length > 0 ? (
               <div className="space-y-3">
                 {drivers.map((driver) => (
                   <article
@@ -320,130 +530,137 @@ export default function WardDetailPage() {
                   </article>
                 ))}
               </div>
+            ) : (
+              <div className="rounded-[1.5rem] border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+                <p className="text-sm font-semibold text-panel-strong">No active risk drivers recorded.</p>
+                <p className="mt-1 text-sm text-panel-muted">
+                  Driver summaries will appear when model runs include explainable signals.
+                </p>
+                <p className="mt-1 text-sm text-panel-muted">
+                  Latest record: {detail?.updatedAt ? formatOperationalTime(detail.updatedAt) : "Unavailable"}
+                </p>
+              </div>
             )}
           </Card>
 
-          <Card className="space-y-5 p-6">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-              <div className="flex items-center gap-3">
-                <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
-                  <Waves className="size-5" aria-hidden="true" />
-                </span>
-                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Recent risk history</h3>
-              </div>
-              <p className="text-sm text-panel-muted">Latest recorded model runs for this ward</p>
-            </div>
-
-            {isHistoryLoading ? (
-              <div className="space-y-3" aria-hidden="true">
-                {Array.from({ length: 4 }, (_, index) => (
-                  <div
-                    key={`history-skeleton-${index}`}
-                    className="h-14 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]"
-                  />
-                ))}
-              </div>
-            ) : historyError ? (
-              <div className="rounded-2xl border border-[color-mix(in_srgb,var(--warning)_20%,white)] bg-[color-mix(in_srgb,var(--warning)_10%,white)] px-4 py-3 text-sm font-medium text-[color:var(--warning)]">
-                <AlertTriangle className="mr-2 inline-flex size-4" aria-hidden="true" />
-                {historyError}
-              </div>
-            ) : detail && detail.riskHistory.length > 0 ? (
-              <div className="overflow-hidden rounded-[1.5rem] border border-[var(--dashboard-table-line)]">
-                <div className="overflow-x-auto">
-                  <table className="min-w-full border-collapse text-left">
-                    <thead>
-                      <tr>
-                        {["Date/time", "Risk score", "Status", "Trend"].map((label) => (
-                          <th
-                            key={label}
-                            className="border-b border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_30%,transparent)] px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted"
-                          >
-                            {label}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {detail.riskHistory.slice(0, 6).map((risk, index, history) => {
-                        const historyTrend = getHistoryTrendIcon(index, history);
-
-                        return (
-                          <tr key={risk.id}>
-                            <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm text-panel-copy last:border-b-0">
-                              {formatOperationalTime(risk.generated_at)}
-                            </td>
-                            <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm font-semibold text-panel-strong last:border-b-0">
-                              {Math.round(normalizeRiskScore(risk.score))}
-                            </td>
-                            <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm last:border-b-0">
-                              <StatusBadge
-                                tone={getRiskBadgeTone(risk.risk_level)}
-                                className="rounded-full px-3 py-1 tracking-[0.14em]"
-                              >
-                                {risk.risk_level}
-                              </StatusBadge>
-                            </td>
-                            <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm last:border-b-0">
-                              <span
-                                className={cn(
-                                  "inline-flex size-8 items-center justify-center rounded-full",
-                                  historyTrend === "up"
-                                    ? "bg-[color-mix(in_srgb,var(--danger)_10%,white)] text-[color:var(--danger)]"
-                                    : historyTrend === "down"
-                                      ? "bg-[color-mix(in_srgb,var(--success)_10%,white)] text-[color:var(--success)]"
-                                      : "bg-[color-mix(in_srgb,var(--dashboard-table-line)_40%,transparent)] text-panel-copy",
-                                )}
-                              >
-                                {historyTrend === "up" ? (
-                                  <ArrowUpRight className="size-4" aria-hidden="true" />
-                                ) : historyTrend === "down" ? (
-                                  <ArrowUpRight className="size-4 rotate-90" aria-hidden="true" />
-                                ) : (
-                                  <Minus className="size-4" aria-hidden="true" />
-                                )}
-                              </span>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+          {!hasLowSignalState ? (
+            <Card className="space-y-5 p-6">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div className="flex items-center gap-3">
+                  <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+                    <Waves className="size-5" aria-hidden="true" />
+                  </span>
+                  <div className="space-y-1">
+                    <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Risk history</h3>
+                    <p className="text-sm text-panel-muted">Compact record of recent ward runs.</p>
+                  </div>
                 </div>
               </div>
-            ) : (
-              <p className="text-sm text-panel-muted">No risk history is currently available for this ward.</p>
-            )}
-          </Card>
 
-          <section className="grid gap-6 lg:grid-cols-2 2xl:grid-cols-3">
+              {isLoading ? (
+                <LoadingBlocks count={4} className="h-14 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
+              ) : detail && detail.riskHistory.length > 0 ? (
+                <div className="overflow-hidden rounded-[1.5rem] border border-[var(--dashboard-table-line)]">
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full border-collapse text-left">
+                      <thead>
+                        <tr>
+                          {["Date/time", "Risk score", "Status", "Trend"].map((label) => (
+                            <th
+                              key={label}
+                              className="border-b border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_30%,transparent)] px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted"
+                            >
+                              {label}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detail.riskHistory.slice(0, 6).map((risk, index, history) => {
+                          const historyTrend = getHistoryTrendIcon(index, history);
+
+                          return (
+                            <tr key={risk.id}>
+                              <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm text-panel-copy last:border-b-0">
+                                {formatOperationalTime(risk.generated_at)}
+                              </td>
+                              <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm font-semibold text-panel-strong last:border-b-0">
+                                {Math.round(normalizeRiskScore(risk.score))}
+                              </td>
+                              <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm last:border-b-0">
+                                <StatusBadge
+                                  tone={getRiskBadgeTone(risk.risk_level)}
+                                  className="rounded-full px-3 py-1 tracking-[0.14em]"
+                                >
+                                  {risk.risk_level}
+                                </StatusBadge>
+                              </td>
+                              <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm last:border-b-0">
+                                <span
+                                  className={cn(
+                                    "inline-flex size-8 items-center justify-center rounded-full",
+                                    historyTrend === "up"
+                                      ? "bg-[color-mix(in_srgb,var(--danger)_10%,white)] text-[color:var(--danger)]"
+                                      : historyTrend === "down"
+                                        ? "bg-[color-mix(in_srgb,var(--success)_10%,white)] text-[color:var(--success)]"
+                                        : "bg-[color-mix(in_srgb,var(--dashboard-table-line)_40%,transparent)] text-panel-copy",
+                                  )}
+                                >
+                                  {historyTrend === "up" ? (
+                                    <ArrowUpRight className="size-4" aria-hidden="true" />
+                                  ) : historyTrend === "down" ? (
+                                    <ArrowUpRight className="size-4 rotate-90" aria-hidden="true" />
+                                  ) : (
+                                    <Minus className="size-4" aria-hidden="true" />
+                                  )}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-[1.5rem] border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+                  <p className="text-sm font-semibold text-panel-strong">No risk trend available yet</p>
+                  <p className="mt-1 text-sm text-panel-muted">Risk history will appear after multiple model runs.</p>
+                </div>
+              )}
+            </Card>
+          ) : null}
+
+          <section className="grid gap-6 lg:grid-cols-2">
             <Card className="space-y-5 p-6">
               <div className="flex items-start gap-3">
                 <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
                   <MapPinned className="size-5" aria-hidden="true" />
                 </span>
-                <h3 className="pt-1 text-xl font-semibold tracking-[-0.03em] text-panel-strong">Ward context</h3>
+                <div className="space-y-1">
+                  <h3 className="pt-1 text-xl font-semibold tracking-[-0.03em] text-panel-strong">Ward context</h3>
+                  <p className="text-sm text-panel-muted">Operational context for this ward record.</p>
+                </div>
               </div>
 
               {isLoading ? (
-                <div className="space-y-3" aria-hidden="true">
-                  <div className="h-4 w-full rounded-full bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
-                  <div className="h-4 w-full rounded-full bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
-                  <div className="h-4 w-1/2 rounded-full bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
-                </div>
+                <LoadingBlocks count={3} className="h-4 rounded-full bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
               ) : detail ? (
                 <dl className="grid gap-4">
                   {[
                     ["Sub-county", detail.subCounty || "Not recorded"],
                     ["Ward code", detail.wardCode ?? "Not recorded"],
-                    ["Predicted cases", detail.predictedCases],
+                    ["Trigger state", formatTriggerState(detail.triggerState)],
+                    ["Latest record", formatOperationalTime(detail.updatedAt)],
+                    ["Model status", detail.modelRunStatus ?? "Not available from current records"],
+                    ["Predicted cases", String(detail.predictedCases)],
                   ].map(([label, value]) => (
                     <div
                       key={label}
                       className="grid gap-1 border-b border-[var(--dashboard-table-line)] pb-3 last:border-b-0 last:pb-0"
                     >
                       <dt className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">{label}</dt>
-                      <dd className="text-sm font-medium text-panel-strong">{String(value)}</dd>
+                      <dd className="text-sm font-medium text-panel-strong">{value}</dd>
                     </div>
                   ))}
                 </dl>
@@ -452,25 +669,28 @@ export default function WardDetailPage() {
               )}
             </Card>
 
-            <Card className="space-y-5 p-6">
+            <Card className="space-y-4 p-5">
               <div className="flex items-start gap-3">
                 <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
                   <MapPinned className="size-5" aria-hidden="true" />
                 </span>
-                <h3 className="pt-1 text-xl font-semibold tracking-[-0.03em] text-panel-strong">Ward geometry</h3>
+                <div className="space-y-1">
+                  <h3 className="pt-1 text-xl font-semibold tracking-[-0.03em] text-panel-strong">Ward geography</h3>
+                  <p className="text-sm text-panel-muted">Boundary preview only.</p>
+                </div>
               </div>
 
               <p className="text-sm leading-6 text-panel-muted">
-                This panel uses the shared Migori ward map contract. It shows recorded ward geometry only and does not add neighboring-ward analysis on this page yet.
+                This panel uses the shared Migori ward map contract. Neighboring ward analysis is not available yet.
               </p>
 
-              <div className="overflow-hidden rounded-[1.5rem] border border-panel-table-wrap bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--brand)_10%,transparent),transparent_35%),radial-gradient(circle_at_bottom_right,color-mix(in_srgb,var(--warning)_10%,transparent),transparent_32%),linear-gradient(135deg,color-mix(in_srgb,var(--panel)_92%,white),var(--panel))] p-4">
-                <div className="flex h-full min-h-[14rem] flex-col gap-3 rounded-[1.1rem] border border-panel-table-wrap bg-panel/80 p-4">
+              <div className="overflow-hidden rounded-[1.5rem] border border-panel-table-wrap bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--brand)_10%,transparent),transparent_35%),radial-gradient(circle_at_bottom_right,color-mix(in_srgb,var(--warning)_10%,transparent),transparent_32%),linear-gradient(135deg,color-mix(in_srgb,var(--panel)_92%,white),var(--panel))] p-3">
+                <div className="flex h-full min-h-[15rem] flex-col gap-3 rounded-[1.1rem] border border-panel-table-wrap bg-panel/80 p-3">
                   <div className="flex items-center justify-between text-xs uppercase tracking-[0.18em] text-panel-subtle">
                     <span>Map context</span>
                     <span>{detail?.wardMapFeature ? "Backend geometry" : "No ward geometry"}</span>
                   </div>
-                  <div className="min-h-[13rem] rounded-[1rem] border border-panel-table-wrap bg-white/60 p-2 dark:bg-panel/70">
+                  <div className="min-h-[13.75rem] rounded-[1rem] border border-panel-table-wrap bg-white/60 p-2 dark:bg-panel/70">
                     {wardMapFeatures.length ? (
                       <MigoriWardMap
                         features={wardMapFeatures}
@@ -479,7 +699,7 @@ export default function WardDetailPage() {
                       />
                     ) : (
                       <div className="flex h-full items-center justify-center text-center text-sm text-panel-muted">
-                        Ward geometry is not available for this route yet.
+                        Neighboring ward analysis not available yet.
                       </div>
                     )}
                   </div>
@@ -492,46 +712,6 @@ export default function WardDetailPage() {
                 </div>
               </div>
             </Card>
-
-            <Card className="space-y-5 p-6">
-              <div className="flex items-start gap-3">
-                <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
-                  <Clock3 className="size-5" aria-hidden="true" />
-                </span>
-                <h3 className="pt-1 text-xl font-semibold tracking-[-0.03em] text-panel-strong">Freshness and availability</h3>
-              </div>
-
-              <dl className="grid gap-4">
-                {[
-                  ["Freshness", isLoading ? "Loading..." : detail?.freshness.is_stale ? "Stale" : "In range"],
-                  ["Recent runs", isLoading ? "Loading..." : detail ? `${detail.freshness.history_count} recent runs` : "Unavailable"],
-                  [
-                    "Alert linkage",
-                    isLoading
-                      ? "Loading..."
-                      : alertsError
-                        ? "Temporarily unavailable"
-                        : detail
-                          ? `${detail.freshness.alert_count} recent alerts`
-                          : "Unavailable",
-                  ],
-                ].map(([label, value]) => (
-                  <div
-                    key={label}
-                    className="grid gap-1 border-b border-[var(--dashboard-table-line)] pb-3 last:border-b-0 last:pb-0"
-                  >
-                    <dt className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">{label}</dt>
-                    <dd className="text-sm font-medium text-panel-strong">{String(value)}</dd>
-                  </div>
-                ))}
-              </dl>
-
-              <p className="text-sm leading-6 text-panel-muted">
-                {!isLoading && detail?.freshness.is_stale
-                  ? `This ward summary is older than the ${detail.freshness.stale_threshold_minutes}-minute freshness window. Review with caution until the next update lands.`
-                  : "Derived from the linked ward summary, recent history, and linked alert activity."}
-              </p>
-            </Card>
           </section>
         </div>
 
@@ -541,66 +721,67 @@ export default function WardDetailPage() {
               <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
                 <Zap className="size-5" aria-hidden="true" />
               </span>
-              <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Guidance for this risk tier</h3>
+              <div className="space-y-1">
+                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Recommended action</h3>
+                <p className="text-sm text-panel-muted">The next truthful operator step for this ward.</p>
+              </div>
             </div>
 
-            <p className="text-sm leading-6 text-panel-muted">
-              This section is read-first. The only executable action on this page is the supported alert-trigger flow below.
-            </p>
-
             {isLoading ? (
-              <div className="space-y-3" aria-hidden="true">
-                <div className="h-16 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
-                <div className="h-16 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
-                <div className="h-16 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
+              <LoadingBlocks count={3} />
+            ) : detail ? (
+              <div className="space-y-4">
+                <div className="rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_20%,transparent)] px-4 py-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Primary action</p>
+                  <p className="mt-2 text-base font-semibold text-panel-strong">
+                    {recommendedActionState?.primaryAction}
+                  </p>
+                </div>
+
+                <div className="rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Why</p>
+                  <p className="mt-2 text-sm leading-6 text-panel-copy">{recommendedActionState?.why}</p>
+                </div>
+
+                <div className="rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Next steps</p>
+                  <div className="mt-3 space-y-3">
+                    {recommendedActionState?.nextSteps.map((step, index) => (
+                      <div key={step} className="flex items-start gap-3">
+                        <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--brand)_10%,white)] text-xs font-semibold text-brand">
+                          {index + 1}
+                        </span>
+                        <p className="pt-1 text-sm font-medium text-panel-strong">{step}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {detail.workflow?.expected_operational_effect ? (
+                  <div className="rounded-[1.5rem] border border-[color-mix(in_srgb,var(--success)_18%,var(--dashboard-table-line))] bg-[color-mix(in_srgb,var(--success)_8%,var(--panel))] px-4 py-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Expected effect</p>
+                    <p className="mt-2 text-sm leading-6 text-panel-copy">{detail.workflow.expected_operational_effect}</p>
+                  </div>
+                ) : null}
+
+                {recommendations.length > 0 ? (
+                  <div className="space-y-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Supporting checks</p>
+                    {recommendations.map((recommendation) => (
+                      <div
+                        key={recommendation.text}
+                        className="flex items-start gap-3 rounded-[1.25rem] border border-[var(--dashboard-table-line)] px-4 py-3"
+                      >
+                        <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-brand" aria-hidden="true" />
+                        <p className="text-sm text-panel-copy">{recommendation.text}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             ) : (
-              <div className="space-y-3">
-                {recommendations.map((recommendation, index) => (
-                  <article
-                    key={recommendation.text}
-                    className="flex gap-3 rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_28%,transparent)] px-4 py-4"
-                  >
-                    <div className="inline-flex size-9 shrink-0 items-center justify-center rounded-full bg-brand text-sm font-semibold text-white">
-                      {String(index + 1).padStart(2, "0")}
-                    </div>
-                    <div className="space-y-1">
-                      <strong className="block text-sm font-semibold text-panel-strong">{recommendation.text}</strong>
-                      <span className="text-xs font-semibold uppercase tracking-[0.14em] text-panel-muted">
-                        {index === 0 && canTriggerAlerts(currentUser.role)
-                          ? "Trigger flow available"
-                          : "Read only guidance"}
-                      </span>
-                    </div>
-                  </article>
-                ))}
-              </div>
+              <p className="text-sm text-panel-muted">No decision summary is available for this ward.</p>
             )}
-
-            {detail ? (
-              canTriggerAlerts(currentUser.role) ? (
-                <TriggerAlertPanel
-                  buttonLabel="Open Trigger Flow"
-                  closeLabel="Close trigger flow"
-                  buttonClassName="inline-flex h-12 w-full items-center justify-center gap-2 rounded-pill bg-[var(--login-submit-start)] px-5 text-base font-semibold text-white shadow-[var(--login-submit-shadow)] transition hover:bg-[var(--login-submit-end)] hover:shadow-[var(--login-submit-shadow-hover)]"
-                  fixedWard={{
-                    id: detail.wardId,
-                    name: detail.wardName,
-                    county: detail.county,
-                    subCounty: detail.subCounty,
-                    riskLevel: detail.riskLevel,
-                    riskScore: detail.riskScore,
-                    predictedCases: detail.predictedCases,
-                    updatedAt: detail.updatedAt,
-                  }}
-                />
-              ) : (
-                <div className="rounded-2xl border border-[color-mix(in_srgb,var(--warning)_20%,white)] bg-[color-mix(in_srgb,var(--warning)_10%,white)] px-4 py-3 text-sm font-medium text-[color:var(--warning)]">
-                  <AlertTriangle className="mr-2 inline-flex size-4" aria-hidden="true" />
-                  Guidance is visible, but this role cannot trigger alerts from this page.
-                </div>
-              )
-            ) : null}
           </Card>
 
           <Card className="space-y-5 p-6">
@@ -608,72 +789,129 @@ export default function WardDetailPage() {
               <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
                 <Bell className="size-5" aria-hidden="true" />
               </span>
-              <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Recent alerts</h3>
+              <div className="space-y-1">
+                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Recent alerts</h3>
+                <p className="text-sm text-panel-muted">Recent ward-linked alert activity with interpretation context.</p>
+              </div>
             </div>
 
-            {isAlertsLoading ? (
-              <div className="space-y-3" aria-hidden="true">
-                {Array.from({ length: 3 }, (_, index) => (
-                  <div
-                    key={`alert-skeleton-${index}`}
-                    className="h-16 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]"
-                  />
-                ))}
-              </div>
-            ) : alertsError ? (
-              <div className="rounded-2xl border border-[color-mix(in_srgb,var(--warning)_20%,white)] bg-[color-mix(in_srgb,var(--warning)_10%,white)] px-4 py-3 text-sm font-medium text-[color:var(--warning)]">
-                <AlertTriangle className="mr-2 inline-flex size-4" aria-hidden="true" />
-                {alertsError}
-              </div>
+            {isLoading ? (
+              <LoadingBlocks count={3} />
             ) : detail && detail.relatedAlerts.length > 0 ? (
               <>
                 <div className="space-y-3">
-                  {detail.relatedAlerts.slice(0, 4).map((alert) => (
-                    <article
-                      key={alert.id}
-                      className="flex items-start gap-3 rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_28%,transparent)] px-4 py-4"
-                    >
-                      <div className="inline-flex size-10 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
-                        <Bell className="size-4" aria-hidden="true" />
+                {detail.relatedAlerts.slice(0, 4).map((alert) => (
+                  <article
+                    key={alert.id}
+                    className="rounded-[1.35rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_28%,transparent)] px-4 py-4"
+                  >
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <strong className="text-sm font-semibold text-panel-strong">
+                          {`${detail.riskLevel === "UNKNOWN" ? "Ward-linked" : formatRiskLevel(detail.riskLevel)} alert`} · {formatRelativeMinutes(alert.created_at)}
+                        </strong>
+                        <StatusBadge tone={getAlertTone(alert)} className="rounded-full px-3 py-1 tracking-[0.14em]">
+                          {alert.status}
+                        </StatusBadge>
                       </div>
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <strong className="text-sm font-semibold text-panel-strong">
-                            {getAlertHeadline(alert)}
-                          </strong>
-                          <StatusBadge
-                            tone={
-                              alert.status === "DELIVERED"
-                                ? "success"
-                                : alert.status === "FAILED"
-                                  ? "danger"
-                                  : "warning"
-                            }
-                            className="rounded-full px-3 py-1 tracking-[0.14em]"
-                          >
-                            {alert.status}
-                          </StatusBadge>
+                      <p className="text-sm text-panel-copy">Delivered ({toTitleCase(alert.channel)})</p>
+                      <p className="text-sm text-panel-copy">
+                        Predicted: {typeof detail.predictedCases === "number" ? detail.predictedCases : "Unavailable"} cases
+                      </p>
+                      <details className="text-sm text-panel-muted">
+                        <summary className="cursor-pointer list-none font-medium text-panel-copy">View alert details</summary>
+                        <div className="mt-2 space-y-1">
+                          <p>
+                            Risk score: {typeof alert.risk_score === "number" ? `${Math.round(normalizeRiskScore(alert.risk_score))}/100` : "Unavailable"}
+                          </p>
+                          <p>Alert message: {getAlertHeadline(alert)}</p>
                         </div>
-                        <p className="text-sm text-panel-muted">
-                          Via {toTitleCase(alert.channel)} • {toTitleCase(alert.status)}
-                        </p>
-                      </div>
-                      <div className="text-xs font-medium text-panel-muted">
-                        {formatRelativeMinutes(alert.created_at)}
-                      </div>
-                    </article>
-                  ))}
+                      </details>
+                    </div>
+                  </article>
+                ))}
                 </div>
                 <Link
                   href="/alerts"
                   className="inline-flex items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--login-link-hover)]"
                 >
-                  View Alert History
+                  View full alert history
                   <ChevronRight className="size-4" aria-hidden="true" />
                 </Link>
               </>
             ) : (
-              <p className="text-sm text-panel-muted">No alert records are currently visible for this ward.</p>
+              <div className="rounded-[1.5rem] border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+                <p className="text-sm font-semibold text-panel-strong">No recent alerts for this ward</p>
+                <p className="mt-1 text-sm text-panel-muted">
+                  {detail?.primaryCtaKind === "OPEN_TRIGGER_FLOW" || detail?.primaryCtaKind === "REVIEW_TRIGGER"
+                    ? canTriggerAlerts(currentUser.role)
+                      ? detail.primaryCtaKind === "REVIEW_TRIGGER"
+                        ? "Review trigger if guided follow-up is still needed."
+                        : "Open trigger flow if a guided response is still needed."
+                      : "Review alert history or coordinate with an authorized operator if a guided response is still needed."
+                    : "Review full alert history if you need older ward-linked alert activity."}
+                </p>
+              </div>
+            )}
+          </Card>
+
+          <Card className={cn("space-y-5 p-6", hasLowSignalState && "xl:sticky xl:top-24")}>
+            <div className="flex items-center gap-3">
+              <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+                <Clock3 className="size-5" aria-hidden="true" />
+              </span>
+              <div className="space-y-1">
+                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Data status</h3>
+                <p className="text-sm text-panel-muted">Compact freshness status with optional detail.</p>
+              </div>
+            </div>
+
+            {isLoading ? (
+              <LoadingBlocks count={3} className="h-4 rounded-full bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
+            ) : detail ? (
+              <details className="group rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+                <summary className="flex cursor-pointer list-none items-start justify-between gap-4">
+                  <div className="space-y-1">
+                    <p className="text-sm font-semibold text-panel-strong">
+                      Data status: {detail.freshness.is_stale ? "Stale" : "In range"} ({formatRelativeMinutes(detail.updatedAt)})
+                    </p>
+                    <p className="text-sm text-panel-muted">
+                      {detail.freshness.is_stale
+                        ? "Review with caution until a fresher ward update lands."
+                        : "Current ward data is inside the freshness window."}
+                    </p>
+                  </div>
+                  <span className="pt-0.5 text-xs font-semibold uppercase tracking-[0.16em] text-brand transition group-open:text-panel-strong">
+                    View details
+                  </span>
+                </summary>
+                <div className="mt-4 space-y-4 border-t border-[var(--dashboard-table-line)] pt-4">
+                  <dl className="grid gap-4">
+                    {[
+                      ["Freshness", detail.freshness.is_stale ? "Stale" : "In range"],
+                      ["Recent runs", `${detail.freshness.history_count} recent runs`],
+                      ["Alert linkage", `${detail.freshness.alert_count} recent alerts`],
+                      ["Freshness window", `${detail.freshness.stale_threshold_minutes} minutes`],
+                    ].map(([label, value]) => (
+                      <div
+                        key={label}
+                        className="grid gap-1 border-b border-[var(--dashboard-table-line)] pb-3 last:border-b-0 last:pb-0"
+                      >
+                        <dt className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">{label}</dt>
+                        <dd className="text-sm font-medium text-panel-strong">{value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+
+                  <p className="text-sm leading-6 text-panel-muted">
+                    {detail.freshness.is_stale
+                      ? `This ward summary is older than the ${detail.freshness.stale_threshold_minutes}-minute freshness window. Review with caution until the next update lands.`
+                      : "Current ward data is inside the freshness window and can be used as the current operating view."}
+                  </p>
+                </div>
+              </details>
+            ) : (
+              <p className="text-sm text-panel-muted">No freshness diagnostics are available for this ward.</p>
             )}
           </Card>
         </aside>

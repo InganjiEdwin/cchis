@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { useAuth } from "@/components/auth-provider";
@@ -28,8 +29,10 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { cn } from "@/lib/cn";
 import { type AlertRecord } from "@/lib/dashboard";
 import { describeFreshness, formatRelativeTimestamp, getLatestTimestamp } from "@/lib/freshness";
-import { groupByWardId } from "@/lib/ward-identity";
 import { useAlertsQuery } from "@/queries/use-alerts-query";
+import { useCreateChvCoverageRequestFromAlertMutation } from "@/queries/use-create-chv-coverage-request-from-alert-mutation";
+import { useCreateChvCoverageRequestMutation } from "@/queries/use-create-chv-coverage-request-mutation";
+import { useLiveChvCoverageRequestForWardQuery } from "@/queries/use-live-chv-coverage-request-for-ward-query";
 
 type AlertStatusFilter = "ALL" | "SENT" | "PENDING" | "FAILED";
 
@@ -50,6 +53,10 @@ const STATUS_FILTER_OPTIONS: Array<{ value: AlertStatusFilter; label: string }> 
 ];
 
 const ROWS_PER_PAGE = 5;
+
+function isAlertActionable(alert: AlertRecord | DecoratedAlert) {
+  return alert.status === "FAILED" || alert.status === "RETRY_PENDING";
+}
 
 function getStatusFilter(status: AlertRecord["status"]): Exclude<AlertStatusFilter, "ALL"> {
   if (status === "DELIVERED") {
@@ -164,6 +171,36 @@ function formatAlertPublicId(alertId: number) {
   return `AL-${String(alertId).padStart(4, "0")}`;
 }
 
+function getAlertPriorityRank(alert: AlertRecord | DecoratedAlert) {
+  if (alert.status === "FAILED") return 4;
+  if (alert.status === "RETRY_PENDING") return 3;
+  if (alert.status === "QUEUED") return 2;
+  return 1;
+}
+
+function getAttentionReason(alert: DecoratedAlert) {
+  if (alert.status === "FAILED") {
+    return "Delivery failure requires operator review before the alert is treated as completed.";
+  }
+  if (alert.status === "RETRY_PENDING") {
+    return "Retry pending in the backend still needs review to confirm whether delivery follow-up is required.";
+  }
+  if (alert.status === "QUEUED") {
+    return "Alert is still queued in the visible delivery state feed.";
+  }
+  return "No immediate delivery concern is visible for this alert record.";
+}
+
+function getRecommendedAlertAction(alert: DecoratedAlert) {
+  return isAlertActionable(alert) ? "Open review" : "Open alert record";
+}
+
+function getOperatorActionLabel(alert: DecoratedAlert) {
+  if (alert.status === "FAILED") return "Needs escalation";
+  if (alert.status === "RETRY_PENDING") return "Needs review";
+  return "No action";
+}
+
 function buildPaginationItems(currentPage: number, totalPages: number): Array<number | "..."> {
   if (totalPages <= 5) {
     return Array.from({ length: totalPages }, (_, index) => index + 1);
@@ -213,12 +250,17 @@ function downloadAlertsCsv(alerts: DecoratedAlert[]) {
 }
 
 export default function AlertsPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { currentUser } = useAuth();
   const [search, setSearch] = useState("");
   const [selectedStatus, setSelectedStatus] = useState<AlertStatusFilter>("ALL");
   const [page, setPage] = useState(1);
   const [selectedAlertId, setSelectedAlertId] = useState<number | null>(null);
+  const [coverageRequestFeedback, setCoverageRequestFeedback] = useState<string | null>(null);
   const alertsQuery = useAlertsQuery({ enabled: Boolean(currentUser) });
+  const createFromAlertMutation = useCreateChvCoverageRequestFromAlertMutation();
+  const createCoverageRequestMutation = useCreateChvCoverageRequestMutation();
   const alerts = alertsQuery.data ?? [];
   const isLoading = alertsQuery.isPending;
   const isRefreshing = alertsQuery.isFetching;
@@ -241,11 +283,42 @@ export default function AlertsPage() {
       }),
     [alerts],
   );
+  const wardFilterFromQuery = useMemo(() => {
+    const rawWardId = searchParams.get("ward_id");
+    if (!rawWardId) {
+      return null;
+    }
+
+    const parsedWardId = Number(rawWardId);
+    return Number.isFinite(parsedWardId) ? parsedWardId : null;
+  }, [searchParams]);
+
+  const prioritizedAlerts = useMemo(
+    () =>
+      [...decoratedAlerts].sort((left, right) => {
+        const priorityDiff = getAlertPriorityRank(right) - getAlertPriorityRank(left);
+        if (priorityDiff !== 0) {
+          return priorityDiff;
+        }
+
+        const riskDiff = (right.risk_score ?? 0) - (left.risk_score ?? 0);
+        if (riskDiff !== 0) {
+          return riskDiff;
+        }
+
+        return new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
+      }),
+    [decoratedAlerts],
+  );
 
   const filteredAlerts = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
 
-    return decoratedAlerts.filter((alert) => {
+    return prioritizedAlerts.filter((alert) => {
+      if (wardFilterFromQuery !== null && alert.ward !== wardFilterFromQuery) {
+        return false;
+      }
+
       if (selectedStatus !== "ALL" && alert.statusFilter !== selectedStatus) {
         return false;
       }
@@ -262,20 +335,22 @@ export default function AlertsPage() {
         alert.recipient.toLowerCase().includes(normalizedSearch)
       );
     });
-  }, [decoratedAlerts, search, selectedStatus]);
+  }, [prioritizedAlerts, search, selectedStatus, wardFilterFromQuery]);
 
   useEffect(() => {
     setPage(1);
   }, [search, selectedStatus]);
 
-  const alertsLast24Hours = useMemo(
-    () =>
-      decoratedAlerts.filter((alert) => Date.now() - new Date(alert.created_at).getTime() <= 24 * 60 * 60 * 1000)
-        .length,
-    [decoratedAlerts],
+  const requiresAttentionAlerts = useMemo(
+    () => prioritizedAlerts.filter((alert) => isAlertActionable(alert)),
+    [prioritizedAlerts],
   );
-  const activeAlertsCount = useMemo(
-    () => decoratedAlerts.filter((alert) => alert.statusFilter === "PENDING").length,
+  const requiresAttentionCount = useMemo(
+    () => requiresAttentionAlerts.length,
+    [requiresAttentionAlerts],
+  );
+  const retryPendingCount = useMemo(
+    () => decoratedAlerts.filter((alert) => alert.status === "RETRY_PENDING").length,
     [decoratedAlerts],
   );
   const failedCount = useMemo(
@@ -291,77 +366,30 @@ export default function AlertsPage() {
   const visibleAlerts = filteredAlerts.slice((safePage - 1) * ROWS_PER_PAGE, safePage * ROWS_PER_PAGE);
   const paginationItems = buildPaginationItems(safePage, totalPages);
 
-  const mostCriticalAlert = useMemo(() => {
-    const statusRank: Record<DecoratedAlert["statusFilter"], number> = {
-      FAILED: 3,
-      PENDING: 2,
-      SENT: 1,
-    };
-
-    return [...decoratedAlerts].sort((left, right) => {
-      const statusDiff = statusRank[right.statusFilter] - statusRank[left.statusFilter];
-      if (statusDiff !== 0) {
-        return statusDiff;
-      }
-
-      const riskDiff = (right.risk_score ?? 0) - (left.risk_score ?? 0);
-      if (riskDiff !== 0) {
-        return riskDiff;
-      }
-
-      return new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
-    })[0];
-  }, [decoratedAlerts]);
-
-  const activeZones = useMemo(() => {
-    return [...groupByWardId(decoratedAlerts).values()]
-      .map((group) => ({
-        wardId: group.wardId,
-        wardName: group.wardName,
-        count: group.items.length,
-        highestRisk: Math.max(...group.items.map((alert) => alert.risk_score ?? 0)),
-        latestAt: group.items
-          .map((alert) => alert.created_at)
-          .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0],
-      }))
-      .sort((left, right) => {
-        if (right.highestRisk !== left.highestRisk) {
-          return right.highestRisk - left.highestRisk;
-        }
-        if (right.count !== left.count) {
-          return right.count - left.count;
-        }
-        return new Date(right.latestAt).getTime() - new Date(left.latestAt).getTime();
-      })
-      .slice(0, 4);
-  }, [decoratedAlerts]);
+  const mostCriticalAlert = prioritizedAlerts[0] ?? null;
 
   const selectedAlert = useMemo(
     () => decoratedAlerts.find((alert) => alert.id === selectedAlertId) ?? null,
     [decoratedAlerts, selectedAlertId],
   );
+  const canRequestCoverage = currentUser?.role === "ADMIN" || currentUser?.role === "SUPERVISOR";
+  const isCoverageRequestPending = createFromAlertMutation.isPending || createCoverageRequestMutation.isPending;
+  const liveCoverageRequestQuery = useLiveChvCoverageRequestForWardQuery({
+    wardId: selectedAlert?.ward ?? null,
+    enabled: Boolean(currentUser) && Boolean(selectedAlert?.ward),
+  });
+  const liveCoverageRequest = liveCoverageRequestQuery.data ?? null;
+  const coverageRequestActionLabel = liveCoverageRequest
+    ? "View CHV coverage request"
+    : "Request CHV coverage";
+  const coverageRequestPendingLabel = liveCoverageRequest
+    ? "Opening CHV coverage request..."
+    : "Preparing CHV coverage request...";
 
   const freshnessAgeMinutes = latestAlertTimestamp
     ? Math.max(0, Math.round((Date.now() - new Date(latestAlertTimestamp).getTime()) / 60000))
     : Number.POSITIVE_INFINITY;
   const freshnessTone = freshnessAgeMinutes >= 6 * 60 ? "critical" : freshnessAgeMinutes >= 20 ? "warning" : "healthy";
-  const lastFailure = useMemo(
-    () =>
-      decoratedAlerts
-        .filter((alert) => alert.statusFilter === "FAILED")
-        .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime())[0] ?? null,
-    [decoratedAlerts],
-  );
-  const previousDayAlerts = useMemo(
-    () =>
-      decoratedAlerts.filter((alert) => {
-        const createdAt = new Date(alert.created_at).getTime();
-        const age = Date.now() - createdAt;
-        return age > 24 * 60 * 60 * 1000 && age <= 48 * 60 * 60 * 1000;
-      }).length,
-    [decoratedAlerts],
-  );
-  const sentTrend = alertsLast24Hours - previousDayAlerts;
 
   if (!currentUser) {
     return null;
@@ -384,6 +412,17 @@ export default function AlertsPage() {
           {error}
         </StatusBanner>
       ) : null}
+      {createFromAlertMutation.error instanceof Error ? (
+        <StatusBanner tone="danger" icon={<AlertTriangle aria-hidden="true" />}>
+          {createFromAlertMutation.error.message}
+        </StatusBanner>
+      ) : null}
+      {createCoverageRequestMutation.error instanceof Error ? (
+        <StatusBanner tone="danger" icon={<AlertTriangle aria-hidden="true" />}>
+          {createCoverageRequestMutation.error.message}
+        </StatusBanner>
+      ) : null}
+      {coverageRequestFeedback ? <StatusBanner tone="success">{coverageRequestFeedback}</StatusBanner> : null}
 
       {!isLoading && !error && decoratedAlerts.length === 0 ? (
         <StatusBanner tone="warning" icon={<AlertTriangle aria-hidden="true" />}>
@@ -447,20 +486,17 @@ export default function AlertsPage() {
 
       <section className="space-y-5">
         <PageSectionHeader
-          title="Alerts Monitoring"
-          description="Track recorded alert status, delivery state, and visible ward alert counts across Migori County."
+          title="Alerts Coordination"
+          description="Review alert records that need attention first, then scan the wider visible delivery queue."
         />
 
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
-          <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-3">
             <Card className="rounded-3xl bg-panel px-5 py-5">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">
-                    Alert records (last 24 hours)
-                  </p>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Requires attention</p>
                   <div className="mt-3 text-4xl font-semibold leading-none text-panel-strong">
-                    {isLoading ? "..." : alertsLast24Hours.toLocaleString()}
+                    {isLoading ? "..." : requiresAttentionCount.toLocaleString()}
                   </div>
                 </div>
                 <span className="inline-flex size-10 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--brand)_10%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]">
@@ -468,18 +504,16 @@ export default function AlertsPage() {
                 </span>
               </div>
               <p className="mt-4 text-sm text-panel-muted">
-                {isLoading
-                  ? "Checking recent alert records"
-                  : `${sentTrend >= 0 ? "+" : ""}${sentTrend} vs previous 24h`}
+                {isLoading ? "Checking attention queue" : "Retry-pending and failed alerts that still need review."}
               </p>
             </Card>
 
             <Card className="rounded-3xl border-[color:var(--warning)]/20 bg-panel px-5 py-5">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Active alert records</p>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Delivered successfully</p>
                   <div className="mt-3 text-4xl font-semibold leading-none text-panel-strong">
-                    {isLoading ? "..." : activeAlertsCount}
+                    {isLoading ? "..." : decoratedAlerts.filter((alert) => alert.status === "DELIVERED").length}
                   </div>
                 </div>
                 <span className="inline-flex size-10 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--warning)_18%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_18%,transparent)]">
@@ -487,7 +521,7 @@ export default function AlertsPage() {
                 </span>
               </div>
               <p className="mt-4 text-sm text-panel-muted">
-                Records still queued or retrying in the visible delivery state feed.
+                Alert records already delivered in the visible scope.
               </p>
             </Card>
 
@@ -520,315 +554,319 @@ export default function AlertsPage() {
                 </span>
               </div>
               <p className="mt-4 text-sm text-panel-muted">
-                {lastFailure ? `Last failure ${formatRelativeShort(lastFailure.created_at)}` : "No visible delivery failures in scope."}
+                {failedCount > 0
+                  ? "Failed alerts remain in the queue and should be reviewed first."
+                  : "No visible delivery failures in scope."}
               </p>
             </Card>
-          </div>
-
-          <Card className="rounded-3xl bg-panel px-5 py-5">
-            <h2 className="text-2xl font-semibold text-panel-strong">Alert Record In Focus</h2>
-            <p className="mt-2 text-sm text-panel-muted">
-              Derived summary of the visible alert record that sorts highest by failure state, risk score, and recency.
-            </p>
-            <div className="mt-5 rounded-2xl bg-[color-mix(in_srgb,var(--brand)_8%,var(--panel))] p-4">
-              <strong className="block text-base text-panel-strong">
-                {mostCriticalAlert
-                  ? `${formatAlertPublicId(mostCriticalAlert.id)} - ${mostCriticalAlert.ward_name}`
-                  : "No alert record stands out in this filter."}
-              </strong>
-              <p className="mt-2 text-sm text-panel-muted">
-                {mostCriticalAlert
-                  ? `${mostCriticalAlert.statusLabel} via ${mostCriticalAlert.channelLabel.toLowerCase()} with recorded risk score ${mostCriticalAlert.risk_score !== null ? Math.round(mostCriticalAlert.risk_score) : "unavailable"}, updated ${mostCriticalAlert.relativeLabel}.`
-                  : "No visible alert record stands out above the rest of the filtered scope."}
-              </p>
-            </div>
-            {mostCriticalAlert ? (
-              <Link
-                href={`/alerts/${mostCriticalAlert.id}`}
-                className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--dashboard-icon-button-ink-hover)]"
-              >
-                Open record page
-                <ChevronRight className="size-4" aria-hidden="true" />
-              </Link>
-            ) : null}
-          </Card>
         </div>
       </section>
 
-      <Card className="rounded-[2rem] bg-panel px-5 py-5 sm:px-6">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-          <div className="flex min-w-0 flex-1 flex-col gap-4 lg:flex-row lg:flex-wrap lg:items-end">
-            <InputShell
-              className="min-w-0 flex-[1.4]"
-              icon={<Search className="size-4" aria-hidden="true" />}
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search alert ID, ward, recipient, or channel..."
-            />
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.75fr)_minmax(18rem,0.85fr)] xl:items-start">
+        <div className="space-y-4">
+          <Card className="rounded-[2rem] bg-panel px-5 py-5 sm:px-6">
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+              <div className="flex min-w-0 flex-1 flex-col gap-4 lg:flex-row lg:flex-wrap lg:items-end">
+                <InputShell
+                  className="min-w-0 flex-[1.4]"
+                  icon={<Search className="size-4" aria-hidden="true" />}
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search alert ID, ward, recipient, or channel..."
+                />
 
-            <div className="flex flex-wrap gap-2" role="tablist" aria-label="Alert status filters">
-              {STATUS_FILTER_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={cn(
-                    "inline-flex h-11 items-center justify-center rounded-pill border px-4 text-sm font-semibold transition",
-                    option.value === selectedStatus
-                      ? "border-brand bg-brand text-white shadow-[var(--login-submit-shadow)]"
-                      : "border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] text-panel-copy hover:border-[var(--dashboard-icon-button-border)] hover:text-panel-strong",
-                  )}
-                  onClick={() => setSelectedStatus(option.value)}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <Button
-            variant="secondary"
-            className="h-11 self-start bg-[var(--dashboard-icon-button-surface)] px-4 xl:self-end"
-            onClick={() => downloadAlertsCsv(filteredAlerts)}
-            disabled={!filteredAlerts.length}
-          >
-            <Download className="size-4" aria-hidden="true" />
-            <span>Export CSV</span>
-          </Button>
-        </div>
-
-        <div className="mt-6 overflow-hidden rounded-[1.5rem] border border-panel-table-wrap">
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-panel-table-wrap text-sm">
-              <thead className="bg-[color-mix(in_srgb,var(--dashboard-table-line)_30%,transparent)]">
-                <tr className="text-left">
-                  {["Alert record", "Administrative ward", "Channel", "Status", "Sent time", "Action"].map((label) => (
-                    <th
-                      key={label}
-                      className="px-5 py-4 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle"
+                <div className="flex flex-wrap gap-2" role="tablist" aria-label="Alert status filters">
+                  {STATUS_FILTER_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={cn(
+                        "inline-flex h-11 items-center justify-center rounded-pill border px-4 text-sm font-semibold transition",
+                        option.value === selectedStatus
+                          ? "border-brand bg-brand text-white shadow-[var(--login-submit-shadow)]"
+                          : "border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] text-panel-copy hover:border-[var(--dashboard-icon-button-border)] hover:text-panel-strong",
+                      )}
+                      onClick={() => setSelectedStatus(option.value)}
                     >
-                      {label}
-                    </th>
+                      {option.label}
+                    </button>
                   ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-panel-table-wrap bg-panel">
-                {isLoading ? (
-                  Array.from({ length: ROWS_PER_PAGE }).map((_, index) => (
-                    <tr key={`alerts-skeleton-${index}`}>
-                      <td colSpan={6} className="px-5 py-5">
-                        <div className="h-6 w-full animate-pulse rounded-full bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
-                      </td>
-                    </tr>
-                  ))
-                ) : visibleAlerts.length > 0 ? (
-                  visibleAlerts.map((alert) => {
-                    const ChannelIcon = getChannelIcon(alert.channel);
+                </div>
+              </div>
 
-                    return (
-                      <tr
-                        key={alert.id}
-                        className="cursor-pointer transition hover:bg-[color-mix(in_srgb,var(--dashboard-nav-hover)_40%,transparent)] focus-within:bg-[color-mix(in_srgb,var(--dashboard-nav-hover)_46%,transparent)]"
-                        onClick={() => setSelectedAlertId(alert.id)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" || event.key === " ") {
-                            event.preventDefault();
-                            setSelectedAlertId(alert.id);
-                          }
-                        }}
-                        tabIndex={0}
-                      >
-                        <td className="px-5 py-4 align-top">
-                          <div className="min-w-0 space-y-2">
-                            <div className="font-semibold text-panel-strong">{formatAlertPublicId(alert.id)}</div>
-                            <p className="line-clamp-2 text-sm text-panel-copy">{alert.message}</p>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <StatusBadge tone="info" className="tracking-[0.12em]">
-                                Backend record
-                              </StatusBadge>
-                              <span className="text-xs text-panel-muted">
-                                {alert.risk_score !== null
-                                  ? `Recorded risk score ${Math.round(alert.risk_score)}/100`
-                                  : "Risk score unavailable"}
-                              </span>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-5 py-4 align-top font-semibold text-panel-strong">{alert.ward_name}</td>
-                        <td className="px-5 py-4 align-top">
-                          <div className="flex items-center gap-2 text-panel-copy">
-                            <ChannelIcon className="size-4 text-panel-muted" aria-hidden="true" />
-                            <span>{alert.channelLabel}</span>
-                          </div>
-                        </td>
-                        <td className="px-5 py-4 align-top">
-                          <div className="space-y-2">
-                            <StatusBadge
-                              tone={
-                                alert.statusFilter === "SENT"
-                                  ? "success"
-                                  : alert.statusFilter === "FAILED"
-                                    ? "danger"
-                                    : "warning"
-                              }
-                              className="tracking-[0.12em]"
-                            >
-                              {alert.statusLabel}
-                            </StatusBadge>
-                            {alert.status === "RETRY_PENDING" ? (
-                              <p className="text-xs font-medium text-[color:var(--warning)]">Retry pending in backend</p>
-                            ) : null}
-                          </div>
-                        </td>
-                        <td className="px-5 py-4 align-top text-panel-copy">{alert.timeLabel}</td>
-                        <td className="px-5 py-4 align-top">
-                          <Button
-                            variant="ghost"
-                            className="h-9 rounded-pill px-3 text-sm"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setSelectedAlertId(alert.id);
-                            }}
+              <Button
+                variant="secondary"
+                className="h-11 self-start bg-[var(--dashboard-icon-button-surface)] px-4 xl:self-end"
+                onClick={() => downloadAlertsCsv(filteredAlerts)}
+                disabled={!filteredAlerts.length}
+              >
+                <Download className="size-4" aria-hidden="true" />
+                <span>Export CSV</span>
+              </Button>
+            </div>
+
+            <div className="mt-4 overflow-hidden rounded-[1.5rem] border border-panel-table-wrap">
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-panel-table-wrap text-sm">
+                  <thead className="bg-[color-mix(in_srgb,var(--dashboard-table-line)_30%,transparent)]">
+                    <tr className="text-left">
+                      {["Alert record", "Administrative ward", "Channel", "Status", "Sent time", "Action"].map(
+                        (label) => (
+                          <th
+                            key={label}
+                            className="px-5 py-4 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle"
                           >
-                            {alert.statusFilter === "FAILED" || alert.status === "RETRY_PENDING" ? "Open review" : "Open"}
-                          </Button>
+                            {label}
+                          </th>
+                        ),
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-panel-table-wrap bg-panel">
+                    {isLoading ? (
+                      Array.from({ length: ROWS_PER_PAGE }).map((_, index) => (
+                        <tr key={`alerts-skeleton-${index}`}>
+                          <td colSpan={6} className="px-5 py-4">
+                            <div className="h-6 w-full animate-pulse rounded-full bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
+                          </td>
+                        </tr>
+                      ))
+                    ) : visibleAlerts.length > 0 ? (
+                      visibleAlerts.map((alert) => {
+                        const ChannelIcon = getChannelIcon(alert.channel);
+
+                        return (
+                          <tr
+                            key={alert.id}
+                            className="cursor-pointer transition hover:bg-[color-mix(in_srgb,var(--dashboard-nav-hover)_40%,transparent)] focus-within:bg-[color-mix(in_srgb,var(--dashboard-nav-hover)_46%,transparent)]"
+                            onClick={() => setSelectedAlertId(alert.id)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                setSelectedAlertId(alert.id);
+                              }
+                            }}
+                            tabIndex={0}
+                          >
+                            <td className="px-5 py-3.5 align-top">
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  {isAlertActionable(alert) ? (
+                                    <span
+                                      className={cn(
+                                        "inline-flex size-2 rounded-full",
+                                        alert.status === "FAILED"
+                                          ? "bg-[color:var(--danger)]"
+                                          : "bg-[color:var(--warning)]",
+                                      )}
+                                      aria-hidden="true"
+                                    />
+                                  ) : null}
+                                  <div className="font-semibold text-panel-strong">
+                                    {formatAlertPublicId(alert.id)}
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-5 py-3.5 align-top font-semibold text-panel-strong">
+                              {alert.ward_name}
+                            </td>
+                            <td className="px-5 py-3.5 align-top">
+                              <div className="flex items-center gap-2 text-panel-copy">
+                                <ChannelIcon className="size-4 text-panel-muted" aria-hidden="true" />
+                                <span>{alert.channelLabel}</span>
+                              </div>
+                            </td>
+                            <td className="px-5 py-3.5 align-top">
+                              <div className="space-y-1.5">
+                                <StatusBadge
+                                  tone={
+                                    alert.statusFilter === "SENT"
+                                      ? "success"
+                                      : alert.statusFilter === "FAILED"
+                                        ? "danger"
+                                        : "warning"
+                                  }
+                                  className="tracking-[0.12em]"
+                                >
+                                  {alert.statusLabel}
+                                </StatusBadge>
+                                {alert.status === "RETRY_PENDING" ? (
+                                  <p className="text-xs font-medium text-[color:var(--warning)]">Needs review</p>
+                                ) : alert.status === "FAILED" ? (
+                                  <p className="text-xs font-medium text-[color:var(--danger)]">Needs escalation</p>
+                                ) : null}
+                              </div>
+                            </td>
+                            <td className="px-5 py-3.5 align-top text-panel-copy">{alert.timeLabel}</td>
+                            <td className="px-5 py-3.5 align-top">
+                              <Button
+                                variant="ghost"
+                                className="h-9 rounded-pill px-3 text-sm"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setSelectedAlertId(alert.id);
+                                }}
+                              >
+                                {alert.statusFilter === "FAILED" || alert.status === "RETRY_PENDING"
+                                  ? "Open review"
+                                  : "Open"}
+                              </Button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    ) : (
+                      <tr>
+                        <td colSpan={6} className="px-5 py-10 text-center text-sm text-panel-muted">
+                          No alerts match the current search and filter combination.
                         </td>
                       </tr>
-                    );
-                  })
-                ) : (
-                  <tr>
-                    <td colSpan={6} className="px-5 py-10 text-center text-sm text-panel-muted">
-                      No alerts match the current search and filter combination.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-          <div className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex flex-wrap items-center gap-3 text-sm text-panel-muted">
-              <span>
-                {Math.min(filteredAlerts.length, safePage * ROWS_PER_PAGE)} of {filteredAlerts.length} alerts
-              </span>
-              <StatusBadge tone="warning" className="tracking-[0.12em]">
-                Read-path only
-              </StatusBadge>
-            </div>
-
-          {totalPages > 1 ? (
-            <div className="flex items-center gap-2">
-              <Button
-                variant="secondary"
-                size="icon"
-                className="size-10"
-                onClick={() => setPage((value) => Math.max(1, value - 1))}
-                disabled={safePage === 1}
-              >
-                <ChevronLeft className="size-4" aria-hidden="true" />
-              </Button>
-              {paginationItems.map((item, index) =>
-                item === "..." ? (
-                  <span key={`ellipsis-${index}`} className="px-2 text-sm text-panel-subtle">
-                    ...
-                  </span>
-                ) : (
-                  <button
-                    key={item}
-                    type="button"
-                    className={cn(
-                      "inline-flex size-10 items-center justify-center rounded-full text-sm font-semibold transition",
-                      item === safePage
-                        ? "bg-brand text-white shadow-[var(--login-submit-shadow)]"
-                        : "text-panel-copy hover:bg-[color-mix(in_srgb,var(--dashboard-nav-hover)_60%,transparent)]",
                     )}
-                    onClick={() => setPage(item)}
-                  >
-                    {item}
-                  </button>
-                ),
-              )}
-              <Button
-                variant="secondary"
-                size="icon"
-                className="size-10"
-                onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
-                disabled={safePage === totalPages}
-              >
-                <ChevronRight className="size-4" aria-hidden="true" />
-              </Button>
+                  </tbody>
+                </table>
+              </div>
             </div>
-          ) : null}
+
+            <div className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-wrap items-center gap-3 text-sm text-panel-muted">
+                <span>
+                  {Math.min(filteredAlerts.length, safePage * ROWS_PER_PAGE)} of {filteredAlerts.length} alerts
+                </span>
+                <span>Showing all alerts (most require no action).</span>
+              </div>
+
+              {totalPages > 1 ? (
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="secondary"
+                    size="icon"
+                    className="size-10"
+                    onClick={() => setPage((value) => Math.max(1, value - 1))}
+                    disabled={safePage === 1}
+                  >
+                    <ChevronLeft className="size-4" aria-hidden="true" />
+                  </Button>
+                  {paginationItems.map((item, index) =>
+                    item === "..." ? (
+                      <span key={`ellipsis-${index}`} className="px-2 text-sm text-panel-subtle">
+                        ...
+                      </span>
+                    ) : (
+                      <button
+                        key={item}
+                        type="button"
+                        className={cn(
+                          "inline-flex size-10 items-center justify-center rounded-full text-sm font-semibold transition",
+                          item === safePage
+                            ? "bg-brand text-white shadow-[var(--login-submit-shadow)]"
+                            : "text-panel-copy hover:bg-[color-mix(in_srgb,var(--dashboard-nav-hover)_60%,transparent)]",
+                        )}
+                        onClick={() => setPage(item)}
+                      >
+                        {item}
+                      </button>
+                    ),
+                  )}
+                  <Button
+                    variant="secondary"
+                    size="icon"
+                    className="size-10"
+                    onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
+                    disabled={safePage === totalPages}
+                  >
+                    <ChevronRight className="size-4" aria-hidden="true" />
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          </Card>
         </div>
-      </Card>
 
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_22rem]">
-        <Card className="overflow-hidden rounded-[2rem] p-5 sm:p-6">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <h2 className="text-2xl font-semibold text-panel-strong">Alert Pressure By Ward</h2>
-              <p className="mt-2 text-sm text-panel-muted">
-                Derived ward ranking from visible alert counts and latest recorded risk, without a dedicated geospatial alert-zone contract on this page yet.
-              </p>
-            </div>
-          </div>
+        <aside className="space-y-5">
+          {requiresAttentionAlerts.length > 0 ? (
+            <section className="space-y-4">
+              <PageSectionHeader
+                title="Requires attention"
+                description="Retry-pending and failed alerts that still need operator review."
+              />
 
-          <div className="mt-6 rounded-[1.75rem] border border-panel-table-wrap bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--brand)_12%,transparent),transparent_40%),radial-gradient(circle_at_bottom_right,color-mix(in_srgb,var(--warning)_12%,transparent),transparent_35%),linear-gradient(135deg,color-mix(in_srgb,var(--panel)_92%,white),var(--panel))] p-5">
-            {activeZones.length > 0 ? (
-              <div className="space-y-3">
-                {activeZones.map((zone, index) => (
-                  <div
-                    key={zone.wardId}
-                    className="flex items-center justify-between gap-4 rounded-[1.3rem] border border-panel-table-wrap bg-panel/85 px-4 py-4"
+              <div className="space-y-4">
+                {requiresAttentionAlerts.slice(0, 2).map((alert, index) => (
+                  <Card
+                    key={alert.id}
+                    className={cn(
+                      "rounded-[1.75rem] px-6 py-6",
+                      alert.status === "FAILED"
+                        ? "border-[color:var(--danger)]/20 bg-[color-mix(in_srgb,var(--danger)_6%,var(--panel))]"
+                        : "border-[color:var(--warning)]/20 bg-[color-mix(in_srgb,var(--warning)_6%,var(--panel))]",
+                    )}
                   >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <StatusBadge
-                          tone={index === 0 ? "danger" : "warning"}
-                          className="tracking-[0.12em]"
-                        >
-                          {index === 0 ? "Top visible row" : "Derived row"}
-                        </StatusBadge>
-                        <strong className="truncate text-base text-panel-strong">{zone.wardName}</strong>
+                    <div className="space-y-4">
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={cn(
+                              "inline-flex size-2.5 rounded-full",
+                              alert.status === "FAILED"
+                                ? "bg-[color:var(--danger)]"
+                                : "bg-[color:var(--warning)]",
+                            )}
+                            aria-hidden="true"
+                          />
+                          <StatusBadge
+                            tone={alert.status === "FAILED" ? "danger" : "warning"}
+                            className="tracking-[0.12em]"
+                          >
+                            {index === 0 ? "Start here" : getOperatorActionLabel(alert)}
+                          </StatusBadge>
+                        </div>
+                        <div className="space-y-1">
+                          <strong className="block text-lg text-panel-strong">
+                            {formatAlertPublicId(alert.id)} - {alert.ward_name}
+                          </strong>
+                          <p className="text-sm font-medium text-panel-copy">
+                            {alert.statusLabel} ({alert.relativeLabel})
+                          </p>
+                        </div>
+                        <p className="text-sm leading-6 text-panel-copy">{getAttentionReason(alert)}</p>
                       </div>
-                      <p className="mt-2 text-sm text-panel-muted">
-                        {zone.count} visible alerts, highest recorded risk {Math.round(zone.highestRisk)}/100, latest activity {formatRelativeShort(zone.latestAt)}.
-                      </p>
+
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="text-sm text-panel-muted">
+                          {getOperatorActionLabel(alert)} - {alert.channelLabel}
+                        </div>
+                        <Button
+                          variant="ghost"
+                          className="h-10 rounded-pill px-4 text-sm"
+                          onClick={() => setSelectedAlertId(alert.id)}
+                        >
+                          Open review
+                        </Button>
+                      </div>
                     </div>
-                    <Link
-                      href={`/wards?search=${encodeURIComponent(zone.wardName)}`}
-                      className="inline-flex shrink-0 items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--dashboard-icon-button-ink-hover)]"
-                    >
-                      Open ward list
-                      <ChevronRight className="size-4" aria-hidden="true" />
-                    </Link>
-                  </div>
+                  </Card>
                 ))}
               </div>
-            ) : (
-              <div className="rounded-[1.3rem] border border-dashed border-panel-table-wrap px-4 py-8 text-sm text-panel-muted">
-                No visible ward alert ranking is available in this scope yet.
-              </div>
-            )}
-          </div>
-        </Card>
+            </section>
+          ) : null}
 
-        <Card className="rounded-[2rem] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--brand)_10%,var(--panel)),var(--panel))] px-5 py-5">
-          <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Record in focus</span>
-          <strong className="mt-3 block text-2xl leading-tight text-panel-strong">
-            {mostCriticalAlert
-              ? `${formatAlertPublicId(mostCriticalAlert.id)} in ${mostCriticalAlert.ward_name}`
-              : "No alert record in focus"}
-          </strong>
-          <p className="mt-3 text-sm text-panel-muted">
-            {mostCriticalAlert
-              ? `Latest recorded risk score: ${mostCriticalAlert.risk_score !== null ? Math.round(mostCriticalAlert.risk_score) : "Unavailable"}`
-              : alertFreshness.isStale
-                ? "Check feed freshness before treating this panel as recent."
-                : "No visible alert record stands out in the filtered scope."}
-          </p>
-        </Card>
+          <Card className="rounded-[2rem] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--brand)_10%,var(--panel)),var(--panel))] px-5 py-5 lg:sticky lg:top-6">
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Queue status</span>
+            <strong className="mt-3 block text-2xl leading-tight text-panel-strong">
+              {requiresAttentionCount > 0
+                ? `${requiresAttentionCount} alert${requiresAttentionCount === 1 ? "" : "s"} still need review`
+                : "No alert review queue right now"}
+            </strong>
+            <p className="mt-3 text-sm text-panel-muted">
+              {requiresAttentionCount > 0
+                ? `${retryPendingCount} retry pending and ${failedCount} failed in the visible queue.`
+                : alertFreshness.isStale
+                  ? "Check feed freshness before treating this panel as recent."
+                  : "Visible alerts do not currently require operator review."}
+            </p>
+          </Card>
+        </aside>
       </section>
 
       {selectedAlert ? (
@@ -904,9 +942,74 @@ export default function AlertsPage() {
                   <p className="mt-3 text-sm leading-6 text-panel-copy">{selectedAlert.error_message}</p>
                 </Card>
               ) : null}
+
+              {canRequestCoverage ? (
+                <Card className="rounded-2xl px-4 py-4 shadow-none">
+                  <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-panel-subtle">CHV coverage workflow</h3>
+                  <p className="mt-3 text-sm leading-6 text-panel-copy">
+                    {liveCoverageRequest
+                      ? "A live CHV coverage request already exists for this ward, so this alert should open that request instead of starting a duplicate workflow."
+                      : "Request CHV coverage only through the real alert-linked workflow. If a live request already exists for this ward, this handoff will route to that request instead of creating a duplicate."}
+                  </p>
+                </Card>
+              ) : null}
             </div>
 
             <div className="flex flex-col gap-3 border-t border-panel-table-wrap px-5 py-5 sm:px-6">
+              {canRequestCoverage ? (
+                <Button
+                  className="w-full justify-center"
+                  disabled={isCoverageRequestPending}
+                  onClick={async () => {
+                    setCoverageRequestFeedback(null);
+
+                    if (liveCoverageRequest) {
+                      setSelectedAlertId(null);
+                      router.push(`/chvs/requests/${liveCoverageRequest.public_id}`);
+                      return;
+                    }
+
+                    if (!selectedAlert?.public_id) {
+                      return;
+                    }
+
+                    try {
+                      const handoff = await createFromAlertMutation.mutateAsync({
+                        alert_public_ids: [selectedAlert.public_id],
+                      });
+
+                      if (handoff.mode === "EXISTING_LIVE_REQUEST" && handoff.existing_request) {
+                        setCoverageRequestFeedback("A live CHV coverage request already exists for this ward.");
+                        setSelectedAlertId(null);
+                        router.push(`/chvs/requests/${handoff.existing_request.public_id}`);
+                        return;
+                      }
+
+                      if (!handoff.create_defaults) {
+                        throw new Error("Alert-linked request defaults were not returned.");
+                      }
+
+                      const createdRequest = await createCoverageRequestMutation.mutateAsync({
+                        ward_id: handoff.create_defaults.ward_id,
+                        priority: handoff.create_defaults.priority,
+                        reason: handoff.create_defaults.reason,
+                        requested_chv_count: handoff.create_defaults.requested_chv_count,
+                        notes: handoff.create_defaults.notes,
+                        trigger_source: handoff.create_defaults.trigger_source,
+                        linked_alert_public_ids: handoff.create_defaults.linked_alert_public_ids,
+                      });
+
+                      setCoverageRequestFeedback("Alert-linked CHV coverage request created.");
+                      setSelectedAlertId(null);
+                      router.push(`/chvs/requests/${createdRequest.public_id}`);
+                    } catch {
+                      // Error banners already reflect the failing mutation.
+                    }
+                  }}
+                >
+                  {isCoverageRequestPending ? coverageRequestPendingLabel : coverageRequestActionLabel}
+                </Button>
+              ) : null}
               {(selectedAlert.statusFilter === "FAILED" || selectedAlert.status === "RETRY_PENDING") && (
                 <Button className="w-full justify-center" disabled>
                   Retry unavailable

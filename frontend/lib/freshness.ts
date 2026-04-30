@@ -23,12 +23,27 @@ export function formatRelativeTimestamp(timestamp: string | null) {
     return "Invalid timestamp";
   }
 
-  return `${date.toLocaleString()} (${new Intl.RelativeTimeFormat("en", {
-    numeric: "auto",
-  }).format(
-    Math.round((date.getTime() - Date.now()) / 60000),
-    "minute",
-  )})`;
+  const diffMs = date.getTime() - Date.now();
+  const diffMinutes = Math.round(diffMs / 60000);
+  const absMinutes = Math.abs(diffMinutes);
+
+  if (absMinutes < 1) {
+    return "Just now";
+  }
+
+  if (absMinutes < 60) {
+    return `${Math.abs(diffMinutes)}m ago`;
+  }
+
+  const diffHours = Math.round(diffMinutes / 60);
+  const absHours = Math.abs(diffHours);
+
+  if (absHours < 24) {
+    return `${Math.abs(diffHours)}h ago`;
+  }
+
+  const diffDays = Math.round(diffHours / 24);
+  return `${Math.abs(diffDays)}d ago`;
 }
 
 export function describeFreshness(timestamp: string | null, thresholdMinutes: number) {

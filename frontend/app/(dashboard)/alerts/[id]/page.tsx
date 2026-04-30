@@ -9,15 +9,13 @@ import {
   CloudRain,
   Download,
   Droplets,
-  Radio,
   Share2,
   ShieldAlert,
-  Smartphone,
   Waves,
   XCircle,
 } from "lucide-react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 
 import { useAuth } from "@/components/auth-provider";
@@ -29,6 +27,9 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { cn } from "@/lib/cn";
 import { type AlertRecord, type WardDetailSummary } from "@/lib/dashboard";
 import { useAlertDetailQuery } from "@/queries/use-alert-detail-query";
+import { useCreateChvCoverageRequestFromAlertMutation } from "@/queries/use-create-chv-coverage-request-from-alert-mutation";
+import { useCreateChvCoverageRequestMutation } from "@/queries/use-create-chv-coverage-request-mutation";
+import { useLiveChvCoverageRequestForWardQuery } from "@/queries/use-live-chv-coverage-request-for-ward-query";
 
 type AlertTypeMeta = {
   icon: typeof Droplets;
@@ -163,26 +164,77 @@ function getToneSurface(tone: "red" | "amber" | "orange" | "blue" | "slate") {
   }
 }
 
+function getLifecycleTone(status: "active" | "monitoring" | "escalated" | "resolved") {
+  if (status === "escalated") return "danger" as const;
+  if (status === "monitoring") return "warning" as const;
+  if (status === "resolved") return "success" as const;
+  return "info" as const;
+}
+
+function getDecisionStatusLabel(alertStatus: string, lifecycleStatus?: "active" | "monitoring" | "escalated" | "resolved") {
+  if (alertStatus === "RETRY_PENDING") {
+    return "Awaiting retry";
+  }
+  if (alertStatus === "FAILED") {
+    return "Needs escalation";
+  }
+  if (alertStatus === "DELIVERED") {
+    return "Delivered";
+  }
+  if (lifecycleStatus === "escalated") {
+    return "Needs escalation";
+  }
+  if (lifecycleStatus === "resolved") {
+    return "Resolved";
+  }
+  if (lifecycleStatus === "monitoring") {
+    return "Under review";
+  }
+  return "Action in progress";
+}
+
+function getTimelineStateLabel(tone: "primary" | "progress" | "success" | "danger" | "warning" | "neutral") {
+  if (tone === "success") {
+    return { label: "Completed", tone: "success" as const };
+  }
+  if (tone === "danger" || tone === "warning") {
+    return { label: "Needs attention", tone: "warning" as const };
+  }
+  if (tone === "progress") {
+    return { label: "In progress", tone: "info" as const };
+  }
+  return { label: "Recorded", tone: "default" as const };
+}
+
 export default function AlertDetailPage() {
   const params = useParams<{ id: string }>();
+  const router = useRouter();
   const { currentUser } = useAuth();
-  const [timelineFilter, setTimelineFilter] = useState<"all" | "delivery" | "responses" | "system">("all");
+  const [timelineFilter, setTimelineFilter] = useState<"all" | "system" | "communication" | "field_activity" | "escalation" | "resolution">("all");
   const [expandedTimelineItemId, setExpandedTimelineItemId] = useState<string | null>("delivery-status");
+  const [coverageRequestFeedback, setCoverageRequestFeedback] = useState<string | null>(null);
 
   const alertId = useMemo(() => Number(params.id), [params.id]);
   const alertDetailQuery = useAlertDetailQuery({
     alertId,
     enabled: Boolean(currentUser) && Number.isFinite(alertId),
   });
+  const createFromAlertMutation = useCreateChvCoverageRequestFromAlertMutation();
+  const createCoverageRequestMutation = useCreateChvCoverageRequestMutation();
   const alert = alertDetailQuery.data?.alert ?? null;
   const wardDetail = alertDetailQuery.data?.ward_detail ?? null;
   const classification = alertDetailQuery.data?.classification ?? null;
   const riskContext = alertDetailQuery.data?.risk_context ?? null;
+  const lifecycle = alertDetailQuery.data?.lifecycle ?? null;
   const delivery = alertDetailQuery.data?.delivery ?? null;
+  const deliverySummary = alertDetailQuery.data?.delivery_summary ?? null;
+  const messageSource = alertDetailQuery.data?.message_source ?? null;
+  const chvResponseSummary = alertDetailQuery.data?.chv_response_summary ?? null;
+  const facilityResponseSummary = alertDetailQuery.data?.facility_response_summary ?? null;
+  const recommendedNextAction = alertDetailQuery.data?.recommended_next_action ?? null;
   const currentState = alertDetailQuery.data?.current_state ?? [];
   const freshness = alertDetailQuery.data?.freshness ?? null;
   const timeline = alertDetailQuery.data?.timeline ?? [];
-  const capabilities = alertDetailQuery.data?.capabilities ?? null;
   const isLoading = alertDetailQuery.isPending;
   const isRefreshing = alertDetailQuery.isFetching;
   const error =
@@ -192,8 +244,28 @@ export default function AlertDetailPage() {
         ? "Alert detail is not available in your current scope."
         : null;
   const filteredTimeline = timeline.filter((item) => timelineFilter === "all" || item.category === timelineFilter);
-  const lastUpdatedTimestamp = freshness?.updated_at ?? null;
+  const lastUpdatedTimestamp = alertDetailQuery.data?.last_updated_at ?? freshness?.updated_at ?? null;
   const AlertTypeIcon = classification ? getClassificationIcon(classification.icon_key) : ShieldAlert;
+  const decisionStatusLabel = alert ? getDecisionStatusLabel(alert.status, lifecycle?.status) : "Decision context unavailable";
+  const hasUsefulMessageSource = Boolean(
+    messageSource &&
+      (messageSource.preview_text ||
+        messageSource.trigger_type ||
+        messageSource.mode !== "unavailable"),
+  );
+  const canRequestCoverage = currentUser?.role === "ADMIN" || currentUser?.role === "SUPERVISOR";
+  const isCoverageRequestPending = createFromAlertMutation.isPending || createCoverageRequestMutation.isPending;
+  const liveCoverageRequestQuery = useLiveChvCoverageRequestForWardQuery({
+    wardId: alert?.ward ?? null,
+    enabled: Boolean(currentUser) && Boolean(alert?.ward),
+  });
+  const liveCoverageRequest = liveCoverageRequestQuery.data ?? null;
+  const coverageRequestActionLabel = liveCoverageRequest
+    ? "View CHV coverage request"
+    : "Request CHV coverage";
+  const coverageRequestPendingLabel = liveCoverageRequest
+    ? "Opening CHV coverage request..."
+    : "Preparing CHV coverage request...";
 
   if (!currentUser) {
     return null;
@@ -216,6 +288,21 @@ export default function AlertDetailPage() {
           {error}
         </StatusBanner>
       ) : null}
+      {createFromAlertMutation.error instanceof Error ? (
+        <StatusBanner tone="danger" icon={<AlertTriangle aria-hidden="true" />}>
+          {createFromAlertMutation.error.message}
+        </StatusBanner>
+      ) : null}
+      {createCoverageRequestMutation.error instanceof Error ? (
+        <StatusBanner tone="danger" icon={<AlertTriangle aria-hidden="true" />}>
+          {createCoverageRequestMutation.error.message}
+        </StatusBanner>
+      ) : null}
+      {coverageRequestFeedback ? (
+        <StatusBanner tone="success" icon={<CheckCircle2 aria-hidden="true" />}>
+          {coverageRequestFeedback}
+        </StatusBanner>
+      ) : null}
 
       <section className="space-y-5">
         <div className="flex flex-wrap items-center gap-3 text-sm text-panel-muted">
@@ -236,35 +323,23 @@ export default function AlertDetailPage() {
               <h1 className="text-[clamp(2rem,1.35rem+2vw,3rem)] font-semibold leading-tight text-panel-strong">
                 {alert ? `Alert ID: ${formatAlertPublicId(alert.id)}` : "Alert detail"}
               </h1>
-              {alert && delivery ? (
-                <StatusBadge tone={delivery.status_tone} className="rounded-full px-3 py-1.5 tracking-[0.14em]">
-                  {delivery.status_label}
+              {alert && lifecycle ? (
+                <StatusBadge tone={getLifecycleTone(lifecycle.status)} className="rounded-full px-3 py-1.5 tracking-[0.14em]">
+                  {lifecycle.status_label}
                 </StatusBadge>
               ) : null}
             </div>
             <p className="max-w-3xl text-sm text-panel-muted">
-              Recorded delivery status, linked ward context, and the available read-path details for this alert.
+              Alert lifecycle, linked ward feedback, and the available operational response path for this alert.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            {alert ? (
-              <Button variant="secondary" className="px-4" onClick={() => exportAlertReport(alert, wardDetail)}>
-                <Download className="size-4" aria-hidden="true" />
-                <span>Export Report</span>
-              </Button>
-            ) : null}
-
-            {alert ? (
-              <Link
-                href={`/wards/${alert.ward}`}
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-pill bg-[var(--login-submit-start)] px-4 text-sm font-semibold text-white shadow-[var(--login-submit-shadow)] transition hover:bg-[var(--login-submit-end)] hover:shadow-[var(--login-submit-shadow-hover)]"
-              >
-                <Share2 className="size-4" aria-hidden="true" />
-                <span>Open Ward Detail</span>
-              </Link>
-            ) : null}
-          </div>
+          {alert ? (
+            <Button variant="secondary" className="px-4" onClick={() => exportAlertReport(alert, wardDetail)}>
+              <Download className="size-4" aria-hidden="true" />
+              <span>Export Report</span>
+            </Button>
+          ) : null}
         </div>
       </section>
 
@@ -275,11 +350,101 @@ export default function AlertDetailPage() {
       ) : null}
 
       {!isLoading && !error && alert ? (
-        <section className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_22rem]">
+        <>
+          <Card className="rounded-[2rem] border-[color:var(--warning)]/20 bg-[color-mix(in_srgb,var(--warning)_6%,var(--panel))] px-5 py-5 sm:px-6">
+            <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+              <div className="space-y-3">
+                <span className="inline-flex items-center gap-2 rounded-full border border-[color:var(--warning)]/25 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-[color:var(--warning)]">
+                  <AlertTriangle className="size-3.5" aria-hidden="true" />
+                  Next action
+                </span>
+                <div className="space-y-2">
+                  <h2 className="text-[clamp(1.55rem,1.2rem+1vw,2rem)] font-semibold leading-tight text-panel-strong">
+                    {recommendedNextAction?.label ?? "Continue alert review"}
+                  </h2>
+                  <p className="max-w-3xl text-sm leading-6 text-panel-copy">
+                    Reason: {recommendedNextAction?.detail ?? "Use the linked ward workflow to continue review."}
+                  </p>
+                  <p className="text-sm text-panel-muted">
+                    {recommendedNextAction?.blocked_reason ??
+                      "This page surfaces the next step, but execution continues through the linked ward and alerts workflow."}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex shrink-0 flex-col gap-3 lg:items-end">
+                <Link
+                  href={`/wards/${alert.ward}`}
+                  className="inline-flex h-11 items-center justify-center gap-2 rounded-pill bg-[var(--login-submit-start)] px-4 text-sm font-semibold text-white shadow-[var(--login-submit-shadow)] transition hover:bg-[var(--login-submit-end)] hover:shadow-[var(--login-submit-shadow-hover)]"
+                >
+                  <Share2 className="size-4" aria-hidden="true" />
+                  <span>Continue in ward workflow</span>
+                </Link>
+                {canRequestCoverage && (alert.public_id || liveCoverageRequest) ? (
+                  <Button
+                    onClick={async () => {
+                      setCoverageRequestFeedback(null);
+
+                       if (liveCoverageRequest) {
+                        router.push(`/chvs/requests/${liveCoverageRequest.public_id}`);
+                        return;
+                      }
+
+                      try {
+                        const handoff = await createFromAlertMutation.mutateAsync({
+                          alert_public_ids: [alert.public_id],
+                        });
+
+                        if (handoff.mode === "EXISTING_LIVE_REQUEST" && handoff.existing_request) {
+                          setCoverageRequestFeedback("A live CHV coverage request already exists for this ward.");
+                          router.push(`/chvs/requests/${handoff.existing_request.public_id}`);
+                          return;
+                        }
+
+                        if (!handoff.create_defaults) {
+                          throw new Error("Alert-linked request defaults were not returned.");
+                        }
+
+                        const createdRequest = await createCoverageRequestMutation.mutateAsync({
+                          ward_id: handoff.create_defaults.ward_id,
+                          priority: handoff.create_defaults.priority,
+                          reason: handoff.create_defaults.reason,
+                          requested_chv_count: handoff.create_defaults.requested_chv_count,
+                          notes: handoff.create_defaults.notes,
+                          trigger_source: handoff.create_defaults.trigger_source,
+                          linked_alert_public_ids: handoff.create_defaults.linked_alert_public_ids,
+                        });
+
+                        setCoverageRequestFeedback("Alert-linked CHV coverage request created.");
+                        router.push(`/chvs/requests/${createdRequest.public_id}`);
+                      } catch {
+                        // Error banners already reflect the failing mutation.
+                      }
+                    }}
+                    disabled={isCoverageRequestPending}
+                    className="px-4"
+                  >
+                    <ShieldAlert className="size-4" aria-hidden="true" />
+                    <span>
+                      {isCoverageRequestPending ? coverageRequestPendingLabel : coverageRequestActionLabel}
+                    </span>
+                  </Button>
+                ) : null}
+                {canRequestCoverage && liveCoverageRequest ? (
+                  <span className="text-xs text-panel-muted">
+                    A live CHV coverage request already exists for this ward, so this alert links to that request.
+                  </span>
+                ) : null}
+                <span className="text-xs text-panel-muted">Other actions stay locked on this page until workflow handoff is available.</span>
+              </div>
+            </div>
+          </Card>
+
+          <section className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_22rem]">
           <div className="space-y-5">
             <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <h2 className="text-2xl font-semibold text-panel-strong">Alert Record Summary</h2>
+                <h2 className="text-2xl font-semibold text-panel-strong">Alert Workflow Summary</h2>
                 <span className="inline-flex rounded-full border border-panel-table-wrap px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-panel-subtle">
                   ID: {alert.external_id || `${alert.id}-A`}
                 </span>
@@ -291,8 +456,18 @@ export default function AlertDetailPage() {
                   <strong className="block text-base text-panel-strong">{alert.ward_name}</strong>
                 </div>
                 <div className="space-y-2">
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Lifecycle status</span>
+                  <strong className="block text-base text-panel-strong">{lifecycle?.status_label ?? "Unknown"}</strong>
+                  <small className="text-sm text-panel-muted">{lifecycle?.summary ?? "No lifecycle summary available."}</small>
+                </div>
+                <div className="space-y-2">
                   <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Recorded risk</span>
                   <strong className="block text-base text-panel-strong">{riskContext?.level_label ?? "Risk unavailable"}</strong>
+                  <small className="text-sm text-panel-muted">{riskContext?.trend_label ?? "Unknown trend"}</small>
+                </div>
+                <div className="space-y-2">
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Triggered time</span>
+                  <strong className="block text-base text-panel-strong">{formatTimeStamp(alert.created_at)}</strong>
                   <small className="text-sm text-panel-muted">
                     {riskContext?.recorded_risk_score !== null && riskContext?.recorded_risk_score !== undefined
                       ? `Score ${Math.round(riskContext.recorded_risk_score)}/100${riskContext.threshold ? `, threshold ${riskContext.threshold}` : ""}`
@@ -308,7 +483,7 @@ export default function AlertDetailPage() {
                     <strong className="text-base text-panel-strong">{classification?.label ?? "Alert record"}</strong>
                   </div>
                   <StatusBadge tone="info" className="tracking-[0.12em]">
-                    {classification?.mode === "derived_from_record_text" ? "Derived from record text" : "Backend record"}
+                    {classification?.mode === "derived_from_record_text" ? "Derived from alert text" : "Recorded signal"}
                   </StatusBadge>
                 </div>
                 <div className="space-y-2">
@@ -316,8 +491,8 @@ export default function AlertDetailPage() {
                   <strong className="block text-base text-panel-strong">{classification?.trigger_source ?? "Not recorded"}</strong>
                 </div>
                 <div className="space-y-2">
-                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Created timestamp</span>
-                  <strong className="block text-base text-panel-strong">{formatTimeStamp(alert.created_at)}</strong>
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Last updated</span>
+                  <strong className="block text-base text-panel-strong">{formatTimeStamp(lastUpdatedTimestamp)}</strong>
                 </div>
               </div>
             </Card>
@@ -348,16 +523,13 @@ export default function AlertDetailPage() {
             <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <h2 className="text-2xl font-semibold text-panel-strong">Alert Record Timeline</h2>
+                  <h2 className="text-2xl font-semibold text-panel-strong">Operational Timeline</h2>
                   <p className="mt-2 text-sm text-panel-muted">
-                    Recorded timeline for this alert, from creation through the delivery-state changes visible on this record.
+                    Alert creation, communication, field feedback, escalation, and resolution signals visible on this record.
                   </p>
                 </div>
-                <StatusBadge
-                  tone={delivery?.status_tone ?? "warning"}
-                  className="px-3 py-1.5 tracking-[0.14em]"
-                >
-                  {delivery?.status_label ?? "Delivery state unavailable"}
+                <StatusBadge tone={getLifecycleTone(lifecycle?.status ?? "active")} className="px-3 py-1.5 tracking-[0.14em]">
+                  {lifecycle?.status_label ?? "Lifecycle unavailable"}
                 </StatusBadge>
               </div>
 
@@ -365,7 +537,7 @@ export default function AlertDetailPage() {
                 <Card className="rounded-[1.4rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-4 shadow-none">
                   <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Recipient count</p>
                   <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-panel-strong">
-                    {delivery?.recipient_count ?? 1}
+                    {deliverySummary?.recipient_count ?? 1}
                   </p>
                 </Card>
                 <Card className="rounded-[1.4rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-4 shadow-none">
@@ -379,9 +551,9 @@ export default function AlertDetailPage() {
                   <p className="mt-2 text-lg font-semibold tracking-[-0.04em] text-panel-strong">{alert.delivery_backend || "Unspecified"}</p>
                 </Card>
                 <Card className="rounded-[1.4rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-4 shadow-none">
-                  <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Next retry</p>
+                  <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Field signals</p>
                   <p className="mt-2 text-lg font-semibold tracking-[-0.04em] text-panel-strong">
-                    {alert.next_retry_at ? formatTimeOnly(alert.next_retry_at) : "None"}
+                    {chvResponseSummary?.response_count ?? 0}
                   </p>
                 </Card>
               </div>
@@ -389,9 +561,11 @@ export default function AlertDetailPage() {
               <div className="mt-6 flex flex-wrap gap-2">
                 {[
                   { value: "all", label: "All" },
-                  { value: "delivery", label: "Delivery" },
-                  { value: "responses", label: "Review items" },
-                  { value: "system", label: "System records" },
+                  { value: "communication", label: "Communication" },
+                  { value: "field_activity", label: "Field activity" },
+                  { value: "escalation", label: "Escalation" },
+                  { value: "resolution", label: "Resolution" },
+                  { value: "system", label: "System" },
                 ].map((filter) => (
                   <button
                     key={filter.value}
@@ -402,7 +576,11 @@ export default function AlertDetailPage() {
                         ? "border-brand bg-brand text-white"
                         : "border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] text-panel-copy hover:border-[var(--dashboard-icon-button-border)] hover:text-panel-strong",
                     )}
-                    onClick={() => setTimelineFilter(filter.value as "all" | "delivery" | "responses" | "system")}
+                    onClick={() =>
+                      setTimelineFilter(
+                        filter.value as "all" | "system" | "communication" | "field_activity" | "escalation" | "resolution",
+                      )
+                    }
                   >
                     {filter.label}
                   </button>
@@ -450,12 +628,25 @@ export default function AlertDetailPage() {
                         }
                       >
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                          <strong className="text-base text-panel-strong">{item.title}</strong>
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <strong className="text-base text-panel-strong">{item.title}</strong>
+                              <StatusBadge tone={getTimelineStateLabel(item.tone).tone} className="tracking-[0.12em]">
+                                {getTimelineStateLabel(item.tone).label}
+                              </StatusBadge>
+                            </div>
+                            {(item.actor || item.event_type) ? (
+                              <p className="mt-1 text-xs font-semibold uppercase tracking-[0.14em] text-panel-subtle">
+                                {[item.actor, item.event_type].filter(Boolean).join(" • ")}
+                              </p>
+                            ) : null}
+                          </div>
                           <span className="shrink-0 text-xs font-semibold uppercase tracking-[0.14em] text-panel-subtle">
                             {formatTimeOnly(item.timestamp)}
                           </span>
                         </div>
                         <p className="mt-2 text-sm leading-6 text-panel-copy">{item.description}</p>
+                        {item.message ? <small className="mt-2 block text-sm text-panel-muted">{item.message}</small> : null}
                         {item.meta ? <small className="mt-2 block text-sm text-panel-muted">{item.meta}</small> : null}
                         {expandedTimelineItemId === item.id && item.details?.length ? (
                           <div className="mt-4 space-y-2 border-t border-panel-table-wrap pt-4">
@@ -477,48 +668,63 @@ export default function AlertDetailPage() {
 
           <div className="space-y-5">
             <Card className="rounded-[2rem] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--brand)_10%,var(--panel)),var(--panel))] px-5 py-5">
-              <h2 className="text-2xl font-semibold text-panel-strong">Recorded Guidance</h2>
+              <h2 className="text-2xl font-semibold text-panel-strong">Decision Context</h2>
 
               <div className="mt-5 space-y-5">
                 <div className="space-y-1">
-                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Posture</span>
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Delivery state</span>
                   <strong className="block text-base text-panel-strong">
-                    {riskContext?.trend_label ?? "Monitoring"}
+                    {decisionStatusLabel}
                   </strong>
                 </div>
                 <div className="space-y-1">
-                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Recorded summary</span>
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Current risk direction</span>
                   <strong className="block text-base leading-6 text-panel-strong">
-                    {riskContext?.summary ?? "Continue monitoring this record and use ward detail for linked ward data."}
+                    {riskContext?.trend_label ?? "No risk direction recorded"}
                   </strong>
+                  <p className="text-sm text-panel-muted">{lifecycle?.summary ?? "Use the linked ward workflow for the current operational summary."}</p>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Response coverage</span>
+                  <strong className="block text-base text-panel-strong">
+                    {chvResponseSummary?.coverage_label ?? "No response coverage available"}
+                  </strong>
+                  <p className="text-sm text-panel-muted">{chvResponseSummary?.summary ?? "No CHV response summary is available."}</p>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Facility pressure signal</span>
+                  <strong className="block text-base text-panel-strong">
+                    {facilityResponseSummary?.status_label ?? "No facility signal available"}
+                  </strong>
+                  <p className="text-sm text-panel-muted">{facilityResponseSummary?.summary ?? "No facility response summary is available."}</p>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Action handoff</span>
+                  <strong className="block text-base text-panel-strong">
+                    Continue in linked ward workflow
+                  </strong>
+                  <p className="text-sm text-panel-muted">
+                    {recommendedNextAction?.blocked_reason ?? "This record still routes through ward and alerts workflow steps."}
+                  </p>
                 </div>
               </div>
 
-              <div className="mt-6 flex flex-col gap-3">
+              <div className="mt-6">
                 <StatusBanner tone="warning" icon={<ShieldAlert aria-hidden="true" />}>
-                  Escalation, facility notification, follow-up messaging, resend, and recall actions are not backend-wired from this alert detail page.
+                  This page surfaces the next move, but execution still happens through the linked ward and alerts workflow.
                 </StatusBanner>
-                <Button className="w-full justify-center" disabled={!capabilities || !capabilities.can_resend}>
-                  Escalation Action Unavailable
-                </Button>
-                <Button variant="secondary" className="w-full justify-center" disabled={!capabilities || !capabilities.can_notify_facilities}>
-                  Facility Notification Unavailable
-                </Button>
-                <Button variant="secondary" className="w-full justify-center" disabled={!capabilities || !capabilities.can_send_follow_up}>
-                  Follow-up Message Unavailable
-                </Button>
               </div>
             </Card>
 
             <Card className="rounded-[2rem] px-5 py-5">
               <div className="flex items-start justify-between gap-4">
-                <h2 className="text-2xl font-semibold text-panel-strong">Delivery Record</h2>
+                <h2 className="text-2xl font-semibold text-panel-strong">Delivery Summary</h2>
               </div>
 
               <dl className="mt-6 space-y-4 border-t border-panel-table-wrap pt-5 text-sm">
                 {[
-                  ["Channel", delivery?.channel_label ?? alert.channel],
-                  ["Audience", delivery?.audience_label ?? "Recorded recipient"],
+                  ["Channel", deliverySummary?.channel_label ?? alert.channel],
+                  ["Audience", deliverySummary?.audience_label ?? "Recorded recipient"],
                   ["Recipient", alert.recipient],
                   ["Attempt count", `${alert.attempt_count} of ${alert.max_attempts}`],
                   ["External ID", alert.external_id || "No external ID recorded"],
@@ -531,6 +737,53 @@ export default function AlertDetailPage() {
                 ))}
               </dl>
             </Card>
+
+            {hasUsefulMessageSource ? (
+              <Card className="rounded-[2rem] px-5 py-5">
+                <div className="flex items-start justify-between gap-4">
+                  <h2 className="text-2xl font-semibold text-panel-strong">Message Source</h2>
+                </div>
+
+                <div className="mt-6 space-y-4">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <strong className="text-base text-panel-strong">{messageSource?.label ?? "Recorded source"}</strong>
+                    <StatusBadge
+                      tone={
+                        messageSource?.mode === "operator_edited"
+                          ? "warning"
+                          : messageSource?.mode === "backend_generated"
+                            ? "info"
+                            : "default"
+                      }
+                      className="tracking-[0.12em]"
+                    >
+                      {messageSource?.mode === "operator_edited"
+                        ? "Operator adjusted"
+                        : messageSource?.mode === "backend_generated"
+                          ? "System draft used"
+                          : "Metadata recorded"}
+                    </StatusBadge>
+                  </div>
+
+                  <p className="text-sm text-panel-muted">
+                    {messageSource?.summary ?? "Message-source detail is recorded for this alert."}
+                  </p>
+
+                  {messageSource?.preview_text ? (
+                    <div className="rounded-[1.2rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-4">
+                      <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Recorded message</p>
+                      <p className="mt-2 text-sm leading-6 text-panel-copy">{messageSource.preview_text}</p>
+                    </div>
+                  ) : null}
+
+                  {messageSource?.trigger_type ? (
+                    <p className="text-xs text-panel-muted">
+                      Guided action recorded at queue time: {messageSource.trigger_type.replaceAll("_", " ").toLowerCase()}.
+                    </p>
+                  ) : null}
+                </div>
+              </Card>
+            ) : null}
 
             <Card className="rounded-[2rem] overflow-hidden p-0">
               <div className="relative h-40 bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--brand)_12%,transparent),transparent_45%),linear-gradient(135deg,color-mix(in_srgb,var(--panel)_92%,white),var(--panel))]">
@@ -560,17 +813,9 @@ export default function AlertDetailPage() {
                 </div>
               </div>
             </Card>
-
-            <div className="flex flex-col gap-3">
-              <Button variant="danger" className="w-full justify-center" disabled={!capabilities || !capabilities.can_resend}>
-                Resend Unavailable
-              </Button>
-              <Button variant="secondary" className="w-full justify-center" disabled={!capabilities || !capabilities.can_recall}>
-                Recall Unavailable
-              </Button>
-            </div>
           </div>
-        </section>
+          </section>
+        </>
       ) : null}
     </div>
   );

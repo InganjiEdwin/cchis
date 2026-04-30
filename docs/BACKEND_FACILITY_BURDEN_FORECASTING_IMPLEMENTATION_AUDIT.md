@@ -64,18 +64,36 @@ Evidence exists in:
 - connect outputs to facility-readiness model shape
 - keep scheduled scoring separate from retraining
 
-### Implemented
+### Initial audit finding
 
-Mostly yes, with honest early-phase limitations.
+This phase was only partially implemented on a stricter external-audit reading.
 
-Evidence exists in:
+What was present:
 
-- `FacilityForecastRun`
-- `FacilityForecast`
-- `run_facility_burden_forecast_pipeline`
-- `run_facility_burden_forecast` management command
-- `run_facility_burden_forecast_task`
-- persisted failed-run handling
+- training path
+- scoring path
+- persisted forecast runs and forecast rows
+- facility-readiness integration
+- scheduled scoring separated from retraining
+
+What was not strong enough yet:
+
+- forecast lineage was only represented by metadata dataset-ref strings
+- unlike the main ML stack, those refs did not point to actual persisted `FeatureDataset` and `FeatureDatasetRow` records
+
+### Gap closure
+
+This audit closed that gap by adding:
+
+- persisted training feature datasets for facility forecasting
+- persisted inference feature datasets for facility forecasting
+- real dataset refs in forecast-run metadata that resolve to stored dataset rows
+- command-level verification that forecast lineage rows exist and are shaped correctly
+
+Evidence now exists in:
+
+- `backend/risk/facility_forecasting.py`
+- `risk.tests.SeedAndModelCommandTestCase.test_run_facility_burden_forecast_command_persists_forecast_run_and_rows`
 
 ### Residual limitation
 
@@ -83,7 +101,7 @@ Evidence exists in:
 
 ### Verdict
 
-- `implemented with explicit limitations`
+- `implemented with explicit limitations after audit gap closure`
 
 ## Scheduling Audit
 
@@ -174,6 +192,7 @@ This audit closed that gap by adding:
 - promoted-forecast preference in facility intelligence over newer preview-only runs
 - promoted-state truth in preview and honesty-rule surfaces
 - promoted-forecast preference in dashboard/map summary over newer preview-only runs
+- promoted-forecast preference in the facility forecast preview surface over newer preview-only runs
 - promoted dashboard/map summaries now expose a truly empty `blocked_product_surfaces` list instead of a sentinel `"none"` value
 
 Evidence now exists in:
@@ -188,6 +207,7 @@ Evidence now exists in:
 - `risk.tests.SeedAndModelCommandTestCase.test_promote_facility_burden_forecast_command_requires_explicit_override_for_blocked_run`
 - `risk.tests.RiskPermissionsTestCase.test_facility_intelligence_prefers_promoted_facility_forecast_over_newer_preview_run`
 - `risk.tests.RiskPermissionsTestCase.test_facility_forecast_preview_reflects_promoted_baseline_status`
+- `risk.tests.RiskPermissionsTestCase.test_facility_forecast_preview_prefers_promoted_run_over_newer_preview_run`
 - `risk.tests.RiskPermissionsTestCase.test_migori_ward_map_prefers_promoted_facility_forecast_over_newer_preview_run`
 
 ### Important honesty note
@@ -214,16 +234,22 @@ That is the correct conservative implementation for the current state.
 
 The facility burden forecasting plan is now materially implemented through Phase 4.
 
-The most meaningful gap found in this audit was:
+The most meaningful gaps found in this audit were:
 
 - missing dashboard/map-facing facility forecast linkage
+- forecast lineage refs that were not backed by persisted feature datasets
 
-That gap has now been closed in code and tested.
+Those gaps have now been closed in code and tested.
 
-On the latest fresh-audit pass, one smaller but still real contract-hygiene gap was also closed:
+On later fresh-audit passes, two smaller but still real contract-hygiene gaps were also closed:
 
 - promoted dashboard summaries no longer represent an unblocked state as `["none"]`
 - they now return an actually empty blocked-surfaces list
+
+Another audit pass also closed a promotion-consistency gap:
+
+- the facility forecast preview surface no longer regresses from an older promoted run to a newer preview-only run
+- preview selection now matches the governance-preference already used by facility intelligence and dashboard/map summaries
 
 ## Remaining Honest Limits
 

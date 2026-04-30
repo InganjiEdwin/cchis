@@ -12,7 +12,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { DashboardTopbar } from "@/components/dashboard-topbar";
 import { RoleGate } from "@/components/role-gate";
@@ -36,14 +36,35 @@ import { useFacilityReadinessQuery } from "@/queries/use-facility-readiness-quer
 const STALE_THRESHOLD_MINUTES = 120;
 const ROWS_PER_PAGE = 5;
 
+type FacilityAdvancedFilter = "ALL" | "STALE" | "ACTIVE_REVIEW" | "UPDATE_PENDING" | "ESCALATED" | "HIGH_RISK";
+
+const ADVANCED_FILTER_LABELS: Record<FacilityAdvancedFilter, string> = {
+  ALL: "All facility signals",
+  STALE: "Stale reports",
+  ACTIVE_REVIEW: "Review open",
+  UPDATE_PENDING: "Update pending",
+  ESCALATED: "Escalated",
+  HIGH_RISK: "High calculated risk",
+};
+
+function compactFacilityName(name: string) {
+  return name.replace(/\s+(Dispensary|Health Centre|Health Center|Hospital)$/i, "");
+}
+
 export default function FacilityReadinessPage() {
   const [search, setSearch] = useState("");
   const [selectedWard, setSelectedWard] = useState("ALL");
+  const [advancedFilter, setAdvancedFilter] = useState<FacilityAdvancedFilter>("ALL");
+  const [isAdvancedFilterOpen, setIsAdvancedFilterOpen] = useState(false);
   const [page, setPage] = useState(1);
+  const [focusedFacilityId, setFocusedFacilityId] = useState<number | null>(null);
+  const matrixRef = useRef<HTMLElement | null>(null);
   const { data, isPending: isLoading, error } = useFacilityReadinessQuery();
   const facilities = data?.facilities ?? [];
   const risks = data?.risks ?? [];
   const alerts = data?.alerts ?? [];
+  const decisionSummary = data?.decisionSummary ?? null;
+  const workflowStates = data?.workflowStates ?? [];
 
   const latestTimestamp = useMemo(
     () =>
@@ -58,6 +79,11 @@ export default function FacilityReadinessPage() {
   const lastUpdatedLabel = latestTimestamp ? formatRelativeTimestamp(latestTimestamp) : freshness.label;
 
   const facilityRows = useMemo(() => buildFacilityRows(facilities, risks), [facilities, risks]);
+  const workflowStateByFacilityId = useMemo(
+    () => new Map(workflowStates.map((workflowState) => [workflowState.facility_id, workflowState])),
+    [workflowStates],
+  );
+  const hasClientMatrixFilters = selectedWard !== "ALL" || search.trim().length > 0 || advancedFilter !== "ALL";
 
   const wardFilterOptions = useMemo(
     () => ["ALL", ...new Set(facilityRows.map((row) => row.wardName).sort((a, b) => a.localeCompare(b)))],
@@ -67,7 +93,23 @@ export default function FacilityReadinessPage() {
   const filteredRows = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
     return facilityRows.filter((row) => {
+      const workflowState = workflowStateByFacilityId.get(row.facilityId);
       if (selectedWard !== "ALL" && row.wardName !== selectedWard) {
+        return false;
+      }
+      if (advancedFilter === "STALE" && row.freshnessState !== "STALE") {
+        return false;
+      }
+      if (advancedFilter === "ACTIVE_REVIEW" && !workflowState?.has_active_review) {
+        return false;
+      }
+      if (advancedFilter === "UPDATE_PENDING" && !workflowState?.has_active_update_request) {
+        return false;
+      }
+      if (advancedFilter === "ESCALATED" && !workflowState?.has_active_escalation) {
+        return false;
+      }
+      if (advancedFilter === "HIGH_RISK" && row.surgeRisk !== "EXTREME") {
         return false;
       }
       if (!normalizedSearch) {
@@ -79,11 +121,43 @@ export default function FacilityReadinessPage() {
         row.subCounty.toLowerCase().includes(normalizedSearch)
       );
     });
-  }, [facilityRows, search, selectedWard]);
+  }, [advancedFilter, facilityRows, search, selectedWard, workflowStateByFacilityId]);
+
+  const advancedFilterCounts = useMemo(() => {
+    return facilityRows.reduce(
+      (counts, row) => {
+        const workflowState = workflowStateByFacilityId.get(row.facilityId);
+        if (row.freshnessState === "STALE") {
+          counts.STALE += 1;
+        }
+        if (workflowState?.has_active_review) {
+          counts.ACTIVE_REVIEW += 1;
+        }
+        if (workflowState?.has_active_update_request) {
+          counts.UPDATE_PENDING += 1;
+        }
+        if (workflowState?.has_active_escalation) {
+          counts.ESCALATED += 1;
+        }
+        if (row.surgeRisk === "EXTREME") {
+          counts.HIGH_RISK += 1;
+        }
+        return counts;
+      },
+      {
+        ALL: facilityRows.length,
+        STALE: 0,
+        ACTIVE_REVIEW: 0,
+        UPDATE_PENDING: 0,
+        ESCALATED: 0,
+        HIGH_RISK: 0,
+      } satisfies Record<FacilityAdvancedFilter, number>,
+    );
+  }, [facilityRows, workflowStateByFacilityId]);
 
   useEffect(() => {
     setPage(1);
-  }, [search, selectedWard]);
+  }, [advancedFilter, search, selectedWard]);
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / ROWS_PER_PAGE));
   const currentPage = Math.min(page, totalPages);
@@ -91,22 +165,102 @@ export default function FacilityReadinessPage() {
 
   const activeFacilities = facilityRows.length;
   const criticalFacilities = facilityRows.filter((row) => row.surgeRisk === "EXTREME").length;
+  const allFacilitiesStale = facilityRows.length > 0 && facilityRows.every((row) => row.freshnessState === "STALE");
   const averageOrs = facilityRows.length
     ? Math.round(facilityRows.reduce((sum, row) => sum + row.orsStockPercent, 0) / facilityRows.length)
     : 0;
-  const immediateAlerts = facilityRows.filter((row) => row.surgeRisk === "EXTREME").slice(0, 2);
   const forecastCases = facilityRows.reduce((sum, row) => sum + row.projectedCases, 0);
   const overloadedFacilities = facilityRows.filter((row) => row.surgeRisk === "EXTREME").length;
   const surgeCardIsCalm = criticalFacilities === 0;
-  const immediateAlertsTitle = immediateAlerts.length ? "Facility Rows Visible" : "No Facility Rows Visible";
-  const immediateAlertsSubtitle = isLoading
-    ? "Checking readiness..."
-    : immediateAlerts.length
-      ? `${immediateAlerts.length} calculated rows are visible`
-      : "No high calculated readiness difference visible";
-  const forecastActionGuidance = overloadedFacilities
-    ? `Summary: calculated resupply readiness is higher for ${overloadedFacilities} facilities.`
-    : "Summary: continue monitoring calculated readiness summaries.";
+  const recommendationTone =
+    decisionSummary?.state === "DEGRADED_CONFIDENCE" ||
+    decisionSummary?.confidence === "DEGRADED" ||
+    (!decisionSummary && allFacilitiesStale)
+      ? "warning"
+      : "default";
+  const priorityItems = decisionSummary?.top_priorities ?? [];
+  const totalReviewFacilityCount =
+    typeof decisionSummary?.total_review_facility_count === "number"
+      ? decisionSummary.total_review_facility_count
+      : null;
+  const topPriority = priorityItems[0] ?? null;
+  const nextPriority = priorityItems[1] ?? null;
+  const priorityLabelByFacilityId = useMemo(
+    () => new Map(priorityItems.map((priority) => [priority.facility_id, priority.priority_label])),
+    [priorityItems],
+  );
+  const workflowCounts = useMemo(
+    () =>
+      workflowStates.reduce(
+        (counts, workflowState) => ({
+          activeReviews: counts.activeReviews + (workflowState.has_active_review ? 1 : 0),
+          updateRequests: counts.updateRequests + (workflowState.has_active_update_request ? 1 : 0),
+          escalations: counts.escalations + (workflowState.has_active_escalation ? 1 : 0),
+        }),
+        { activeReviews: 0, updateRequests: 0, escalations: 0 },
+      ),
+    [workflowStates],
+  );
+  const priorityRows = useMemo(
+    () =>
+      priorityItems
+        .map((priority) => facilityRows.find((row) => row.facilityId === priority.facility_id))
+        .filter((row): row is FacilityRow => Boolean(row)),
+    [facilityRows, priorityItems],
+  );
+  const recommendationHeadline = isLoading
+    ? "Preparing readiness guidance"
+    : decisionSummary?.headline
+      ? decisionSummary.headline
+      : allFacilitiesStale
+        ? "Decision confidence degraded"
+        : "No immediate facility review required";
+  const recommendationBody = isLoading
+    ? "Loading readiness guidance."
+    : decisionSummary?.body
+      ? decisionSummary.body
+      : allFacilitiesStale
+        ? "Facility readiness inputs are stale. No facilities are currently flagged for review, but this assessment is based on outdated data."
+        : "Based on the current derived readiness estimates, no facility is flagged for review.";
+  const reviewSummaryTitle = "Current review summary";
+  const reviewSummarySubtitle = isLoading
+    ? "Checking readiness priorities..."
+    : decisionSummary?.state === "DEGRADED_CONFIDENCE"
+      ? typeof totalReviewFacilityCount === "number" && totalReviewFacilityCount > 0
+        ? "Facilities are flagged for readiness review, but data freshness is limited."
+        : "No facilities are currently flagged for review, but data freshness is limited."
+      : typeof totalReviewFacilityCount === "number" && totalReviewFacilityCount > 0
+        ? `${totalReviewFacilityCount} facilities are currently flagged for readiness review in this view.`
+        : decisionSummary && totalReviewFacilityCount === null
+          ? "Readiness review count is unavailable in this view."
+        : "No facilities are currently flagged for readiness review in this view.";
+  const forecastImpactScan = isLoading
+    ? "Calculating..."
+    : typeof totalReviewFacilityCount === "number" && totalReviewFacilityCount > 0
+      ? `${totalReviewFacilityCount} review signal${totalReviewFacilityCount === 1 ? "" : "s"}`
+      : decisionSummary && totalReviewFacilityCount === null
+        ? "Review count unavailable"
+        : "No capacity concern";
+  const forecastActionScan = isLoading
+    ? "Preparing..."
+    : topPriority
+      ? `Review ${compactFacilityName(topPriority.facility_name)}`
+      : decisionSummary?.state === "DEGRADED_CONFIDENCE" || allFacilitiesStale
+        ? "Monitor stale reports"
+        : "Continue monitoring";
+  const forecastConfidenceScan = decisionSummary?.state === "DEGRADED_CONFIDENCE" || allFacilitiesStale
+    ? "Low (stale inputs)"
+    : "Normal";
+
+  function focusPriorityInMatrix(facilityId: number, facilityName: string, wardName: string) {
+    setFocusedFacilityId(facilityId);
+    setSearch(facilityName);
+    setSelectedWard(wardName);
+    setPage(1);
+    if (typeof matrixRef.current?.scrollIntoView === "function") {
+      matrixRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -135,11 +289,11 @@ export default function FacilityReadinessPage() {
                 <Building2 className="size-5" aria-hidden="true" />
               </span>
               <div>
-                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Visible facilities</span>
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Facilities assessed</span>
                 <strong className="mt-2 block text-4xl font-semibold leading-none text-panel-strong">
                   {isLoading ? "..." : activeFacilities}
                 </strong>
-                <small className="mt-3 block text-sm text-panel-muted">Facility records in view</small>
+                <small className="mt-3 block text-sm text-panel-muted">Facility records included in this readiness view</small>
               </div>
             </div>
           </Card>
@@ -171,7 +325,9 @@ export default function FacilityReadinessPage() {
                   {isLoading ? "..." : criticalFacilities}
                 </strong>
                 <small className="mt-3 block text-sm text-panel-muted">
-                  {surgeCardIsCalm ? "No high calculated readiness difference in view" : "Calculated readiness rows are visible"}
+                  {surgeCardIsCalm
+                    ? "No high calculated readiness concern detected"
+                    : "Calculated readiness concern is present in this view"}
                 </small>
               </div>
             </div>
@@ -183,17 +339,99 @@ export default function FacilityReadinessPage() {
                 <PackagePlus className="size-5" aria-hidden="true" />
               </span>
               <div>
-                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Calculated ORS estimate</span>
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Estimated ORS coverage</span>
                 <strong className="mt-2 block text-4xl font-semibold leading-none text-panel-strong">
                   {isLoading ? "..." : `${averageOrs}%`}
                 </strong>
-                <small className="mt-3 block text-sm text-panel-muted">Estimated from ward risk and facility identity, not live stock feeds</small>
+                <small className="mt-3 block text-sm text-panel-muted">
+                  Estimated from ward risk and facility identity in this readiness view, not live stock feeds
+                </small>
               </div>
             </div>
           </Card>
         </section>
 
-        <section className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_22rem]">
+        <Card
+          className={cn(
+            "rounded-[2rem] px-5 py-5 sm:px-6",
+            recommendationTone === "warning"
+              ? "border-[color:var(--warning)]/30 bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))]"
+              : "bg-panel",
+          )}
+        >
+          <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">System recommendation</span>
+          <div className="mt-3 space-y-2">
+            <h2 className="text-2xl font-semibold text-panel-strong">
+              {recommendationHeadline}
+            </h2>
+            <p className="text-sm leading-6 text-panel-copy">
+              {recommendationBody}
+            </p>
+            {!isLoading && decisionSummary?.confidence === "DEGRADED" ? (
+              <p className="text-sm font-medium text-[color:var(--warning)]">
+                Decision confidence degraded
+                {decisionSummary.confidence_reason ? `: ${decisionSummary.confidence_reason.replaceAll("_", " ")}.` : "."}
+              </p>
+            ) : null}
+          </div>
+
+          {!isLoading && priorityItems.length > 0 ? (
+            <div className="mt-5 grid gap-3 md:grid-cols-2">
+              {[topPriority, nextPriority].filter(Boolean).map((priority) => (
+                <div
+                  key={priority!.facility_id}
+                  className="rounded-2xl border border-panel-border bg-panel/55 px-4 py-4"
+                >
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">
+                    {priority!.priority_label}
+                  </span>
+                  <h3 className="mt-2 text-lg font-semibold text-panel-strong">{priority!.facility_name}</h3>
+                  <p className="mt-1 text-sm text-panel-muted">{priority!.ward_name}</p>
+                  <p className="mt-3 text-sm leading-6 text-panel-copy">{priority!.reason_text}</p>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <Button
+                      variant="secondary"
+                      className="w-full justify-center"
+                      onClick={() => focusPriorityInMatrix(priority!.facility_id, priority!.facility_name, priority!.ward_name)}
+                    >
+                      Focus in matrix
+                    </Button>
+                    <Link
+                      href={priority!.review_href ?? `/facility-readiness/${priority!.facility_id}`}
+                      className="inline-flex h-11 w-full items-center justify-center rounded-pill bg-[var(--login-submit-start)] px-4 text-sm font-semibold text-white shadow-[var(--login-submit-shadow)] transition hover:bg-[var(--login-submit-end)] hover:shadow-[var(--login-submit-shadow-hover)]"
+                    >
+                      Review detail
+                    </Link>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {!isLoading && decisionSummary && priorityItems.length === 0 ? (
+            <div className="mt-5 rounded-2xl border border-panel-border bg-panel/55 px-4 py-4">
+              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Current readiness scope</span>
+              <p className="mt-2 text-sm leading-6 text-panel-copy">
+                No facilities are currently flagged for readiness review in this view.
+              </p>
+            </div>
+          ) : null}
+
+          {!isLoading && decisionSummary?.related_surfaces.has_linked_alerts ? (
+            <p className="mt-4 text-sm text-panel-muted">
+              Linked alert context is present for {decisionSummary.related_surfaces.linked_alert_count} alert
+              {decisionSummary.related_surfaces.linked_alert_count === 1 ? "" : " records"} in the current readiness scope.
+            </p>
+          ) : null}
+
+          {!isLoading && hasClientMatrixFilters ? (
+            <p className="mt-3 text-sm text-panel-muted">
+              The matrix filters below are narrower than the readiness summary shown above.
+            </p>
+          ) : null}
+        </Card>
+
+        <section ref={matrixRef} className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_22rem]">
           <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
             <div className="space-y-1.5">
               <div className="min-w-0">
@@ -240,17 +478,92 @@ export default function FacilityReadinessPage() {
                   </span>
                 </label>
 
-                <label className="grid gap-2 xl:justify-self-end">
+                <div className="grid gap-2 xl:justify-self-end">
                   <span aria-hidden="true" className="text-sm font-medium text-transparent">
                     Filters
                   </span>
-                  <Button variant="secondary" size="icon" className="size-10" aria-label="More filters">
-                    <Filter className="size-4" aria-hidden="true" />
-                  </Button>
-                </label>
+                  <div className="relative">
+                    <Button
+                      variant="secondary"
+                      size="icon"
+                      className={cn(
+                        "size-10",
+                        advancedFilter !== "ALL" &&
+                          "border-[color:var(--brand)]/45 bg-[color-mix(in_srgb,var(--brand)_14%,var(--panel))] text-brand",
+                      )}
+                      aria-label={`More filters${advancedFilter !== "ALL" ? `: ${ADVANCED_FILTER_LABELS[advancedFilter]}` : ""}`}
+                      aria-expanded={isAdvancedFilterOpen}
+                      onClick={() => setIsAdvancedFilterOpen((value) => !value)}
+                    >
+                      <Filter className="size-4" aria-hidden="true" />
+                    </Button>
+
+                    {isAdvancedFilterOpen ? (
+                      <div className="absolute right-0 z-20 mt-2 w-72 rounded-[1.5rem] border border-panel-border bg-panel p-3 shadow-[var(--dashboard-card-shadow)]">
+                        <div className="flex items-start justify-between gap-3 px-2 py-1">
+                          <div>
+                            <p className="text-sm font-semibold text-panel-strong">Filter facilities</p>
+                            <p className="mt-1 text-xs leading-5 text-panel-muted">Narrow the matrix by operational signal.</p>
+                          </div>
+                          {advancedFilter !== "ALL" ? (
+                            <button
+                              type="button"
+                              className="text-xs font-semibold text-brand transition hover:text-[var(--login-link-hover)]"
+                              onClick={() => {
+                                setAdvancedFilter("ALL");
+                                setIsAdvancedFilterOpen(false);
+                              }}
+                            >
+                              Reset
+                            </button>
+                          ) : null}
+                        </div>
+
+                        <div className="mt-2 space-y-1">
+                          {(["ALL", "STALE", "ACTIVE_REVIEW", "UPDATE_PENDING", "ESCALATED", "HIGH_RISK"] satisfies FacilityAdvancedFilter[]).map(
+                            (filter) => (
+                              <button
+                                key={filter}
+                                type="button"
+                                className={cn(
+                                  "flex w-full items-center justify-between gap-3 rounded-2xl px-3 py-2 text-left text-sm transition",
+                                  advancedFilter === filter
+                                    ? "bg-[color-mix(in_srgb,var(--brand)_14%,var(--panel))] text-panel-strong"
+                                    : "text-panel-copy hover:bg-[color-mix(in_srgb,var(--dashboard-nav-hover)_45%,transparent)]",
+                                )}
+                                onClick={() => {
+                                  setAdvancedFilter(filter);
+                                  setIsAdvancedFilterOpen(false);
+                                }}
+                              >
+                                <span>{ADVANCED_FILTER_LABELS[filter]}</span>
+                                <span className="rounded-pill border border-panel-border px-2 py-0.5 text-xs font-semibold text-panel-muted">
+                                  {advancedFilterCounts[filter]}
+                                </span>
+                              </button>
+                            ),
+                          )}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
                 </div>
               </div>
             </div>
+
+            {advancedFilter !== "ALL" ? (
+              <div className="mt-4 flex flex-wrap items-center gap-2 text-sm text-panel-muted">
+                <span>Active filter:</span>
+                <button
+                  type="button"
+                  className="inline-flex items-center rounded-pill border border-[color:var(--brand)]/35 bg-[color-mix(in_srgb,var(--brand)_10%,var(--panel))] px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-brand transition hover:bg-[color-mix(in_srgb,var(--brand)_16%,var(--panel))]"
+                  onClick={() => setAdvancedFilter("ALL")}
+                >
+                  {ADVANCED_FILTER_LABELS[advancedFilter]}
+                </button>
+              </div>
+            ) : null}
 
             <div className="mt-6 overflow-hidden rounded-[1.5rem] border border-panel-table-wrap">
               <div className="overflow-x-auto">
@@ -285,10 +598,18 @@ export default function FacilityReadinessPage() {
                         </tr>
                       ))
                     ) : visibleRows.length ? (
-                      visibleRows.map((row) => (
+                      visibleRows.map((row) => {
+                        const workflowState = workflowStateByFacilityId.get(row.facilityId);
+                        return (
                         <tr
                           key={row.id}
-                          className="cursor-pointer transition hover:bg-[color-mix(in_srgb,var(--dashboard-nav-hover)_40%,transparent)]"
+                          className={cn(
+                            "cursor-pointer transition hover:bg-[color-mix(in_srgb,var(--dashboard-nav-hover)_40%,transparent)]",
+                            priorityLabelByFacilityId.has(row.facilityId) &&
+                              "bg-[color-mix(in_srgb,var(--brand)_8%,transparent)]",
+                            focusedFacilityId === row.facilityId &&
+                              "bg-[color-mix(in_srgb,var(--brand)_12%,transparent)] ring-1 ring-[color:var(--brand)]/25",
+                          )}
                         >
                           <td className="px-5 py-4 align-top">
                             <div className="flex items-center gap-3">
@@ -297,6 +618,18 @@ export default function FacilityReadinessPage() {
                               </span>
                               <div>
                                 <strong className="block text-base text-panel-strong">{row.facilityName}</strong>
+                                {priorityLabelByFacilityId.has(row.facilityId) ? (
+                                  <small className="mt-1 inline-flex rounded-pill bg-[color-mix(in_srgb,var(--brand)_12%,white)] px-2.5 py-1 text-xs font-semibold text-brand dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]">
+                                    {priorityLabelByFacilityId.get(row.facilityId)}
+                                  </small>
+                                ) : null}
+                                {workflowState && workflowState.label !== "No review signals" ? (
+                                  <small className="mt-1 block">
+                                    <StatusBadge tone={workflowState.tone} className="tracking-[0.1em]">
+                                      {workflowState.label}
+                                    </StatusBadge>
+                                  </small>
+                                ) : null}
                                 <small className="text-sm text-panel-muted">{row.facilityType}</small>
                               </div>
                             </div>
@@ -334,9 +667,11 @@ export default function FacilityReadinessPage() {
                           <td className="px-5 py-4 align-top">
                             <div className="space-y-2">
                               <span className="block text-panel-copy">{row.lastReported}</span>
-                              <StatusBadge tone={freshnessTone(row.freshnessState)} className="tracking-[0.12em]">
-                                {row.freshnessState === "FRESH" ? "Recent" : row.freshnessState === "WARNING" ? "Warning" : "Stale"}
-                              </StatusBadge>
+                              <span title={row.freshnessState === "STALE" ? "Last reported data is outdated." : undefined}>
+                                <StatusBadge tone={freshnessTone(row.freshnessState)} className="tracking-[0.12em]">
+                                  {row.freshnessState === "FRESH" ? "Recent" : row.freshnessState === "WARNING" ? "Warning" : "Stale"}
+                                </StatusBadge>
+                              </span>
                             </div>
                           </td>
                           <td className="px-5 py-4 align-top">
@@ -344,11 +679,12 @@ export default function FacilityReadinessPage() {
                               href={`/facility-readiness/${row.id}`}
                               className="inline-flex h-9 items-center rounded-pill px-3 text-sm font-medium text-panel-copy transition hover:bg-[color-mix(in_srgb,var(--dashboard-nav-hover)_72%,transparent)] hover:text-panel-strong"
                             >
-                              Open
+                              Review detail
                             </Link>
                           </td>
                         </tr>
-                      ))
+                      );
+                      })
                     ) : (
                       <tr>
                         <td colSpan={7} className="px-5 py-10 text-center text-sm text-panel-muted">
@@ -395,51 +731,88 @@ export default function FacilityReadinessPage() {
             <Card className="rounded-[2rem] px-5 py-5">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <h2 className="text-2xl font-semibold text-panel-strong">{immediateAlertsTitle}</h2>
-                  <p className="mt-2 text-sm text-panel-muted">{immediateAlertsSubtitle}</p>
+                  <h2 className="text-2xl font-semibold text-panel-strong">{reviewSummaryTitle}</h2>
+                  <p className="mt-2 text-sm text-panel-muted">{reviewSummarySubtitle}</p>
                 </div>
-                <Button variant="secondary" className="h-10 px-4">
-                  <Filter className="size-4" aria-hidden="true" />
-                  Filter by ward
-                </Button>
+                {!isLoading && (decisionSummary?.state === "DEGRADED_CONFIDENCE" || allFacilitiesStale) ? (
+                  <StatusBadge tone="warning" className="tracking-[0.12em]">
+                    Low confidence
+                  </StatusBadge>
+                ) : null}
               </div>
 
               <div className="mt-5 space-y-3">
+                {!isLoading && workflowStates.length > 0 ? (
+                  <div className="grid gap-2 rounded-[1.25rem] border border-panel-table-wrap px-4 py-3 text-sm text-panel-copy">
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Active reviews</span>
+                      <strong className="text-panel-strong">{workflowCounts.activeReviews}</strong>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Update requests pending</span>
+                      <strong className="text-panel-strong">{workflowCounts.updateRequests}</strong>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>County reviews escalated</span>
+                      <strong className="text-panel-strong">{workflowCounts.escalations}</strong>
+                    </div>
+                  </div>
+                ) : null}
+
                 {isLoading ? (
                   <div className="rounded-[1.5rem] border border-panel-table-wrap px-4 py-5 text-sm text-panel-muted">
                     Loading facility readiness rows...
                   </div>
-                ) : immediateAlerts.length ? (
-                  immediateAlerts.map((row) => (
-                    <article key={row.id} className="rounded-[1.5rem] border border-panel-table-wrap px-4 py-4">
+                ) : priorityItems.length ? (
+                  priorityItems.map((priority) => {
+                    const row = priorityRows.find((candidate) => candidate.facilityId === priority.facility_id);
+                    return (
+                    <article key={priority.facility_id} className="rounded-[1.5rem] border border-panel-table-wrap px-4 py-4">
                       <div className="flex items-start justify-between gap-3">
-                        <strong className="text-base text-panel-strong">{row.facilityName}</strong>
-                        <StatusBadge tone="danger" className="tracking-[0.12em]">
-                          High calculated risk
+                        <div>
+                          <strong className="text-base text-panel-strong">{priority.facility_name}</strong>
+                          <span className="mt-1 block text-sm text-panel-muted">{priority.ward_name}</span>
+                        </div>
+                        <StatusBadge
+                          tone={priority.priority_rank === 1 ? "warning" : "default"}
+                          className="tracking-[0.12em]"
+                        >
+                          {priority.priority_label}
                         </StatusBadge>
                       </div>
                       <p className="mt-3 text-sm leading-6 text-panel-copy">
-                        Calculated readiness is higher in {row.wardName}. Estimated ORS readiness is {row.orsStockPercent}% with projected
-                        case activity at {row.projectedCases}.
+                        {priority.reason_text}
                       </p>
-                      <button
-                        type="button"
-                        className="mt-4 text-sm font-semibold text-panel-muted"
-                        disabled
+                      {row ? (
+                        <p className="mt-3 text-sm text-panel-muted">
+                          Calculated ORS estimate: {row.orsStockPercent}%. Projected cases: +{row.projectedCases}.
+                        </p>
+                      ) : null}
+                      <Button
+                        variant="secondary"
+                        className="mt-4"
+                        onClick={() => focusPriorityInMatrix(priority.facility_id, priority.facility_name, priority.ward_name)}
                       >
-                        {row.orsStockPercent < 30 ? "Dispatch unavailable" : "Facility notification unavailable"}
-                      </button>
+                        Focus in matrix
+                      </Button>
                     </article>
-                  ))
+                  );
+                  })
                 ) : (
                   <div className="flex items-start gap-3 rounded-[1.5rem] border border-panel-table-wrap px-4 py-5">
                     <span className="inline-flex size-10 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--success)_16%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_20%,transparent)]">
                       <ShieldCheck className="size-4" aria-hidden="true" />
                     </span>
                     <div>
-                      <strong className="block text-base text-panel-strong">No facility rows visible</strong>
+                      <strong className="block text-base text-panel-strong">
+                        {decisionSummary?.state === "DEGRADED_CONFIDENCE" || allFacilitiesStale
+                          ? "No review signals detected (low confidence)"
+                          : "Safe current view"}
+                      </strong>
                       <span className="mt-1 block text-sm text-panel-muted">
-                        No high calculated readiness difference is visible across the facility view.
+                        {decisionSummary?.state === "DEGRADED_CONFIDENCE" || allFacilitiesStale
+                          ? "No facilities are currently flagged for review, but data freshness is limited."
+                          : "No visible facilities are currently flagged for readiness review."}
                       </span>
                     </div>
                   </div>
@@ -450,36 +823,55 @@ export default function FacilityReadinessPage() {
             <Card className="rounded-[2rem] px-5 py-5">
               <div>
                 <h2 className="text-2xl font-semibold text-panel-strong">Surge Forecast</h2>
-                <p className="mt-2 text-sm text-panel-muted">Calculated 14-day projection from ward risk and recent alert activity</p>
+                <p className="mt-1 text-xs text-panel-muted">7-day projection from ward risk and alert activity</p>
               </div>
 
-              <div className="mt-5 rounded-[1.5rem] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] px-4 py-4">
-                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">7-day calculated outlook</span>
-                <strong className="mt-3 block text-4xl font-semibold leading-none text-[color:var(--warning)]">
+              <div className="mt-4 rounded-[1.5rem] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] px-4 py-4">
+                <span className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">7-day calculated outlook</span>
+                <strong className="mt-2 block text-4xl font-semibold leading-none text-[color:var(--warning)]">
                   +{isLoading ? "..." : forecastCases} cases
                 </strong>
-                <span className="mt-3 block text-sm text-panel-copy">
+                <span className="mt-2 block text-xs text-panel-muted">
                   {isLoading ? "Loading..." : `${overloadedFacilities} facilities in high calculated readiness difference`}
                 </span>
               </div>
 
-              <p className="mt-4 text-sm font-medium text-panel-copy">
-                {isLoading ? "Calculating summary..." : forecastActionGuidance}
-              </p>
+              <div className="mt-4 space-y-2 rounded-[1.25rem] border border-panel-table-wrap px-3 py-3 text-sm">
+                {[
+                  ["Impact", forecastImpactScan],
+                  ["Action", forecastActionScan],
+                  ["Confidence", forecastConfidenceScan],
+                ].map(([label, value]) => (
+                  <div key={label} className="grid grid-cols-[5.75rem_minmax(0,1fr)] items-start gap-3">
+                    <span className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-panel-subtle">{label}</span>
+                    <span className={cn("font-semibold text-panel-strong", label === "Confidence" && forecastConfidenceScan.startsWith("Low") ? "text-[color:var(--warning)]" : "")}>
+                      {value}
+                    </span>
+                  </div>
+                ))}
+              </div>
 
               <div className="mt-5 space-y-3">
-                {facilityRows.slice(0, 3).map((row) => (
+                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Top contributors</span>
+                {(priorityRows.length ? priorityRows : facilityRows.slice(0, 3)).map((row) => (
                   <div key={`forecast-${row.id}`} className="flex items-center justify-between gap-3 text-sm">
-                    <span className="text-panel-copy">{row.facilityName}</span>
+                    <div className="min-w-0">
+                      <span className="block truncate text-panel-copy">{compactFacilityName(row.facilityName)}</span>
+                      {priorityLabelByFacilityId.has(row.facilityId) ? (
+                        <span className="ml-2 text-xs font-semibold uppercase tracking-[0.12em] text-panel-subtle">
+                          {priorityLabelByFacilityId.get(row.facilityId)}
+                        </span>
+                      ) : null}
+                    </div>
                     <strong className="text-[color:var(--warning)]">+{row.projectedCases}</strong>
                   </div>
                 ))}
               </div>
 
-              <Card className="mt-5 rounded-[1.5rem] bg-[color-mix(in_srgb,var(--brand)_8%,var(--panel))] px-4 py-4 shadow-none">
-                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-brand">Important limitation</span>
-                <p className="mt-2 text-sm text-panel-copy">
-                  This page does not yet have live facility inventory, staffing roster, or bed occupancy feeds. These readiness figures remain calculated estimates.
+              <Card className="mt-5 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--brand)_8%,var(--panel))] px-3 py-3 shadow-none">
+                <span className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-brand">Limitation</span>
+                <p className="mt-1 text-xs leading-5 text-panel-copy">
+                  Calculated estimates only. No live inventory, staffing, or bed feeds.
                 </p>
               </Card>
             </Card>

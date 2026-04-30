@@ -1,15 +1,22 @@
 import { NextResponse } from "next/server";
 
 import type {
-  AlertRecord,
+  DashboardNotification,
   FacilityRecord,
+  ModelRunRecord,
+  IngestionRunRecord,
   LatestWardRisk,
   PaginatedResponse,
   TopbarData,
   TopbarFeedStatus,
-  TopbarNotification,
 } from "@/lib/dashboard";
 import { ServerApiError, fetchBackendJson } from "@/lib/server-api";
+import {
+  buildFreshnessSummary,
+  getLatestDataSyncTimestamp,
+  getLatestModelRunTimestamp,
+  getLatestPredictionTimestamp,
+} from "@/app/api/dashboard/_freshness";
 
 const STALE_THRESHOLD_MINUTES = 120;
 
@@ -24,39 +31,6 @@ function isStale(timestamp: string | null) {
   }
 
   return Date.now() - value > STALE_THRESHOLD_MINUTES * 60 * 1000;
-}
-
-function buildAlertNotifications(alerts: AlertRecord[]): TopbarNotification[] {
-  return alerts.slice(0, 4).map((alert) => ({
-    id: `alert-${alert.id}`,
-    level: alert.status === "FAILED" ? "critical" : alert.status === "RETRY_PENDING" ? "warning" : "info",
-    title:
-      alert.status === "FAILED"
-        ? `${alert.ward_name}: alert delivery failed`
-        : alert.status === "RETRY_PENDING"
-          ? `${alert.ward_name}: alert retry pending`
-          : `${alert.ward_name}: alert delivered`,
-    context: `${alert.channel} alert for ${alert.recipient} is currently ${alert.status.toLowerCase().replaceAll("_", " ")}.`,
-    action: "Open Alert",
-    href: `/alerts/${alert.id}`,
-    timestamp: alert.created_at,
-  }));
-}
-
-function buildRiskNotifications(risks: LatestWardRisk[]): TopbarNotification[] {
-  return risks
-    .filter((risk) => risk.risk_level === "HIGH")
-    .sort((left, right) => (right.risk_score ?? 0) - (left.risk_score ?? 0))
-    .slice(0, 2)
-    .map((risk) => ({
-      id: `risk-${risk.ward_id}`,
-      level: "warning" as const,
-      title: `${risk.ward_name}: high ward risk`,
-      context: `Latest ward score is ${Math.round((risk.risk_score ?? 0) * 100)}% with ${risk.predicted_cases} predicted cases.`,
-      action: "Open Ward",
-      href: `/wards/${risk.ward_id}`,
-      timestamp: risk.generated_at ?? new Date().toISOString(),
-    }));
 }
 
 function buildFeedStatuses(
@@ -86,18 +60,32 @@ function buildFeedStatuses(
   ];
 }
 
+type NotificationListResponse = {
+  count: number;
+  unread_count: number;
+  highest_unread_severity: "INFO" | "WARNING" | "CRITICAL" | null;
+  system_status: "STABLE" | "DATA_FRESHNESS_DEGRADED" | "ACTION_REQUIRED";
+  results: DashboardNotification[];
+};
+
 export async function GET(request: Request) {
   const cookieHeader = request.headers.get("cookie") ?? "";
 
   try {
-    const [alerts, latestRisks, facilities] = await Promise.all([
-      fetchBackendJson<PaginatedResponse<AlertRecord>>("/alerts/?page_size=20&ordering=-created_at", {
+    const [notifications, latestRisks, facilities, modelRuns, ingestionRuns] = await Promise.all([
+      fetchBackendJson<NotificationListResponse>("/notifications/?page_size=100", {
         cookieHeader,
       }),
       fetchBackendJson<LatestWardRisk[]>("/risk-score/latest/", {
         cookieHeader,
       }),
       fetchBackendJson<PaginatedResponse<FacilityRecord>>("/facilities/?page_size=100&ordering=-updated_at", {
+        cookieHeader,
+      }),
+      fetchBackendJson<PaginatedResponse<ModelRunRecord>>("/model-runs/?page_size=1&ordering=-completed_at", {
+        cookieHeader,
+      }),
+      fetchBackendJson<PaginatedResponse<IngestionRunRecord>>("/ingestion-runs/?page_size=1&ordering=-started_at", {
         cookieHeader,
       }),
     ]);
@@ -112,12 +100,14 @@ export async function GET(request: Request) {
       return latest;
     }, null);
 
-    const latestAlertTimestamp = alerts.results.reduce<string | null>((latest, alert) => {
-      if (!latest || new Date(alert.created_at).getTime() > new Date(latest).getTime()) {
-        return alert.created_at;
-      }
-      return latest;
-    }, null);
+    const latestAlertTimestamp = notifications.results
+      .filter((item) => item.source_object_type === "alert")
+      .reduce<string | null>((latest, item) => {
+        if (!latest || new Date(item.created_at).getTime() > new Date(latest).getTime()) {
+          return item.created_at;
+        }
+        return latest;
+      }, null);
 
     const latestFacilityTimestamp = facilities.results.reduce<string | null>((latest, facility) => {
       if (!latest || new Date(facility.updated_at).getTime() > new Date(latest).getTime()) {
@@ -125,17 +115,22 @@ export async function GET(request: Request) {
       }
       return latest;
     }, null);
-
-    const notifications: TopbarNotification[] = [
-      ...buildAlertNotifications(alerts.results),
-      ...buildRiskNotifications(latestRisks),
-    ]
-      .sort((left, right) => new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime())
-      .slice(0, 6);
+    const latestModelRunTimestamp = getLatestModelRunTimestamp(modelRuns.results);
+    const latestDataSyncTimestamp = getLatestDataSyncTimestamp(ingestionRuns.results);
+    const predictionGeneratedAt = getLatestPredictionTimestamp(latestRisks);
 
     const payload: TopbarData = {
-      notifications,
+      notifications: notifications.results,
+      unread_count: notifications.unread_count,
+      highest_unread_severity: notifications.highest_unread_severity,
+      system_status: notifications.system_status,
       feeds: buildFeedStatuses(latestRiskTimestamp, latestAlertTimestamp, latestFacilityTimestamp),
+      freshness: buildFreshnessSummary(
+        latestModelRunTimestamp,
+        latestDataSyncTimestamp,
+        latestAlertTimestamp,
+        predictionGeneratedAt,
+      ),
     };
 
     return NextResponse.json(payload);

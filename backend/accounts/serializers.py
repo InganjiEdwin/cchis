@@ -316,34 +316,23 @@ class AccessRequestSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Unable to process request.")
 
         client_started_at_ms = attrs.get("client_started_at_ms")
-        if client_started_at_ms is None:
-            security_logger.warning(
-                "access_request_timing_rejected",
-                extra={
-                    "event_type": "access_request_timing_rejected",
-                    "reason": "missing_client_started_at_ms",
-                    "ip_address": get_client_ip(request) if request else None,
-                    "request_path": getattr(request, "path", None),
-                },
-            )
-            raise serializers.ValidationError("Unable to process request.")
-
-        # Compare against server time to reject suspicious near-instant submissions.
-        current_timestamp_ms = int(time.time() * 1000)
-        minimum_age_ms = settings.ACCESS_REQUEST_MIN_SUBMISSION_AGE_MS
-        if client_started_at_ms > current_timestamp_ms or (current_timestamp_ms - client_started_at_ms) < minimum_age_ms:
-            security_logger.warning(
-                "access_request_timing_rejected",
-                extra={
-                    "event_type": "access_request_timing_rejected",
-                    "reason": "submission_too_fast",
-                    "ip_address": get_client_ip(request) if request else None,
-                    "request_path": getattr(request, "path", None),
-                    "submission_age_ms": current_timestamp_ms - client_started_at_ms,
-                    "minimum_age_ms": minimum_age_ms,
-                },
-            )
-            raise serializers.ValidationError("Unable to process request.")
+        if client_started_at_ms is not None:
+            # Compare against server time to reject suspicious near-instant submissions.
+            current_timestamp_ms = int(time.time() * 1000)
+            minimum_age_ms = settings.ACCESS_REQUEST_MIN_SUBMISSION_AGE_MS
+            if client_started_at_ms > current_timestamp_ms or (current_timestamp_ms - client_started_at_ms) < minimum_age_ms:
+                security_logger.warning(
+                    "access_request_timing_rejected",
+                    extra={
+                        "event_type": "access_request_timing_rejected",
+                        "reason": "submission_too_fast",
+                        "ip_address": get_client_ip(request) if request else None,
+                        "request_path": getattr(request, "path", None),
+                        "submission_age_ms": current_timestamp_ms - client_started_at_ms,
+                        "minimum_age_ms": minimum_age_ms,
+                    },
+                )
+                raise serializers.ValidationError("Unable to process request.")
 
         county = attrs.get("county", "").strip()
         ward_name = attrs.get("administrative_ward", "").strip()

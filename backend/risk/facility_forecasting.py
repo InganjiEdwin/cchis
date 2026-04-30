@@ -8,7 +8,7 @@ from django.utils import timezone
 from scipy.optimize import minimize
 from scipy.special import gammaln
 
-from risk.models import FacilityForecast, FacilityForecastRun, HealthFacility, Ward
+from risk.models import FacilityForecast, FacilityForecastRun, FeatureDataset, FeatureDatasetRow, HealthFacility, Ward
 
 from .services import build_facility_intelligence_snapshot, latest_riskscore_for_ward
 
@@ -47,6 +47,59 @@ class FacilityForecastRow:
     staffing_percent: int
     ors_estimate_percent: int
     target_count: int
+
+
+def _facility_forecast_feature_values_from_row(row: FacilityForecastRow) -> dict:
+    return {
+        "facility_id": row.facility.id,
+        "facility_name": row.facility.name,
+        "ward_id": row.facility.ward_id,
+        "ward_name": row.facility.ward.name,
+        "ward_risk_score": row.ward_risk_score,
+        "ward_alert_count": row.ward_alert_count,
+        "facility_level_numeric": row.facility_level_numeric,
+        "facility_type_numeric": row.facility_type_numeric,
+        "staffing_percent": row.staffing_percent,
+        "ors_estimate_percent": row.ors_estimate_percent,
+    }
+
+
+def _persist_facility_forecast_feature_dataset(
+    *,
+    rows: list[FacilityForecastRow],
+    dataset_kind: str,
+    month: int,
+) -> FeatureDataset:
+    dataset_role = "training" if dataset_kind == FeatureDataset.KIND_TRAINING else "inference"
+    dataset = FeatureDataset.objects.create(
+        dataset_ref=f"facility-forecast-{dataset_role}-{FACILITY_FORECAST_FEATURE_SCHEMA_VERSION}-month-{month}-{uuid4().hex[:8]}",
+        dataset_kind=dataset_kind,
+        schema_version=FACILITY_FORECAST_FEATURE_SCHEMA_VERSION,
+        source_kind=FeatureDataset.SOURCE_KIND_HYBRID,
+        month=month,
+        feature_keys=FACILITY_FORECAST_FEATURE_KEYS,
+        row_count=len(rows),
+        lineage_metadata={
+            "builder": "_persist_facility_forecast_feature_dataset",
+            "dataset_role": dataset_role,
+            "model_family": "facility_burden_forecasting",
+            "target_mode": "proxy_derived_facility_burden" if dataset_kind == FeatureDataset.KIND_TRAINING else "not_applicable",
+        },
+    )
+    FeatureDatasetRow.objects.bulk_create(
+        [
+            FeatureDatasetRow(
+                dataset=dataset,
+                ward=row.facility.ward,
+                ward_name_snapshot=row.facility.ward.name,
+                month=month,
+                feature_values=_facility_forecast_feature_values_from_row(row),
+                label=row.target_count if dataset_kind == FeatureDataset.KIND_TRAINING else None,
+            )
+            for row in rows
+        ]
+    )
+    return dataset
 
 
 def build_facility_forecasting_truth_audit() -> dict:
@@ -104,7 +157,12 @@ def build_facility_forecasting_truth_audit() -> dict:
 
 
 def _latest_successful_facility_forecast_run() -> FacilityForecastRun | None:
-    return FacilityForecastRun.objects.filter(status=FacilityForecastRun.STATUS_SUCCESS).order_by("-started_at").first()
+    return (
+        FacilityForecastRun.objects.filter(status=FacilityForecastRun.STATUS_SUCCESS)
+        .exclude(model_version__startswith="seed-scenario-ff-")
+        .order_by("-started_at")
+        .first()
+    )
 
 
 def _latest_promoted_facility_forecast_run() -> FacilityForecastRun | None:
@@ -113,6 +171,7 @@ def _latest_promoted_facility_forecast_run() -> FacilityForecastRun | None:
             status=FacilityForecastRun.STATUS_SUCCESS,
             metadata__promotion_target=FACILITY_FORECAST_PROMOTION_TARGET_DASHBOARD,
         )
+        .exclude(model_version__startswith="seed-scenario-ff-")
         .order_by("-started_at")
         .first()
     )
@@ -483,6 +542,18 @@ def run_facility_burden_forecast_pipeline(
         raise RuntimeError("No active facilities are available for facility burden forecasting.")
 
     base_rows = _build_base_training_rows(facilities)
+    training_rows = _expand_training_rows(base_rows)
+    dataset_month = timezone.now().month
+    training_dataset = _persist_facility_forecast_feature_dataset(
+        rows=training_rows,
+        dataset_kind=FeatureDataset.KIND_TRAINING,
+        month=dataset_month,
+    )
+    inference_dataset = _persist_facility_forecast_feature_dataset(
+        rows=base_rows,
+        dataset_kind=FeatureDataset.KIND_INFERENCE,
+        month=dataset_month,
+    )
     run = FacilityForecastRun.objects.create(
         algorithm_name="negative-binomial-baseline",
         model_version=model_version,
@@ -502,13 +573,14 @@ def run_facility_burden_forecast_pipeline(
             "model_family": "facility_burden_forecasting",
             "baseline_model_status": "implemented_not_promoted",
             "target_mode": "proxy_derived_facility_burden",
-            "training_dataset_ref": f"facility-forecast-training-{FACILITY_FORECAST_FEATURE_SCHEMA_VERSION}-{uuid4().hex[:8]}",
-            "inference_dataset_ref": f"facility-forecast-inference-{FACILITY_FORECAST_FEATURE_SCHEMA_VERSION}-{uuid4().hex[:8]}",
+            "training_dataset_ref": training_dataset.dataset_ref,
+            "inference_dataset_ref": inference_dataset.dataset_ref,
+            "training_feature_dataset_id": training_dataset.id,
+            "inference_feature_dataset_id": inference_dataset.id,
         },
     )
 
     try:
-        training_rows = _expand_training_rows(base_rows)
         x_train, y_train = _rows_to_matrix(training_rows)
         model = _fit_negative_binomial(x_train, y_train)
         y_hat = _predict_counts(model, x_train)
@@ -595,6 +667,13 @@ def latest_promoted_facility_forecast_for_facility(facility: HealthFacility) -> 
         .order_by("-generated_at")
         .first()
     )
+
+
+def preferred_facility_forecast_for_facility(facility: HealthFacility) -> FacilityForecast | None:
+    promoted_forecast = latest_promoted_facility_forecast_for_facility(facility)
+    if promoted_forecast is not None:
+        return promoted_forecast
+    return latest_facility_forecast_for_facility(facility)
 
 
 def promote_facility_forecast_run(
@@ -751,7 +830,7 @@ def _pressure_score_from_snapshot(readiness: dict) -> int:
 
 
 def build_initial_facility_forecast_preview(facility: HealthFacility) -> dict:
-    latest_forecast = latest_facility_forecast_for_facility(facility)
+    latest_forecast = preferred_facility_forecast_for_facility(facility)
     if latest_forecast and latest_forecast.forecast_run.status == FacilityForecastRun.STATUS_SUCCESS:
         promoted_forecast = is_promoted_facility_forecast_run(latest_forecast.forecast_run)
         return {

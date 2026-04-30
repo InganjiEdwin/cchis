@@ -48,6 +48,7 @@ from .serializers import (
     TwoFactorEnrollmentSetupSerializer,
 )
 from .turnstile import is_turnstile_enabled, verify_turnstile_token
+from .throttles import AuthScopedRateThrottle
 from .two_factor import (
     consume_pre_auth_token,
     generate_totp_secret,
@@ -892,6 +893,7 @@ class PasswordResetConfirmAPIView(APIView):
 
 class AccessRequestAPIView(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [AuthScopedRateThrottle]
     throttle_scope = "access_request"
 
     def post(self, request):
@@ -1009,6 +1011,7 @@ class AccessRequestAPIView(APIView):
 
 class AccessRequestOptionsAPIView(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [AuthScopedRateThrottle]
     throttle_scope = "access_request_options"
 
     def get(self, request):

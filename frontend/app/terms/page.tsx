@@ -1,7 +1,6 @@
 "use client";
 
 import { ArrowLeft, Download, LayoutGrid, ShieldAlert, Siren, Sparkles } from "lucide-react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
@@ -36,7 +35,7 @@ export default function TermsPage() {
 
   return (
     <PublicScreen className="bg-[var(--forgot-background)]">
-      <PublicTopbar extra={<button type="button" className="text-sm text-[var(--forgot-link)] transition hover:text-[var(--forgot-link-hover)]" onClick={() => router.back()}>Back</button>} />
+      <PublicTopbar />
       <PublicShell>
         <div className="w-full space-y-6">
           <div className="space-y-3">
@@ -98,7 +97,7 @@ export default function TermsPage() {
 
             <article className="space-y-4">
               <h2 className="text-2xl font-semibold text-panel-strong">5. Important Disclaimer</h2>
-              <div className="flex items-center gap-3 rounded-2xl border border-[color-mix(in_srgb,var(--warning)_24%,white)] bg-[color-mix(in_srgb,var(--warning)_8%,white)] px-4 py-3 text-sm text-[color:var(--warning)]">
+              <div className="flex items-center gap-3 rounded-2xl border border-[color-mix(in_srgb,var(--warning)_24%,white)] bg-[color-mix(in_srgb,var(--warning)_8%,white)] px-4 py-3 text-sm text-[color:var(--warning)] dark:border-[color-mix(in_srgb,var(--warning)_30%,transparent)] dark:bg-[color-mix(in_srgb,var(--warning)_14%,transparent)] dark:text-[color-mix(in_srgb,var(--warning)_86%,white)]">
                 <ShieldAlert className="size-5 shrink-0" aria-hidden="true" />
                 <p className="leading-6">
                   CHIS provides operational decision support informed by climate and risk signals. It does not replace professional judgment, official public health procedures, or verified field assessment.

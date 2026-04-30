@@ -32,7 +32,7 @@ services:
       context: ./backend
     container_name: cchis_backend
     restart: unless-stopped
-    command: sh -c "python manage.py runserver 0.0.0.0:8000"
+    command: sh -c "daphne -b 0.0.0.0 -p 8000 core.asgi:application"
     volumes:
       - ./backend:/app
     env_file:

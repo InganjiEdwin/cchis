@@ -8,6 +8,8 @@ import {
   fetchWardRiskDataViaBff,
   type AlertRecord,
   type FacilityRecord,
+  type FacilityReadinessDecisionSummary,
+  type FacilityReadinessWorkflowState,
   type LatestWardRisk,
 } from "@/lib/dashboard";
 import { queryKeys } from "@/lib/query-keys";
@@ -16,6 +18,8 @@ export type FacilityReadinessSnapshot = {
   facilities: FacilityRecord[];
   risks: LatestWardRisk[];
   alerts: AlertRecord[];
+  decisionSummary: FacilityReadinessDecisionSummary | null;
+  workflowStates: FacilityReadinessWorkflowState[];
 };
 
 export function useFacilityReadinessQuery({ enabled = true }: { enabled?: boolean } = {}) {
@@ -32,6 +36,8 @@ export function useFacilityReadinessQuery({ enabled = true }: { enabled?: boolea
         facilities: facilityData.results,
         risks: wardData.latestRisks,
         alerts: alertData.results,
+        decisionSummary: facilityData.decision_summary ?? null,
+        workflowStates: facilityData.workflow_states ?? [],
       };
     },
     enabled,

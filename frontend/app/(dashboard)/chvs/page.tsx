@@ -3,19 +3,13 @@
 import {
   Activity,
   AlertTriangle,
-  BellRing,
-  BriefcaseMedical,
   ChevronLeft,
   ChevronRight,
-  ChevronsRight,
   Clock3,
   Filter,
-  Megaphone,
-  MoreHorizontal,
   Search,
   ShieldAlert,
   Smartphone,
-  Users2,
   Wifi,
   WifiOff,
   X,
@@ -32,8 +26,19 @@ import { InputShell } from "@/components/ui/input-shell";
 import { StatusBanner } from "@/components/ui/status-banner";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { cn } from "@/lib/cn";
-import type { LatestWardRisk, WardMapFeature } from "@/lib/dashboard";
+import type {
+  ChvCoverageRequestPriority,
+  ChvCoverageRequestRecord,
+  ChvOperationsRecord,
+  LatestWardRisk,
+  WardMapFeature,
+} from "@/lib/dashboard";
 import { describeFreshness, formatRelativeTimestamp, getLatestTimestamp } from "@/lib/freshness";
+import { useAssignChvCoverageRequestMutation } from "@/queries/use-assign-chv-coverage-request-mutation";
+import { useCreateChvMessageMutation } from "@/queries/use-create-chv-message-mutation";
+import { useChvMessagesQuery } from "@/queries/use-chv-messages-query";
+import { useCreateChvCoverageRequestMutation } from "@/queries/use-create-chv-coverage-request-mutation";
+import { useChvCoverageRequestDetailQuery } from "@/queries/use-chv-coverage-request-detail-query";
 import { useChvOperationsQuery } from "@/queries/use-chv-operations-query";
 
 type FocusFilter = "ALL" | "HIGH_RISK";
@@ -45,6 +50,8 @@ type SelectedWardFilter = "ALL" | `id:${number}`;
 
 type RegistryRow = {
   id: number;
+  publicId: string;
+  wardId: number;
   initials: string;
   name: string;
   rosterId: string;
@@ -58,6 +65,10 @@ type RegistryRow = {
   phoneNumber: string;
   language: string;
   lastProtocolUpdate: string;
+  canMessage: boolean;
+  messageMode: "SEND" | "QUEUE_ONLY" | "UNAVAILABLE";
+  messageDeliveryKind: "LIVE" | "SIMULATED" | "QUEUE_ONLY" | "UNAVAILABLE";
+  canViewActivity: boolean;
 };
 
 const ROWS_PER_PAGE = 5;
@@ -104,6 +115,55 @@ function resolveRiskZone(level: string | null | undefined): RegistryRiskZone {
     return "MODERATE";
   }
   return "SAFE";
+}
+
+function normalizeChvMessageMode(chv: ChvOperationsRecord): RegistryRow["messageMode"] {
+  if (chv.message_mode === "SEND" || chv.message_mode === "QUEUE_ONLY" || chv.message_mode === "UNAVAILABLE") {
+    return chv.message_mode;
+  }
+
+  // Older payloads may omit the explicit capability fields. Default to the
+  // current real backend flow rather than silently hiding supported actions.
+  return "SEND";
+}
+
+function normalizeChvMessageDeliveryKind(
+  chv: ChvOperationsRecord,
+  messageMode: RegistryRow["messageMode"],
+): RegistryRow["messageDeliveryKind"] {
+  if (
+    chv.message_delivery_kind === "LIVE" ||
+    chv.message_delivery_kind === "SIMULATED" ||
+    chv.message_delivery_kind === "QUEUE_ONLY" ||
+    chv.message_delivery_kind === "UNAVAILABLE"
+  ) {
+    return chv.message_delivery_kind;
+  }
+
+  if (messageMode === "QUEUE_ONLY") {
+    return "QUEUE_ONLY";
+  }
+  if (messageMode === "UNAVAILABLE") {
+    return "UNAVAILABLE";
+  }
+  return "SIMULATED";
+}
+
+function normalizeChvCapabilities(chv: ChvOperationsRecord) {
+  const messageMode = normalizeChvMessageMode(chv);
+  const messageDeliveryKind = normalizeChvMessageDeliveryKind(chv, messageMode);
+  const canMessage =
+    typeof chv.can_message === "boolean"
+      ? chv.can_message
+      : messageMode === "SEND" || messageMode === "QUEUE_ONLY";
+  const canViewActivity = typeof chv.can_view_activity === "boolean" ? chv.can_view_activity : Boolean(chv.public_id);
+
+  return {
+    canMessage,
+    canViewActivity,
+    messageMode,
+    messageDeliveryKind,
+  };
 }
 
 function toSyncHealthLabel(syncHealth: SyncHealth) {
@@ -209,6 +269,121 @@ function getCoverageStatus(feature: WardMapFeature) {
   };
 }
 
+function isLiveCoverageRequestStatus(status: ChvCoverageRequestRecord["status"]) {
+  return status === "OPEN" || status === "APPROVED" || status === "IN_PROGRESS";
+}
+
+function hasStoredAlertLinkage(requestRecord: Pick<ChvCoverageRequestRecord, "trigger_source" | "linked_alerts_summary">) {
+  return requestRecord.trigger_source === "ALERT_DRIVEN" && requestRecord.linked_alerts_summary.length > 0;
+}
+
+function hasLinkedAlertContext(requestRecord: Pick<ChvCoverageRequestRecord, "linked_alerts_summary">) {
+  return requestRecord.linked_alerts_summary.length > 0;
+}
+
+function getCoverageRequestSourceDescription(
+  requestRecord: Pick<ChvCoverageRequestRecord, "trigger_source" | "linked_alerts_summary">,
+) {
+  if (hasStoredAlertLinkage(requestRecord)) {
+    return "This request was opened from alert context.";
+  }
+  if (hasLinkedAlertContext(requestRecord)) {
+    return "This request was opened manually and later linked to alert context.";
+  }
+  return "This request was opened without stored alert-linked context.";
+}
+
+function getCoverageRequestStatusLabel(status: ChvCoverageRequestRecord["status"]) {
+  switch (status) {
+    case "OPEN":
+      return "Coverage request open";
+    case "APPROVED":
+      return "Coverage approved";
+    case "IN_PROGRESS":
+      return "Assignment in progress";
+    case "REJECTED":
+      return "Coverage request rejected";
+    case "RESOLVED":
+      return "Coverage request resolved";
+    case "CANCELLED":
+    default:
+      return "Coverage request cancelled";
+  }
+}
+
+function getCoverageRequestStatusMessage(requestRecord: ChvCoverageRequestRecord) {
+  switch (requestRecord.status) {
+    case "OPEN":
+      return "This ward already has a live request pending review, so the next truthful action is to track that request instead of opening another one.";
+    case "APPROVED":
+      return "Coverage follow-up has been approved. The next truthful action is to review the request and watch assignment progress.";
+    case "IN_PROGRESS":
+      return "Assignment work is active for this ward, so the next truthful action is to review request progress instead of opening another request.";
+    case "REJECTED":
+      return "The latest request was rejected. Review the recorded reason before opening a new request.";
+    case "RESOLVED":
+      return "The latest request is resolved. Open a new request only if coverage conditions have changed again.";
+    case "CANCELLED":
+    default:
+      return "The latest request was cancelled. Review it before deciding whether to reopen the issue.";
+  }
+}
+
+function getDefaultCoverageRequestPriority(feature: WardMapFeature): ChvCoverageRequestPriority {
+  if (feature.properties.active_chv_count === 0 && feature.properties.risk_level === "HIGH") {
+    return "HIGH";
+  }
+  if (feature.properties.active_chv_count === 0) {
+    return "MEDIUM";
+  }
+  return feature.properties.risk_level === "HIGH" ? "MEDIUM" : "LOW";
+}
+
+function getPrefilledCoverageRequestReason(feature: WardMapFeature) {
+  if (feature.properties.active_chv_count === 0) {
+    return "Coverage gap detected: 0 active CHVs recorded in this ward.";
+  }
+
+  return `Coverage threshold concern detected: ${feature.properties.active_chv_count} active CHV${feature.properties.active_chv_count === 1 ? "" : "s"} recorded in this ward for the current risk profile.`;
+}
+
+function buildChvMessageTemplates(chvName: string, wardName: string) {
+  return [
+    {
+      label: "Check in",
+      body: `Hello ${chvName}, please check in when you are able and confirm your current field status in ${wardName}.`,
+    },
+    {
+      label: "Coverage follow-up",
+      body: `Hello ${chvName}, please review the current coverage situation in ${wardName} and confirm whether follow-up support is needed.`,
+    },
+    {
+      label: "Alert follow-up",
+      body: `Hello ${chvName}, please follow up on the latest alert context in ${wardName} and share any field update you have.`,
+    },
+  ] as const;
+}
+
+function getChvMessageCapabilityLabel(messageMode: RegistryRow["messageMode"], deliveryKind: RegistryRow["messageDeliveryKind"]) {
+  if (messageMode === "QUEUE_ONLY" || deliveryKind === "QUEUE_ONLY") {
+    return "Messages from this screen are queued only.";
+  }
+  if (deliveryKind === "SIMULATED") {
+    return "Test-mode SMS send is available from this screen.";
+  }
+  if (deliveryKind === "LIVE") {
+    return "Live SMS send is available from this screen.";
+  }
+  return "Messaging is not available from this screen.";
+}
+
+function getChvMessageDeliveryTag(deliveryKind: "LIVE" | "SIMULATED" | "QUEUE_ONLY" | "UNAVAILABLE") {
+  if (deliveryKind === "LIVE") return "Live delivery";
+  if (deliveryKind === "SIMULATED") return "Test mode";
+  if (deliveryKind === "QUEUE_ONLY") return "Queued only";
+  return "Unavailable";
+}
+
 export default function ChvsPage() {
   const { currentUser } = useAuth();
   const [search, setSearch] = useState("");
@@ -217,13 +392,30 @@ export default function ChvsPage() {
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("ALL");
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedChvId, setSelectedChvId] = useState<number | null>(null);
+  const [isChvMessageModalOpen, setIsChvMessageModalOpen] = useState(false);
+  const [selectedMessageTemplateLabel, setSelectedMessageTemplateLabel] = useState<string | null>(null);
+  const [messageBody, setMessageBody] = useState("");
+  const [messageFeedback, setMessageFeedback] = useState<string | null>(null);
+  const [isCoverageRequestModalOpen, setIsCoverageRequestModalOpen] = useState(false);
+  const [selectedCoverageRequestId, setSelectedCoverageRequestId] = useState<string | null>(null);
+  const [requestPriority, setRequestPriority] = useState<ChvCoverageRequestPriority>("MEDIUM");
+  const [requestCount, setRequestCount] = useState(1);
+  const [requestReason, setRequestReason] = useState("");
+  const [requestNotes, setRequestNotes] = useState("");
+  const [requestFeedback, setRequestFeedback] = useState<string | null>(null);
+  const [assignmentChvId, setAssignmentChvId] = useState<number | null>(null);
+  const [assignmentNotes, setAssignmentNotes] = useState("");
   const { data, isPending: isLoading, error } = useChvOperationsQuery({
     enabled: Boolean(currentUser),
   });
+  const createCoverageRequestMutation = useCreateChvCoverageRequestMutation();
+  const assignCoverageRequestMutation = useAssignChvCoverageRequestMutation();
   const chvs = data?.chvs ?? [];
   const latestRisks = data?.latestRisks ?? [];
   const alerts = data?.alerts ?? [];
   const wardMap = data?.wardMap ?? null;
+  const coverageRequests = data?.coverageRequests ?? [];
+  const coverageByWard = data?.coverageByWard ?? {};
   const mapFeatures = wardMap?.features ?? [];
 
   const latestTimestamp = useMemo(
@@ -310,17 +502,16 @@ export default function ChvsPage() {
     setCurrentPage(1);
   }, [focusFilter, quickFilter, search, selectedWard]);
 
-  const totalChvs = chvs.length;
   const activeChvs = filteredChvs.filter((item) => item.operational_status === "ACTIVE").length;
-  const acknowledgedRate = alerts.length
-    ? (alerts.filter((item) => item.status === "DELIVERED").length / alerts.length) * 100
-    : 0;
   const highUrgencyCases = filteredChvs.reduce((sum, item) => sum + item.triage_sessions_24h, 0);
 
   const registryRows = useMemo<RegistryRow[]>(() => {
     return filteredChvs.map((chv) => {
+      const capabilities = normalizeChvCapabilities(chv);
       return {
         id: chv.id,
+        publicId: chv.public_id,
+        wardId: chv.ward,
         initials: getInitials(chv.name),
         name: chv.name,
         rosterId: `Phone ${chv.phone_number}`,
@@ -334,6 +525,10 @@ export default function ChvsPage() {
         phoneNumber: chv.phone_number,
         language: chv.language,
         lastProtocolUpdate: chv.last_activity_at ? formatRelativeTimestamp(chv.last_activity_at) : "No recent activity",
+        canMessage: capabilities.canMessage,
+        messageMode: capabilities.messageMode,
+        messageDeliveryKind: capabilities.messageDeliveryKind,
+        canViewActivity: capabilities.canViewActivity,
       };
     });
   }, [filteredChvs, riskByWard]);
@@ -342,33 +537,28 @@ export default function ChvsPage() {
     () => registryRows.find((row) => row.id === selectedChvId) ?? null,
     [registryRows, selectedChvId],
   );
+  const {
+    data: chvMessages = [],
+    isPending: isChvMessagesPending,
+    error: chvMessagesError,
+  } = useChvMessagesQuery(selectedChv?.publicId ?? null, {
+    enabled: Boolean(selectedChv?.canMessage && isChvMessageModalOpen),
+  });
+  const createChvMessageMutation = useCreateChvMessageMutation(selectedChv?.publicId ?? null);
+
+  useEffect(() => {
+    setIsChvMessageModalOpen(false);
+    setSelectedMessageTemplateLabel(null);
+    setMessageBody("");
+    setMessageFeedback(null);
+  }, [selectedChvId]);
+  const latestChvMessage = chvMessages[0] ?? null;
+  const selectedChvMessageTemplates = selectedChv ? buildChvMessageTemplates(selectedChv.name, selectedChv.wardName) : [];
 
   const totalPages = Math.max(1, Math.ceil(registryRows.length / ROWS_PER_PAGE));
   const clampedPage = Math.min(currentPage, totalPages);
   const pagedRows = registryRows.slice((clampedPage - 1) * ROWS_PER_PAGE, clampedPage * ROWS_PER_PAGE);
 
-  const criticalCoverageGap = useMemo(() => {
-    const wardCounts = chvs.reduce((map, chv) => {
-      map.set(chv.ward, (map.get(chv.ward) ?? 0) + (chv.operational_status === "ACTIVE" ? 1 : 0));
-      return map;
-    }, new Map<number, number>());
-
-    const candidate = latestRisks.find(
-      (risk) => risk.risk_level === "HIGH" && (wardCounts.get(risk.ward_id) ?? 0) <= 1,
-    );
-
-    if (!candidate) {
-      return null;
-    }
-
-    return {
-      wardName: candidate.ward_name,
-      activeCount: wardCounts.get(candidate.ward_id) ?? 0,
-      predictedCases: candidate.predicted_cases,
-    };
-  }, [chvs, latestRisks]);
-
-  const hasCriticalCoverageGap = Boolean(criticalCoverageGap);
   const highPriorityReferrals = latestRisks
     .filter((item) => item.risk_level === "HIGH")
     .reduce(
@@ -379,19 +569,8 @@ export default function ChvsPage() {
           .reduce((chvSum, chv) => chvSum + chv.referrals_24h, 0),
       0,
     );
-  const activeReportingRate = totalChvs ? Math.round((activeChvs / totalChvs) * 100) : 0;
-  const commandStatus = {
-    assign: hasCriticalCoverageGap
-      ? `${criticalCoverageGap?.wardName} stands out in the visible coverage summary`
-      : "No visible wards stand out in the coverage summary",
-    broadcast: alerts.length
-      ? `${alerts.length} visible alert records are in this view`
-      : "No visible alert records are in this view",
-    training: `${registryRows.filter((row) => row.syncHealth !== "ONLINE").length} CHVs show delayed sync or offline status`,
-  };
-
-  const coverageShare = totalChvs ? Math.max(8, Math.round((activeChvs / totalChvs) * 100)) : 0;
-  const totalVisibleLabel = isLoading ? "..." : totalChvs.toLocaleString();
+  const delayedOrOfflineCount = registryRows.filter((row) => row.syncHealth !== "ONLINE").length;
+  const totalVisibleLabel = isLoading ? "..." : filteredChvs.length.toLocaleString();
   const activeVisibleLabel = isLoading ? "..." : activeChvs.toLocaleString();
   const casesVisibleLabel = isLoading ? "..." : highUrgencyCases.toLocaleString();
   const selectedMapWard = useMemo<WardMapFeature | null>(() => {
@@ -494,6 +673,105 @@ export default function ChvsPage() {
       priorities: priorities.slice(0, 3),
     };
   }, [mapFeatures]);
+  const selectedWardId =
+    selectedWard !== "ALL" ? Number(selectedWard.slice(3)) : selectedMapWard?.properties.backend_ward_id ?? null;
+  const selectedWardWorkflowSummary = selectedWardId ? coverageByWard[selectedWardId] ?? null : null;
+  const selectedWardLiveRequest =
+    selectedWardWorkflowSummary?.latestRequest && isLiveCoverageRequestStatus(selectedWardWorkflowSummary.latestRequest.status)
+      ? selectedWardWorkflowSummary.latestRequest
+      : null;
+  const canRequestCoverageFromSelectedWard = Boolean(
+    selectedMapWard && selectedWardCoverage?.label === "Gap" && !selectedWardLiveRequest,
+  );
+  const canAssignChvFromSelectedWard = selectedWardLiveRequest?.status === "APPROVED";
+  const selectedWardAlertsHref = selectedWardId ? `/alerts?ward_id=${selectedWardId}` : "/alerts";
+  const selectedWardPrimaryActionLabel = selectedWardLiveRequest
+    ? selectedWardLiveRequest.status === "OPEN"
+      ? "Track pending coverage request"
+      : selectedWardLiveRequest.status === "APPROVED"
+        ? "Assign CHV"
+        : "Review active request"
+    : canRequestCoverageFromSelectedWard
+      ? "Request coverage"
+      : selectedWardCoverage?.action ?? "Review ward coverage";
+  const selectedWardPrimaryActionDetail = selectedWardLiveRequest
+    ? `Latest request priority: ${selectedWardLiveRequest.priority}. Requested by ${selectedWardLiveRequest.requested_by_username ?? "system"} on ${formatRelativeTimestamp(selectedWardLiveRequest.created_at)}.`
+    : canRequestCoverageFromSelectedWard
+      ? "No active CHVs are visible here, so coverage follow-up should start with a real request."
+      : selectedWardCoverage?.label === "Low"
+        ? "Coverage is below the visible threshold for this ward's current risk."
+        : "Coverage is present, so monitor activity and review alerts before changing staffing.";
+  const selectedCoverageRequest = useMemo(
+    () =>
+      selectedCoverageRequestId
+        ? coverageRequests.find((requestRecord) => requestRecord.public_id === selectedCoverageRequestId) ?? null
+        : null,
+    [coverageRequests, selectedCoverageRequestId],
+  );
+  const selectedCoverageRequestDetailQuery = useChvCoverageRequestDetailQuery({
+    publicId: selectedCoverageRequestId,
+    enabled: Boolean(selectedCoverageRequestId),
+  });
+  const selectedCoverageRequestDetail = selectedCoverageRequestDetailQuery.data ?? selectedCoverageRequest;
+  const hasFreshSelectedCoverageRequestDetail = Boolean(selectedCoverageRequestDetailQuery.data);
+  const selectedWardName =
+    selectedMapWard?.properties.name ??
+    wardsForFilter.find((option) => option.value === selectedWard)?.label ??
+    null;
+  const filteredWardAlertCount = useMemo(() => {
+    if (!selectedWardId) {
+      return 0;
+    }
+
+    return alerts.filter((item) => item.ward === selectedWardId).length;
+  }, [alerts, selectedWardId]);
+  const operationalInsights = [
+    coverageSummary.gap > 0
+      ? `${coverageSummary.gap} ward${coverageSummary.gap === 1 ? "" : "s"} have no active CHV coverage in visible records.`
+      : "No visible wards are completely uncovered by active CHVs.",
+    delayedOrOfflineCount > 0
+      ? `${delayedOrOfflineCount} CHV${delayedOrOfflineCount === 1 ? "" : "s"} show delayed sync or offline status in the current view.`
+      : "No visible CHVs are currently flagged for delayed sync or offline status.",
+    highUrgencyCases > 0
+      ? `${highUrgencyCases} triage session${highUrgencyCases === 1 ? "" : "s"} were recorded in the last 24 hours.`
+      : "No triage sessions were recorded in the visible scope during the last 24 hours.",
+  ];
+
+  useEffect(() => {
+    if (!selectedMapWard) {
+      return;
+    }
+
+    setRequestPriority(getDefaultCoverageRequestPriority(selectedMapWard));
+    setRequestCount(1);
+    setRequestReason(getPrefilledCoverageRequestReason(selectedMapWard));
+    setRequestNotes("");
+  }, [selectedMapWard]);
+
+  const assignableWardChvs = useMemo(() => {
+    if (!selectedCoverageRequestDetail) {
+      return [];
+    }
+
+    return chvs.filter(
+      (chv) =>
+        chv.ward === selectedCoverageRequestDetail.ward &&
+        chv.is_active &&
+        chv.operational_status !== "OFFLINE",
+    );
+  }, [chvs, selectedCoverageRequestDetail]);
+
+  useEffect(() => {
+    if (!selectedCoverageRequestDetail || selectedCoverageRequestDetail.status !== "APPROVED") {
+      setAssignmentChvId(null);
+      setAssignmentNotes("");
+      return;
+    }
+
+    const firstCandidate = assignableWardChvs[0];
+    setAssignmentChvId(firstCandidate?.id ?? null);
+    setAssignmentNotes("");
+  }, [assignableWardChvs, selectedCoverageRequestDetail]);
 
   if (!currentUser) {
     return null;
@@ -518,6 +796,7 @@ export default function ChvsPage() {
             {error instanceof Error ? error.message : "Unable to load CHV operations."}
           </StatusBanner>
         ) : null}
+        {requestFeedback ? <StatusBanner tone="success">{requestFeedback}</StatusBanner> : null}
 
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <Card className="rounded-[2rem] px-5 py-5">
@@ -527,32 +806,23 @@ export default function ChvsPage() {
           </Card>
 
           <Card className="rounded-[2rem] px-5 py-5">
-            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Visible active CHVs</span>
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Active today</span>
             <div className="mt-3 flex items-end gap-2">
               <strong className="text-4xl font-semibold leading-none text-panel-strong">{activeVisibleLabel}</strong>
               <span className="pb-1 text-sm font-medium text-panel-muted">/ {totalVisibleLabel}</span>
             </div>
-            <div className="mt-4 h-2 rounded-full bg-[color-mix(in_srgb,var(--dashboard-table-line)_70%,transparent)]">
-              <span
-                className="block h-full rounded-full bg-brand"
-                style={{ width: `${coverageShare}%` }}
-                aria-hidden="true"
-              />
-            </div>
-            <p className="mt-3 text-sm text-panel-muted">{activeReportingRate}% active in the selected filter</p>
+            <p className="mt-4 text-sm text-panel-muted">CHVs marked active in the current visible scope</p>
           </Card>
 
           <Card className="rounded-[2rem] px-5 py-5">
-            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">
-              Alert delivery rate
-            </span>
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Coverage gaps</span>
             <div className="mt-3 flex items-center gap-3">
-              <strong className="text-4xl font-semibold leading-none text-panel-strong">{acknowledgedRate.toFixed(1)}%</strong>
-              <StatusBadge tone="warning" className="tracking-[0.12em]">
-                Calculated
+              <strong className="text-4xl font-semibold leading-none text-panel-strong">{coverageSummary.gap}</strong>
+              <StatusBadge tone={coverageSummary.gap > 0 ? "danger" : "success"} className="tracking-[0.12em]">
+                {coverageSummary.gap > 0 ? "Needs action" : "Stable"}
               </StatusBadge>
             </div>
-            <p className="mt-4 text-sm text-panel-muted">Calculated from visible alert delivery outcomes in this view</p>
+            <p className="mt-4 text-sm text-panel-muted">Wards with no active CHV coverage in the visible map scope</p>
           </Card>
 
           <Card className="rounded-[2rem] px-5 py-5">
@@ -618,7 +888,7 @@ export default function ChvsPage() {
             </div>
 
             <div className="relative mt-5 min-h-[39rem] overflow-hidden rounded-[1.75rem] border border-panel-table-wrap bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--brand)_8%,transparent),transparent_34%),linear-gradient(135deg,color-mix(in_srgb,var(--panel)_94%,var(--background-fade)),var(--panel))] p-4">
-              <div className="relative z-10 grid h-full gap-4 lg:grid-cols-[minmax(0,1.2fr)_18.5rem]">
+              <div className="relative z-10 grid h-full gap-4 lg:grid-cols-[minmax(0,1fr)_22rem] xl:grid-cols-[minmax(0,0.95fr)_24rem]">
                 <div className="min-h-[34rem] rounded-[1.5rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--panel)_92%,transparent)] p-2.5 shadow-[inset_0_1px_0_color-mix(in_srgb,var(--dashboard-table-line)_40%,transparent)]">
                   {mapFeatures.length ? (
                     <div className="flex h-full flex-col gap-4">
@@ -669,16 +939,102 @@ export default function ChvsPage() {
                         <div className="flex items-start justify-between gap-3">
                           <div>
                             <h3 className="text-lg font-semibold text-panel-strong">{selectedMapWard.properties.name}</h3>
-                            <p className="mt-1 text-sm text-panel-muted">{selectedWardRiskLabel}</p>
+                            <p className="mt-1 text-sm text-panel-muted">
+                              {selectedWardLiveRequest
+                                ? getCoverageRequestStatusLabel(selectedWardLiveRequest.status)
+                                : selectedWardRiskLabel}
+                            </p>
                           </div>
                           {selectedWardCoverage ? (
                             <StatusBadge tone={selectedWardCoverage.tone}>{selectedWardCoverage.label}</StatusBadge>
                           ) : null}
                         </div>
                         <p className="mt-3 text-sm text-panel-copy">
-                          {selectedWardCoverage?.reason ??
-                            "Select a ward to review CHV coverage relative to its recorded risk."}
+                          {selectedWardLiveRequest
+                            ? getCoverageRequestStatusMessage(selectedWardLiveRequest)
+                            : selectedWardCoverage?.reason ??
+                              "Select a ward to review CHV coverage relative to its recorded risk."}
                         </p>
+                      </div>
+
+                      <div className="flex flex-col gap-3 rounded-[1.25rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-icon-button-surface)_76%,transparent)] p-3">
+                        <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-panel-subtle">
+                          Recommended action
+                        </span>
+                        <strong className="text-base text-panel-strong">
+                          {selectedWardPrimaryActionLabel}
+                        </strong>
+                        <p className="text-xs text-panel-muted">{selectedWardPrimaryActionDetail}</p>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <button
+                            type="button"
+                            className={cn(
+                              "inline-flex h-10 items-center justify-center rounded-pill px-4 text-sm font-semibold transition",
+                              canRequestCoverageFromSelectedWard
+                                ? "bg-brand text-white hover:opacity-95"
+                                : "border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] text-panel-muted",
+                            )}
+                            disabled={!canRequestCoverageFromSelectedWard}
+                            onClick={() => {
+                              if (!canRequestCoverageFromSelectedWard) {
+                                return;
+                              }
+
+                              setRequestFeedback(null);
+                              setIsCoverageRequestModalOpen(true);
+                            }}
+                          >
+                            Request coverage
+                          </button>
+                          <a
+                            href={selectedWardAlertsHref}
+                            className="inline-flex h-10 items-center justify-center rounded-pill border border-panel-table-wrap px-4 text-sm font-semibold text-panel-copy transition hover:border-[var(--dashboard-icon-button-border)] hover:text-panel-strong"
+                          >
+                            View related alerts
+                          </a>
+                          {selectedWardLiveRequest ? (
+                            <button
+                              type="button"
+                              className="inline-flex h-10 items-center justify-center rounded-pill border border-panel-table-wrap px-4 text-sm font-semibold text-panel-copy transition hover:border-[var(--dashboard-icon-button-border)] hover:text-panel-strong"
+                              onClick={() => {
+                                setRequestFeedback(null);
+                                setSelectedCoverageRequestId(selectedWardLiveRequest.public_id);
+                              }}
+                            >
+                              View request
+                            </button>
+                          ) : null}
+                        </div>
+                        <div className="space-y-1 text-[11px] text-panel-muted">
+                          <p>
+                            {canRequestCoverageFromSelectedWard
+                              ? "Request coverage is available because this ward currently shows a visible coverage gap and no live request."
+                              : selectedWardLiveRequest
+                                ? "Request coverage stays locked while a live request already exists for this ward."
+                                : "Request coverage stays locked until this ward meets the visible gap threshold."}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {selectedMapWard.properties.backend_ward_id ? (
+                            <a
+                              href={`/wards/${selectedMapWard.properties.backend_ward_id}`}
+                              className={cn(
+                                "inline-flex h-10 items-center justify-center whitespace-nowrap rounded-pill px-3 text-xs font-semibold transition sm:px-4",
+                                selectedWardLiveRequest || selectedWardCoverage?.label === "Gap"
+                                  ? "border border-panel-table-wrap text-panel-copy hover:border-[var(--dashboard-icon-button-border)] hover:text-panel-strong"
+                                  : "bg-brand text-white hover:opacity-95",
+                              )}
+                            >
+                              Open Ward Detail
+                            </a>
+                          ) : null}
+                          <a
+                            href="#chv-registry"
+                            className="inline-flex h-10 items-center justify-center whitespace-nowrap rounded-pill border border-panel-table-wrap px-3 text-xs font-semibold text-panel-copy transition hover:border-[var(--dashboard-icon-button-border)] hover:text-panel-strong sm:px-4"
+                          >
+                            Review visible CHVs
+                          </a>
+                        </div>
                       </div>
 
                       <div className="rounded-[1.25rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-icon-button-surface)_76%,transparent)] p-3">
@@ -694,7 +1050,9 @@ export default function ChvsPage() {
                           ) : null}
                         </div>
                         <p className="mt-2 text-xs text-panel-muted">
-                          Action recommended: {selectedWardCoverage?.action ?? "Review ward coverage"}
+                          {selectedWardLiveRequest
+                            ? `${selectedWardWorkflowSummary?.liveRequestCount ?? 0} live request${selectedWardWorkflowSummary?.liveRequestCount === 1 ? "" : "s"} in this ward.`
+                            : `Action recommended: ${selectedWardCoverage?.action ?? "Review ward coverage"}`}
                         </p>
                       </div>
 
@@ -721,7 +1079,15 @@ export default function ChvsPage() {
                         </div>
                         <div className="flex items-center justify-between gap-3">
                           <span>Open alert records</span>
-                          <strong className="text-panel-strong">{selectedMapWard.properties.alert_count}</strong>
+                          <strong className="text-panel-strong">{filteredWardAlertCount || selectedMapWard.properties.alert_count}</strong>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span>Live coverage requests</span>
+                          <strong className="text-panel-strong">{selectedWardWorkflowSummary?.liveRequestCount ?? 0}</strong>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span>Active assignments</span>
+                          <strong className="text-panel-strong">{selectedWardWorkflowSummary?.activeAssignmentCount ?? 0}</strong>
                         </div>
                         <div className="flex items-center justify-between gap-3">
                           <span>Active facilities</span>
@@ -757,44 +1123,20 @@ export default function ChvsPage() {
 
           <div className="grid gap-5 xl:grid-cols-2">
             <Card className="rounded-[2rem] px-5 py-5">
-              <h2 className="text-2xl font-semibold text-panel-strong">Planning Summary</h2>
+              <h2 className="text-2xl font-semibold text-panel-strong">Operational Insights</h2>
               <p className="mt-3 text-sm text-panel-muted">
-                Assignment, alert count, and training notes below are calculated from visible records only. This page does not expose backend action routes for those actions.
+                Coverage gaps, sync delays, and field activity below are derived from visible records and meant to guide follow-up.
               </p>
 
               <div className="mt-5 space-y-3">
-                {[
-                  {
-                    icon: Users2,
-                    title: "Ward coverage summary",
-                    detail: commandStatus.assign,
-                  },
-                  {
-                    icon: Megaphone,
-                    title: "Alert count summary",
-                    detail: commandStatus.broadcast,
-                  },
-                  {
-                    icon: BriefcaseMedical,
-                    title: "Training status summary",
-                    detail: commandStatus.training,
-                  },
-                ].map((item) => (
-                  <button
-                    key={item.title}
-                    type="button"
-                    disabled
-                    className="flex w-full items-center gap-3 rounded-[1.5rem] border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 py-4 text-left"
+                {operationalInsights.map((insight) => (
+                  <div
+                    key={insight}
+                    className="flex items-start gap-3 rounded-[1.5rem] border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 py-4"
                   >
-                    <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--brand)_10%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]">
-                      <item.icon className="size-5" aria-hidden="true" />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <strong className="block text-base text-panel-strong">{item.title}</strong>
-                      <small className="mt-1 block text-sm text-panel-muted">{item.detail}</small>
-                    </span>
-                    <span className="text-sm font-semibold text-panel-muted">Read only</span>
-                  </button>
+                    <span className="mt-2 inline-flex size-2 rounded-full bg-brand" aria-hidden="true" />
+                    <p className="text-sm leading-6 text-panel-copy">{insight}</p>
+                  </div>
                 ))}
               </div>
             </Card>
@@ -827,17 +1169,20 @@ export default function ChvsPage() {
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <div className="rounded-[1.25rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-icon-button-surface)_74%,transparent)] px-4 py-3">
                   <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Current view</span>
+                  <p className="mt-2 text-xs leading-5 text-panel-muted">
+                    Gap = 0 active CHVs, or only 1 active CHV in a high-risk ward. Low = below the visible risk threshold.
+                  </p>
                   <div className="mt-3 space-y-2 text-sm text-panel-copy">
                     <div className="flex items-center justify-between gap-3">
-                      <span>Coverage gaps</span>
+                      <span>Gap wards (0 active CHVs)</span>
                       <strong className="text-[color:var(--danger)]">{coverageSummary.gap}</strong>
                     </div>
                     <div className="flex items-center justify-between gap-3">
-                      <span>Low coverage</span>
+                      <span>Below visible threshold</span>
                       <strong className="text-[color:var(--warning)]">{coverageSummary.low}</strong>
                     </div>
                     <div className="flex items-center justify-between gap-3">
-                      <span>Adequately covered</span>
+                      <span>Meets visible threshold</span>
                       <strong className="text-[color:var(--success)]">{coverageSummary.good}</strong>
                     </div>
                     <div className="flex items-center justify-between gap-3">
@@ -868,20 +1213,25 @@ export default function ChvsPage() {
                   )}
                 </div>
               </div>
-              <Button className="mt-5 w-full justify-center" disabled>
-                Redeployment unavailable
-              </Button>
+              <p className="mt-5 text-sm text-panel-muted">
+                Use the selected ward panel and CHV registry below to review the specific volunteers linked to the highest-priority gaps.
+              </p>
             </Card>
           </div>
         </section>
 
-        <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
+        <Card id="chv-registry" className="rounded-[2rem] px-5 py-5 sm:px-6">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div>
               <h2 className="text-[clamp(1.6rem,1rem+1vw,2.3rem)] font-semibold leading-tight text-panel-strong">
                 CHV Personnel Registry
               </h2>
               <p className="mt-2 text-sm text-panel-muted">Recorded CHV identity, sync, alert, and ward-linked status fields</p>
+              {selectedWard !== "ALL" && selectedWardName ? (
+                <p className="mt-2 text-xs font-medium text-brand">
+                  Registry filtered to {selectedWardName} from the ward coverage view.
+                </p>
+              ) : null}
             </div>
 
             <div className="flex min-w-0 flex-1 flex-col gap-4 xl:max-w-3xl xl:flex-row xl:flex-wrap xl:justify-end">
@@ -979,7 +1329,11 @@ export default function ChvsPage() {
                       <tr
                         key={row.id}
                         onClick={() => setSelectedChvId(row.id)}
-                        className="cursor-pointer transition hover:bg-[color-mix(in_srgb,var(--dashboard-nav-hover)_40%,transparent)]"
+                        className={cn(
+                          "cursor-pointer transition hover:bg-[color-mix(in_srgb,var(--dashboard-nav-hover)_40%,transparent)]",
+                          selectedWardId === row.wardId &&
+                            "bg-[color-mix(in_srgb,var(--brand)_6%,transparent)]",
+                        )}
                       >
                         <td className="px-5 py-4 align-top">
                           <div className="flex items-center gap-3">
@@ -994,9 +1348,14 @@ export default function ChvsPage() {
                         </td>
                         <td className="px-5 py-4 align-top text-panel-copy">{row.wardName}</td>
                         <td className="px-5 py-4 align-top">
-                          <StatusBadge tone={statusTone(row.status)} className="tracking-[0.12em]">
-                            {toTitleStatus(row.status)}
-                          </StatusBadge>
+                          <div className="space-y-2">
+                            <StatusBadge tone={statusTone(row.status)} className="tracking-[0.12em]">
+                              {toTitleStatus(row.status)}
+                            </StatusBadge>
+                            {row.status === "OFFLINE" ? (
+                              <p className="text-xs font-medium text-[color:var(--danger)]">Needs follow-up</p>
+                            ) : null}
+                          </div>
                         </td>
                         <td className="px-5 py-4 align-top text-panel-copy">
                           {row.alertsRaised} / {row.alertsAcknowledged}
@@ -1006,7 +1365,14 @@ export default function ChvsPage() {
                             {toSyncHealthLabel(row.syncHealth)}
                           </StatusBadge>
                         </td>
-                        <td className="px-5 py-4 align-top text-panel-copy">{row.lastSync}</td>
+                        <td className="px-5 py-4 align-top">
+                          <div className="space-y-2 text-panel-copy">
+                            <div>{row.lastSync}</div>
+                            {row.lastSync === "No sync recorded" ? (
+                              <p className="text-xs font-medium text-[color:var(--warning)]">No sync recorded</p>
+                            ) : null}
+                          </div>
+                        </td>
                         <td className="px-5 py-4 align-top">
                           <StatusBadge tone={riskTone(row.riskZone)} className="tracking-[0.12em]">
                             {toRiskZoneLabel(row.riskZone)}
@@ -1017,12 +1383,12 @@ export default function ChvsPage() {
                             <Button variant="ghost" className="h-9 rounded-pill px-3 text-sm" onClick={() => setSelectedChvId(row.id)}>
                               Open
                             </Button>
-                            <Button variant="secondary" size="icon" className="size-9" aria-label={`Messaging unavailable for ${row.name}`} disabled>
-                              <BellRing className="size-4" aria-hidden="true" />
-                            </Button>
-                            <Button variant="secondary" size="icon" className="size-9" aria-label={`Additional actions unavailable for ${row.name}`} disabled>
-                              <MoreHorizontal className="size-4" aria-hidden="true" />
-                            </Button>
+                            <a
+                              href={`/wards/${row.wardId}`}
+                              className="inline-flex h-9 items-center justify-center rounded-pill border border-panel-table-wrap px-3 text-sm font-semibold text-panel-copy transition hover:border-[var(--dashboard-icon-button-border)] hover:text-panel-strong"
+                            >
+                              Ward
+                            </a>
                           </div>
                         </td>
                       </tr>
@@ -1069,6 +1435,321 @@ export default function ChvsPage() {
             ) : null}
           </div>
         </Card>
+
+        {isCoverageRequestModalOpen && selectedMapWard ? (
+          <>
+            <button
+              type="button"
+              className="fixed inset-0 z-40 bg-slate-950/50 backdrop-blur-[1px]"
+              aria-label="Close coverage request modal"
+              onClick={() => setIsCoverageRequestModalOpen(false)}
+            />
+            <aside className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[30rem] flex-col border-l border-panel-border bg-panel shadow-2xl">
+              <div className="flex items-start justify-between gap-4 border-b border-panel-table-wrap px-5 py-5 sm:px-6">
+                <div>
+                  <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Request coverage</span>
+                  <h2 className="mt-2 text-2xl font-semibold text-panel-strong">{selectedMapWard.properties.name}</h2>
+                  <p className="mt-1 text-sm text-panel-muted">Create a real CHV coverage request for this ward.</p>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-10 shrink-0"
+                  onClick={() => setIsCoverageRequestModalOpen(false)}
+                  aria-label="Close coverage request modal"
+                >
+                  <X className="size-4" aria-hidden="true" />
+                </Button>
+              </div>
+
+              <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5 sm:px-6">
+                {createCoverageRequestMutation.error instanceof Error ? (
+                  <StatusBanner tone="danger">{createCoverageRequestMutation.error.message}</StatusBanner>
+                ) : null}
+                <Card className="rounded-2xl px-4 py-4 shadow-none">
+                  <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-panel-subtle">Request details</h3>
+                  <div className="mt-4 space-y-4 text-sm text-panel-copy">
+                    <div>
+                      <span className="block text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Ward</span>
+                      <strong className="mt-1 block text-panel-strong">{selectedMapWard.properties.name}</strong>
+                    </div>
+                    <label className="block">
+                      <span className="block text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Priority</span>
+                      <select
+                        value={requestPriority}
+                        onChange={(event) => setRequestPriority(event.target.value as ChvCoverageRequestPriority)}
+                        className="mt-2 h-11 w-full rounded-2xl border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 text-sm text-panel-strong outline-none"
+                      >
+                        <option value="LOW">Low</option>
+                        <option value="MEDIUM">Medium</option>
+                        <option value="HIGH">High</option>
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="block text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Requested CHVs</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={requestCount}
+                        onChange={(event) => setRequestCount(Number(event.target.value) || 1)}
+                        className="mt-2 h-11 w-full rounded-2xl border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 text-sm text-panel-strong outline-none"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="block text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Reason</span>
+                      <textarea
+                        value={requestReason}
+                        onChange={(event) => setRequestReason(event.target.value)}
+                        rows={4}
+                        className="mt-2 w-full rounded-2xl border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 py-3 text-sm text-panel-strong outline-none"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="block text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">Notes</span>
+                      <textarea
+                        value={requestNotes}
+                        onChange={(event) => setRequestNotes(event.target.value)}
+                        rows={3}
+                        className="mt-2 w-full rounded-2xl border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 py-3 text-sm text-panel-strong outline-none"
+                      />
+                    </label>
+                  </div>
+                </Card>
+              </div>
+
+              <div className="flex flex-col gap-3 border-t border-panel-table-wrap px-5 py-5 sm:px-6">
+                <Button
+                  onClick={async () => {
+                    if (!selectedMapWard.properties.backend_ward_id) {
+                      return;
+                    }
+
+                    try {
+                      const result = await createCoverageRequestMutation.mutateAsync({
+                        ward_id: selectedMapWard.properties.backend_ward_id,
+                        priority: requestPriority,
+                        reason: requestReason.trim(),
+                        requested_chv_count: requestCount,
+                        notes: requestNotes.trim(),
+                      });
+                      setRequestFeedback(`Coverage request created for ${selectedMapWard.properties.name}.`);
+                      setIsCoverageRequestModalOpen(false);
+                      setSelectedCoverageRequestId(result.public_id);
+                    } catch {
+                      // The mutation hook already exposes the backend error for the modal banner.
+                    }
+                  }}
+                  disabled={createCoverageRequestMutation.isPending || !requestReason.trim()}
+                >
+                  {createCoverageRequestMutation.isPending ? "Creating request..." : "Create coverage request"}
+                </Button>
+                <Button variant="secondary" onClick={() => setIsCoverageRequestModalOpen(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </aside>
+          </>
+        ) : null}
+
+        {selectedCoverageRequestId ? (
+          <>
+            <button
+              type="button"
+              className="fixed inset-0 z-40 bg-slate-950/50 backdrop-blur-[1px]"
+              aria-label="Close coverage request drawer"
+              onClick={() => setSelectedCoverageRequestId(null)}
+            />
+            <aside className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[30rem] flex-col border-l border-panel-border bg-panel shadow-2xl">
+              <div className="flex items-start justify-between gap-4 border-b border-panel-table-wrap px-5 py-5 sm:px-6">
+                <div>
+                  <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Coverage request</span>
+                  <h2 className="mt-2 text-2xl font-semibold text-panel-strong">
+                    {selectedCoverageRequestDetail?.ward_name ?? "Coverage request"}
+                  </h2>
+                  <p className="mt-1 text-sm text-panel-muted">
+                    {selectedCoverageRequestDetail ? getCoverageRequestStatusLabel(selectedCoverageRequestDetail.status) : "Loading request details"}
+                  </p>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-10 shrink-0"
+                  onClick={() => setSelectedCoverageRequestId(null)}
+                  aria-label="Close coverage request drawer"
+                >
+                  <X className="size-4" aria-hidden="true" />
+                </Button>
+              </div>
+
+              <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5 sm:px-6">
+                {selectedCoverageRequestDetailQuery.error instanceof Error ? (
+                  <StatusBanner tone="danger">{selectedCoverageRequestDetailQuery.error.message}</StatusBanner>
+                ) : null}
+                {assignCoverageRequestMutation.error instanceof Error ? (
+                  <StatusBanner tone="danger">{assignCoverageRequestMutation.error.message}</StatusBanner>
+                ) : null}
+                {selectedCoverageRequestDetailQuery.isPending && !selectedCoverageRequestDetail ? (
+                  <Card className="rounded-2xl px-4 py-6 shadow-none">
+                    <p className="text-sm text-panel-muted">Loading coverage request details...</p>
+                  </Card>
+                ) : null}
+                {selectedCoverageRequestDetail ? (
+                  <>
+                <Card className="rounded-2xl px-4 py-4 shadow-none">
+                  <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-panel-subtle">Request summary</h3>
+                  <div className="mt-4 space-y-3 text-sm text-panel-copy">
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Status</span>
+                      <strong className="text-panel-strong">{selectedCoverageRequestDetail.status}</strong>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Priority</span>
+                      <strong className="text-panel-strong">{selectedCoverageRequestDetail.priority}</strong>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Source</span>
+                      <strong className="text-panel-strong">
+                        {hasStoredAlertLinkage(selectedCoverageRequestDetail) ? "Alert-driven" : "Manual"}
+                      </strong>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Requested CHVs</span>
+                      <strong className="text-panel-strong">{selectedCoverageRequestDetail.requested_chv_count}</strong>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Requested by</span>
+                      <strong className="text-panel-strong">{selectedCoverageRequestDetail.requested_by_username ?? "Unknown"}</strong>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Created</span>
+                      <strong className="text-panel-strong">{formatRelativeTimestamp(selectedCoverageRequestDetail.created_at)}</strong>
+                    </div>
+                  </div>
+                </Card>
+
+                <Card className="rounded-2xl px-4 py-4 shadow-none">
+                  <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-panel-subtle">Request source</h3>
+                  <p className="mt-3 text-sm leading-6 text-panel-copy">
+                    {getCoverageRequestSourceDescription(selectedCoverageRequestDetail)}
+                  </p>
+                  {selectedCoverageRequestDetail.linked_alerts_summary.length ? (
+                    <div className="mt-4 space-y-3">
+                      {selectedCoverageRequestDetail.linked_alerts_summary.map((alertSummary) => (
+                        <div key={alertSummary.alert_public_id} className="rounded-2xl border border-panel-table-wrap px-4 py-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <strong className="text-sm text-panel-strong">Alert {alertSummary.alert_public_id}</strong>
+                            <StatusBadge tone={alertSummary.status === "DELIVERED" ? "success" : alertSummary.status === "FAILED" ? "warning" : "info"}>
+                              {alertSummary.status}
+                            </StatusBadge>
+                          </div>
+                          <p className="mt-2 text-sm text-panel-copy">
+                            {alertSummary.ward_name ?? selectedCoverageRequestDetail.ward_name} · {alertSummary.channel}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </Card>
+
+                <Card className="rounded-2xl px-4 py-4 shadow-none">
+                  <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-panel-subtle">Reason</h3>
+                  <p className="mt-3 text-sm leading-6 text-panel-copy">{selectedCoverageRequestDetail.reason}</p>
+                  {selectedCoverageRequestDetail.notes ? (
+                    <p className="mt-3 text-sm leading-6 text-panel-muted">{selectedCoverageRequestDetail.notes}</p>
+                  ) : null}
+                </Card>
+
+                {selectedCoverageRequestDetail.status === "APPROVED" && hasFreshSelectedCoverageRequestDetail ? (
+                  <Card className="rounded-2xl px-4 py-4 shadow-none">
+                    <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-panel-subtle">Assign CHV</h3>
+                    <p className="mt-3 text-sm leading-6 text-panel-copy">
+                      Assignment is only available inside request detail after approval. Select a real active CHV linked to this ward.
+                    </p>
+                    {assignableWardChvs.length ? (
+                      <div className="mt-4 space-y-4">
+                        <select
+                          value={assignmentChvId ?? ""}
+                          onChange={(event) => setAssignmentChvId(Number(event.target.value) || null)}
+                          className="h-11 w-full rounded-2xl border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 text-sm text-panel-strong outline-none"
+                        >
+                          {assignableWardChvs.map((chv) => (
+                            <option key={chv.id} value={chv.id}>
+                              {chv.name} · {chv.phone_number}
+                            </option>
+                          ))}
+                        </select>
+                        <textarea
+                          value={assignmentNotes}
+                          onChange={(event) => setAssignmentNotes(event.target.value)}
+                          rows={3}
+                          placeholder="Optional assignment notes"
+                          className="w-full rounded-2xl border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 py-3 text-sm text-panel-strong outline-none"
+                        />
+                        <Button
+                          disabled={!assignmentChvId || assignCoverageRequestMutation.isPending}
+                          onClick={async () => {
+                            if (!assignmentChvId || !selectedCoverageRequestDetail) {
+                              return;
+                            }
+
+                            try {
+                              await assignCoverageRequestMutation.mutateAsync({
+                                publicId: selectedCoverageRequestDetail.public_id,
+                                payload: {
+                                  chv_id: assignmentChvId,
+                                  notes: assignmentNotes.trim(),
+                                },
+                              });
+                              setRequestFeedback(`CHV assigned for ${selectedCoverageRequestDetail.ward_name}.`);
+                            } catch {
+                              // Hook exposes backend error banner.
+                            }
+                          }}
+                        >
+                          {assignCoverageRequestMutation.isPending ? "Assigning CHV..." : "Assign CHV"}
+                        </Button>
+                      </div>
+                    ) : (
+                      <StatusBanner tone="warning" className="mt-4">
+                        No active CHVs are currently available in this ward for direct assignment from this surface.
+                      </StatusBanner>
+                    )}
+                  </Card>
+                ) : null}
+
+                <Card className="rounded-2xl px-4 py-4 shadow-none">
+                  <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-panel-subtle">Timeline</h3>
+                  <div className="mt-4 space-y-3">
+                    {selectedCoverageRequestDetail.events.length ? (
+                      selectedCoverageRequestDetail.events.map((event) => (
+                        <div key={event.public_id} className="rounded-2xl border border-panel-table-wrap px-4 py-3 text-sm">
+                          <div className="flex items-center justify-between gap-3">
+                            <strong className="text-panel-strong">{event.action.replaceAll("_", " ")}</strong>
+                            <span className="text-panel-muted">{formatRelativeTimestamp(event.created_at)}</span>
+                          </div>
+                          <p className="mt-2 text-panel-copy">{event.detail}</p>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-sm text-panel-muted">No workflow events are recorded for this request yet.</p>
+                    )}
+                  </div>
+                </Card>
+                <div className="flex flex-wrap gap-3">
+                  <a
+                    href={`/chvs/requests/${selectedCoverageRequestDetail.public_id}`}
+                    className="inline-flex h-10 items-center justify-center rounded-pill bg-brand px-4 text-sm font-semibold text-white transition hover:opacity-95"
+                  >
+                    Open full request
+                  </a>
+                </div>
+                  </>
+                ) : null}
+              </div>
+            </aside>
+          </>
+        ) : null}
 
         {selectedChv ? (
           <>
@@ -1140,33 +1821,191 @@ export default function ChvsPage() {
                 </Card>
 
                 <Card className="rounded-2xl px-4 py-4 shadow-none">
-                  <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-panel-subtle">Recorded activity</h3>
+                  <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-panel-subtle">Latest activity</h3>
                   <p className="mt-3 text-sm leading-6 text-panel-copy">
-                    Recent activity for {selectedChv.wardName} is derived from backend sync, triage, and USSD traces. Last activity was{" "}
-                    {selectedChv.lastProtocolUpdate}, and this CHV is marked as{" "}
-                    {selectedChv.status === "ACTIVE" ? "active in visible records." : selectedChv.status === "IDLE" ? "idle in visible records." : "offline in visible records."}
+                    {selectedChv.lastProtocolUpdate === "No recent activity"
+                      ? "No recent activity recorded for this CHV."
+                      : `Last recorded activity ${selectedChv.lastProtocolUpdate}.`}
                   </p>
+                  {latestChvMessage ? (
+                    <p className="mt-3 text-sm leading-6 text-panel-muted">
+                      Latest message status: {latestChvMessage.status.toLowerCase().replace("_", " ")}{" "}
+                      {formatRelativeTimestamp(latestChvMessage.created_at)}.
+                    </p>
+                  ) : null}
                 </Card>
+
               </div>
 
-              <div className="flex flex-col gap-3 border-t border-panel-table-wrap px-5 py-5 sm:px-6">
-                <p className="text-sm text-panel-muted">
-                  Messaging, reassignment, and detailed history actions are unavailable from this screen because the corresponding backend routes are not exposed here.
-                </p>
-                <Button className="w-full justify-center" disabled>
-                  <BellRing className="size-4" aria-hidden="true" />
-                  Messaging unavailable
-                </Button>
-                <Button variant="secondary" className="w-full justify-center" disabled>
-                  <Users2 className="size-4" aria-hidden="true" />
-                  Reassignment unavailable
-                </Button>
-                <Button variant="secondary" className="w-full justify-center" disabled>
-                  <Activity className="size-4" aria-hidden="true" />
-                  Activity history unavailable
-                </Button>
+              <div className="border-t border-panel-table-wrap px-5 py-5 sm:px-6">
+                {selectedChv.canMessage || selectedChv.canViewActivity ? (
+                  <div className="space-y-3">
+                    {selectedChv.canMessage ? (
+                      <Button
+                        type="button"
+                        className="w-full rounded-full"
+                        onClick={() => {
+                          setMessageFeedback(null);
+                          setIsChvMessageModalOpen(true);
+                        }}
+                      >
+                        Message CHV
+                      </Button>
+                    ) : null}
+                    {selectedChv.messageMode === "QUEUE_ONLY" ? (
+                      <p className="text-sm leading-6 text-panel-muted">Messages from this screen are queued for follow-up rather than sent live.</p>
+                    ) : selectedChv.canMessage ? (
+                      <p className="text-sm leading-6 text-panel-muted">
+                        {getChvMessageCapabilityLabel(selectedChv.messageMode, selectedChv.messageDeliveryKind)}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : (
+                  <p className="text-sm leading-6 text-panel-muted">
+                    This screen currently supports CHV profile and sync review only.
+                  </p>
+                )}
               </div>
             </aside>
+            {isChvMessageModalOpen ? (
+              <>
+                <button
+                  type="button"
+                  className="fixed inset-0 z-[60] bg-slate-950/60"
+                  aria-label="Close CHV messaging modal"
+                  onClick={() => setIsChvMessageModalOpen(false)}
+                />
+                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+                  <Card className="w-full max-w-2xl rounded-[2rem] border border-panel-border bg-panel p-6 shadow-2xl">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">CHV messaging</span>
+                        <h3 className="mt-2 text-2xl font-semibold text-panel-strong">Message {selectedChv.name}</h3>
+                        <p className="mt-1 text-sm text-panel-muted">
+                          {selectedChv.phoneNumber} · {getChvMessageCapabilityLabel(selectedChv.messageMode, selectedChv.messageDeliveryKind)}
+                        </p>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-10 shrink-0"
+                        onClick={() => setIsChvMessageModalOpen(false)}
+                        aria-label="Close CHV messaging modal"
+                      >
+                        <X className="size-4" aria-hidden="true" />
+                      </Button>
+                    </div>
+
+                    <div className="mt-6 space-y-5">
+                      {messageFeedback ? <StatusBanner tone="success">{messageFeedback}</StatusBanner> : null}
+                      {createChvMessageMutation.error ? <StatusBanner tone="danger">{createChvMessageMutation.error.message}</StatusBanner> : null}
+
+                      <div>
+                        <p className="text-sm font-medium text-panel-strong">Templates</p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {selectedChvMessageTemplates.map((template) => (
+                            <button
+                              key={template.label}
+                              type="button"
+                              onClick={() => {
+                                setSelectedMessageTemplateLabel(template.label);
+                                setMessageBody(template.body);
+                              }}
+                              className={cn(
+                                "rounded-full border px-3 py-2 text-xs font-semibold transition",
+                                selectedMessageTemplateLabel === template.label
+                                  ? "border-brand-primary bg-brand-primary/15 text-brand-primary"
+                                  : "border-panel-border text-panel-copy hover:border-brand-primary/40 hover:text-panel-strong",
+                              )}
+                              aria-pressed={selectedMessageTemplateLabel === template.label}
+                            >
+                              {template.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <label className="block">
+                        <span className="text-sm font-medium text-panel-strong">Message body</span>
+                        <textarea
+                          value={messageBody}
+                          onChange={(event) => {
+                            setSelectedMessageTemplateLabel(null);
+                            setMessageBody(event.target.value);
+                          }}
+                          rows={6}
+                          className="mt-3 w-full rounded-3xl border border-panel-border bg-panel px-4 py-3 text-sm text-panel-copy outline-none transition focus:border-brand-primary/40"
+                          placeholder="Write the message you want to send to this CHV."
+                        />
+                      </label>
+
+                      <div>
+                        <p className="text-sm font-medium text-panel-strong">Recent messages</p>
+                        {isChvMessagesPending ? (
+                          <p className="mt-3 text-sm leading-6 text-panel-muted">Loading recent messages…</p>
+                        ) : chvMessagesError ? (
+                          <p className="mt-3 text-sm leading-6 text-status-danger">Unable to load recent messages right now.</p>
+                        ) : chvMessages.length ? (
+                          <div className="mt-3 space-y-3">
+                            {chvMessages.slice(0, 3).map((message) => (
+                              <div key={message.public_id} className="rounded-2xl border border-panel-table-wrap px-4 py-3">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div>
+                                    <strong className="text-sm text-panel-strong">{message.status.replace("_", " ")}</strong>
+                                    <p className="mt-1 text-xs uppercase tracking-[0.14em] text-panel-subtle">
+                                      {getChvMessageDeliveryTag(message.delivery_kind)}
+                                    </p>
+                                  </div>
+                                  <span className="text-xs text-panel-muted">{formatRelativeTimestamp(message.created_at)}</span>
+                                </div>
+                                <p className="mt-2 text-sm leading-6 text-panel-copy">{message.message_body}</p>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="mt-3 text-sm leading-6 text-panel-muted">No CHV messages have been recorded yet.</p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mt-6 flex flex-wrap justify-end gap-3">
+                      <Button type="button" variant="ghost" onClick={() => setIsChvMessageModalOpen(false)}>
+                        Cancel
+                      </Button>
+                      <Button
+                        type="button"
+                        disabled={!messageBody.trim() || createChvMessageMutation.isPending}
+                        onClick={async () => {
+                          const result = await createChvMessageMutation.mutateAsync({
+                            message_body: messageBody.trim(),
+                            channel: "SMS",
+                          });
+                          setMessageFeedback(
+                            result.status === "QUEUED"
+                              ? "Message queued for follow-up."
+                              : result.status === "FAILED"
+                                ? "Message was recorded but delivery failed."
+                                : selectedChv.messageDeliveryKind === "SIMULATED"
+                                  ? "Message was sent through the stub provider."
+                                  : "Message sent successfully.",
+                          );
+                          setSelectedMessageTemplateLabel(null);
+                          setMessageBody("");
+                        }}
+                      >
+                        {createChvMessageMutation.isPending
+                          ? selectedChv.messageMode === "SEND"
+                            ? "Sending..."
+                            : "Queueing..."
+                          : selectedChv.messageMode === "SEND"
+                            ? "Send message"
+                            : "Queue message"}
+                      </Button>
+                    </div>
+                  </Card>
+                </div>
+              </>
+            ) : null}
           </>
         ) : null}
       </RoleGate>

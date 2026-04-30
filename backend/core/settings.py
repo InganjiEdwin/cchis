@@ -30,6 +30,7 @@ CSRF_TRUSTED_ORIGINS = [
 ]
 
 INSTALLED_APPS = [
+    "daphne",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -40,6 +41,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework_simplejwt",
     "rest_framework_simplejwt.token_blacklist",
+    "channels",
     "corsheaders",
     "accounts",
     "risk",
@@ -58,6 +60,7 @@ MIDDLEWARE = [
 ]
 
 ROOT_URLCONF = "core.urls"
+ASGI_APPLICATION = "core.asgi.application"
 
 TEMPLATES = [
     {
@@ -291,6 +294,15 @@ TOTP_OPTIONAL_ROLES = parse_role_setting("TOTP_OPTIONAL_ROLES", default="ANALYST
 
 CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://redis:6379/0")
 CELERY_RESULT_BACKEND = config("CELERY_RESULT_BACKEND", default="redis://redis:6379/1")
+CHANNEL_REDIS_URL = config("CHANNEL_REDIS_URL", default=CELERY_BROKER_URL)
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": config("CHANNEL_LAYER_BACKEND", default="channels_redis.core.RedisChannelLayer").strip(),
+        "CONFIG": {
+            "hosts": [CHANNEL_REDIS_URL],
+        },
+    }
+}
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"

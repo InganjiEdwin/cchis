@@ -64,13 +64,35 @@ def run_rainfall_ingestion_task(self) -> int:
 
 
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
-def trigger_alerts_task(self, risk_score_id: int, send_sms: bool = False) -> int:
+def trigger_alerts_task(
+    self,
+    risk_score_id: int,
+    send_sms: bool = False,
+    trigger_type: str | None = None,
+    message_override: str | None = None,
+    guided_request_metadata: dict | None = None,
+) -> int:
     risk_score = RiskScore.objects.select_related("ward").get(id=risk_score_id)
-    alerts = trigger_alerts_for_riskscore(risk_score, send_sms_enabled=send_sms)
+    alerts = trigger_alerts_for_riskscore(
+        risk_score,
+        send_sms_enabled=send_sms,
+        trigger_type=trigger_type,
+        message_override=message_override,
+        guided_request_metadata=guided_request_metadata,
+    )
     for alert in alerts:
         if alert.status == Alert.STATUS_QUEUED:
             deliver_alert_task.delay(alert.id)
-    logger.info("trigger_alerts_task_completed", extra={"risk_score_id": risk_score_id, "alerts_created": len(alerts)})
+    logger.info(
+        "trigger_alerts_task_completed",
+        extra={
+            "risk_score_id": risk_score_id,
+            "alerts_created": len(alerts),
+            "trigger_type": trigger_type,
+            "message_override_used": bool(message_override),
+            "guided_request_metadata_recorded": bool(guided_request_metadata),
+        },
+    )
     return len(alerts)
 
 
