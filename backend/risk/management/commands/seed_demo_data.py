@@ -10,12 +10,20 @@ from django.utils import timezone
 from accounts.two_factor import generate_totp_secret
 from risk.models import (
     Alert,
+    CatchmentPopulationRecord,
     CHV,
+    ExposureFeatureRecord,
     FacilityForecast,
     FacilityForecastRun,
     HealthFacility,
     IngestionRun,
     ModelRun,
+    PopulationBaselineRecord,
+    PopulationExposureIngestionRun,
+    PopulationExposureFreshness,
+    PopulationExposureSource,
+    PopulationExposureSourceKind,
+    PopulationExposureTruth,
     RiskScore,
     SyncQueue,
     TriageSession,
@@ -97,6 +105,8 @@ class Command(BaseCommand):
 
         ingestion_run = self._seed_ingestion_run(anchor, selected_scenarios)
         model_runs = self._seed_model_runs(anchor, ingestion_run, selected_scenarios)
+        population_exposure_run = self._seed_population_exposure_ingestion_run(anchor, selected_scenarios)
+        population_exposure_records_created = 0
 
         for profile in ward_profiles:
             ward = profile["ward"]
@@ -107,6 +117,13 @@ class Command(BaseCommand):
 
             self._seed_chvs_for_profile(ward, profile)
             facilities = self._seed_facilities_for_profile(ward, profile)
+            population_exposure_records_created += self._seed_population_exposure_records(
+                population_exposure_run,
+                ward,
+                facilities,
+                profile,
+                anchor,
+            )
             current_risk_score = self._seed_risk_history(ward, profile, model_runs, anchor)
             self._seed_alerts(ward, current_risk_score, profile, anchor)
             self._seed_field_feedback(ward, profile, anchor)
@@ -116,6 +133,13 @@ class Command(BaseCommand):
             else:
                 self._seed_facility_forecasts(facilities, ward, anchor, promoted=False)
 
+        self._finalize_population_exposure_ingestion_run(
+            population_exposure_run,
+            records_seen=len(ward_profiles),
+            records_loaded=len(ward_profiles),
+            canonical_records_created=population_exposure_records_created,
+            anchor=anchor,
+        )
         reconcile_ward_codes_from_reference(stdout=self.stdout, county_names=["Migori"])
         seeded_accounts = self._seed_accounts()
 
@@ -135,6 +159,11 @@ class Command(BaseCommand):
         RiskScore.objects.filter(model_version__startswith="v0-demo-seeded-").delete()
         ModelRun.objects.filter(model_version__in=["v0-demo", "v0-demo-seeded-24h", "v0-demo-seeded-48h"]).delete()
         IngestionRun.objects.filter(source_name__startswith="seed-scenario-").delete()
+        PopulationBaselineRecord.objects.filter(source_name__startswith="seed-scenario-").delete()
+        ExposureFeatureRecord.objects.filter(source_name__startswith="seed-scenario-").delete()
+        CatchmentPopulationRecord.objects.filter(source_name__startswith="seed-scenario-").delete()
+        PopulationExposureIngestionRun.objects.filter(source_name__startswith="seed-scenario-").delete()
+        PopulationExposureSource.objects.filter(source_name__startswith="seed-scenario-").delete()
 
     def _build_ward_profiles(self, selected_scenarios: list[str]):
         predefined_names = {
@@ -359,6 +388,157 @@ class Command(BaseCommand):
         IngestionRun.objects.filter(pk=run.pk).update(started_at=anchor - timedelta(minutes=45))
         run.refresh_from_db()
         return run
+
+    def _seed_population_exposure_ingestion_run(self, anchor, selected_scenarios: list[str]):
+        source = PopulationExposureSource.objects.create(
+            source_name="seed-scenario-population-exposure",
+            source_type=PopulationExposureSource.SOURCE_TYPE_CSV_BACKFILL,
+            source_timestamp=anchor - timedelta(minutes=50),
+            release_version="seed-demo-population-exposure-v1",
+            submitted_at=anchor - timedelta(minutes=50),
+            source_ref="seed_demo_data",
+            operator_note=f"seeded_non_production_scenarios={','.join(selected_scenarios)}",
+            metadata={
+                "seeded": True,
+                "seeded_non_production": True,
+                "scenario_bundle": FULL_SUITE_BUNDLE if len(selected_scenarios) > 1 else selected_scenarios[0],
+            },
+        )
+        return PopulationExposureIngestionRun.objects.create(
+            source=source,
+            status=PopulationExposureIngestionRun.STATUS_RUNNING,
+            source_name=source.source_name,
+            source_type=source.source_type,
+            source_timestamp=source.source_timestamp,
+            release_version=source.release_version,
+            source_ref=source.source_ref,
+            adapter_key="seed_demo_population_exposure",
+            input_ref="risk.management.commands.seed_demo_data",
+            execution_mode=PopulationExposureIngestionRun.EXECUTION_MANUAL,
+            correction_mode=PopulationExposureIngestionRun.CORRECTION_ORIGINAL,
+            fallback_used=True,
+            operator_note=source.operator_note,
+            source_metadata={
+                "source_id": source.id,
+                "seeded": True,
+                "seeded_non_production": True,
+                "truth_class": PopulationExposureTruth.SEEDED_DEMO,
+            },
+            started_at=anchor - timedelta(minutes=50),
+        )
+
+    def _seed_population_exposure_records(self, run, ward: Ward, facilities: list[HealthFacility], profile: dict, anchor):
+        recorded_at = anchor - timedelta(minutes=49)
+        population_total = int(round(3900 + (ward.id * 75) + (profile["current_risk_score"] * 2600)))
+        population_under_five = int(round(population_total * 0.14))
+        household_count_proxy = int(round(population_total / 4.3))
+        common = {
+            "ingestion_run": run,
+            "source": run.source,
+            "recorded_at": recorded_at,
+            "truth_class": PopulationExposureTruth.SEEDED_DEMO,
+            "source_name": run.source_name,
+            "source_kind": PopulationExposureSourceKind.SEEDED,
+            "freshness_state": PopulationExposureFreshness.FRESH,
+            "release_version": run.release_version,
+            "source_ref": run.source_ref,
+            "raw_payload": {
+                "seeded": True,
+                "seeded_non_production": True,
+                "scenario_name": profile["scenario_name"],
+                "current_risk_score": profile["current_risk_score"],
+            },
+        }
+        PopulationBaselineRecord.objects.create(
+            ward=ward,
+            population_total=population_total,
+            population_under_five=population_under_five,
+            household_count_proxy=household_count_proxy,
+            revision_number=1,
+            **common,
+        )
+
+        exposure_records = [
+            ExposureFeatureRecord(
+                ward=ward,
+                exposure_type=ExposureFeatureRecord.EXPOSURE_SETTLEMENT_CONCENTRATION,
+                exposure_value=round(min(1.0, 0.18 + profile["current_risk_score"] * 0.72), 3),
+                unit="index",
+                aggregation_method="seeded_profile_proxy",
+                notes="Seeded non-production settlement concentration proxy.",
+                **common,
+            ),
+            ExposureFeatureRecord(
+                ward=ward,
+                exposure_type=ExposureFeatureRecord.EXPOSURE_FLOODPLAIN_EXPOSURE,
+                exposure_value=round(min(1.0, profile["current_risk_score"]), 3),
+                unit="index",
+                aggregation_method="seeded_profile_proxy",
+                notes="Seeded non-production flood exposure proxy.",
+                **common,
+            ),
+            ExposureFeatureRecord(
+                ward=ward,
+                exposure_type=ExposureFeatureRecord.EXPOSURE_EXPOSED_POPULATION_PROXY,
+                exposure_value=round(population_total * min(1.0, profile["current_risk_score"]) * 0.35, 1),
+                unit="people",
+                aggregation_method="seeded_profile_proxy",
+                notes="Seeded non-production exposed population proxy.",
+                **common,
+            ),
+        ]
+        ExposureFeatureRecord.objects.bulk_create(exposure_records)
+
+        catchment_records = []
+        for facility in facilities:
+            catchment_records.append(
+                CatchmentPopulationRecord(
+                    facility=facility,
+                    catchment_population_estimate=round(population_total * 0.85, 1),
+                    catchment_under_five_estimate=round(population_under_five * 0.85, 1),
+                    assigned_ward_ids=[ward.id],
+                    assignment_method="seeded_facility_ward_assignment",
+                    **common,
+                )
+            )
+        CatchmentPopulationRecord.objects.bulk_create(catchment_records)
+        return 1 + len(exposure_records) + len(catchment_records)
+
+    def _finalize_population_exposure_ingestion_run(
+        self,
+        run,
+        *,
+        records_seen: int,
+        records_loaded: int,
+        canonical_records_created: int,
+        anchor,
+    ):
+        run.status = PopulationExposureIngestionRun.STATUS_SUCCESS
+        run.records_seen = records_seen
+        run.records_loaded = records_loaded
+        run.records_rejected = 0
+        run.results = {
+            "phase": "phase_2_canonical_normalization",
+            "canonical_records_persisted": True,
+            "canonical_summary": {
+                "population_baseline_records": records_loaded,
+                "exposure_feature_records": records_loaded * 3,
+                "catchment_population_records": max(canonical_records_created - records_loaded - (records_loaded * 3), 0),
+                "source_rows_normalized": records_loaded,
+                "canonical_records_total": canonical_records_created,
+            },
+        }
+        run.completed_at = anchor - timedelta(minutes=48)
+        run.save(
+            update_fields=[
+                "status",
+                "records_seen",
+                "records_loaded",
+                "records_rejected",
+                "results",
+                "completed_at",
+            ]
+        )
 
     def _seed_model_runs(self, anchor, ingestion_run, selected_scenarios: list[str]):
         definitions = [

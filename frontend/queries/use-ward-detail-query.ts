@@ -13,6 +13,7 @@ import {
   type WardMapFeature,
   type WardIntelligenceTrend,
   type WardIntelligenceRouteResponse,
+  type WardOperationalEvidence,
 } from "@/lib/dashboard";
 import { queryKeys } from "@/lib/query-keys";
 
@@ -47,6 +48,7 @@ export type WardDetailState = {
   workflow: WardIntelligenceRouteResponse["workflow"];
   decisionSummary: WardIntelligenceRouteResponse["decision_summary"];
   headerContext: WardIntelligenceRouteResponse["header_context"];
+  operationalEvidence: WardOperationalEvidence | null;
 };
 
 type UseWardDetailQueryParams = {
@@ -136,6 +138,7 @@ export function useWardDetailQuery({ wardId, enabled = true }: UseWardDetailQuer
         workflow,
         decisionSummary,
         headerContext,
+        operationalEvidence: response.operational_evidence ?? null,
       };
     },
     enabled,

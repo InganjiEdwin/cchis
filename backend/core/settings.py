@@ -118,13 +118,18 @@ SECURE_CONTENT_TYPE_NOSNIFF = config("SECURE_CONTENT_TYPE_NOSNIFF", cast=bool, d
 SECURE_REFERRER_POLICY = config("SECURE_REFERRER_POLICY", default="same-origin")
 X_FRAME_OPTIONS = config("X_FRAME_OPTIONS", default="DENY")
 
+PASSWORD_MIN_LENGTH = 12
+
 AUTH_PASSWORD_VALIDATORS = [
     {
         "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
     },
     {
         "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
-        "OPTIONS": {"min_length": 8},
+        "OPTIONS": {"min_length": PASSWORD_MIN_LENGTH},
+    },
+    {
+        "NAME": "accounts.password_validation.StrongPasswordValidator",
     },
     {
         "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",

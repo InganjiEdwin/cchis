@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { fetchSystemDataViaBff } from "@/lib/dashboard";
+import { fetchSystemDataViaBff, type SystemControlStatus } from "@/lib/dashboard";
 import { queryKeys } from "@/lib/query-keys";
 
 export type SystemSnapshot = {
@@ -31,6 +31,7 @@ export type SystemSnapshot = {
   syncPayloads24h: number;
   ussdSessions24h: number;
   deliveryBackends: Array<{ name: string; count: number }>;
+  controlStatus: SystemControlStatus;
 };
 
 function latestTimestamp(values: Array<string | null | undefined>) {
@@ -103,6 +104,7 @@ export function useSystemQuery({ enabled = true }: { enabled?: boolean } = {}) {
         syncPayloads24h: data.chvOperations.reduce((sum, item) => sum + item.sync_payloads_24h, 0),
         ussdSessions24h: data.chvOperations.reduce((sum, item) => sum + item.ussd_sessions_24h, 0),
         deliveryBackends,
+        controlStatus: data.controlStatus,
       };
     },
     enabled,

@@ -8,7 +8,20 @@ import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
+import type { CurrentUser } from "@/lib/auth";
 import { getVisibleNav } from "@/lib/navigation";
+
+function getSidebarScopeLabel(user: CurrentUser) {
+  if (user.scope_type === "BROAD") {
+    return "Migori County";
+  }
+
+  if (user.scope_type === "WARD") {
+    return user.ward_name || "Ward-scoped access";
+  }
+
+  return user.ward_name || "No scope assigned";
+}
 
 export function DashboardSidebar() {
   const pathname = usePathname();
@@ -80,9 +93,7 @@ export function DashboardSidebar() {
             {currentUser.full_name || currentUser.username}
           </strong>
           <span className="text-xs text-[var(--dashboard-sidebar-muted)]">{currentUser.role}</span>
-          <span className="text-xs text-[var(--dashboard-sidebar-muted)]">
-            {currentUser.ward_name ?? "County-wide access"}
-          </span>
+          <span className="text-xs text-[var(--dashboard-sidebar-muted)]">{getSidebarScopeLabel(currentUser)}</span>
         </div>
       </Link>
 

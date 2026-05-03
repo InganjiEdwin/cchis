@@ -11,7 +11,7 @@ from .services import (
     reject_chv_coverage_request,
     resolve_chv_coverage_request,
 )
-from .models import Alert, AlertWorkflowEvent, AlertWorkflowState, CHV, CHVAssignment, CHVCoverageRequest, CHVCoverageRequestAlertLink, CHVCoverageRequestEmailDelivery, CHVCoverageRequestEvent, DashboardNotification, DashboardNotificationEvent, ETLHeartbeat, FacilityContact, FacilityReadinessEscalation, FacilityReadinessReview, FacilityReadinessReviewEvent, FacilityReadinessUpdateRequest, FacilityForecast, FacilityForecastRun, FeatureDataset, FeatureDatasetRow, HealthFacility, IngestionRun, ModelRun, RiskScore, SyncQueue, TriageSession, UssdSessionLog, Ward
+from .models import Alert, AlertWorkflowEvent, AlertWorkflowState, CatchmentPopulationRecord, CHV, CHVAssignment, CHVCoverageRequest, CHVCoverageRequestAlertLink, CHVCoverageRequestEmailDelivery, CHVCoverageRequestEvent, DashboardNotification, DashboardNotificationEvent, ETLHeartbeat, ExposureFeatureRecord, FacilityContact, FacilityReadinessEscalation, FacilityReadinessReview, FacilityReadinessReviewEvent, FacilityReadinessUpdateRequest, FacilityForecast, FacilityForecastRun, FeatureDataset, FeatureDatasetRow, HealthFacility, IngestionRun, ModelRun, PopulationBaselineRecord, PopulationExposureIngestionRun, PopulationExposureSource, RiskScore, SurveillanceIngestionRun, SurveillanceLabelWindow, SurveillanceRecord, SurveillanceSource, SyncQueue, SystemControlState, TriageSession, UssdSessionLog, Ward
 
 
 class CHVCoverageRequestAlertLinkInline(admin.TabularInline):
@@ -197,6 +197,209 @@ class ETLHeartbeatAdmin(admin.ModelAdmin):
     list_display = ("component", "task_name", "status", "recorded_at")
     search_fields = ("component", "task_name", "status")
     list_filter = ("component", "status", "recorded_at")
+
+
+@admin.register(SurveillanceSource)
+class SurveillanceSourceAdmin(admin.ModelAdmin):
+    list_display = (
+        "source_name",
+        "source_type",
+        "reporting_period_start",
+        "reporting_period_end",
+        "source_timestamp",
+        "submitted_at",
+        "is_active",
+    )
+    search_fields = ("source_name", "source_ref", "operator_note")
+    list_filter = ("source_type", "is_active", "submitted_at")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(SurveillanceIngestionRun)
+class SurveillanceIngestionRunAdmin(admin.ModelAdmin):
+    list_display = (
+        "source_name",
+        "source_type",
+        "status",
+        "correction_mode",
+        "execution_mode",
+        "reporting_period_start",
+        "reporting_period_end",
+        "records_loaded",
+        "records_seen",
+        "records_rejected",
+        "started_at",
+        "completed_at",
+    )
+    search_fields = ("source_name", "source_ref", "input_ref", "operator_note", "correction_reason", "error_summary")
+    list_filter = ("source_type", "status", "correction_mode", "execution_mode", "started_at")
+    autocomplete_fields = ("source", "replay_of")
+    readonly_fields = (
+        "source_metadata",
+        "results",
+        "rejected_rows",
+        "records_seen",
+        "records_loaded",
+        "records_rejected",
+        "started_at",
+        "completed_at",
+    )
+
+
+@admin.register(SurveillanceRecord)
+class SurveillanceRecordAdmin(admin.ModelAdmin):
+    list_display = (
+        "ward",
+        "facility",
+        "disease_category",
+        "case_class",
+        "outbreak_label",
+        "count_value",
+        "truth_level",
+        "freshness_state",
+        "reporting_period_start",
+        "reporting_period_end",
+        "source_name",
+    )
+    search_fields = ("ward__name", "facility__name", "source_name", "source_ref")
+    list_filter = (
+        "disease_category",
+        "case_class",
+        "outbreak_label",
+        "truth_level",
+        "source_kind",
+        "freshness_state",
+        "reporting_granularity",
+    )
+    autocomplete_fields = ("ward", "facility", "ingestion_run", "source")
+    readonly_fields = ("raw_payload", "created_at")
+
+
+@admin.register(SurveillanceLabelWindow)
+class SurveillanceLabelWindowAdmin(admin.ModelAdmin):
+    list_display = (
+        "ward",
+        "dataset_ref",
+        "schema_version",
+        "label_window_start",
+        "label_window_end",
+        "outbreak_label",
+        "label_truth_level",
+        "suspected_case_count",
+        "confirmed_case_count",
+        "proxy_case_count",
+        "source_record_count",
+        "generation_mode",
+    )
+    search_fields = ("ward__name", "dataset_ref", "schema_version", "generation_mode")
+    list_filter = ("outbreak_label", "label_truth_level", "schema_version", "generation_mode")
+    autocomplete_fields = ("ward", "feature_dataset")
+    readonly_fields = ("source_coverage_summary", "generated_from_record_refs", "created_at")
+
+
+@admin.register(PopulationExposureSource)
+class PopulationExposureSourceAdmin(admin.ModelAdmin):
+    list_display = (
+        "source_name",
+        "source_type",
+        "release_version",
+        "source_timestamp",
+        "submitted_at",
+        "is_active",
+    )
+    search_fields = ("source_name", "source_ref", "release_version", "operator_note")
+    list_filter = ("source_type", "is_active", "submitted_at")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(PopulationExposureIngestionRun)
+class PopulationExposureIngestionRunAdmin(admin.ModelAdmin):
+    list_display = (
+        "source_name",
+        "source_type",
+        "release_version",
+        "status",
+        "correction_mode",
+        "execution_mode",
+        "records_loaded",
+        "records_seen",
+        "records_rejected",
+        "started_at",
+        "completed_at",
+    )
+    search_fields = (
+        "source_name",
+        "source_ref",
+        "release_version",
+        "input_ref",
+        "operator_note",
+        "replacement_reason",
+        "error_summary",
+    )
+    list_filter = ("source_type", "status", "correction_mode", "execution_mode", "started_at")
+    autocomplete_fields = ("source", "replay_of", "replaces_run")
+    readonly_fields = (
+        "source_metadata",
+        "results",
+        "rejected_rows",
+        "records_seen",
+        "records_loaded",
+        "records_rejected",
+        "started_at",
+        "completed_at",
+    )
+
+
+@admin.register(PopulationBaselineRecord)
+class PopulationBaselineRecordAdmin(admin.ModelAdmin):
+    list_display = (
+        "ward",
+        "population_total",
+        "population_under_five",
+        "truth_class",
+        "source_kind",
+        "release_version",
+        "recorded_at",
+    )
+    search_fields = ("ward__name", "source_name", "source_ref", "release_version", "supersedes_record_ref")
+    list_filter = ("truth_class", "source_kind", "freshness_state", "recorded_at")
+    autocomplete_fields = ("ward", "ingestion_run", "source")
+    readonly_fields = ("raw_payload", "created_at")
+
+
+@admin.register(ExposureFeatureRecord)
+class ExposureFeatureRecordAdmin(admin.ModelAdmin):
+    list_display = (
+        "ward",
+        "exposure_type",
+        "exposure_value",
+        "unit",
+        "truth_class",
+        "source_kind",
+        "release_version",
+        "recorded_at",
+    )
+    search_fields = ("ward__name", "source_name", "source_ref", "release_version", "notes")
+    list_filter = ("exposure_type", "truth_class", "source_kind", "freshness_state", "recorded_at")
+    autocomplete_fields = ("ward", "ingestion_run", "source")
+    readonly_fields = ("raw_payload", "created_at")
+
+
+@admin.register(CatchmentPopulationRecord)
+class CatchmentPopulationRecordAdmin(admin.ModelAdmin):
+    list_display = (
+        "facility",
+        "catchment_population_estimate",
+        "catchment_under_five_estimate",
+        "truth_class",
+        "source_kind",
+        "release_version",
+        "recorded_at",
+    )
+    search_fields = ("facility__name", "facility__facility_code", "source_name", "source_ref", "release_version")
+    list_filter = ("truth_class", "source_kind", "freshness_state", "recorded_at")
+    autocomplete_fields = ("facility", "ingestion_run", "source")
+    readonly_fields = ("assigned_ward_ids", "raw_payload", "created_at")
 
 
 @admin.register(ModelRun)
@@ -619,3 +822,17 @@ class SyncQueueAdmin(admin.ModelAdmin):
     )
     search_fields = ("source_device_id", "client_submission_id", "phone_number", "ward__name")
     list_filter = ("status", "created_at")
+
+
+@admin.register(SystemControlState)
+class SystemControlStateAdmin(admin.ModelAdmin):
+    list_display = (
+        "control_key",
+        "is_active",
+        "active_until",
+        "updated_by",
+        "updated_at",
+    )
+    search_fields = ("control_key", "reason", "updated_by__username")
+    list_filter = ("control_key", "is_active", "updated_at")
+    readonly_fields = ("created_at", "updated_at")

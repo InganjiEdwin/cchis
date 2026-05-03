@@ -26,6 +26,7 @@ export async function POST(request: Request) {
     const data = (await backendResponse.json().catch(() => ({}))) as
       | ConfirmTwoFactorEnrollmentResponse
       | { detail?: string; user?: unknown; enrollment_completed?: true };
+    const dataRecord = data as Record<string, unknown>;
 
     if (!backendResponse.ok) {
       return applyBackendSetCookie(
@@ -47,6 +48,8 @@ export async function POST(request: Request) {
             enrollment_completed: true as const,
             requires_2fa: false as const,
             session_established: true as const,
+            recovery_codes: Array.isArray(dataRecord.recovery_codes) ? dataRecord.recovery_codes : [],
+            recovery_codes_generated: dataRecord.recovery_codes_generated === true,
           }
         : data;
 

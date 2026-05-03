@@ -14,7 +14,7 @@ from rest_framework.views import APIView
 from accounts.models import User
 from accounts.permissions import IsAdminOnly, IsAdminOrSupervisor, IsAdminSupervisorOrAnalyst, IsFieldOperator
 
-from .tasks import trigger_alerts_task
+from .tasks import deliver_alert_task, run_risk_model_task, trigger_alerts_task
 
 from .facility_forecasting import (
     build_facility_forecast_promotion_summary,
@@ -23,7 +23,7 @@ from .facility_forecasting import (
     build_initial_facility_forecast_preview,
 )
 from .ml.alignment import get_live_model_alignment_summary
-from .models import Alert, AlertWorkflowEvent, AlertWorkflowState, CHV, CHVMessage, DashboardNotification, FacilityReadinessEscalation, FacilityReadinessReview, FacilityReadinessUpdateRequest, HealthFacility, IngestionRun, ModelRun, RiskScore, UssdSessionLog, Ward
+from .models import Alert, AlertWorkflowEvent, AlertWorkflowState, CHV, CHVMessage, DashboardNotification, FacilityReadinessEscalation, FacilityReadinessReview, FacilityReadinessUpdateRequest, HealthFacility, IngestionRun, ModelRun, RiskScore, SyncQueue, UssdSessionLog, Ward
 from .models import CHVAssignment, CHVCoverageRequest, CHVCoverageRequestAlertLink, CHVCoverageRequestEvent
 from .map_data import build_migori_ward_map_summary
 from datetime import timedelta
@@ -65,12 +65,16 @@ from .serializers import (
     FacilityForecastingStatusSerializer,
     HealthFacilitySerializer,
     IngestionRunSerializer,
+    AlertDeliveryPauseRequestSerializer,
     DashboardNotificationSerializer,
+    ManualRiskScoringRequestSerializer,
     ModelAlignmentSerializer,
     ModelRunSerializer,
     RiskScoreSerializer,
     ScenarioSimulationRequestSerializer,
     ScenarioSimulationRunSerializer,
+    SystemControlStatusSerializer,
+    SystemRetryControlsRequestSerializer,
     TriggerContextRequestSerializer,
     TriggerContextResponseSerializer,
     TriggerAlertRequestSerializer,
@@ -93,6 +97,7 @@ from .services import (
     build_facility_readiness_decision_summary,
     acknowledge_facility_readiness_review,
     build_alert_workflow_records,
+    build_system_control_status,
     build_ward_intelligence_snapshot,
     cancel_chv_assignment,
     cancel_chv_coverage_request,
@@ -113,6 +118,7 @@ from .services import (
     transition_facility_readiness_escalation,
     transition_facility_readiness_review,
     run_dashboard_scenario_simulation,
+    set_alert_delivery_pause,
     sync_alert_workflow_for_ward,
     sync_alert_workflows_for_wards,
 )
@@ -1239,7 +1245,7 @@ class RiskScoreListAPIView(generics.ListAPIView):
     ordering = ["-generated_at"]
 
     def get_queryset(self):
-        queryset = RiskScore.objects.select_related("ward").all()
+        queryset = RiskScore.objects.select_related("ward", "model_run").all()
         ward_id = self.request.query_params.get("ward_id")
         risk_level = self.request.query_params.get("risk_level")
         source = self.request.query_params.get("source")
@@ -1563,7 +1569,7 @@ class TriggerAlertsAPIView(APIView):
         trigger_type = serializer.validated_data.get("trigger_type")
         message_override = serializer.validated_data.get("message_override")
 
-        queryset = RiskScore.objects.select_related("ward").all()
+        queryset = RiskScore.objects.select_related("ward", "model_run").all()
         user = request.user
         if user.role != User.ROLE_ADMIN:
             queryset = apply_ward_scope_or_none(queryset, user)
@@ -1604,6 +1610,7 @@ class TriggerAlertsAPIView(APIView):
             "message_preview_used": preview_payload["message_preview"],
             "confirmed_by_user_id": user.id,
             "confirmed_at": queued_at.isoformat(),
+            "decision_policy": risk_score.decision_policy or {},
         }
         workflow = sync_alert_workflow_for_ward(
             risk_score.ward,
@@ -1658,6 +1665,100 @@ class TriggerAlertsAPIView(APIView):
             },
             status=status.HTTP_202_ACCEPTED,
         )
+
+
+class SystemControlStatusAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request):
+        can_write = getattr(request.user, "role", None) == User.ROLE_ADMIN
+        payload = build_system_control_status(can_write=can_write)
+        return Response(SystemControlStatusSerializer(payload).data, status=status.HTTP_200_OK)
+
+
+class SystemRetryControlsAPIView(APIView):
+    permission_classes = [IsAdminOnly]
+
+    def post(self, request):
+        serializer = SystemRetryControlsRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        limit = serializer.validated_data["limit"]
+
+        alert_task_ids: list[str] = []
+        retry_alert_count = 0
+        if serializer.validated_data["retry_alert_delivery"]:
+            retryable_alerts = list(
+                Alert.objects.filter(
+                    channel=Alert.CHANNEL_SMS,
+                    status__in=[Alert.STATUS_QUEUED, Alert.STATUS_RETRY_PENDING],
+                )
+                .order_by("next_retry_at", "created_at")[:limit]
+            )
+            retry_alert_count = len(retryable_alerts)
+            for alert in retryable_alerts:
+                task = deliver_alert_task.delay(alert.id)
+                alert_task_ids.append(str(task.id))
+
+        failed_sync_payload_count = 0
+        if serializer.validated_data["retry_failed_sync_payloads"]:
+            failed_sync_payload_count = SyncQueue.objects.filter(status=SyncQueue.STATUS_FAILED).update(
+                status=SyncQueue.STATUS_PENDING,
+                error_message="",
+                processed_at=None,
+            )
+
+        payload = {
+            "detail": "Background retry request accepted.",
+            "queued_alert_delivery_count": retry_alert_count,
+            "failed_sync_payload_count": failed_sync_payload_count,
+            "task_ids": alert_task_ids,
+            "control_status": build_system_control_status(can_write=True),
+        }
+        return Response(payload, status=status.HTTP_202_ACCEPTED)
+
+
+class SystemManualRiskScoringAPIView(APIView):
+    permission_classes = [IsAdminOnly]
+
+    def post(self, request):
+        serializer = ManualRiskScoringRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        task = run_risk_model_task.delay(
+            month=serializer.validated_data.get("month"),
+            model_version=serializer.validated_data["model_version"],
+            algorithm=serializer.validated_data["algorithm"],
+            trigger_alerts=serializer.validated_data["trigger_alerts"],
+            send_sms=serializer.validated_data["send_sms"],
+            dual_model=serializer.validated_data["dual_model"],
+            execution_context="manual_system_page",
+            run_purpose="manual_live_scoring",
+        )
+
+        return Response(
+            {
+                "detail": "Manual risk scoring request accepted.",
+                "task_id": str(task.id),
+                "control_status": build_system_control_status(can_write=True),
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
+class SystemAlertDeliveryPauseAPIView(APIView):
+    permission_classes = [IsAdminOnly]
+
+    def post(self, request):
+        serializer = AlertDeliveryPauseRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        set_alert_delivery_pause(
+            paused=serializer.validated_data["paused"],
+            actor=request.user,
+            duration_minutes=serializer.validated_data.get("duration_minutes", 60),
+            reason=serializer.validated_data.get("reason", ""),
+        )
+        payload = build_system_control_status(can_write=True)
+        return Response(SystemControlStatusSerializer(payload).data, status=status.HTTP_200_OK)
 
 
 class TriggerAlertRequestStatusAPIView(APIView):

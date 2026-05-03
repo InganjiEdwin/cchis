@@ -18,10 +18,11 @@ def build_boosting_readiness_summary() -> dict:
     return {
         "phase": "xgboost_lightgbm_readiness",
         "live_state": {
-            "current_live_baseline": "logistic_regression",
+            "current_live_baseline": None,
+            "primary_scoring_candidate": "logistic_regression",
             "current_benchmark_model": "random_forest",
             "candidate_models": candidate_algorithms,
-            "promotion_state": "candidate_only_not_live",
+            "promotion_state": "candidate_scoring_until_phase_4_promotion",
         },
         "boosting_feature_discipline": {
             "required_feature_schema_versioning": True,

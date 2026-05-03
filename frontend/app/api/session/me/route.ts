@@ -20,6 +20,6 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ detail: error.message }, { status: error.status });
     }
 
-    return NextResponse.json({ detail: "Unable to update appearance." }, { status: 500 });
+    return NextResponse.json({ detail: "Unable to update profile." }, { status: 500 });
   }
 }

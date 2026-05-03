@@ -33,7 +33,13 @@ def algorithm_key_from_run(run: ModelRun | None) -> str | None:
 def is_promoted_model_run(run: ModelRun | None) -> bool:
     if run is None or run.status != ModelRun.STATUS_SUCCESS:
         return False
-    return (run.metadata or {}).get("promotion_target") == PROMOTION_TARGET_LIVE_BASELINE
+    metadata = run.metadata or {}
+    return (
+        metadata.get("promotion_target") == PROMOTION_TARGET_LIVE_BASELINE
+        and metadata.get("promotion_state") == "promoted"
+        and metadata.get("phase_4_promotion_gates_passed") is True
+        and metadata.get("alert_eligible") is True
+    )
 
 
 def promoted_risk_scores(risk_scores: Iterable[RiskScore]) -> list[RiskScore]:
@@ -56,6 +62,10 @@ def latest_promoted_riskscore_for_ward(ward) -> RiskScore | None:
 def _latest_successful_run_for_target(promotion_target: str) -> ModelRun | None:
     queryset = ModelRun.objects.filter(status=ModelRun.STATUS_SUCCESS).order_by("-started_at")
     for run in queryset:
+        if promotion_target == PROMOTION_TARGET_LIVE_BASELINE:
+            if is_promoted_model_run(run):
+                return run
+            continue
         if (run.metadata or {}).get("promotion_target") == promotion_target:
             return run
     return None

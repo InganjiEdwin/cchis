@@ -11,6 +11,7 @@ import {
   fetchSession,
   login as loginRequest,
   logoutViaBff,
+  normalizeCurrentUser,
   persistCurrentUser,
   persistEnrollmentToken,
   persistPreAuthToken,
@@ -18,11 +19,15 @@ import {
   readEnrollmentToken,
   readPreAuthToken,
   updateAppearanceViaBff,
+  updateProfileViaBff,
   verifyTwoFactor as verifyTwoFactorRequest,
   type CurrentUser,
+  type ConfirmTwoFactorEnrollmentResponse,
   type LoginPayload,
   type ThemePreference,
   type SessionResponse,
+  type UpdateProfilePayload,
+  type VerifyTwoFactorResponse,
 } from "@/lib/auth";
 import { queryKeys } from "@/lib/query-keys";
 import { applyThemePreference, persistThemePreference } from "@/lib/theme-preference";
@@ -43,7 +48,7 @@ type AuthContextValue = {
   isHydrating: boolean;
   isAuthenticated: boolean;
   login: (payload: LoginPayload) => Promise<CurrentUser | null>;
-  verifyTwoFactor: (code: string) => Promise<CurrentUser>;
+  verifyTwoFactor: (code: string) => Promise<VerifyTwoFactorResponse>;
   beginTwoFactorEnrollment: () => Promise<{
     manual_entry_key: string;
     provisioning_uri: string;
@@ -53,7 +58,8 @@ type AuthContextValue = {
     is_totp_enabled: boolean;
   }>;
   updateAppearance: (themePreference: ThemePreference) => Promise<CurrentUser>;
-  confirmTwoFactorEnrollment: (code: string) => Promise<CurrentUser>;
+  updateProfile: (payload: UpdateProfilePayload) => Promise<CurrentUser>;
+  confirmTwoFactorEnrollment: (code: string) => Promise<ConfirmTwoFactorEnrollmentResponse>;
   clearPendingEnrollment: () => void;
   clearPendingTwoFactor: () => void;
   logout: () => Promise<void>;
@@ -77,8 +83,8 @@ export function AuthProvider({
 }) {
   const queryClient = useQueryClient();
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(() => {
-    if (initialSession?.authenticated) {
-      return initialSession.user;
+    if (initialSession?.authenticated && initialSession.user) {
+      return normalizeCurrentUser(initialSession.user);
     }
     if (typeof window !== "undefined") {
       return readCurrentUser();
@@ -119,14 +125,15 @@ export function AuthProvider({
     }
 
     queryClient.setQueryData(queryKeys.auth.me(), session);
-    setCurrentUser(session.user);
-    persistCurrentUser(session.user);
+    const user = normalizeCurrentUser(session.user);
+    setCurrentUser(user);
+    persistCurrentUser(user);
     persistPreAuthToken(null);
     persistEnrollmentToken(null);
     setPendingTwoFactor(null);
     setPendingEnrollment(null);
 
-    return session.user;
+    return user;
   }
 
   useEffect(() => {
@@ -146,8 +153,9 @@ export function AuthProvider({
         persistEnrollmentToken(null);
         setPendingTwoFactor(null);
         setPendingEnrollment(null);
-        setCurrentUser(currentUserQuery.data.user);
-        persistCurrentUser(currentUserQuery.data.user);
+        const user = normalizeCurrentUser(currentUserQuery.data.user);
+        setCurrentUser(user);
+        persistCurrentUser(user);
       } else {
         persistCurrentUser(null);
         setCurrentUser(null);
@@ -242,8 +250,9 @@ export function AuthProvider({
           throw new Error("Your verification session expired. Please sign in again.");
         }
 
-        await verifyTwoFactorRequest(pendingTwoFactor.tempToken, code);
-        return adoptEstablishedSession();
+        const response = await verifyTwoFactorRequest(pendingTwoFactor.tempToken, code);
+        const user = await adoptEstablishedSession();
+        return { ...response, user };
       },
       async beginTwoFactorEnrollment() {
         const token = pendingEnrollment?.tempToken;
@@ -272,7 +281,7 @@ export function AuthProvider({
         } satisfies SessionResponse);
 
         try {
-          const user = await updateAppearanceViaBff(themePreference);
+          const user = normalizeCurrentUser(await updateAppearanceViaBff(themePreference));
           setCurrentUser(user);
           persistCurrentUser(user);
           applyThemePreference(user.theme_preference);
@@ -284,19 +293,37 @@ export function AuthProvider({
             session_source: null,
           } satisfies SessionResponse);
           return user;
-        } catch (error) {
-          setCurrentUser(previousUser);
-          persistCurrentUser(previousUser);
-          applyThemePreference(previousUser.theme_preference);
-          persistThemePreference(previousUser.theme_preference);
+        } catch {
+          // Appearance is cosmetic, so keep the local preference usable even if
+          // profile persistence is temporarily unavailable.
+          setCurrentUser(optimisticUser);
+          persistCurrentUser(optimisticUser);
+          applyThemePreference(optimisticUser.theme_preference);
+          persistThemePreference(optimisticUser.theme_preference);
           queryClient.setQueryData(queryKeys.auth.me(), {
             authenticated: true,
-            user: previousUser,
+            user: optimisticUser,
             access: null,
             session_source: null,
           } satisfies SessionResponse);
-          throw error;
+          return optimisticUser;
         }
+      },
+      async updateProfile(payload: UpdateProfilePayload) {
+        if (!currentUser) {
+          throw new Error("Your session expired. Please sign in again.");
+        }
+
+        const user = normalizeCurrentUser(await updateProfileViaBff(payload));
+        setCurrentUser(user);
+        persistCurrentUser(user);
+        queryClient.setQueryData(queryKeys.auth.me(), {
+          authenticated: true,
+          user,
+          access: null,
+          session_source: null,
+        } satisfies SessionResponse);
+        return user;
       },
       async confirmTwoFactorEnrollment(code: string) {
         const token = pendingEnrollment?.tempToken;
@@ -305,12 +332,20 @@ export function AuthProvider({
           : await confirmTwoFactorEnrollmentViaBff(code);
 
         if (token) {
-          return adoptEstablishedSession();
+          const user = await adoptEstablishedSession();
+          return {
+            ...response,
+            user,
+            requires_2fa: false,
+            enrollment_completed: true,
+            session_established: true,
+          };
         }
 
-        setCurrentUser(response.user);
-        persistCurrentUser(response.user);
-        return response.user;
+        const user = normalizeCurrentUser(response.user);
+        setCurrentUser(user);
+        persistCurrentUser(user);
+        return { ...response, user };
       },
       clearPendingEnrollment() {
         persistEnrollmentToken(null);

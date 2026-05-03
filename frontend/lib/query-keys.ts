@@ -1,6 +1,9 @@
 export const queryKeys = {
   auth: {
     me: () => ["auth", "me"] as const,
+    activity: (filters?: Record<string, string | number | boolean | null | undefined>) =>
+      ["auth", "activity", filters ?? {}] as const,
+    recoveryCodes: () => ["auth", "recovery-codes"] as const,
   },
   wards: {
     all: () => ["wards"] as const,

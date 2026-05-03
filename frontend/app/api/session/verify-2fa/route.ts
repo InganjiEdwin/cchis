@@ -30,6 +30,13 @@ export async function POST(request: Request) {
       requires_2fa: false,
       user: data.user as VerifyTwoFactorResponse["user"],
       session_established: true,
+      second_factor_method:
+        data.second_factor_method === "recovery_code" || data.second_factor_method === "totp"
+          ? data.second_factor_method
+          : undefined,
+      recovery_codes_remaining:
+        typeof data.recovery_codes_remaining === "number" ? data.recovery_codes_remaining : undefined,
+      recovery_codes_low: typeof data.recovery_codes_low === "boolean" ? data.recovery_codes_low : undefined,
     };
 
     return applyBackendSetCookie(NextResponse.json(responseBody), backendResponse);

@@ -6,8 +6,14 @@ from django.utils import timezone
 from risk.facility_forecasting import run_facility_burden_forecast_pipeline
 from risk.ml.ingestion import fetch_rainfall_for_wards
 from risk.ml.pipeline import run_mock_prediction_pipeline
-from risk.models import Alert, ETLHeartbeat, RiskScore, Ward
+from risk.models import Alert, ETLHeartbeat, PopulationExposureIngestionRun, RiskScore, SurveillanceIngestionRun, Ward
+from risk.population_exposure_ingestion import parse_source_timestamp, run_population_exposure_csv_ingestion
 from risk.services import deliver_alert, trigger_alerts_for_riskscore
+from risk.surveillance_ingestion import (
+    parse_surveillance_date,
+    parse_surveillance_source_timestamp,
+    run_surveillance_csv_ingestion,
+)
 
 
 logger = logging.getLogger("risk")
@@ -64,6 +70,114 @@ def run_rainfall_ingestion_task(self) -> int:
 
 
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+def run_population_exposure_ingestion_task(
+    self,
+    file_path: str,
+    source_name: str,
+    source_type: str,
+    source_timestamp: str | None = None,
+    release_version: str = "",
+    source_ref: str = "",
+    correction_mode: str = "original",
+    replacement_reason: str = "",
+    operator_note: str = "",
+    replaces_run_id: int | None = None,
+) -> int:
+    replaces_run = (
+        PopulationExposureIngestionRun.objects.get(pk=replaces_run_id)
+        if replaces_run_id is not None
+        else None
+    )
+    run = run_population_exposure_csv_ingestion(
+        file_path=file_path,
+        source_name=source_name,
+        source_type=source_type,
+        source_timestamp=parse_source_timestamp(source_timestamp),
+        release_version=release_version,
+        source_ref=source_ref,
+        correction_mode=correction_mode,
+        replacement_reason=replacement_reason,
+        operator_note=operator_note,
+        execution_mode="scheduled",
+        replaces_run=replaces_run,
+    )
+    logger.info(
+        "run_population_exposure_ingestion_task_completed",
+        extra={
+            "ingestion_run_id": run.id,
+            "status": run.status,
+            "source_name": run.source_name,
+            "source_type": run.source_type,
+            "release_version": run.release_version,
+            "records_seen": run.records_seen,
+            "records_loaded": run.records_loaded,
+            "records_rejected": run.records_rejected,
+        },
+    )
+    return run.id
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+def run_surveillance_ingestion_task(
+    self,
+    file_path: str,
+    source_name: str,
+    source_type: str,
+    source_timestamp: str | None = None,
+    reporting_period_start: str | None = None,
+    reporting_period_end: str | None = None,
+    source_ref: str = "",
+    correction_mode: str = "original",
+    correction_reason: str = "",
+    operator_note: str = "",
+    execution_mode: str = SurveillanceIngestionRun.EXECUTION_SCHEDULED,
+    regenerate_label_windows: bool = False,
+    label_dataset_role: str = "evaluation",
+    label_window_days: int = 7,
+    label_step_days: int = 7,
+    include_seeded_labels: bool = False,
+) -> int:
+    run = run_surveillance_csv_ingestion(
+        file_path=file_path,
+        source_name=source_name,
+        source_type=source_type,
+        source_timestamp=parse_surveillance_source_timestamp(source_timestamp),
+        reporting_period_start=parse_surveillance_date(reporting_period_start),
+        reporting_period_end=parse_surveillance_date(reporting_period_end),
+        source_ref=source_ref,
+        correction_mode=correction_mode,
+        correction_reason=correction_reason,
+        operator_note=operator_note,
+        execution_mode=execution_mode,
+        regenerate_label_windows=regenerate_label_windows,
+        label_dataset_role=label_dataset_role,
+        label_window_days=label_window_days,
+        label_step_days=label_step_days,
+        include_seeded_labels=include_seeded_labels,
+    )
+    logger.info(
+        "run_surveillance_ingestion_task_completed",
+        extra={
+            "ingestion_run_id": run.id,
+            "status": run.status,
+            "source_name": run.source_name,
+            "source_type": run.source_type,
+            "reporting_period_start": run.reporting_period_start.isoformat() if run.reporting_period_start else None,
+            "reporting_period_end": run.reporting_period_end.isoformat() if run.reporting_period_end else None,
+            "records_seen": run.records_seen,
+            "records_loaded": run.records_loaded,
+            "records_rejected": run.records_rejected,
+            "execution_mode": run.execution_mode,
+            "feed_policy": run.results.get("feed_policy") if isinstance(run.results, dict) else None,
+            "downstream_label_regeneration": (
+                run.results.get("downstream_label_regeneration") if isinstance(run.results, dict) else None
+            ),
+        },
+    )
+    return run.id
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
 def trigger_alerts_task(
     self,
     risk_score_id: int,
@@ -72,7 +186,7 @@ def trigger_alerts_task(
     message_override: str | None = None,
     guided_request_metadata: dict | None = None,
 ) -> int:
-    risk_score = RiskScore.objects.select_related("ward").get(id=risk_score_id)
+    risk_score = RiskScore.objects.select_related("ward", "model_run").get(id=risk_score_id)
     alerts = trigger_alerts_for_riskscore(
         risk_score,
         send_sms_enabled=send_sms,

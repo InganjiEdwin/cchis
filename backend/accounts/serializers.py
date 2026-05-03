@@ -53,6 +53,9 @@ class UserSerializer(serializers.ModelSerializer):
     scope_ward_id = serializers.SerializerMethodField()
     two_factor_policy = serializers.SerializerMethodField()
     is_totp_enabled = serializers.BooleanField(read_only=True)
+    account_created_at = serializers.DateTimeField(source="date_joined", read_only=True)
+    last_login_at = serializers.DateTimeField(source="last_login", read_only=True, allow_null=True)
+    profile_capabilities = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -71,6 +74,9 @@ class UserSerializer(serializers.ModelSerializer):
             "two_factor_policy",
             "is_totp_enabled",
             "is_active",
+            "account_created_at",
+            "last_login_at",
+            "profile_capabilities",
         ]
 
     def get_scope_type(self, obj):
@@ -88,6 +94,21 @@ class UserSerializer(serializers.ModelSerializer):
     def get_two_factor_policy(self, obj):
         return get_two_factor_policy_for_user(obj)
 
+    def get_profile_capabilities(self, obj):
+        two_factor_policy = get_two_factor_policy_for_user(obj)
+        can_update_identity = obj.is_active and is_totp_enrolled(obj)
+        return {
+            "can_change_password": obj.is_active,
+            "can_update_appearance": obj.is_active,
+            "can_manage_totp": obj.is_active and two_factor_policy != "NONE",
+            "can_view_own_activity": obj.is_active,
+            "can_update_identity": can_update_identity,
+            "can_review_sessions": False,
+            "can_generate_profile_report": False,
+            "identity_update_mode": "totp_step_up" if can_update_identity else "admin_managed",
+            "mode": "auth_contract_backed_profile",
+        }
+
 
 class UserAppearanceSerializer(serializers.ModelSerializer):
     class Meta:
@@ -95,12 +116,65 @@ class UserAppearanceSerializer(serializers.ModelSerializer):
         fields = ["theme_preference"]
 
 
+class UserProfileUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ["username", "email", "full_name", "phone_number", "theme_preference"]
+        extra_kwargs = {
+            "username": {"required": False},
+            "email": {"required": False},
+            "full_name": {"required": False, "allow_blank": True},
+            "phone_number": {"required": False, "allow_blank": True, "allow_null": True},
+            "theme_preference": {"required": False},
+        }
+
+    def validate_username(self, value):
+        username = value.strip()
+        if not username:
+            raise serializers.ValidationError("Username cannot be blank.")
+        if self.instance and username.lower() == self.instance.username.lower():
+            return username
+        queryset = User.objects.filter(username__iexact=username)
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError("This username is already in use.")
+        return username
+
+    def validate_email(self, value):
+        email = value.strip().lower()
+        if not email:
+            raise serializers.ValidationError("Email address cannot be blank.")
+        if self.instance and email == self.instance.email.lower():
+            return email
+        queryset = User.objects.filter(email__iexact=email)
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError("This email address is already in use.")
+        return email
+
+    def validate_phone_number(self, value):
+        if value in {None, ""}:
+            return None
+
+        phone_number = normalize_kenyan_phone_number(value)
+        if self.instance and phone_number == (self.instance.phone_number or ""):
+            return phone_number
+        queryset = User.objects.filter(phone_number=phone_number)
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError("This phone number is already in use.")
+        return phone_number
+
+
 class RegisterSerializer(serializers.ModelSerializer):
     email = serializers.EmailField(
         required=True,
         validators=[UniqueValidator(queryset=User.objects.all())],
     )
-    password = serializers.CharField(write_only=True, min_length=8)
+    password = serializers.CharField(write_only=True, min_length=settings.PASSWORD_MIN_LENGTH)
 
     class Meta:
         model = User
@@ -149,7 +223,7 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 class ChangePasswordSerializer(serializers.Serializer):
     current_password = serializers.CharField(write_only=True)
-    new_password = serializers.CharField(write_only=True, min_length=8)
+    new_password = serializers.CharField(write_only=True, min_length=settings.PASSWORD_MIN_LENGTH)
 
     def validate_current_password(self, value):
         user = self.context["request"].user
@@ -175,7 +249,7 @@ class PasswordResetRequestSerializer(serializers.Serializer):
 
 class PasswordResetConfirmSerializer(serializers.Serializer):
     token = serializers.CharField(max_length=128)
-    new_password = serializers.CharField(write_only=True, min_length=8)
+    new_password = serializers.CharField(write_only=True, min_length=settings.PASSWORD_MIN_LENGTH)
 
     def validate_token(self, value):
         return value.strip()
@@ -190,10 +264,20 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 
 class VerifyTwoFactorSerializer(serializers.Serializer):
     token = serializers.CharField(max_length=128)
-    code = serializers.CharField(max_length=6)
+    code = serializers.CharField(max_length=64)
 
     def validate_token(self, value):
         return value.strip()
+
+    def validate_code(self, value):
+        code = value.strip()
+        if not code:
+            raise serializers.ValidationError("Enter an authentication or recovery code.")
+        return code
+
+
+class VerifyAuthenticatedTwoFactorSerializer(serializers.Serializer):
+    code = serializers.CharField(max_length=6)
 
     def validate_code(self, value):
         digits_only = "".join(ch for ch in value.strip() if ch.isdigit())
@@ -221,6 +305,23 @@ class ConfirmTwoFactorEnrollmentSerializer(serializers.Serializer):
         if len(digits_only) != 6:
             raise serializers.ValidationError("Enter a valid 6-digit code.")
         return digits_only
+
+
+class RegenerateTwoFactorRecoveryCodesSerializer(serializers.Serializer):
+    current_password = serializers.CharField(write_only=True)
+    code = serializers.CharField(max_length=64)
+
+    def validate_current_password(self, value):
+        user = self.context["request"].user
+        if not user.check_password(value):
+            raise serializers.ValidationError("Current password is incorrect.")
+        return value
+
+    def validate_code(self, value):
+        code = value.strip()
+        if not code:
+            raise serializers.ValidationError("Enter an authentication or recovery code.")
+        return code
 
 
 class TwoFactorEnrollmentSetupSerializer(serializers.Serializer):
@@ -501,3 +602,146 @@ class AuthAuditEventSerializer(serializers.ModelSerializer):
             "metadata",
             "created_at",
         ]
+
+
+class OwnAuthActivityEventSerializer(serializers.ModelSerializer):
+    title = serializers.SerializerMethodField()
+    description = serializers.SerializerMethodField()
+
+    EVENT_COPY = {
+        AuthAuditEvent.EVENT_LOGIN_SUCCESS: (
+            "Login successful",
+            "Your account signed in successfully.",
+        ),
+        AuthAuditEvent.EVENT_LOGIN_FAILED: (
+            "Login failed",
+            "A sign-in attempt for your account failed.",
+        ),
+        AuthAuditEvent.EVENT_LOGOUT: (
+            "Signed out",
+            "Your account signed out.",
+        ),
+        AuthAuditEvent.EVENT_REFRESH_SUCCESS: (
+            "Session refreshed",
+            "Your dashboard session was refreshed.",
+        ),
+        AuthAuditEvent.EVENT_REFRESH_FAILED: (
+            "Session refresh failed",
+            "A dashboard session refresh for your account failed.",
+        ),
+        AuthAuditEvent.EVENT_PASSWORD_CHANGED: (
+            "Password changed",
+            "Your account password was changed.",
+        ),
+        AuthAuditEvent.EVENT_PASSWORD_RESET_COMPLETED: (
+            "Password reset completed",
+            "Your account password was reset successfully.",
+        ),
+        AuthAuditEvent.EVENT_2FA_ENROLLMENT_REQUIRED: (
+            "Two-factor setup required",
+            "Your account was asked to complete two-factor setup.",
+        ),
+        AuthAuditEvent.EVENT_2FA_ENROLLMENT_STARTED: (
+            "Two-factor setup started",
+            "Two-factor setup was opened for your account.",
+        ),
+        AuthAuditEvent.EVENT_2FA_ENROLLMENT_COMPLETED: (
+            "Two-factor setup completed",
+            "Two-factor authentication was enabled for your account.",
+        ),
+        AuthAuditEvent.EVENT_2FA_REQUIRED: (
+            "Two-factor verification required",
+            "Your account was asked for a two-factor verification code.",
+        ),
+        AuthAuditEvent.EVENT_2FA_VERIFIED: (
+            "Two-factor verified",
+            "A two-factor challenge for your account was verified.",
+        ),
+        AuthAuditEvent.EVENT_2FA_FAILED: (
+            "Two-factor verification failed",
+            "A two-factor verification attempt for your account failed.",
+        ),
+        AuthAuditEvent.EVENT_2FA_RECOVERY_CODES_GENERATED: (
+            "Recovery codes generated",
+            "Recovery codes were generated for your account.",
+        ),
+        AuthAuditEvent.EVENT_2FA_RECOVERY_CODES_REGENERATED: (
+            "Recovery codes regenerated",
+            "Your account recovery codes were replaced.",
+        ),
+        AuthAuditEvent.EVENT_2FA_RECOVERY_CODE_USED: (
+            "Recovery code used",
+            "A recovery code was used for your account.",
+        ),
+        AuthAuditEvent.EVENT_2FA_RECOVERY_CODE_FAILED: (
+            "Recovery code failed",
+            "A recovery code verification attempt failed.",
+        ),
+        AuthAuditEvent.EVENT_2FA_RECOVERY_CODES_LOW: (
+            "Recovery codes low",
+            "Your account has few unused recovery codes remaining.",
+        ),
+        AuthAuditEvent.EVENT_USER_CREATED: (
+            "Account created",
+            "Your user account was created.",
+        ),
+        AuthAuditEvent.EVENT_USER_DEACTIVATED: (
+            "Account deactivated",
+            "Your user account was deactivated.",
+        ),
+        AuthAuditEvent.EVENT_USER_REACTIVATED: (
+            "Account reactivated",
+            "Your user account was reactivated.",
+        ),
+    }
+
+    class Meta:
+        model = AuthAuditEvent
+        fields = [
+            "id",
+            "event_type",
+            "status",
+            "title",
+            "description",
+            "created_at",
+        ]
+
+    def get_title(self, obj):
+        return self.EVENT_COPY.get(
+            obj.event_type,
+            (obj.get_event_type_display(), ""),
+        )[0]
+
+    def get_description(self, obj):
+        default_description = f"{obj.get_event_type_display()} was recorded for your account."
+        return self.EVENT_COPY.get(obj.event_type, ("", default_description))[1]
+
+
+class OwnAuthActivityQuerySerializer(serializers.Serializer):
+    page = serializers.IntegerField(required=False, min_value=1)
+    page_size = serializers.IntegerField(required=False, min_value=1)
+    event_type = serializers.ChoiceField(
+        choices=[choice[0] for choice in AuthAuditEvent.EVENT_CHOICES],
+        required=False,
+        allow_blank=True,
+    )
+    status = serializers.ChoiceField(
+        choices=[choice[0] for choice in AuthAuditEvent.STATUS_CHOICES],
+        required=False,
+        allow_blank=True,
+    )
+    date_from = serializers.DateField(required=False)
+    date_to = serializers.DateField(required=False)
+    security_only = serializers.BooleanField(required=False, default=True)
+    include_refresh_events = serializers.BooleanField(required=False, default=False)
+
+    def validate(self, attrs):
+        date_from = attrs.get("date_from")
+        date_to = attrs.get("date_to")
+
+        if date_from and date_to and date_to < date_from:
+            raise serializers.ValidationError(
+                {"date_to": "Date to must be the same as or later than date from."}
+            )
+
+        return attrs

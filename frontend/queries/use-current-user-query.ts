@@ -19,6 +19,7 @@ export function useCurrentUserQuery({
     queryFn: fetchSession,
     enabled,
     initialData: initialSession ?? undefined,
-    staleTime: 60 * 1000,
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 }

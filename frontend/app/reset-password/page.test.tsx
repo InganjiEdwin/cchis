@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import ResetPasswordPage from "@/app/reset-password/page";
+import { isStrongPassword } from "@/lib/password-policy";
 
 const mockReplace = vi.fn();
 const mockValidatePasswordResetToken = vi.fn();
@@ -61,6 +62,45 @@ describe("ResetPasswordPage", () => {
 
     await waitFor(() => {
       expect(mockConfirmPasswordReset).toHaveBeenCalledWith("valid-token-123", "ResetStrongPass123!");
+    });
+  });
+
+  it("blocks weak reset passwords before submitting", async () => {
+    const user = userEvent.setup();
+    mockConfirmPasswordReset.mockResolvedValue({ detail: "Password reset successfully." });
+
+    render(React.createElement(ResetPasswordPage));
+
+    await screen.findByLabelText("New Password");
+    await user.type(screen.getByLabelText("New Password"), "longpasswordonly");
+    await user.type(screen.getByLabelText("Confirm Password"), "longpasswordonly");
+    await user.click(screen.getByRole("button", { name: /update password/i }));
+
+    expect(screen.getByText(/Use at least 12 characters with uppercase, lowercase, a number, and a symbol/i)).toBeInTheDocument();
+    expect(mockConfirmPasswordReset).not.toHaveBeenCalled();
+  });
+
+  it("generates and fills a strong reset password", async () => {
+    const user = userEvent.setup();
+    mockConfirmPasswordReset.mockResolvedValue({ detail: "Password reset successfully." });
+
+    render(React.createElement(ResetPasswordPage));
+
+    await screen.findByLabelText("New Password");
+    await user.click(screen.getByRole("button", { name: "Generate strong password" }));
+
+    const newPasswordInput = screen.getByLabelText("New Password") as HTMLInputElement;
+    const confirmPasswordInput = screen.getByLabelText("Confirm Password") as HTMLInputElement;
+    const generatedPassword = newPasswordInput.value;
+
+    expect(isStrongPassword(generatedPassword)).toBe(true);
+    expect(confirmPasswordInput.value).toBe(generatedPassword);
+    expect(screen.getByText(/Generated and filled a strong password/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /update password/i }));
+
+    await waitFor(() => {
+      expect(mockConfirmPasswordReset).toHaveBeenCalledWith("valid-token-123", generatedPassword);
     });
   });
 

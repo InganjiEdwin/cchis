@@ -14,7 +14,7 @@ import {
   Waves,
   Waypoints,
 } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import { useAuth } from "@/components/auth-provider";
 import { DashboardTopbar } from "@/components/dashboard-topbar";
@@ -25,6 +25,11 @@ import { PageSectionHeader } from "@/components/ui/page-section-header";
 import { StatusBanner } from "@/components/ui/status-banner";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { cn } from "@/lib/cn";
+import {
+  retrySystemBackgroundJobsViaBff,
+  runManualRiskScoringViaBff,
+  setAlertDeliveryPauseViaBff,
+} from "@/lib/dashboard";
 import { useSystemQuery } from "@/queries/use-system-query";
 
 function formatRelativeLabel(timestamp: string | null) {
@@ -60,6 +65,19 @@ function formatEventTime(timestamp: string | null) {
   }
 
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatDateTimeLabel(timestamp: string | null) {
+  if (!timestamp) {
+    return "No expiry recorded";
+  }
+
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) {
+    return "Invalid expiry";
+  }
+
+  return date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
 }
 
 type SystemTone = "success" | "warning" | "danger" | "default";
@@ -224,19 +242,33 @@ function makeEvent(event: SystemEvent) {
   return event;
 }
 
+function getActionErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
+
 export default function SystemPage() {
   const { currentUser } = useAuth();
   const systemQuery = useSystemQuery({ enabled: Boolean(currentUser) });
+  const [controlAction, setControlAction] = useState<"retry" | "risk" | "pause" | null>(null);
+  const [controlFeedback, setControlFeedback] = useState<{
+    tone: "success" | "danger" | "info" | "warning";
+    message: string;
+  } | null>(null);
   const snapshot = systemQuery.data ?? null;
   const isLoading = systemQuery.isPending;
   const isRefreshing = systemQuery.isFetching;
   const error = systemQuery.error instanceof Error ? systemQuery.error.message : null;
+  const controlStatus = snapshot?.controlStatus ?? null;
 
   const riskFreshness = describeFreshness(snapshot?.latestRiskTimestamp ?? null, 360);
   const alertFreshness = describeFreshness(snapshot?.latestAlertTimestamp ?? null, 15);
   const facilityFreshness = describeFreshness(snapshot?.latestFacilityTimestamp ?? null, 1440);
   const chvFreshness = describeFreshness(snapshot?.latestChvTimestamp ?? null, 180);
   const alertBacklog = (snapshot?.queuedAlerts ?? 0) + (snapshot?.retryPendingAlerts ?? 0);
+  const alertDeliveryPaused = controlStatus?.alert_delivery_paused ?? false;
+  const controlDisabled = controlAction !== null || !controlStatus;
+  const controlStatusTone = controlStatus ? "success" : error ? "danger" : "default";
+  const controlStatusLabel = controlStatus ? "Contracts active" : error ? "Unavailable" : "Loading";
   const systemStatus = getSystemStatus({
     riskFreshness,
     alertFreshness,
@@ -258,6 +290,78 @@ export default function SystemPage() {
           snapshot?.latestFacilityTimestamp ??
           null,
       );
+
+  async function handleRetryBackgroundJobs() {
+    setControlAction("retry");
+    setControlFeedback(null);
+    try {
+      const result = await retrySystemBackgroundJobsViaBff({ limit: 25 });
+      setControlFeedback({
+        tone: "success",
+        message: `${result.queued_alert_delivery_count} alert delivery retry tasks were queued.`,
+      });
+      await systemQuery.refetch();
+    } catch (actionError) {
+      setControlFeedback({
+        tone: "danger",
+        message: getActionErrorMessage(actionError, "Unable to queue background retry controls."),
+      });
+    } finally {
+      setControlAction(null);
+    }
+  }
+
+  async function handleManualRiskScoring() {
+    setControlAction("risk");
+    setControlFeedback(null);
+    try {
+      const month = new Date().getMonth() + 1;
+      const result = await runManualRiskScoringViaBff({
+        month,
+        trigger_alerts: false,
+        send_sms: false,
+      });
+      setControlFeedback({
+        tone: "success",
+        message: `Manual risk scoring was queued as task ${result.task_id}.`,
+      });
+      await systemQuery.refetch();
+    } catch (actionError) {
+      setControlFeedback({
+        tone: "danger",
+        message: getActionErrorMessage(actionError, "Unable to queue manual risk scoring."),
+      });
+    } finally {
+      setControlAction(null);
+    }
+  }
+
+  async function handleAlertDeliveryPause() {
+    const nextPausedState = !alertDeliveryPaused;
+    setControlAction("pause");
+    setControlFeedback(null);
+    try {
+      const result = await setAlertDeliveryPauseViaBff({
+        paused: nextPausedState,
+        duration_minutes: 60,
+        reason: nextPausedState ? "Paused from system page." : "Resumed from system page.",
+      });
+      setControlFeedback({
+        tone: nextPausedState ? "warning" : "success",
+        message: result.alert_delivery_paused
+          ? `Alert delivery is paused until ${formatDateTimeLabel(result.alert_delivery_paused_until)}.`
+          : "Alert delivery has resumed.",
+      });
+      await systemQuery.refetch();
+    } catch (actionError) {
+      setControlFeedback({
+        tone: "danger",
+        message: getActionErrorMessage(actionError, "Unable to update alert delivery pause."),
+      });
+    } finally {
+      setControlAction(null);
+    }
+  }
 
   const statusCards = useMemo(
     () => [
@@ -552,7 +656,7 @@ export default function SystemPage() {
     <div className="space-y-6">
       <DashboardTopbar
         title="System Status"
-        subtitle="Read-only system status from dashboard records"
+        subtitle="System status and explicit control contracts"
         lastUpdatedLabel={lastUpdatedLabel}
         lastUpdatedTone={
           systemStatus.state !== "OK" &&
@@ -884,7 +988,7 @@ export default function SystemPage() {
               </span>
               <span className="inline-flex items-center gap-2">
                 <ShieldAlert className="size-4" aria-hidden="true" />
-                No manual controls are exposed on this page.
+                Control contracts are wired to backend endpoints.
               </span>
             </div>
           </Card>
@@ -895,41 +999,113 @@ export default function SystemPage() {
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <PageSectionHeader
                 className="gap-1"
-                title="Current capability mode"
-                description="This page is read-only until explicit control contracts exist."
+                title="System controls"
+                description="Backend contracts are available for retry queues, manual risk scoring, and alert delivery pause."
               />
-              <StatusBadge tone="default" className="w-fit px-3 py-1 tracking-[0.14em]">
-                Read-only
+              <StatusBadge tone={controlStatusTone} className="w-fit px-3 py-1 tracking-[0.14em]">
+                {controlStatusLabel}
               </StatusBadge>
             </div>
 
-            <div className="mt-5 grid gap-4 lg:grid-cols-2">
+            {!controlStatus && error ? (
+              <StatusBanner tone="danger" className="mt-5" icon={<AlertTriangle aria-hidden="true" />}>
+                System controls could not load: {error}
+              </StatusBanner>
+            ) : null}
+
+            {controlFeedback ? (
+              <StatusBanner tone={controlFeedback.tone} className="mt-5">
+                {controlFeedback.message}
+              </StatusBanner>
+            ) : null}
+
+            {alertDeliveryPaused ? (
+              <StatusBanner tone="warning" className="mt-5" icon={<ShieldAlert aria-hidden="true" />}>
+                Alert delivery is paused until {formatDateTimeLabel(controlStatus?.alert_delivery_paused_until ?? null)}.
+              </StatusBanner>
+            ) : null}
+
+            <div className="mt-5 grid gap-4 xl:grid-cols-3">
               <div className="rounded-[1.35rem] border border-panel-table-wrap px-4 py-4">
                 <div className="flex items-center gap-3">
                   <span className="inline-flex size-9 items-center justify-center rounded-xl bg-[color-mix(in_srgb,var(--success)_14%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_20%,transparent)]">
-                    <ShieldCheck className="size-4" aria-hidden="true" />
+                    <RefreshCcw className="size-4" aria-hidden="true" />
                   </span>
-                  <h3 className="text-sm font-semibold text-panel-strong">Supported here</h3>
+                  <h3 className="text-sm font-semibold text-panel-strong">Background retry</h3>
                 </div>
-                <ul className="mt-4 space-y-2 text-sm text-panel-muted">
-                  <li>View dashboard-backed system status.</li>
-                  <li>Refresh visible records.</li>
-                  <li>Inspect visible data freshness and record summaries.</li>
-                </ul>
+                <p className="mt-4 text-sm text-panel-muted">
+                  Queues retryable SMS alert delivery jobs from queued and retry-pending records.
+                </p>
+                <p className="mt-3 text-xs font-semibold uppercase tracking-[0.14em] text-panel-subtle">
+                  {alertBacklog} visible queued/retry-pending
+                </p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="mt-4"
+                  onClick={handleRetryBackgroundJobs}
+                  disabled={controlDisabled || !controlStatus?.can_retry_background_jobs}
+                >
+                  <RefreshCcw className={cn("size-4", controlAction === "retry" && "animate-spin")} aria-hidden="true" />
+                  Retry background jobs
+                </Button>
               </div>
 
               <div className="rounded-[1.35rem] border border-panel-table-wrap px-4 py-4">
                 <div className="flex items-center gap-3">
-                  <span className="inline-flex size-9 items-center justify-center rounded-xl bg-[color-mix(in_srgb,var(--dashboard-subtle-copy)_14%,var(--panel))] text-panel-muted">
-                    <ShieldAlert className="size-4" aria-hidden="true" />
+                  <span className="inline-flex size-9 items-center justify-center rounded-xl bg-[color-mix(in_srgb,var(--brand)_14%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--brand)_20%,transparent)]">
+                    <Siren className="size-4" aria-hidden="true" />
                   </span>
-                  <h3 className="text-sm font-semibold text-panel-strong">Not supported here</h3>
+                  <h3 className="text-sm font-semibold text-panel-strong">Manual risk scoring</h3>
                 </div>
-                <ul className="mt-4 space-y-2 text-sm text-panel-muted">
-                  <li>Background-processing retry controls.</li>
-                  <li>Manual risk-scoring controls.</li>
-                  <li>Alert delivery pause controls.</li>
-                </ul>
+                <p className="mt-4 text-sm text-panel-muted">
+                  Queues a model run for the current month. Alert creation and SMS delivery stay off by default.
+                </p>
+                <p className="mt-3 text-xs font-semibold uppercase tracking-[0.14em] text-panel-subtle">
+                  Governed async model task
+                </p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="mt-4"
+                  onClick={handleManualRiskScoring}
+                  disabled={controlDisabled || !controlStatus?.can_run_manual_risk_scoring}
+                >
+                  <Siren className="size-4" aria-hidden="true" />
+                  Run risk scoring
+                </Button>
+              </div>
+
+              <div className="rounded-[1.35rem] border border-panel-table-wrap px-4 py-4">
+                <div className="flex items-center gap-3">
+                  <span
+                    className={cn(
+                      "inline-flex size-9 items-center justify-center rounded-xl",
+                      alertDeliveryPaused
+                        ? "bg-[color-mix(in_srgb,var(--warning)_16%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_22%,transparent)]"
+                        : "bg-[color-mix(in_srgb,var(--success)_14%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_20%,transparent)]",
+                    )}
+                  >
+                    <BellRing className="size-4" aria-hidden="true" />
+                  </span>
+                  <h3 className="text-sm font-semibold text-panel-strong">Alert delivery</h3>
+                </div>
+                <p className="mt-4 text-sm text-panel-muted">
+                  Pauses or resumes outbound SMS delivery while dashboard alerts and records stay visible.
+                </p>
+                <p className="mt-3 text-xs font-semibold uppercase tracking-[0.14em] text-panel-subtle">
+                  {alertDeliveryPaused ? "Paused" : "Active"}
+                </p>
+                <Button
+                  variant={alertDeliveryPaused ? "primary" : "danger"}
+                  size="sm"
+                  className="mt-4"
+                  onClick={handleAlertDeliveryPause}
+                  disabled={controlDisabled || !controlStatus?.can_pause_alert_delivery}
+                >
+                  <BellRing className="size-4" aria-hidden="true" />
+                  {alertDeliveryPaused ? "Resume alert delivery" : "Pause alert delivery"}
+                </Button>
               </div>
             </div>
           </Card>

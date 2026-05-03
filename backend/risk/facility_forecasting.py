@@ -9,6 +9,15 @@ from scipy.optimize import minimize
 from scipy.special import gammaln
 
 from risk.models import FacilityForecast, FacilityForecastRun, FeatureDataset, FeatureDatasetRow, HealthFacility, Ward
+from risk.population_exposure_features import (
+    build_population_exposure_context_for_facility,
+    build_population_exposure_feature_dataset,
+)
+from risk.surveillance_features import (
+    SURVEILLANCE_CONTEXT_FEATURE_KEYS,
+    SURVEILLANCE_FEATURE_SCHEMA_VERSION,
+    build_surveillance_feature_snapshot,
+)
 
 from .services import build_facility_intelligence_snapshot, latest_riskscore_for_ward
 
@@ -27,6 +36,15 @@ FACILITY_FORECAST_FEATURE_KEYS = [
     "facility_type_numeric",
     "staffing_percent",
     "ors_estimate_percent",
+    "ward_population_total_scaled",
+    "catchment_population_estimate_scaled",
+    "exposed_population_proxy_scaled",
+    "surveillance_recent_suspected_cases_28d",
+    "surveillance_recent_confirmed_cases_28d",
+    "surveillance_recent_proxy_cases_28d",
+    "surveillance_active_label_count_28d",
+    "surveillance_proxy_only_label_window_count_28d",
+    "surveillance_delayed_or_stale_record_count_28d",
 ]
 FACILITY_FORECAST_PROMOTION_BLOCKERS = [
     "proxy_training_target_only",
@@ -47,6 +65,35 @@ class FacilityForecastRow:
     staffing_percent: int
     ors_estimate_percent: int
     target_count: int
+    ward_population_total: float | None = None
+    catchment_population_estimate: float | None = None
+    exposed_population_proxy: float | None = None
+    population_exposure_truth_summary: dict | None = None
+    surveillance_recent_suspected_cases_28d: int = 0
+    surveillance_recent_confirmed_cases_28d: int = 0
+    surveillance_recent_proxy_cases_28d: int = 0
+    surveillance_recent_total_cases_28d: int = 0
+    surveillance_active_label_count_28d: int = 0
+    surveillance_watch_label_count_28d: int = 0
+    surveillance_confirmed_label_window_count_28d: int = 0
+    surveillance_proxy_only_label_window_count_28d: int = 0
+    surveillance_delayed_or_stale_record_count_28d: int = 0
+    surveillance_latest_label_window_ref: str | None = None
+    surveillance_latest_label_truth_level: str | None = None
+    surveillance_label_truth_state: str = "no_surveillance_label_window"
+    surveillance_truth_summary: dict | None = None
+
+    @property
+    def ward_population_total_scaled(self) -> float:
+        return round(float(self.ward_population_total or 0) / 10000.0, 6)
+
+    @property
+    def catchment_population_estimate_scaled(self) -> float:
+        return round(float(self.catchment_population_estimate or 0) / 10000.0, 6)
+
+    @property
+    def exposed_population_proxy_scaled(self) -> float:
+        return round(float(self.exposed_population_proxy or 0) / 10000.0, 6)
 
 
 def _facility_forecast_feature_values_from_row(row: FacilityForecastRow) -> dict:
@@ -61,6 +108,33 @@ def _facility_forecast_feature_values_from_row(row: FacilityForecastRow) -> dict
         "facility_type_numeric": row.facility_type_numeric,
         "staffing_percent": row.staffing_percent,
         "ors_estimate_percent": row.ors_estimate_percent,
+        "ward_population_total": row.ward_population_total,
+        "catchment_population_estimate": row.catchment_population_estimate,
+        "exposed_population_proxy": row.exposed_population_proxy,
+        "ward_population_total_scaled": row.ward_population_total_scaled,
+        "catchment_population_estimate_scaled": row.catchment_population_estimate_scaled,
+        "exposed_population_proxy_scaled": row.exposed_population_proxy_scaled,
+        "population_exposure_truth_summary": row.population_exposure_truth_summary or {},
+        "population_exposure_display_caveat": (
+            "Population and catchment values are baselines, estimates, or proxies; "
+            "they must not be described as facility census truth."
+        ),
+        "surveillance_recent_suspected_cases_28d": row.surveillance_recent_suspected_cases_28d,
+        "surveillance_recent_confirmed_cases_28d": row.surveillance_recent_confirmed_cases_28d,
+        "surveillance_recent_proxy_cases_28d": row.surveillance_recent_proxy_cases_28d,
+        "surveillance_recent_total_cases_28d": row.surveillance_recent_total_cases_28d,
+        "surveillance_active_label_count_28d": row.surveillance_active_label_count_28d,
+        "surveillance_watch_label_count_28d": row.surveillance_watch_label_count_28d,
+        "surveillance_confirmed_label_window_count_28d": row.surveillance_confirmed_label_window_count_28d,
+        "surveillance_proxy_only_label_window_count_28d": row.surveillance_proxy_only_label_window_count_28d,
+        "surveillance_delayed_or_stale_record_count_28d": row.surveillance_delayed_or_stale_record_count_28d,
+        "surveillance_latest_label_window_ref": row.surveillance_latest_label_window_ref,
+        "surveillance_latest_label_truth_level": row.surveillance_latest_label_truth_level,
+        "surveillance_label_truth_state": row.surveillance_label_truth_state,
+        "surveillance_truth_summary": row.surveillance_truth_summary or {},
+        "surveillance_display_caveat": (
+            "Surveillance trend inputs retain truth and freshness metadata; proxy-only windows are not confirmed outbreaks."
+        ),
     }
 
 
@@ -69,6 +143,9 @@ def _persist_facility_forecast_feature_dataset(
     rows: list[FacilityForecastRow],
     dataset_kind: str,
     month: int,
+    population_exposure_dataset: FeatureDataset | None = None,
+    surveillance_coverage: dict | None = None,
+    surveillance_truth_gate: dict | None = None,
 ) -> FeatureDataset:
     dataset_role = "training" if dataset_kind == FeatureDataset.KIND_TRAINING else "inference"
     dataset = FeatureDataset.objects.create(
@@ -77,13 +154,28 @@ def _persist_facility_forecast_feature_dataset(
         schema_version=FACILITY_FORECAST_FEATURE_SCHEMA_VERSION,
         source_kind=FeatureDataset.SOURCE_KIND_HYBRID,
         month=month,
-        feature_keys=FACILITY_FORECAST_FEATURE_KEYS,
+        feature_keys=list(dict.fromkeys([*FACILITY_FORECAST_FEATURE_KEYS, *SURVEILLANCE_CONTEXT_FEATURE_KEYS])),
         row_count=len(rows),
         lineage_metadata={
             "builder": "_persist_facility_forecast_feature_dataset",
             "dataset_role": dataset_role,
             "model_family": "facility_burden_forecasting",
             "target_mode": "proxy_derived_facility_burden" if dataset_kind == FeatureDataset.KIND_TRAINING else "not_applicable",
+            "population_exposure_dataset_ref": population_exposure_dataset.dataset_ref if population_exposure_dataset else None,
+            "population_exposure_feature_dataset_id": population_exposure_dataset.id if population_exposure_dataset else None,
+            "population_exposure_schema_version": population_exposure_dataset.schema_version if population_exposure_dataset else None,
+            "population_exposure_coverage": (population_exposure_dataset.lineage_metadata or {}).get("coverage", {})
+            if population_exposure_dataset
+            else {},
+            "population_exposure_truth_assumptions": (population_exposure_dataset.lineage_metadata or {}).get("truth_assumptions", {})
+            if population_exposure_dataset
+            else {},
+            "surveillance_feature_schema_version": SURVEILLANCE_FEATURE_SCHEMA_VERSION,
+            "surveillance_feature_coverage": surveillance_coverage or {},
+            "surveillance_truth_gate": surveillance_truth_gate or {
+                "proxy_only_as_confirmed_allowed": False,
+                "confirmed_truth_required_for_confirmed_outbreak_claims": True,
+            },
         },
     )
     FeatureDatasetRow.objects.bulk_create(
@@ -138,6 +230,8 @@ def build_facility_forecasting_truth_audit() -> dict:
                 "projected cases derived from promoted ward-risk outputs",
                 "surge pressure derived from ward risk level",
                 "ORS and staffing pressure derived from heuristic mappings",
+                "population and exposure features with truth_class metadata",
+                "catchment population estimates, not facility census counts",
             ],
             "not_yet_available_as_real_facility_forecast_inputs": [
                 "facility-level historical suspected cholera case counts",
@@ -152,6 +246,8 @@ def build_facility_forecasting_truth_audit() -> dict:
             "negative_binomial_not_yet_promoted": not bool(promoted_run),
             "current_readiness_is_proxy_backed": not bool(promoted_run),
             "dashboard_must_not_present_preview_as_promoted_forecast": True,
+            "catchment_population_must_be_labeled_estimate": True,
+            "exposure_features_must_retain_truth_class_metadata": True,
         },
     }
 
@@ -399,12 +495,26 @@ def _target_count_from_snapshot(readiness: dict, context: dict) -> int:
     return max(1, projected_cases + alert_weight + surge_weight)
 
 
-def _build_base_training_rows(facilities: list[HealthFacility]) -> list[FacilityForecastRow]:
+def _build_base_training_rows(
+    facilities: list[HealthFacility],
+    *,
+    population_exposure_rows_by_ward_id: dict[int, dict] | None = None,
+    surveillance_rows_by_ward_id: dict[int, dict] | None = None,
+) -> list[FacilityForecastRow]:
     rows: list[FacilityForecastRow] = []
     for facility in facilities:
         snapshot = build_facility_intelligence_snapshot(facility)
         readiness = snapshot["readiness"]
         context = snapshot["context"]
+        population_exposure_row = (population_exposure_rows_by_ward_id or {}).get(facility.ward_id, {})
+        population_exposure_truth_summary = population_exposure_row.get("source_lineage") or {}
+        surveillance_row = (surveillance_rows_by_ward_id or {}).get(facility.ward_id, {})
+        surveillance_total_cases = int(surveillance_row.get("surveillance_recent_total_cases_28d") or 0)
+        surveillance_burden_floor = (
+            int(surveillance_row.get("surveillance_recent_suspected_cases_28d") or 0)
+            + int(surveillance_row.get("surveillance_recent_confirmed_cases_28d") or 0)
+            + max(0, int(surveillance_row.get("surveillance_recent_proxy_cases_28d") or 0) // 2)
+        )
         rows.append(
             FacilityForecastRow(
                 facility=facility,
@@ -414,7 +524,27 @@ def _build_base_training_rows(facilities: list[HealthFacility]) -> list[Facility
                 facility_type_numeric=_type_to_numeric(facility.facility_type),
                 staffing_percent=int(readiness["staffing_percent"]),
                 ors_estimate_percent=int(readiness["ors_estimate_percent"]),
-                target_count=_target_count_from_snapshot(readiness, context),
+                target_count=max(_target_count_from_snapshot(readiness, context), surveillance_burden_floor, 1),
+                ward_population_total=population_exposure_row.get("population_total"),
+                catchment_population_estimate=population_exposure_row.get("catchment_population_estimate"),
+                exposed_population_proxy=population_exposure_row.get("exposed_population_proxy"),
+                population_exposure_truth_summary=population_exposure_truth_summary,
+                surveillance_recent_suspected_cases_28d=surveillance_row.get("surveillance_recent_suspected_cases_28d", 0),
+                surveillance_recent_confirmed_cases_28d=surveillance_row.get("surveillance_recent_confirmed_cases_28d", 0),
+                surveillance_recent_proxy_cases_28d=surveillance_row.get("surveillance_recent_proxy_cases_28d", 0),
+                surveillance_recent_total_cases_28d=surveillance_total_cases,
+                surveillance_active_label_count_28d=surveillance_row.get("surveillance_active_label_count_28d", 0),
+                surveillance_watch_label_count_28d=surveillance_row.get("surveillance_watch_label_count_28d", 0),
+                surveillance_confirmed_label_window_count_28d=surveillance_row.get("surveillance_confirmed_label_window_count_28d", 0),
+                surveillance_proxy_only_label_window_count_28d=surveillance_row.get("surveillance_proxy_only_label_window_count_28d", 0),
+                surveillance_delayed_or_stale_record_count_28d=surveillance_row.get("surveillance_delayed_or_stale_record_count_28d", 0),
+                surveillance_latest_label_window_ref=surveillance_row.get("surveillance_latest_label_window_ref"),
+                surveillance_latest_label_truth_level=surveillance_row.get("surveillance_latest_label_truth_level"),
+                surveillance_label_truth_state=surveillance_row.get(
+                    "surveillance_label_truth_state",
+                    "no_surveillance_label_window",
+                ),
+                surveillance_truth_summary=surveillance_row.get("surveillance_source_coverage_summary", {}),
             )
         )
     return rows
@@ -436,6 +566,23 @@ def _expand_training_rows(rows: list[FacilityForecastRow]) -> list[FacilityForec
                     staffing_percent=max(1, min(100, int(round(row.staffing_percent * (2 - multiplier))))),
                     ors_estimate_percent=max(1, min(100, int(round(row.ors_estimate_percent * (2 - multiplier))))),
                     target_count=target,
+                    ward_population_total=row.ward_population_total,
+                    catchment_population_estimate=row.catchment_population_estimate,
+                    exposed_population_proxy=row.exposed_population_proxy,
+                    population_exposure_truth_summary=row.population_exposure_truth_summary,
+                    surveillance_recent_suspected_cases_28d=row.surveillance_recent_suspected_cases_28d,
+                    surveillance_recent_confirmed_cases_28d=row.surveillance_recent_confirmed_cases_28d,
+                    surveillance_recent_proxy_cases_28d=row.surveillance_recent_proxy_cases_28d,
+                    surveillance_recent_total_cases_28d=row.surveillance_recent_total_cases_28d,
+                    surveillance_active_label_count_28d=row.surveillance_active_label_count_28d,
+                    surveillance_watch_label_count_28d=row.surveillance_watch_label_count_28d,
+                    surveillance_confirmed_label_window_count_28d=row.surveillance_confirmed_label_window_count_28d,
+                    surveillance_proxy_only_label_window_count_28d=row.surveillance_proxy_only_label_window_count_28d,
+                    surveillance_delayed_or_stale_record_count_28d=row.surveillance_delayed_or_stale_record_count_28d,
+                    surveillance_latest_label_window_ref=row.surveillance_latest_label_window_ref,
+                    surveillance_latest_label_truth_level=row.surveillance_latest_label_truth_level,
+                    surveillance_label_truth_state=row.surveillance_label_truth_state,
+                    surveillance_truth_summary=row.surveillance_truth_summary,
                 )
             )
     return expanded
@@ -454,6 +601,15 @@ def _rows_to_matrix(rows: list[FacilityForecastRow]) -> tuple[np.ndarray, np.nda
                 row.facility_type_numeric,
                 row.staffing_percent / 100.0,
                 row.ors_estimate_percent / 100.0,
+                row.ward_population_total_scaled,
+                row.catchment_population_estimate_scaled,
+                row.exposed_population_proxy_scaled,
+                float(row.surveillance_recent_suspected_cases_28d),
+                float(row.surveillance_recent_confirmed_cases_28d),
+                float(row.surveillance_recent_proxy_cases_28d),
+                float(row.surveillance_active_label_count_28d),
+                float(row.surveillance_proxy_only_label_window_count_28d),
+                float(row.surveillance_delayed_or_stale_record_count_28d),
             ]
         )
         y.append(row.target_count)
@@ -520,7 +676,10 @@ def _surge_threshold_state(case_burden: int, staffing_percent: int, ors_percent:
 
 
 def _forecast_factors(row: FacilityForecastRow) -> list[dict]:
-    return [
+    truth_summary = row.population_exposure_truth_summary or {}
+    truth_class_counts = truth_summary.get("truth_class_counts", {})
+    surveillance_truth_summary = row.surveillance_truth_summary or {}
+    factors = [
         {"label": "Ward risk score", "value": round(row.ward_risk_score, 4), "source": "promoted_ward_risk", "mode": "direct_or_fallback"},
         {"label": "Ward alert count", "value": row.ward_alert_count, "source": "ward_alert_history", "mode": "direct_or_fallback"},
         {"label": "Facility level", "value": row.facility_level_numeric, "source": "facility_master_record", "mode": "direct"},
@@ -528,6 +687,58 @@ def _forecast_factors(row: FacilityForecastRow) -> list[dict]:
         {"label": "Staffing percent", "value": row.staffing_percent, "source": "facility_proxy_projection", "mode": "proxy"},
         {"label": "ORS estimate percent", "value": row.ors_estimate_percent, "source": "facility_proxy_projection", "mode": "proxy"},
     ]
+    if row.ward_population_total is not None:
+        factors.append(
+            {
+                "label": "Ward population baseline",
+                "value": row.ward_population_total,
+                "source": "population_exposure_snapshot",
+                "mode": "release_aware_context",
+                "truth_class_counts": truth_class_counts,
+                "caveat": "Population baseline/estimate from source-fed population exposure records.",
+            }
+        )
+    if row.catchment_population_estimate is not None:
+        factors.append(
+            {
+                "label": "Catchment population estimate",
+                "value": row.catchment_population_estimate,
+                "source": "population_exposure_snapshot",
+                "mode": "proxy_or_aggregated_context",
+                "truth_class_counts": truth_class_counts,
+                "caveat": "Catchment population estimate; do not treat as exact facility census truth.",
+            }
+        )
+    if row.exposed_population_proxy is not None:
+        factors.append(
+            {
+                "label": "Exposed population proxy",
+                "value": row.exposed_population_proxy,
+                "source": "population_exposure_snapshot",
+                "mode": "proxy_or_aggregated_context",
+                "truth_class_counts": truth_class_counts,
+                "caveat": "Exposure proxy used as model context, not a direct exposed-person count.",
+            }
+        )
+    if row.surveillance_recent_total_cases_28d > 0 or row.surveillance_latest_label_window_ref:
+        factors.append(
+            {
+                "label": "Recent surveillance trend",
+                "value": row.surveillance_recent_total_cases_28d,
+                "source": "surveillance_trend_context",
+                "mode": "canonical_surveillance_records_and_label_windows",
+                "suspected_cases_28d": row.surveillance_recent_suspected_cases_28d,
+                "confirmed_cases_28d": row.surveillance_recent_confirmed_cases_28d,
+                "proxy_cases_28d": row.surveillance_recent_proxy_cases_28d,
+                "active_label_count_28d": row.surveillance_active_label_count_28d,
+                "latest_label_window_ref": row.surveillance_latest_label_window_ref,
+                "latest_label_truth_level": row.surveillance_latest_label_truth_level,
+                "label_truth_state": row.surveillance_label_truth_state,
+                "freshness_state_counts": surveillance_truth_summary.get("freshness_state_counts", {}),
+                "caveat": "Proxy-only surveillance labels are not treated as confirmed outbreak truth.",
+            }
+        )
+    return factors
 
 
 def run_facility_burden_forecast_pipeline(
@@ -541,18 +752,34 @@ def run_facility_burden_forecast_pipeline(
     if not facilities:
         raise RuntimeError("No active facilities are available for facility burden forecasting.")
 
-    base_rows = _build_base_training_rows(facilities)
-    training_rows = _expand_training_rows(base_rows)
     dataset_month = timezone.now().month
+    forecast_wards = list({facility.ward_id: facility.ward for facility in facilities}.values())
+    population_exposure_dataset = build_population_exposure_feature_dataset(
+        forecast_wards,
+        month=dataset_month,
+    )
+    surveillance_snapshot = build_surveillance_feature_snapshot(forecast_wards)
+    base_rows = _build_base_training_rows(
+        facilities,
+        population_exposure_rows_by_ward_id=population_exposure_dataset.rows_by_ward_id,
+        surveillance_rows_by_ward_id=surveillance_snapshot.rows_by_ward_id,
+    )
+    training_rows = _expand_training_rows(base_rows)
     training_dataset = _persist_facility_forecast_feature_dataset(
         rows=training_rows,
         dataset_kind=FeatureDataset.KIND_TRAINING,
         month=dataset_month,
+        population_exposure_dataset=population_exposure_dataset.feature_dataset,
+        surveillance_coverage=surveillance_snapshot.coverage,
+        surveillance_truth_gate=surveillance_snapshot.truth_gate,
     )
     inference_dataset = _persist_facility_forecast_feature_dataset(
         rows=base_rows,
         dataset_kind=FeatureDataset.KIND_INFERENCE,
         month=dataset_month,
+        population_exposure_dataset=population_exposure_dataset.feature_dataset,
+        surveillance_coverage=surveillance_snapshot.coverage,
+        surveillance_truth_gate=surveillance_snapshot.truth_gate,
     )
     run = FacilityForecastRun.objects.create(
         algorithm_name="negative-binomial-baseline",
@@ -577,6 +804,14 @@ def run_facility_burden_forecast_pipeline(
             "inference_dataset_ref": inference_dataset.dataset_ref,
             "training_feature_dataset_id": training_dataset.id,
             "inference_feature_dataset_id": inference_dataset.id,
+            "population_exposure_dataset_ref": population_exposure_dataset.feature_dataset.dataset_ref,
+            "population_exposure_feature_dataset_id": population_exposure_dataset.feature_dataset.id,
+            "population_exposure_schema_version": population_exposure_dataset.feature_dataset.schema_version,
+            "population_exposure_coverage": (population_exposure_dataset.feature_dataset.lineage_metadata or {}).get("coverage", {}),
+            "population_exposure_truth_assumptions": (population_exposure_dataset.feature_dataset.lineage_metadata or {}).get("truth_assumptions", {}),
+            "surveillance_feature_schema_version": SURVEILLANCE_FEATURE_SCHEMA_VERSION,
+            "surveillance_feature_coverage": surveillance_snapshot.coverage,
+            "surveillance_truth_gate": surveillance_snapshot.truth_gate,
         },
     )
 
@@ -597,6 +832,8 @@ def run_facility_burden_forecast_pipeline(
                 "facility_historical_case_counts_not_yet_available",
                 "training_target_is_proxy_derived",
             ],
+            "surveillance_trend_context_attached": surveillance_snapshot.coverage["record_count"] > 0,
+            "surveillance_truth_gate": surveillance_snapshot.truth_gate,
         }
         run.save(update_fields=["training_row_count", "evaluation_metrics"])
 
@@ -855,6 +1092,7 @@ def build_initial_facility_forecast_preview(facility: HealthFacility) -> dict:
 
     snapshot = build_facility_intelligence_snapshot(facility)
     readiness = snapshot["readiness"]
+    population_exposure_context = snapshot.get("population_exposure") or build_population_exposure_context_for_facility(facility)
     latest_risk = latest_riskscore_for_ward(facility.ward)
     pressure_score = _pressure_score_from_snapshot(readiness)
     generated_at = (
@@ -889,6 +1127,18 @@ def build_initial_facility_forecast_preview(facility: HealthFacility) -> dict:
             "mode": "proxy",
         },
     ]
+    catchment_value = (population_exposure_context.get("values") or {}).get("catchment_population_estimate")
+    if catchment_value is not None:
+        forecast_factors.append(
+            {
+                "label": "Catchment population estimate",
+                "value": catchment_value,
+                "source": "population_exposure_context",
+                "mode": "proxy_or_aggregated_context",
+                "truth_class_counts": (population_exposure_context.get("source_lineage") or {}).get("truth_class_counts", {}),
+                "caveat": "Catchment estimate is contextual and must not be read as facility census truth.",
+            }
+        )
 
     return {
         "facility_id": facility.id,

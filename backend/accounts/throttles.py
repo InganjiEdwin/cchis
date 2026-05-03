@@ -9,3 +9,7 @@ class AuthScopedRateThrottle(ScopedRateThrottle):
         rates = settings.REST_FRAMEWORK.get("DEFAULT_THROTTLE_RATES", {})
         self.THROTTLE_RATES = rates
         return super().get_rate()
+
+
+class SecondaryAuthScopedRateThrottle(AuthScopedRateThrottle):
+    scope_attr = "secondary_throttle_scope"

@@ -6,6 +6,7 @@ import type {
   FacilityRecord,
   LatestWardRisk,
   PaginatedResponse,
+  SystemControlStatus,
   WardSummary,
 } from "@/lib/dashboard";
 import { ServerApiError, fetchBackendJson } from "@/lib/server-api";
@@ -14,8 +15,18 @@ export async function GET(request: Request) {
   const cookieHeader = request.headers.get("cookie") ?? "";
 
   try {
-    const [wards, latestRisks, alerts, queuedAlerts, retryAlerts, failedAlerts, deliveredAlerts, facilities, chvOperations] =
-      await Promise.all([
+    const [
+      wards,
+      latestRisks,
+      alerts,
+      queuedAlerts,
+      retryAlerts,
+      failedAlerts,
+      deliveredAlerts,
+      facilities,
+      chvOperations,
+      controlStatus,
+    ] = await Promise.all([
       fetchBackendJson<PaginatedResponse<WardSummary>>("/wards/?page_size=100&county=Migori", {
         cookieHeader,
       }),
@@ -43,6 +54,9 @@ export async function GET(request: Request) {
       fetchBackendJson<ChvOperationsRecord[]>("/chvs/operations/", {
         cookieHeader,
       }),
+      fetchBackendJson<SystemControlStatus>("/system/controls/", {
+        cookieHeader,
+      }),
     ]);
 
     return NextResponse.json({
@@ -55,6 +69,7 @@ export async function GET(request: Request) {
       deliveredAlerts,
       facilities,
       chvOperations,
+      controlStatus,
     });
   } catch (error) {
     if (error instanceof ServerApiError) {

@@ -7,18 +7,24 @@ import hmac
 import secrets
 import struct
 import time
+import uuid
 from urllib.parse import quote
 from datetime import timedelta
 
+from django.contrib.auth.hashers import check_password, make_password
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 
-from .models import PreAuthToken
+from .models import PreAuthToken, TwoFactorRecoveryCode
 
 
 TWO_FACTOR_POLICY_REQUIRED = "REQUIRED"
 TWO_FACTOR_POLICY_OPTIONAL = "OPTIONAL"
 TWO_FACTOR_POLICY_NONE = "NONE"
+RECOVERY_CODE_COUNT = 10
+RECOVERY_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+RECOVERY_CODE_PREFIX = "CCHIS"
 
 
 def get_two_factor_policy_for_role(role: str) -> str:
@@ -97,6 +103,98 @@ def verify_totp_code(secret: str, code: str, *, valid_window: int = 1, interval:
 
 def generate_current_totp_code(secret: str, *, interval: int = 30) -> str:
     return _totp_at(secret, int(time.time() // interval))
+
+
+def normalize_recovery_code(code: str) -> str:
+    return "".join(ch for ch in str(code).strip().upper() if ch.isalnum())
+
+
+def _generate_plain_recovery_code() -> str:
+    body = "".join(secrets.choice(RECOVERY_CODE_ALPHABET) for _ in range(12))
+    return f"{RECOVERY_CODE_PREFIX}-{body[:4]}-{body[4:8]}-{body[8:]}"
+
+
+def _recovery_code_hint(code: str) -> str:
+    normalized = normalize_recovery_code(code)
+    return normalized[-4:]
+
+
+def hash_recovery_code(code: str) -> str:
+    return make_password(normalize_recovery_code(code))
+
+
+def generate_recovery_codes(user, count: int = RECOVERY_CODE_COUNT) -> list[str]:
+    if count < 1:
+        raise ValueError("Recovery code count must be at least 1.")
+
+    batch_id = uuid.uuid4()
+    invalidated_at = timezone.now()
+    plain_codes = [_generate_plain_recovery_code() for _ in range(count)]
+    recovery_code_records = [
+        TwoFactorRecoveryCode(
+            user=user,
+            code_hash=hash_recovery_code(plain_code),
+            code_hint=_recovery_code_hint(plain_code),
+            batch_id=batch_id,
+        )
+        for plain_code in plain_codes
+    ]
+
+    with transaction.atomic():
+        user.two_factor_recovery_codes.filter(
+            used_at__isnull=True,
+            invalidated_at__isnull=True,
+        ).update(invalidated_at=invalidated_at)
+        TwoFactorRecoveryCode.objects.bulk_create(recovery_code_records)
+
+    return plain_codes
+
+
+def verify_recovery_code(user, code: str) -> TwoFactorRecoveryCode | None:
+    normalized_code = normalize_recovery_code(code)
+    if not normalized_code:
+        return None
+
+    recovery_codes = user.two_factor_recovery_codes.filter(
+        used_at__isnull=True,
+        invalidated_at__isnull=True,
+    ).order_by("-created_at", "-id")
+
+    for recovery_code in recovery_codes:
+        if check_password(normalized_code, recovery_code.code_hash):
+            return recovery_code
+
+    return None
+
+
+def consume_recovery_code(code_record: TwoFactorRecoveryCode) -> TwoFactorRecoveryCode | None:
+    with transaction.atomic():
+        locked_record = TwoFactorRecoveryCode.objects.select_for_update().get(pk=code_record.pk)
+        if not locked_record.is_usable:
+            return None
+
+        locked_record.used_at = timezone.now()
+        locked_record.save(update_fields=["used_at"])
+        return locked_record
+
+
+def get_recovery_code_status(user) -> dict:
+    recovery_codes = user.two_factor_recovery_codes.all()
+    latest_batch_id = recovery_codes.order_by("-created_at", "-id").values_list("batch_id", flat=True).first()
+    latest_batch_codes = recovery_codes.filter(batch_id=latest_batch_id) if latest_batch_id else recovery_codes.none()
+    last_generated_code = latest_batch_codes.order_by("-created_at", "-id").first()
+    last_used_code = recovery_codes.filter(used_at__isnull=False).order_by("-used_at", "-id").first()
+
+    return {
+        "remaining_count": latest_batch_codes.filter(
+            used_at__isnull=True,
+            invalidated_at__isnull=True,
+        ).count(),
+        "total_count": latest_batch_codes.count(),
+        "last_generated_at": last_generated_code.created_at if last_generated_code else None,
+        "last_used_at": last_used_code.used_at if last_used_code else None,
+        "can_regenerate": is_totp_enrolled(user),
+    }
 
 
 def create_pre_auth_token(user) -> PreAuthToken:

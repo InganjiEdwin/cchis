@@ -6,7 +6,7 @@ import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 
-from .data import WardFeatureRow, month_to_seasonality
+from .data import WARD_RISK_FEATURE_KEYS, WardFeatureRow, month_to_seasonality
 
 
 ALGORITHM_LOGISTIC_REGRESSION = "logistic_regression"
@@ -15,20 +15,13 @@ ALGORITHM_XGBOOST = "xgboost"
 ALGORITHM_LIGHTGBM = "lightgbm"
 
 
-FEATURE_KEYS = [
-    "rainfall_mm",
-    "flood_indicator",
-    "historical_cases",
-    "month",
-    "seasonality",
-    "population_proxy",
-]
+FEATURE_KEYS = WARD_RISK_FEATURE_KEYS
 
 
 MODEL_CATALOG = {
     ALGORITHM_LOGISTIC_REGRESSION: {
         "run_name": "logistic-regression-baseline",
-        "readiness_state": "promoted_live_baseline",
+        "readiness_state": "candidate_scoring_until_phase_4_promotion",
         "runnable": True,
         "family": "linear_classifier",
     },
@@ -66,6 +59,13 @@ def rows_to_matrix(rows: list[WardFeatureRow]) -> tuple[np.ndarray, np.ndarray |
                 row.month,
                 month_to_seasonality(row.month),
                 row.population_proxy,
+                float(row.population_density or 0.0),
+                float(row.settlement_concentration or 0.0),
+                float(row.floodplain_exposure or 0.0),
+                float(row.water_body_proximity or 0.0),
+                float(row.wash_vulnerability or 0.0),
+                row.exposed_population_proxy_scaled,
+                row.catchment_population_estimate_scaled,
             ]
         )
         if row.label is not None:

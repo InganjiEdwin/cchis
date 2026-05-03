@@ -1,6 +1,18 @@
 export type UserRole = "ADMIN" | "SUPERVISOR" | "ANALYST" | "CHV";
 export type ThemePreference = "SYSTEM" | "LIGHT" | "DARK";
 
+export type ProfileCapabilities = {
+  can_change_password: boolean;
+  can_update_appearance: boolean;
+  can_manage_totp: boolean;
+  can_view_own_activity: boolean;
+  can_update_identity: boolean;
+  can_review_sessions: boolean;
+  can_generate_profile_report: boolean;
+  identity_update_mode: "admin_managed" | "totp_step_up";
+  mode: "auth_contract_backed_profile";
+};
+
 export type CurrentUser = {
   id: number;
   username: string;
@@ -16,7 +28,41 @@ export type CurrentUser = {
   two_factor_policy?: "REQUIRED" | "OPTIONAL" | "NONE";
   is_totp_enabled?: boolean;
   is_active: boolean;
+  account_created_at?: string;
+  last_login_at?: string | null;
+  profile_capabilities?: ProfileCapabilities;
 };
+
+export function buildDefaultProfileCapabilities(
+  user: Pick<CurrentUser, "is_active" | "two_factor_policy" | "is_totp_enabled">,
+): ProfileCapabilities {
+  const isActive = user.is_active;
+  const twoFactorPolicy = user.two_factor_policy ?? "NONE";
+  const canUpdateIdentity = isActive && user.is_totp_enabled === true && twoFactorPolicy !== "NONE";
+
+  return {
+    can_change_password: isActive,
+    can_update_appearance: isActive,
+    can_manage_totp: isActive && twoFactorPolicy !== "NONE",
+    can_view_own_activity: isActive,
+    can_update_identity: canUpdateIdentity,
+    can_review_sessions: false,
+    can_generate_profile_report: false,
+    identity_update_mode: canUpdateIdentity ? "totp_step_up" : "admin_managed",
+    mode: "auth_contract_backed_profile",
+  };
+}
+
+export function normalizeCurrentUser(user: CurrentUser): CurrentUser {
+  if (user.profile_capabilities) {
+    return user;
+  }
+
+  return {
+    ...user,
+    profile_capabilities: buildDefaultProfileCapabilities(user),
+  };
+}
 
 export type LoginSuccessResponse = {
   user: CurrentUser;
@@ -49,6 +95,13 @@ export type VerifyTwoFactorResponse = {
   user: CurrentUser;
   requires_2fa: false;
   session_established: true;
+  second_factor_method?: "totp" | "recovery_code";
+  recovery_codes_remaining?: number;
+  recovery_codes_low?: boolean;
+};
+export type RecoveryCodeLoginNotice = {
+  remaining_count: number;
+  created_at: string;
 };
 
 export type BeginTwoFactorEnrollmentResponse = {
@@ -64,6 +117,8 @@ export type ConfirmTwoFactorEnrollmentAuthenticatedResponse = {
   detail: string;
   user: CurrentUser;
   enrollment_completed: true;
+  recovery_codes: string[];
+  recovery_codes_generated: boolean;
 };
 
 export type ConfirmTwoFactorEnrollmentLoginResponse = {
@@ -71,6 +126,8 @@ export type ConfirmTwoFactorEnrollmentLoginResponse = {
   requires_2fa: false;
   enrollment_completed: true;
   session_established: true;
+  recovery_codes: string[];
+  recovery_codes_generated: boolean;
 };
 
 export type ConfirmTwoFactorEnrollmentResponse =
@@ -85,11 +142,76 @@ export type SessionResponse = {
 };
 
 export type UpdateAppearanceResponse = CurrentUser;
+export type UpdateProfilePayload = Partial<Pick<CurrentUser, "username" | "email" | "full_name" | "phone_number">>;
+export type VerifyProfileIdentityTwoFactorResponse = {
+  detail: string;
+};
 export type PasswordResetRequestResponse = {
   detail: string;
 };
 export type PasswordResetConfirmResponse = {
   detail: string;
+};
+export type ChangePasswordPayload = {
+  current_password: string;
+  new_password: string;
+};
+export type ChangePasswordResponse = {
+  detail: string;
+};
+export type RecoveryCodeStatusResponse = {
+  remaining_count: number;
+  total_count: number;
+  last_generated_at: string | null;
+  last_used_at: string | null;
+  can_regenerate: boolean;
+};
+export type RegenerateRecoveryCodesPayload = {
+  current_password: string;
+  code: string;
+};
+export type RegenerateRecoveryCodesResponse = RecoveryCodeStatusResponse & {
+  recovery_codes: string[];
+  recovery_codes_generated: boolean;
+};
+export type ProfileActivityEvent = {
+  id: number;
+  event_type: string;
+  status: "SUCCESS" | "FAILED" | "FAILURE" | "INFO";
+  title: string;
+  description: string;
+  created_at: string;
+};
+export type ProfileActivityFilters = {
+  page?: number;
+  page_size?: number;
+  event_type?: string;
+  status?: string;
+  date_from?: string;
+  date_to?: string;
+  security_only?: boolean;
+  include_refresh_events?: boolean;
+};
+export type ProfileActivityResponse = {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: ProfileActivityEvent[];
+  events?: ProfileActivityEvent[];
+  filters: {
+    event_type: string;
+    status: string;
+    date_from: string;
+    date_to: string;
+    security_only: boolean;
+    include_refresh_events: boolean;
+    page: number;
+    page_size: number;
+  };
+  capabilities: {
+    can_view_own_activity: boolean;
+    mode: "self_scoped_auth_activity";
+  };
 };
 export type PasswordResetValidateResponse = {
   detail: string;
@@ -125,10 +247,13 @@ export type AccessRequestResponse = {
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "http://localhost:8000/api/v1";
 const REQUEST_TIMEOUT_MS = 10000;
+const BFF_REQUEST_TIMEOUT_MS = 30000;
+const USERNAME_PATTERN = /^[\w.@+-]+$/;
 
 const PRE_AUTH_TOKEN_KEY = "cchis.pre_auth_token";
 const ENROLLMENT_TOKEN_KEY = "cchis.enrollment_token";
 const CURRENT_USER_KEY = "cchis.current_user";
+const RECOVERY_CODE_LOGIN_NOTICE_KEY = "cchis.recovery_code_login_notice";
 
 function readStorageValue(key: string, storage: Storage) {
   try {
@@ -151,6 +276,45 @@ function writeStorageValue(key: string, value: string | null, storage: Storage) 
   }
 }
 
+function stringifyErrorValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => stringifyErrorValue(item)).filter(Boolean).join(" ");
+  }
+
+  if (value && typeof value === "object") {
+    return formatResponseErrorDetail(value as Record<string, unknown>);
+  }
+
+  return "";
+}
+
+function formatResponseErrorDetail(data: Record<string, unknown>) {
+  const errors = data.errors && typeof data.errors === "object" && !Array.isArray(data.errors)
+    ? data.errors as Record<string, unknown>
+    : data;
+  const fieldMessages = Object.entries(errors)
+    .filter(([field]) => field !== "detail" && field !== "errors")
+    .map(([field, value]) => {
+      const message = stringifyErrorValue(value);
+      return message ? `${field.replaceAll("_", " ")}: ${message}` : "";
+    })
+    .filter(Boolean);
+
+  if (fieldMessages.length > 0) {
+    return fieldMessages.join(" ");
+  }
+
+  return typeof data.detail === "string" ? data.detail : "Request failed.";
+}
+
+export function isValidUsername(value: string) {
+  return USERNAME_PATTERN.test(value);
+}
+
 export function getApiBaseUrl() {
   return API_BASE_URL;
 }
@@ -160,7 +324,7 @@ export function persistCurrentUser(user: CurrentUser | null) {
     return;
   }
 
-  const serialized = user ? JSON.stringify(user) : null;
+  const serialized = user ? JSON.stringify(normalizeCurrentUser(user)) : null;
   writeStorageValue(CURRENT_USER_KEY, serialized, window.localStorage);
   writeStorageValue(CURRENT_USER_KEY, serialized, window.sessionStorage);
 }
@@ -195,10 +359,10 @@ export function readCurrentUser() {
   }
 
   try {
-    const parsed = JSON.parse(source) as CurrentUser;
+    const parsed = normalizeCurrentUser(JSON.parse(source) as CurrentUser);
 
     if (persistedUser && !sessionUser) {
-      writeStorageValue(CURRENT_USER_KEY, persistedUser, window.sessionStorage);
+      writeStorageValue(CURRENT_USER_KEY, JSON.stringify(parsed), window.sessionStorage);
     }
 
     return parsed;
@@ -225,6 +389,54 @@ export function readEnrollmentToken() {
   return readStorageValue(ENROLLMENT_TOKEN_KEY, window.sessionStorage);
 }
 
+export function persistRecoveryCodeLoginNotice(remainingCount: number) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  writeStorageValue(
+    RECOVERY_CODE_LOGIN_NOTICE_KEY,
+    JSON.stringify({
+      remaining_count: remainingCount,
+      created_at: new Date().toISOString(),
+    } satisfies RecoveryCodeLoginNotice),
+    window.sessionStorage,
+  );
+}
+
+export function readRecoveryCodeLoginNotice() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const rawNotice = readStorageValue(RECOVERY_CODE_LOGIN_NOTICE_KEY, window.sessionStorage);
+  if (!rawNotice) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(rawNotice) as Partial<RecoveryCodeLoginNotice>;
+    if (typeof parsed.remaining_count !== "number" || typeof parsed.created_at !== "string") {
+      return null;
+    }
+
+    return {
+      remaining_count: parsed.remaining_count,
+      created_at: parsed.created_at,
+    } satisfies RecoveryCodeLoginNotice;
+  } catch {
+    return null;
+  }
+}
+
+export function clearRecoveryCodeLoginNotice() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  writeStorageValue(RECOVERY_CODE_LOGIN_NOTICE_KEY, null, window.sessionStorage);
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   const controller = new AbortController();
@@ -245,7 +457,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     });
   } catch (error) {
     window.clearTimeout(timeoutId);
-    if (error instanceof DOMException && error.name === "AbortError") {
+    if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) {
       throw new Error("Request timed out. Please try again.");
     }
     throw error;
@@ -257,8 +469,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     let detail = "Request failed.";
 
     try {
-      const data = (await response.json()) as { detail?: string };
-      detail = data.detail ?? detail;
+      const data = (await response.json()) as Record<string, unknown>;
+      detail = formatResponseErrorDetail(data);
     } catch {
       // Ignore parse failures and keep the generic message.
     }
@@ -276,7 +488,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 async function requestBff<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeoutId = window.setTimeout(() => controller.abort(), BFF_REQUEST_TIMEOUT_MS);
+  const bffUrl =
+    typeof window === "undefined" ? path : new URL(path.startsWith("/") ? path : `/${path}`, window.location.origin);
 
   if (!headers.has("Content-Type") && init.body) {
     headers.set("Content-Type", "application/json");
@@ -285,7 +499,7 @@ async function requestBff<T>(path: string, init: RequestInit = {}): Promise<T> {
   let response: Response;
 
   try {
-    response = await fetch(path, {
+    response = await fetch(bffUrl, {
       ...init,
       headers,
       credentials: "include",
@@ -293,7 +507,7 @@ async function requestBff<T>(path: string, init: RequestInit = {}): Promise<T> {
     });
   } catch (error) {
     window.clearTimeout(timeoutId);
-    if (error instanceof DOMException && error.name === "AbortError") {
+    if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) {
       throw new Error("Request timed out. Please try again.");
     }
     throw error;
@@ -305,8 +519,8 @@ async function requestBff<T>(path: string, init: RequestInit = {}): Promise<T> {
     let detail = "Request failed.";
 
     try {
-      const data = (await response.json()) as { detail?: string };
-      detail = data.detail ?? detail;
+      const data = (await response.json()) as Record<string, unknown>;
+      detail = formatResponseErrorDetail(data);
     } catch {
       // Ignore parse failures and keep the generic message.
     }
@@ -336,6 +550,54 @@ export async function updateAppearanceViaBff(themePreference: ThemePreference) {
   return requestBff<UpdateAppearanceResponse>("/api/session/me", {
     method: "PATCH",
     body: JSON.stringify({ theme_preference: themePreference }),
+  });
+}
+
+export async function verifyProfileIdentityTwoFactorViaBff(code: string) {
+  return requestBff<VerifyProfileIdentityTwoFactorResponse>("/api/session/profile-identity/verify-2fa", {
+    method: "POST",
+    body: JSON.stringify({ code }),
+  });
+}
+
+export async function updateProfileViaBff(payload: UpdateProfilePayload) {
+  return requestBff<CurrentUser>("/api/session/me", {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function changePasswordViaBff(payload: ChangePasswordPayload) {
+  return requestBff<ChangePasswordResponse>("/api/session/change-password", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchProfileActivityViaBff(filters: ProfileActivityFilters = {}) {
+  const query = new URLSearchParams();
+
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      query.set(key, String(value));
+    }
+  });
+
+  return requestBff<ProfileActivityResponse>(`/api/session/activity?${query.toString()}`, {
+    method: "GET",
+  });
+}
+
+export async function fetchRecoveryCodeStatusViaBff() {
+  return requestBff<RecoveryCodeStatusResponse>("/api/session/2fa/recovery-codes", {
+    method: "GET",
+  });
+}
+
+export async function regenerateRecoveryCodesViaBff(payload: RegenerateRecoveryCodesPayload) {
+  return requestBff<RegenerateRecoveryCodesResponse>("/api/session/2fa/recovery-codes/regenerate", {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 }
 

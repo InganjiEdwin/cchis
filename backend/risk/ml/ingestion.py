@@ -144,7 +144,7 @@ def fetch_open_meteo_daily_precipitation(
         "OPEN_METEO_FORECAST_URL",
         default="https://api.open-meteo.com/v1/forecast",
     )
-    timezone = config("OPEN_METEO_TIMEZONE", default="Africa/Nairobi")
+    open_meteo_timezone = config("OPEN_METEO_TIMEZONE", default="Africa/Nairobi")
 
     query = urllib.parse.urlencode(
         {
@@ -152,7 +152,7 @@ def fetch_open_meteo_daily_precipitation(
             "longitude": longitude,
             "daily": "precipitation_sum",
             "forecast_days": forecast_days,
-            "timezone": timezone,
+            "timezone": open_meteo_timezone,
         }
     )
     url = f"{base_url}?{query}"

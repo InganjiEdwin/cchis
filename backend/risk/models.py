@@ -547,6 +547,7 @@ class RiskScore(models.Model):
     rainfall_mm = models.FloatField(default=0.0)
     flood_indicator = models.FloatField(default=0.0)
     predicted_cases = models.PositiveIntegerField(default=0)
+    decision_policy = models.JSONField(default=dict, blank=True)
     source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default=SOURCE_MODEL)
     model_version = models.CharField(max_length=50, default="v0")
     notes = models.TextField(blank=True)
@@ -628,6 +629,688 @@ class IngestionRun(models.Model):
 
     def __str__(self) -> str:
         return f"{self.run_type} [{self.status}] {self.started_at}"
+
+
+class SurveillanceSource(models.Model):
+    SOURCE_TYPE_WEEKLY_AGGREGATE = "weekly_aggregate"
+    SOURCE_TYPE_DAILY_AGGREGATE = "daily_aggregate"
+    SOURCE_TYPE_LINE_LIST_SUMMARY = "line_list_summary"
+    SOURCE_TYPE_TRUSTED_PUSH = "trusted_push"
+    SOURCE_TYPE_CSV_BACKFILL = "csv_backfill"
+    SOURCE_TYPE_FIELD_SIGNAL = "field_signal"
+    SOURCE_TYPE_FACILITY_PROXY = "facility_proxy"
+    SOURCE_TYPE_CHOICES = [
+        (SOURCE_TYPE_WEEKLY_AGGREGATE, "Weekly aggregate"),
+        (SOURCE_TYPE_DAILY_AGGREGATE, "Daily aggregate"),
+        (SOURCE_TYPE_LINE_LIST_SUMMARY, "Line-list summary"),
+        (SOURCE_TYPE_TRUSTED_PUSH, "Trusted push"),
+        (SOURCE_TYPE_CSV_BACKFILL, "CSV backfill"),
+        (SOURCE_TYPE_FIELD_SIGNAL, "Field signal"),
+        (SOURCE_TYPE_FACILITY_PROXY, "Facility proxy"),
+    ]
+
+    source_name = models.CharField(max_length=120)
+    source_type = models.CharField(max_length=40, choices=SOURCE_TYPE_CHOICES)
+    source_timestamp = models.DateTimeField(null=True, blank=True)
+    submitted_at = models.DateTimeField(default=timezone.now)
+    reporting_period_start = models.DateField(null=True, blank=True)
+    reporting_period_end = models.DateField(null=True, blank=True)
+    source_ref = models.CharField(max_length=255, blank=True)
+    operator_note = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-submitted_at", "source_name"]
+        indexes = [
+            models.Index(fields=["source_type", "reporting_period_start"], name="risk_survsrc_type_period_idx"),
+            models.Index(fields=["source_name", "submitted_at"], name="risk_survsrc_name_sub_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=(
+                    models.Q(reporting_period_start__isnull=True)
+                    | models.Q(reporting_period_end__isnull=True)
+                    | models.Q(reporting_period_start__lte=models.F("reporting_period_end"))
+                ),
+                name="risk_survsrc_period_order",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        period = ""
+        if self.reporting_period_start and self.reporting_period_end:
+            period = f" {self.reporting_period_start}:{self.reporting_period_end}"
+        return f"{self.source_name}{period} [{self.source_type}]"
+
+
+class SurveillanceIngestionRun(models.Model):
+    STATUS_RUNNING = "RUNNING"
+    STATUS_SUCCESS = "SUCCESS"
+    STATUS_PARTIAL = "PARTIAL"
+    STATUS_FAILED = "FAILED"
+    STATUS_CHOICES = [
+        (STATUS_RUNNING, "Running"),
+        (STATUS_SUCCESS, "Success"),
+        (STATUS_PARTIAL, "Partial"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    CORRECTION_ORIGINAL = "original"
+    CORRECTION_AMENDMENT = "amendment"
+    CORRECTION_BACKFILL = "backfill"
+    CORRECTION_MODE_CHOICES = [
+        (CORRECTION_ORIGINAL, "Original"),
+        (CORRECTION_AMENDMENT, "Amendment"),
+        (CORRECTION_BACKFILL, "Backfill"),
+    ]
+
+    EXECUTION_MANUAL = "manual"
+    EXECUTION_SCHEDULED = "scheduled"
+    EXECUTION_TRUSTED_PUSH = "trusted_push"
+    EXECUTION_REPLAY = "replay"
+    EXECUTION_MODE_CHOICES = [
+        (EXECUTION_MANUAL, "Manual"),
+        (EXECUTION_SCHEDULED, "Scheduled"),
+        (EXECUTION_TRUSTED_PUSH, "Trusted push"),
+        (EXECUTION_REPLAY, "Replay"),
+    ]
+
+    source = models.ForeignKey(
+        SurveillanceSource,
+        on_delete=models.PROTECT,
+        related_name="ingestion_runs",
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_RUNNING)
+    source_name = models.CharField(max_length=120)
+    source_type = models.CharField(max_length=40, choices=SurveillanceSource.SOURCE_TYPE_CHOICES)
+    source_timestamp = models.DateTimeField(null=True, blank=True)
+    reporting_period_start = models.DateField(null=True, blank=True)
+    reporting_period_end = models.DateField(null=True, blank=True)
+    source_ref = models.CharField(max_length=255, blank=True)
+    adapter_key = models.CharField(max_length=80, default="surveillance_csv")
+    input_ref = models.CharField(max_length=255, blank=True)
+    execution_mode = models.CharField(max_length=20, choices=EXECUTION_MODE_CHOICES, default=EXECUTION_MANUAL)
+    correction_mode = models.CharField(max_length=40, choices=CORRECTION_MODE_CHOICES, default=CORRECTION_ORIGINAL)
+    correction_reason = models.TextField(blank=True)
+    fallback_used = models.BooleanField(default=False)
+    records_seen = models.PositiveIntegerField(default=0)
+    records_loaded = models.PositiveIntegerField(default=0)
+    records_rejected = models.PositiveIntegerField(default=0)
+    operator_note = models.TextField(blank=True)
+    source_metadata = models.JSONField(default=dict, blank=True)
+    results = models.JSONField(default=dict, blank=True)
+    rejected_rows = models.JSONField(default=list, blank=True)
+    error_summary = models.TextField(blank=True)
+    replay_of = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="replay_runs",
+    )
+    started_at = models.DateTimeField(default=timezone.now)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-started_at"]
+        indexes = [
+            models.Index(fields=["source_type", "started_at"], name="risk_survrun_type_started_idx"),
+            models.Index(fields=["status", "started_at"], name="risk_survrun_status_idx"),
+            models.Index(fields=["correction_mode", "started_at"], name="risk_survrun_corr_started_idx"),
+            models.Index(fields=["reporting_period_start"], name="risk_survrun_period_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=(
+                    models.Q(reporting_period_start__isnull=True)
+                    | models.Q(reporting_period_end__isnull=True)
+                    | models.Q(reporting_period_start__lte=models.F("reporting_period_end"))
+                ),
+                name="risk_survrun_period_order",
+            ),
+            models.CheckConstraint(
+                check=~models.Q(correction_mode="amendment") | ~models.Q(correction_reason=""),
+                name="risk_survrun_amend_reason",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.source_name} [{self.status}] {self.started_at}"
+
+
+class SurveillanceTruthLevel(models.TextChoices):
+    CONFIRMED_SURVEILLANCE = "confirmed_surveillance", "Confirmed surveillance"
+    SUSPECTED_SURVEILLANCE = "suspected_surveillance", "Suspected surveillance"
+    PROXY_DIARRHEAL_SIGNAL = "proxy_diarrheal_signal", "Proxy diarrheal signal"
+    FIELD_SIGNAL_ONLY = "field_signal_only", "Field signal only"
+    SEEDED_DEMO = "seeded_demo", "Seeded demo"
+
+
+class SurveillanceSourceKind(models.TextChoices):
+    LIVE = "live", "Live"
+    BACKFILL = "backfill", "Backfill"
+    SEEDED = "seeded", "Seeded"
+
+
+class SurveillanceFreshnessState(models.TextChoices):
+    FRESH = "fresh", "Fresh"
+    DELAYED = "delayed", "Delayed"
+    STALE = "stale", "Stale"
+    CORRECTED_AFTER_INITIAL_SUBMISSION = (
+        "corrected_after_initial_submission",
+        "Corrected after initial submission",
+    )
+    REPLAY_DIAGNOSTIC = "replay_diagnostic", "Replay diagnostic"
+    UNKNOWN = "unknown", "Unknown"
+
+
+class SurveillanceDiseaseCategory(models.TextChoices):
+    CHOLERA = "cholera", "Cholera"
+    DIARRHEAL = "diarrheal", "Diarrheal"
+
+
+class SurveillanceCaseClass(models.TextChoices):
+    SUSPECTED = "suspected", "Suspected"
+    CONFIRMED = "confirmed", "Confirmed"
+    PROXY = "proxy", "Proxy"
+
+
+class SurveillanceOutbreakLabel(models.TextChoices):
+    NONE = "none", "None"
+    WATCH = "watch", "Watch"
+    ACTIVE = "active", "Active"
+
+
+class SurveillanceRecord(models.Model):
+    ward = models.ForeignKey(Ward, on_delete=models.PROTECT, related_name="surveillance_records")
+    ingestion_run = models.ForeignKey(
+        SurveillanceIngestionRun,
+        on_delete=models.PROTECT,
+        related_name="surveillance_records",
+    )
+    source = models.ForeignKey(
+        SurveillanceSource,
+        on_delete=models.PROTECT,
+        related_name="surveillance_records",
+    )
+    facility = models.ForeignKey(
+        HealthFacility,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="surveillance_records",
+    )
+    disease_category = models.CharField(max_length=20, choices=SurveillanceDiseaseCategory.choices)
+    case_class = models.CharField(max_length=20, choices=SurveillanceCaseClass.choices)
+    outbreak_label = models.CharField(
+        max_length=20,
+        choices=SurveillanceOutbreakLabel.choices,
+        default=SurveillanceOutbreakLabel.NONE,
+    )
+    count_value = models.PositiveIntegerField()
+    reporting_period_start = models.DateField()
+    reporting_period_end = models.DateField()
+    reporting_granularity = models.CharField(
+        max_length=10,
+        choices=[("day", "Day"), ("week", "Week")],
+        default="week",
+    )
+    truth_level = models.CharField(
+        max_length=40,
+        choices=SurveillanceTruthLevel.choices,
+        default=SurveillanceTruthLevel.SUSPECTED_SURVEILLANCE,
+    )
+    source_name = models.CharField(max_length=120)
+    source_kind = models.CharField(
+        max_length=20,
+        choices=SurveillanceSourceKind.choices,
+        default=SurveillanceSourceKind.LIVE,
+    )
+    freshness_state = models.CharField(
+        max_length=50,
+        choices=SurveillanceFreshnessState.choices,
+        default=SurveillanceFreshnessState.UNKNOWN,
+    )
+    revision_number = models.PositiveIntegerField(default=1)
+    supersedes_record_ref = models.CharField(max_length=160, blank=True)
+    source_ref = models.CharField(max_length=255, blank=True)
+    raw_payload = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-reporting_period_end", "ward__name", "case_class"]
+        indexes = [
+            models.Index(fields=["ward", "reporting_period_start", "reporting_period_end"], name="risk_survrec_ward_period_idx"),
+            models.Index(fields=["facility", "reporting_period_start"], name="risk_survrec_fac_period_idx"),
+            models.Index(fields=["truth_level", "reporting_period_start"], name="risk_survrec_truth_period_idx"),
+            models.Index(fields=["source", "created_at"], name="risk_survrec_src_created_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(reporting_period_start__lte=models.F("reporting_period_end")),
+                name="risk_survrec_period_order",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.ward.name} {self.case_class}={self.count_value} [{self.truth_level}]"
+
+
+class SurveillanceLabelWindow(models.Model):
+    ward = models.ForeignKey(Ward, on_delete=models.PROTECT, related_name="surveillance_label_windows")
+    feature_dataset = models.ForeignKey(
+        "risk.FeatureDataset",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="surveillance_label_windows",
+    )
+    schema_version = models.CharField(max_length=50, default="surveillance-label-v1")
+    dataset_ref = models.CharField(max_length=160, blank=True)
+    label_window_start = models.DateField()
+    label_window_end = models.DateField()
+    suspected_case_count = models.PositiveIntegerField(default=0)
+    confirmed_case_count = models.PositiveIntegerField(default=0)
+    proxy_case_count = models.PositiveIntegerField(default=0)
+    outbreak_label = models.CharField(
+        max_length=20,
+        choices=SurveillanceOutbreakLabel.choices,
+        default=SurveillanceOutbreakLabel.NONE,
+    )
+    label_truth_level = models.CharField(
+        max_length=40,
+        choices=SurveillanceTruthLevel.choices,
+        default=SurveillanceTruthLevel.SUSPECTED_SURVEILLANCE,
+    )
+    generation_mode = models.CharField(max_length=40, default="phase_2_shape_defined")
+    source_coverage_summary = models.JSONField(default=dict, blank=True)
+    generated_from_record_refs = models.JSONField(default=list, blank=True)
+    source_record_count = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-label_window_end", "ward__name"]
+        indexes = [
+            models.Index(fields=["ward", "label_window_start", "label_window_end"], name="risk_survlbl_ward_window_idx"),
+            models.Index(fields=["dataset_ref", "label_window_start"], name="risk_survlbl_dataset_idx"),
+            models.Index(fields=["outbreak_label", "label_window_end"], name="risk_survlbl_outbreak_idx"),
+            models.Index(fields=["label_truth_level", "label_window_end"], name="risk_survlbl_truth_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(label_window_start__lte=models.F("label_window_end")),
+                name="risk_survlbl_window_order",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.ward.name} {self.label_window_start}:{self.label_window_end} [{self.outbreak_label}]"
+
+
+class PopulationExposureSource(models.Model):
+    SOURCE_TYPE_POPULATION_BASELINE = "population_baseline"
+    SOURCE_TYPE_GRIDDED_POPULATION = "gridded_population"
+    SOURCE_TYPE_SETTLEMENT_LAYER = "settlement_layer"
+    SOURCE_TYPE_WASH_VULNERABILITY_LAYER = "wash_vulnerability_layer"
+    SOURCE_TYPE_WATER_BODY_DISTANCE_LAYER = "water_body_distance_layer"
+    SOURCE_TYPE_FLOOD_EXPOSURE_LAYER = "flood_exposure_layer"
+    SOURCE_TYPE_CATCHMENT_MAPPING = "catchment_mapping"
+    SOURCE_TYPE_CSV_BACKFILL = "csv_backfill"
+    SOURCE_TYPE_CHOICES = [
+        (SOURCE_TYPE_POPULATION_BASELINE, "Population baseline"),
+        (SOURCE_TYPE_GRIDDED_POPULATION, "Gridded population"),
+        (SOURCE_TYPE_SETTLEMENT_LAYER, "Settlement layer"),
+        (SOURCE_TYPE_WASH_VULNERABILITY_LAYER, "WASH vulnerability layer"),
+        (SOURCE_TYPE_WATER_BODY_DISTANCE_LAYER, "Water body distance layer"),
+        (SOURCE_TYPE_FLOOD_EXPOSURE_LAYER, "Flood exposure layer"),
+        (SOURCE_TYPE_CATCHMENT_MAPPING, "Catchment mapping"),
+        (SOURCE_TYPE_CSV_BACKFILL, "CSV backfill"),
+    ]
+
+    source_name = models.CharField(max_length=120)
+    source_type = models.CharField(max_length=40, choices=SOURCE_TYPE_CHOICES)
+    source_timestamp = models.DateTimeField(null=True, blank=True)
+    release_version = models.CharField(max_length=120, blank=True)
+    submitted_at = models.DateTimeField(default=timezone.now)
+    source_ref = models.CharField(max_length=255, blank=True)
+    operator_note = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-submitted_at", "source_name"]
+        indexes = [
+            models.Index(fields=["source_type", "release_version"], name="risk_popsrc_type_release_idx"),
+            models.Index(fields=["source_name", "submitted_at"], name="risk_popsrc_name_sub_idx"),
+        ]
+
+    def __str__(self) -> str:
+        release = self.release_version or "unversioned"
+        return f"{self.source_name} {release} [{self.source_type}]"
+
+
+class PopulationExposureIngestionRun(models.Model):
+    STATUS_RUNNING = "RUNNING"
+    STATUS_SUCCESS = "SUCCESS"
+    STATUS_PARTIAL = "PARTIAL"
+    STATUS_FAILED = "FAILED"
+    STATUS_CHOICES = [
+        (STATUS_RUNNING, "Running"),
+        (STATUS_SUCCESS, "Success"),
+        (STATUS_PARTIAL, "Partial"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    CORRECTION_ORIGINAL = "original"
+    CORRECTION_AMENDMENT = "amendment"
+    CORRECTION_BACKFILL = "backfill"
+    CORRECTION_RELEASE_REPLACEMENT = "release_replacement"
+    CORRECTION_MODE_CHOICES = [
+        (CORRECTION_ORIGINAL, "Original"),
+        (CORRECTION_AMENDMENT, "Amendment"),
+        (CORRECTION_BACKFILL, "Backfill"),
+        (CORRECTION_RELEASE_REPLACEMENT, "Release replacement"),
+    ]
+
+    EXECUTION_MANUAL = "manual"
+    EXECUTION_SCHEDULED = "scheduled"
+    EXECUTION_REPLAY = "replay"
+    EXECUTION_MODE_CHOICES = [
+        (EXECUTION_MANUAL, "Manual"),
+        (EXECUTION_SCHEDULED, "Scheduled"),
+        (EXECUTION_REPLAY, "Replay"),
+    ]
+
+    source = models.ForeignKey(
+        PopulationExposureSource,
+        on_delete=models.PROTECT,
+        related_name="ingestion_runs",
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_RUNNING)
+    source_name = models.CharField(max_length=120)
+    source_type = models.CharField(max_length=40, choices=PopulationExposureSource.SOURCE_TYPE_CHOICES)
+    source_timestamp = models.DateTimeField(null=True, blank=True)
+    release_version = models.CharField(max_length=120, blank=True)
+    source_ref = models.CharField(max_length=255, blank=True)
+    adapter_key = models.CharField(max_length=80, default="csv")
+    input_ref = models.CharField(max_length=255, blank=True)
+    execution_mode = models.CharField(max_length=20, choices=EXECUTION_MODE_CHOICES, default=EXECUTION_MANUAL)
+    correction_mode = models.CharField(max_length=40, choices=CORRECTION_MODE_CHOICES, default=CORRECTION_ORIGINAL)
+    replacement_reason = models.TextField(blank=True)
+    fallback_used = models.BooleanField(default=False)
+    records_seen = models.PositiveIntegerField(default=0)
+    records_loaded = models.PositiveIntegerField(default=0)
+    records_rejected = models.PositiveIntegerField(default=0)
+    operator_note = models.TextField(blank=True)
+    source_metadata = models.JSONField(default=dict, blank=True)
+    results = models.JSONField(default=dict, blank=True)
+    rejected_rows = models.JSONField(default=list, blank=True)
+    error_summary = models.TextField(blank=True)
+    replay_of = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="replay_runs",
+    )
+    replaces_run = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="replacement_runs",
+    )
+    started_at = models.DateTimeField(default=timezone.now)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-started_at"]
+        indexes = [
+            models.Index(fields=["source_type", "started_at"], name="risk_popexp_type_started_idx"),
+            models.Index(fields=["status", "started_at"], name="risk_popexp_status_started_idx"),
+            models.Index(fields=["correction_mode", "started_at"], name="risk_popexp_corr_started_idx"),
+            models.Index(fields=["release_version", "started_at"], name="risk_popexp_rel_started_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=(
+                    ~models.Q(correction_mode="release_replacement")
+                    | (
+                        models.Q(replaces_run_id__isnull=False)
+                        & ~models.Q(replacement_reason="")
+                        & ~models.Q(release_version="")
+                        & ~models.Q(source_ref="")
+                    )
+                ),
+                name="risk_popexp_repl_required",
+            ),
+            models.CheckConstraint(
+                check=models.Q(replaces_run_id__isnull=True) | models.Q(correction_mode="release_replacement"),
+                name="risk_popexp_repl_only",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.source_name} [{self.status}] {self.started_at}"
+
+
+class PopulationExposureTruth(models.TextChoices):
+    DIRECT_POPULATION_BASELINE = "direct_population_baseline", "Direct population baseline"
+    SPATIALLY_AGGREGATED_SOURCE = "spatially_aggregated_source", "Spatially aggregated source"
+    DERIVED_EXPOSURE_PROXY = "derived_exposure_proxy", "Derived exposure proxy"
+    MANUAL_OVERRIDE = "manual_override", "Manual override"
+    SEEDED_DEMO = "seeded_demo", "Seeded demo"
+
+
+class PopulationExposureSourceKind(models.TextChoices):
+    LIVE = "live", "Live"
+    BACKFILL = "backfill", "Backfill"
+    SEEDED = "seeded", "Seeded"
+
+
+class PopulationExposureFreshness(models.TextChoices):
+    FRESH = "fresh", "Fresh"
+    DELAYED = "delayed", "Delayed"
+    STALE = "stale", "Stale"
+    REPLACED_BY_NEW_RELEASE = "replaced_by_new_release", "Replaced by new release"
+    REPLAY_DIAGNOSTIC = "replay_diagnostic", "Replay diagnostic"
+    REPLACEMENT_NOT_ACTIVATED = "replacement_not_activated", "Replacement not activated"
+    UNKNOWN = "unknown", "Unknown"
+
+
+class PopulationBaselineRecord(models.Model):
+    ward = models.ForeignKey(Ward, on_delete=models.PROTECT, related_name="population_baselines")
+    ingestion_run = models.ForeignKey(
+        PopulationExposureIngestionRun,
+        on_delete=models.PROTECT,
+        related_name="population_baseline_records",
+    )
+    source = models.ForeignKey(
+        PopulationExposureSource,
+        on_delete=models.PROTECT,
+        related_name="population_baseline_records",
+    )
+    recorded_at = models.DateTimeField(default=timezone.now)
+    population_total = models.PositiveIntegerField()
+    population_under_five = models.PositiveIntegerField(null=True, blank=True)
+    household_count_proxy = models.PositiveIntegerField(null=True, blank=True)
+    truth_class = models.CharField(
+        max_length=40,
+        choices=PopulationExposureTruth.choices,
+        default=PopulationExposureTruth.DIRECT_POPULATION_BASELINE,
+    )
+    source_name = models.CharField(max_length=120)
+    source_kind = models.CharField(
+        max_length=20,
+        choices=PopulationExposureSourceKind.choices,
+        default=PopulationExposureSourceKind.LIVE,
+    )
+    freshness_state = models.CharField(
+        max_length=40,
+        choices=PopulationExposureFreshness.choices,
+        default=PopulationExposureFreshness.UNKNOWN,
+    )
+    release_version = models.CharField(max_length=120, blank=True)
+    supersedes_record_ref = models.CharField(max_length=160, blank=True)
+    revision_number = models.PositiveIntegerField(default=1)
+    source_ref = models.CharField(max_length=255, blank=True)
+    raw_payload = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-recorded_at", "ward__name"]
+        indexes = [
+            models.Index(fields=["ward", "recorded_at"], name="risk_popbase_ward_recorded_idx"),
+            models.Index(fields=["truth_class", "recorded_at"], name="risk_popbase_truth_idx"),
+            models.Index(fields=["release_version", "recorded_at"], name="risk_popbase_release_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=~models.Q(truth_class=PopulationExposureTruth.DERIVED_EXPOSURE_PROXY),
+                name="risk_popbase_no_proxy",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.ward.name} population {self.population_total} [{self.truth_class}]"
+
+
+class ExposureFeatureRecord(models.Model):
+    EXPOSURE_POPULATION_DENSITY = "population_density"
+    EXPOSURE_SETTLEMENT_CONCENTRATION = "settlement_concentration"
+    EXPOSURE_FLOODPLAIN_EXPOSURE = "floodplain_exposure"
+    EXPOSURE_WATER_BODY_PROXIMITY = "water_body_proximity"
+    EXPOSURE_WASH_VULNERABILITY = "wash_vulnerability"
+    EXPOSURE_EXPOSED_POPULATION_PROXY = "exposed_population_proxy"
+    EXPOSURE_TYPE_CHOICES = [
+        (EXPOSURE_POPULATION_DENSITY, "Population density"),
+        (EXPOSURE_SETTLEMENT_CONCENTRATION, "Settlement concentration"),
+        (EXPOSURE_FLOODPLAIN_EXPOSURE, "Floodplain exposure"),
+        (EXPOSURE_WATER_BODY_PROXIMITY, "Water body proximity"),
+        (EXPOSURE_WASH_VULNERABILITY, "WASH vulnerability"),
+        (EXPOSURE_EXPOSED_POPULATION_PROXY, "Exposed population proxy"),
+    ]
+
+    ward = models.ForeignKey(Ward, on_delete=models.PROTECT, related_name="exposure_feature_records")
+    ingestion_run = models.ForeignKey(
+        PopulationExposureIngestionRun,
+        on_delete=models.PROTECT,
+        related_name="exposure_feature_records",
+    )
+    source = models.ForeignKey(
+        PopulationExposureSource,
+        on_delete=models.PROTECT,
+        related_name="exposure_feature_records",
+    )
+    recorded_at = models.DateTimeField(default=timezone.now)
+    exposure_type = models.CharField(max_length=40, choices=EXPOSURE_TYPE_CHOICES)
+    exposure_value = models.FloatField()
+    unit = models.CharField(max_length=40, blank=True)
+    truth_class = models.CharField(
+        max_length=40,
+        choices=PopulationExposureTruth.choices,
+        default=PopulationExposureTruth.DERIVED_EXPOSURE_PROXY,
+    )
+    source_name = models.CharField(max_length=120)
+    source_kind = models.CharField(
+        max_length=20,
+        choices=PopulationExposureSourceKind.choices,
+        default=PopulationExposureSourceKind.LIVE,
+    )
+    freshness_state = models.CharField(
+        max_length=40,
+        choices=PopulationExposureFreshness.choices,
+        default=PopulationExposureFreshness.UNKNOWN,
+    )
+    aggregation_method = models.CharField(max_length=120, blank=True)
+    spatial_resolution = models.CharField(max_length=120, blank=True)
+    release_version = models.CharField(max_length=120, blank=True)
+    source_ref = models.CharField(max_length=255, blank=True)
+    notes = models.TextField(blank=True)
+    raw_payload = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-recorded_at", "ward__name", "exposure_type"]
+        indexes = [
+            models.Index(fields=["ward", "exposure_type", "recorded_at"], name="risk_expfeat_ward_type_idx"),
+            models.Index(fields=["truth_class", "recorded_at"], name="risk_expfeat_truth_idx"),
+            models.Index(fields=["release_version", "recorded_at"], name="risk_expfeat_release_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=~models.Q(truth_class=PopulationExposureTruth.DIRECT_POPULATION_BASELINE),
+                name="risk_expfeat_no_direct",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.ward.name} {self.exposure_type}={self.exposure_value}"
+
+
+class CatchmentPopulationRecord(models.Model):
+    facility = models.ForeignKey(
+        HealthFacility,
+        on_delete=models.PROTECT,
+        related_name="catchment_population_records",
+    )
+    ingestion_run = models.ForeignKey(
+        PopulationExposureIngestionRun,
+        on_delete=models.PROTECT,
+        related_name="catchment_population_records",
+    )
+    source = models.ForeignKey(
+        PopulationExposureSource,
+        on_delete=models.PROTECT,
+        related_name="catchment_population_records",
+    )
+    recorded_at = models.DateTimeField(default=timezone.now)
+    catchment_population_estimate = models.FloatField()
+    catchment_under_five_estimate = models.FloatField(null=True, blank=True)
+    assigned_ward_ids = models.JSONField(default=list, blank=True)
+    assignment_method = models.CharField(max_length=120, blank=True)
+    truth_class = models.CharField(
+        max_length=40,
+        choices=PopulationExposureTruth.choices,
+        default=PopulationExposureTruth.DERIVED_EXPOSURE_PROXY,
+    )
+    source_name = models.CharField(max_length=120)
+    source_kind = models.CharField(
+        max_length=20,
+        choices=PopulationExposureSourceKind.choices,
+        default=PopulationExposureSourceKind.LIVE,
+    )
+    freshness_state = models.CharField(
+        max_length=40,
+        choices=PopulationExposureFreshness.choices,
+        default=PopulationExposureFreshness.UNKNOWN,
+    )
+    release_version = models.CharField(max_length=120, blank=True)
+    source_ref = models.CharField(max_length=255, blank=True)
+    raw_payload = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-recorded_at", "facility__name"]
+        indexes = [
+            models.Index(fields=["facility", "recorded_at"], name="risk_catchpop_fac_record_idx"),
+            models.Index(fields=["truth_class", "recorded_at"], name="risk_catchpop_truth_idx"),
+            models.Index(fields=["release_version", "recorded_at"], name="risk_catchpop_release_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=~models.Q(truth_class=PopulationExposureTruth.DIRECT_POPULATION_BASELINE),
+                name="risk_catchpop_no_direct",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.facility.name} catchment {self.catchment_population_estimate}"
 
 
 class ETLHeartbeat(models.Model):
@@ -1004,6 +1687,48 @@ class SyncQueue(models.Model):
 
     def __str__(self) -> str:
         return f"SyncQueue {self.id} [{self.status}]"
+
+
+class SystemControlState(models.Model):
+    KEY_ALERT_DELIVERY_PAUSE = "ALERT_DELIVERY_PAUSE"
+    KEY_WARD_RISK_DECISION_POLICY = "WARD_RISK_DECISION_POLICY"
+    CONTROL_KEY_CHOICES = [
+        (KEY_ALERT_DELIVERY_PAUSE, "Alert delivery pause"),
+        (KEY_WARD_RISK_DECISION_POLICY, "Ward risk decision policy"),
+    ]
+
+    control_key = models.CharField(max_length=80, choices=CONTROL_KEY_CHOICES, unique=True)
+    is_active = models.BooleanField(default=False)
+    reason = models.TextField(blank=True)
+    active_until = models.DateTimeField(null=True, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="system_control_updates",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["control_key"]
+        indexes = [
+            models.Index(fields=["control_key", "is_active"], name="risk_system_control_key_idx"),
+            models.Index(fields=["active_until"], name="risk_system_active_until_idx"),
+        ]
+
+    def is_currently_active(self) -> bool:
+        if not self.is_active:
+            return False
+        if self.active_until is None:
+            return True
+        return self.active_until > timezone.now()
+
+    def __str__(self) -> str:
+        state = "active" if self.is_currently_active() else "inactive"
+        return f"{self.control_key} [{state}]"
 
 
 class WardGeometryDataset(models.Model):

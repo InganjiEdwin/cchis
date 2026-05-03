@@ -19,6 +19,41 @@ export class ServerApiError extends Error {
   }
 }
 
+function stringifyErrorValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => stringifyErrorValue(item)).filter(Boolean).join(" ");
+  }
+
+  if (value && typeof value === "object") {
+    return formatBackendErrorDetail(value as Record<string, unknown>);
+  }
+
+  return "";
+}
+
+function formatBackendErrorDetail(data: Record<string, unknown>) {
+  const errors = data.errors && typeof data.errors === "object" && !Array.isArray(data.errors)
+    ? data.errors as Record<string, unknown>
+    : data;
+  const fieldMessages = Object.entries(errors)
+    .filter(([field]) => field !== "detail" && field !== "errors")
+    .map(([field, value]) => {
+      const message = stringifyErrorValue(value);
+      return message ? `${field.replaceAll("_", " ")}: ${message}` : "";
+    })
+    .filter(Boolean);
+
+  if (fieldMessages.length > 0) {
+    return fieldMessages.join(" ");
+  }
+
+  return typeof data.detail === "string" ? data.detail : "Request failed.";
+}
+
 async function resolveCookieHeader(explicitCookieHeader?: string) {
   if (explicitCookieHeader !== undefined) {
     return explicitCookieHeader;
@@ -101,8 +136,8 @@ export async function fetchBackendJson<T>(path: string, init: ServerApiRequestIn
     let detail = "Unable to load server-side dashboard data.";
 
     try {
-      const data = (await response.json()) as { detail?: string };
-      detail = data.detail ?? detail;
+      const data = (await response.json()) as Record<string, unknown>;
+      detail = formatBackendErrorDetail(data);
     } catch {
       // Keep generic detail if parsing fails.
     }

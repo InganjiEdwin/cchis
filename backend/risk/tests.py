@@ -31,9 +31,17 @@ from rest_framework.settings import api_settings
 
 from accounts.audit import get_client_ip
 from accounts.admin import AccessRequestAdmin
-from accounts.models import AccessRequest, AuthAuditEvent, PasswordResetToken, PreAuthToken
+from accounts.models import AccessRequest, AuthAuditEvent, PasswordResetToken, PreAuthToken, TwoFactorRecoveryCode
 from accounts.turnstile import TurnstileVerificationResult
-from accounts.two_factor import generate_current_totp_code, generate_totp_secret
+from accounts.two_factor import (
+    consume_recovery_code,
+    generate_current_totp_code,
+    generate_recovery_codes,
+    generate_totp_secret,
+    get_recovery_code_status,
+    normalize_recovery_code,
+    verify_recovery_code,
+)
 from communications.providers import EmailDeliveryResult, MailgunEmailProvider, StubEmailProvider, get_email_provider
 from communications.services import send_email
 from accounts.views import (
@@ -42,6 +50,7 @@ from accounts.views import (
     LoginAPIView,
     LogoutAPIView,
     ReactivateUserAPIView,
+    RegenerateTwoFactorRecoveryCodesAPIView,
     RefreshAPIView,
     VerifyTwoFactorAPIView,
 )
@@ -93,6 +102,7 @@ from risk.interoperability import (
 )
 from risk.providers import DeliveryResult, StubSmsProvider, get_sms_provider
 from risk.admin import CHVCoverageRequestAdmin, CHVCoverageRequestAlertLinkInline
+from risk.population_exposure_features import POPULATION_EXPOSURE_FEATURE_SCHEMA_VERSION
 from risk.serializers import IngestionRunSerializer
 from risk.services import create_alerts_for_riskscore, deliver_alert
 from risk.services import build_facility_intelligence_snapshot, build_facility_readiness_decision_summary
@@ -132,6 +142,7 @@ from .models import (
     ModelRun,
     RiskScore,
     SyncQueue,
+    SystemControlState,
     TriageSession,
     UssdSessionLog,
     Ward,
@@ -218,6 +229,7 @@ class AuthenticatedAPITestCase(APITestCase):
                 "algorithm": "logistic_regression",
                 "promotion_target": "live_baseline",
                 "promotion_state": "promoted",
+                "phase_4_promotion_gates_passed": True,
                 "run_purpose": "live_scoring",
                 "execution_context": "test_fixture",
                 "alert_eligible": True,
@@ -338,6 +350,72 @@ class AuthenticatedAPITestCase(APITestCase):
         user.totp_secret = generate_totp_secret()
         user.is_totp_enabled = True
         user.save(update_fields=["totp_secret", "is_totp_enabled"])
+
+
+class TwoFactorRecoveryCodeServiceTestCase(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="recovery_user",
+            password="ChangeMe123!",
+            email="recovery_user@example.com",
+        )
+        self.user.role = User.ROLE_ADMIN
+        self.user.totp_secret = generate_totp_secret()
+        self.user.is_totp_enabled = True
+        self.user.save(update_fields=["role", "totp_secret", "is_totp_enabled"])
+
+    def test_generate_recovery_codes_stores_hashes_not_plaintext(self):
+        codes = generate_recovery_codes(self.user)
+
+        self.assertEqual(len(codes), 10)
+        self.assertEqual(TwoFactorRecoveryCode.objects.filter(user=self.user).count(), 10)
+        first_code_record = TwoFactorRecoveryCode.objects.filter(user=self.user).first()
+
+        self.assertNotEqual(first_code_record.code_hash, normalize_recovery_code(codes[0]))
+        self.assertEqual(first_code_record.code_hint, normalize_recovery_code(first_code_record.code_hint))
+        self.assertTrue(verify_recovery_code(self.user, codes[0]))
+
+    def test_recovery_code_verification_normalizes_case_spaces_and_hyphens(self):
+        code = generate_recovery_codes(self.user, count=1)[0]
+        normalized = normalize_recovery_code(code)
+        spaced_lower_code = f"{normalized[:5].lower()} {normalized[5:9].lower()}-{normalized[9:].lower()}"
+
+        code_record = verify_recovery_code(self.user, spaced_lower_code)
+
+        self.assertIsNotNone(code_record)
+        self.assertEqual(code_record.user, self.user)
+
+    def test_consume_recovery_code_makes_it_one_time_use(self):
+        code = generate_recovery_codes(self.user, count=1)[0]
+        code_record = verify_recovery_code(self.user, code)
+
+        consumed_record = consume_recovery_code(code_record)
+
+        self.assertIsNotNone(consumed_record)
+        self.assertIsNotNone(consumed_record.used_at)
+        self.assertIsNone(verify_recovery_code(self.user, code))
+
+    def test_regenerating_recovery_codes_invalidates_old_unused_codes(self):
+        old_code = generate_recovery_codes(self.user, count=1)[0]
+        old_record = verify_recovery_code(self.user, old_code)
+        new_code = generate_recovery_codes(self.user, count=1)[0]
+
+        old_record.refresh_from_db()
+        self.assertIsNotNone(old_record.invalidated_at)
+        self.assertIsNone(verify_recovery_code(self.user, old_code))
+        self.assertTrue(verify_recovery_code(self.user, new_code))
+
+    def test_recovery_code_status_reports_latest_batch_counts(self):
+        used_code = generate_recovery_codes(self.user, count=2)[0]
+        consume_recovery_code(verify_recovery_code(self.user, used_code))
+
+        status_payload = get_recovery_code_status(self.user)
+
+        self.assertEqual(status_payload["remaining_count"], 1)
+        self.assertEqual(status_payload["total_count"], 2)
+        self.assertIsNotNone(status_payload["last_generated_at"])
+        self.assertIsNotNone(status_payload["last_used_at"])
+        self.assertTrue(status_payload["can_regenerate"])
 
 
 class AuthEndpointsTestCase(AuthenticatedAPITestCase):
@@ -521,11 +599,14 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(confirm_response.status_code, status.HTTP_200_OK)
         self.assertIn("access", confirm_response.data)
         self.assertIn("refresh", confirm_response.data)
+        self.assertTrue(confirm_response.data["recovery_codes_generated"])
+        self.assertEqual(len(confirm_response.data["recovery_codes"]), 10)
         cookie = confirm_response.cookies.get(settings.AUTH_REFRESH_COOKIE_NAME)
         self.assertIsNotNone(cookie)
         self.assertEqual(cookie.value, confirm_response.data["refresh"])
         unenrolled_admin.refresh_from_db()
         self.assertTrue(unenrolled_admin.is_totp_enabled)
+        self.assertEqual(TwoFactorRecoveryCode.objects.filter(user=unenrolled_admin).count(), 10)
 
     def test_authenticated_optional_user_can_complete_two_factor_enrollment(self):
         analyst = self._create_user(
@@ -534,6 +615,25 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
             ward=self.ward,
         )
         self.authenticate(analyst.username)
+        self.client.credentials()
+
+        setup_response = self.client.post(reverse("auth-2fa-setup"), {}, format="json")
+
+        self.assertEqual(setup_response.status_code, status.HTTP_200_OK)
+        self.assertIn("manual_entry_key", setup_response.data)
+
+        confirm_response = self.client.post(
+            reverse("auth-2fa-setup-confirm"),
+            {"code": generate_current_totp_code(setup_response.data["manual_entry_key"])},
+            format="json",
+        )
+
+        self.assertEqual(confirm_response.status_code, status.HTTP_200_OK)
+        self.assertTrue(confirm_response.data["enrollment_completed"])
+        self.assertTrue(confirm_response.data["recovery_codes_generated"])
+        self.assertEqual(len(confirm_response.data["recovery_codes"]), 10)
+        analyst.refresh_from_db()
+        self.assertTrue(analyst.is_totp_enabled)
 
     def test_verify_2fa_returns_tokens_for_valid_code(self):
         secret = self.admin_user.totp_secret
@@ -563,6 +663,111 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
                 event_type=AuthAuditEvent.EVENT_2FA_VERIFIED,
                 status=AuthAuditEvent.STATUS_SUCCESS,
                 target_user=self.admin_user,
+            ).exists()
+        )
+
+    def test_verify_2fa_accepts_unused_recovery_code_once(self):
+        recovery_code = generate_recovery_codes(self.admin_user, count=2)[0]
+
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+
+        verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": login_response.data["temp_token"],
+                "code": recovery_code,
+            },
+            format="json",
+        )
+
+        self.assertEqual(verify_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(verify_response.data["second_factor_method"], "recovery_code")
+        self.assertEqual(verify_response.data["recovery_codes_remaining"], 1)
+        self.assertFalse(verify_response.data["requires_2fa"])
+        self.assertIsNone(verify_recovery_code(self.admin_user, recovery_code))
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_2FA_RECOVERY_CODE_USED,
+                status=AuthAuditEvent.STATUS_SUCCESS,
+                target_user=self.admin_user,
+                metadata__purpose="login",
+            ).exists()
+        )
+
+    def test_verify_2fa_rejects_replayed_recovery_code(self):
+        recovery_code = generate_recovery_codes(self.admin_user, count=2)[0]
+        first_login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+
+        first_verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": first_login_response.data["temp_token"],
+                "code": recovery_code,
+            },
+            format="json",
+        )
+
+        self.assertEqual(first_verify_response.status_code, status.HTTP_200_OK)
+
+        second_login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+        replay_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": second_login_response.data["temp_token"],
+                "code": recovery_code,
+            },
+            format="json",
+        )
+
+        self.assertEqual(replay_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(replay_response.data["detail"], "Invalid or expired code. Please try again.")
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_2FA_RECOVERY_CODE_FAILED,
+                status=AuthAuditEvent.STATUS_FAILED,
+                target_user=self.admin_user,
+                metadata__purpose="login",
+                metadata__reason="invalid_code",
+            ).exists()
+        )
+
+    def test_verify_2fa_records_invalid_recovery_code_failure_event(self):
+        generate_recovery_codes(self.admin_user, count=2)
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+
+        verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": login_response.data["temp_token"],
+                "code": "CCHIS-NOT-A-REAL-CODE",
+            },
+            format="json",
+        )
+
+        self.assertEqual(verify_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_2FA_RECOVERY_CODE_FAILED,
+                status=AuthAuditEvent.STATUS_FAILED,
+                target_user=self.admin_user,
+                metadata__purpose="login",
+                metadata__reason="invalid_code",
             ).exists()
         )
 
@@ -645,6 +850,159 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.data["detail"], "Invalid or expired 2FA token.")
+
+    def test_recovery_code_status_returns_counts_without_plaintext_codes(self):
+        self.authenticate(self.admin_user.username)
+        recovery_codes = generate_recovery_codes(self.admin_user, count=3)
+        consume_recovery_code(verify_recovery_code(self.admin_user, recovery_codes[0]))
+
+        response = self.client.get(reverse("auth-2fa-recovery-codes"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["remaining_count"], 2)
+        self.assertEqual(response.data["total_count"], 3)
+        self.assertTrue(response.data["can_regenerate"])
+        self.assertNotIn("recovery_codes", response.data)
+
+    def test_recovery_code_regeneration_requires_password_and_second_factor(self):
+        self.authenticate(self.admin_user.username)
+        old_recovery_code = generate_recovery_codes(self.admin_user, count=1)[0]
+        old_record = verify_recovery_code(self.admin_user, old_recovery_code)
+
+        response = self.client.post(
+            reverse("auth-2fa-recovery-codes-regenerate"),
+            {
+                "current_password": self.password,
+                "code": generate_current_totp_code(self.admin_user.totp_secret),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["recovery_codes_generated"])
+        self.assertEqual(len(response.data["recovery_codes"]), 10)
+        self.assertEqual(response.data["remaining_count"], 10)
+        old_record.refresh_from_db()
+        self.assertIsNotNone(old_record.invalidated_at)
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_2FA_RECOVERY_CODES_REGENERATED,
+                status=AuthAuditEvent.STATUS_SUCCESS,
+                target_user=self.admin_user,
+            ).exists()
+        )
+
+    def test_recovery_code_regeneration_accepts_existing_recovery_code(self):
+        self.authenticate(self.admin_user.username)
+        authorizing_code = generate_recovery_codes(self.admin_user, count=2)[0]
+
+        response = self.client.post(
+            reverse("auth-2fa-recovery-codes-regenerate"),
+            {
+                "current_password": self.password,
+                "code": authorizing_code,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["recovery_codes"]), 10)
+        self.assertIsNone(verify_recovery_code(self.admin_user, authorizing_code))
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_2FA_RECOVERY_CODE_USED,
+                status=AuthAuditEvent.STATUS_SUCCESS,
+                target_user=self.admin_user,
+                metadata__purpose="recovery_code_regeneration",
+            ).exists()
+        )
+
+    def test_invalid_recovery_code_regeneration_records_recovery_failure_event(self):
+        self.authenticate(self.admin_user.username)
+        generate_recovery_codes(self.admin_user, count=2)
+
+        response = self.client.post(
+            reverse("auth-2fa-recovery-codes-regenerate"),
+            {
+                "current_password": self.password,
+                "code": "CCHIS-NOT-A-REAL-CODE",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_2FA_RECOVERY_CODE_FAILED,
+                status=AuthAuditEvent.STATUS_FAILED,
+                target_user=self.admin_user,
+                metadata__purpose="recovery_code_regeneration",
+                metadata__reason="invalid_code",
+            ).exists()
+        )
+
+    def test_recovery_code_login_low_remaining_records_low_warning(self):
+        recovery_code = generate_recovery_codes(self.admin_user, count=1)[0]
+
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+
+        verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": login_response.data["temp_token"],
+                "code": recovery_code,
+            },
+            format="json",
+        )
+
+        self.assertEqual(verify_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(verify_response.data["second_factor_method"], "recovery_code")
+        self.assertEqual(verify_response.data["recovery_codes_remaining"], 0)
+        self.assertTrue(verify_response.data["recovery_codes_low"])
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_2FA_RECOVERY_CODES_LOW,
+                status=AuthAuditEvent.STATUS_SUCCESS,
+                target_user=self.admin_user,
+                metadata__purpose="login",
+                metadata__remaining_count=0,
+            ).exists()
+        )
+
+    def test_recovery_code_audit_metadata_excludes_secret_material(self):
+        recovery_code = generate_recovery_codes(self.admin_user, count=1)[0]
+
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+
+        verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": login_response.data["temp_token"],
+                "code": recovery_code,
+            },
+            format="json",
+        )
+
+        self.assertEqual(verify_response.status_code, status.HTTP_200_OK)
+        event = AuthAuditEvent.objects.filter(
+            event_type=AuthAuditEvent.EVENT_2FA_RECOVERY_CODE_USED,
+            status=AuthAuditEvent.STATUS_SUCCESS,
+            target_user=self.admin_user,
+        ).latest("created_at")
+        metadata_text = json.dumps(event.metadata)
+        stored_hash = TwoFactorRecoveryCode.objects.get(user=self.admin_user).code_hash
+        self.assertNotIn(recovery_code, metadata_text)
+        self.assertNotIn(normalize_recovery_code(recovery_code), metadata_text)
+        self.assertNotIn(stored_hash, metadata_text)
+        self.assertNotIn("code_hash", metadata_text)
 
     def test_login_rejects_invalid_password(self):
         cache.clear()
@@ -826,6 +1184,22 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.data["two_factor_policy"], "REQUIRED")
         self.assertTrue(response.data["is_totp_enabled"])
         self.assertEqual(response.data["theme_preference"], User.THEME_SYSTEM)
+        self.assertIn("account_created_at", response.data)
+        self.assertIn("last_login_at", response.data)
+        self.assertEqual(
+            response.data["profile_capabilities"],
+            {
+                "can_change_password": True,
+                "can_update_appearance": True,
+                "can_manage_totp": True,
+                "can_view_own_activity": True,
+                "can_update_identity": True,
+                "can_review_sessions": False,
+                "can_generate_profile_report": False,
+                "identity_update_mode": "totp_step_up",
+                "mode": "auth_contract_backed_profile",
+            },
+        )
 
     def test_me_returns_ward_scope_for_supervisor(self):
         self.authenticate(self.supervisor_user.username)
@@ -870,6 +1244,198 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["role"], User.ROLE_CHV)
         self.assertEqual(response.data["two_factor_policy"], "NONE")
+        self.assertFalse(response.data["profile_capabilities"]["can_manage_totp"])
+        self.assertTrue(response.data["profile_capabilities"]["can_change_password"])
+        self.assertFalse(response.data["profile_capabilities"]["can_update_identity"])
+
+    def test_me_activity_requires_authentication(self):
+        response = self.client.get(reverse("auth-me-activity"))
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_me_activity_returns_only_current_user_events(self):
+        self.authenticate(self.admin_user.username)
+        own_event = AuthAuditEvent.objects.create(
+            event_type=AuthAuditEvent.EVENT_PASSWORD_CHANGED,
+            status=AuthAuditEvent.STATUS_SUCCESS,
+            actor=self.admin_user,
+            target_user=self.admin_user,
+            ip_address="10.0.0.10",
+            user_agent="sensitive-browser-fingerprint",
+            metadata={"sensitive": "do-not-expose"},
+        )
+        other_user_event = AuthAuditEvent.objects.create(
+            event_type=AuthAuditEvent.EVENT_LOGIN_SUCCESS,
+            status=AuthAuditEvent.STATUS_SUCCESS,
+            actor=self.chv_user,
+            target_user=self.chv_user,
+        )
+
+        response = self.client.get(reverse("auth-me-activity"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["capabilities"],
+            {
+                "can_view_own_activity": True,
+                "mode": "self_scoped_auth_activity",
+            },
+        )
+        self.assertIn("count", response.data)
+        self.assertIn("next", response.data)
+        self.assertIn("previous", response.data)
+        self.assertIn("results", response.data)
+        self.assertIn("filters", response.data)
+        self.assertEqual(response.data["filters"]["security_only"], True)
+        self.assertEqual(response.data["filters"]["include_refresh_events"], False)
+        event_ids = {event["id"] for event in response.data["results"]}
+        self.assertIn(own_event.id, event_ids)
+        self.assertNotIn(other_user_event.id, event_ids)
+
+        unsafe_fields = {
+            "actor",
+            "actor_username",
+            "target_user",
+            "target_username",
+            "ward",
+            "ward_name",
+            "ip_address",
+            "user_agent",
+            "metadata",
+        }
+        for event in response.data["results"]:
+            self.assertFalse(unsafe_fields.intersection(event.keys()))
+            self.assertIn("title", event)
+            self.assertIn("description", event)
+
+        own_payload = next(
+            event for event in response.data["results"] if event["id"] == own_event.id
+        )
+        self.assertEqual(own_payload["title"], "Password changed")
+        self.assertEqual(own_payload["description"], "Your account password was changed.")
+
+    def test_me_activity_paginates_and_caps_requested_page_size(self):
+        self.authenticate(self.chv_user.username)
+        for _ in range(55):
+            AuthAuditEvent.objects.create(
+                event_type=AuthAuditEvent.EVENT_PASSWORD_CHANGED,
+                status=AuthAuditEvent.STATUS_SUCCESS,
+                actor=self.chv_user,
+                target_user=self.chv_user,
+            )
+
+        response = self.client.get(reverse("auth-me-activity"), {"page_size": "100"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["filters"]["page"], 1)
+        self.assertEqual(response.data["filters"]["page_size"], 50)
+        self.assertLessEqual(len(response.data["results"]), 50)
+        self.assertGreaterEqual(response.data["count"], 55)
+        self.assertIsNotNone(response.data["next"])
+
+    def test_me_activity_hides_refresh_success_by_default(self):
+        self.authenticate(self.chv_user.username)
+        refresh_success = AuthAuditEvent.objects.create(
+            event_type=AuthAuditEvent.EVENT_REFRESH_SUCCESS,
+            status=AuthAuditEvent.STATUS_SUCCESS,
+            actor=self.chv_user,
+            target_user=self.chv_user,
+        )
+        refresh_failed = AuthAuditEvent.objects.create(
+            event_type=AuthAuditEvent.EVENT_REFRESH_FAILED,
+            status=AuthAuditEvent.STATUS_FAILED,
+            actor=self.chv_user,
+            target_user=self.chv_user,
+        )
+
+        default_response = self.client.get(reverse("auth-me-activity"))
+
+        self.assertEqual(default_response.status_code, status.HTTP_200_OK)
+        default_ids = {event["id"] for event in default_response.data["results"]}
+        self.assertNotIn(refresh_success.id, default_ids)
+        self.assertIn(refresh_failed.id, default_ids)
+
+        expanded_response = self.client.get(
+            reverse("auth-me-activity"),
+            {"include_refresh_events": "true"},
+        )
+
+        self.assertEqual(expanded_response.status_code, status.HTTP_200_OK)
+        expanded_ids = {event["id"] for event in expanded_response.data["results"]}
+        self.assertIn(refresh_success.id, expanded_ids)
+
+    def test_me_activity_filters_by_event_status_and_dates(self):
+        self.authenticate(self.admin_user.username)
+        older_event = AuthAuditEvent.objects.create(
+            event_type=AuthAuditEvent.EVENT_LOGIN_FAILED,
+            status=AuthAuditEvent.STATUS_FAILED,
+            actor=self.admin_user,
+            target_user=self.admin_user,
+        )
+        matching_event = AuthAuditEvent.objects.create(
+            event_type=AuthAuditEvent.EVENT_LOGIN_FAILED,
+            status=AuthAuditEvent.STATUS_FAILED,
+            actor=self.admin_user,
+            target_user=self.admin_user,
+        )
+        other_status_event = AuthAuditEvent.objects.create(
+            event_type=AuthAuditEvent.EVENT_LOGIN_FAILED,
+            status=AuthAuditEvent.STATUS_SUCCESS,
+            actor=self.admin_user,
+            target_user=self.admin_user,
+        )
+        other_user_event = AuthAuditEvent.objects.create(
+            event_type=AuthAuditEvent.EVENT_LOGIN_FAILED,
+            status=AuthAuditEvent.STATUS_FAILED,
+            actor=self.chv_user,
+            target_user=self.chv_user,
+        )
+        now = timezone.now()
+        today = timezone.localdate(now)
+        yesterday = today - timedelta(days=1)
+        AuthAuditEvent.objects.filter(pk=older_event.pk).update(created_at=timezone.now() - timedelta(days=5))
+        AuthAuditEvent.objects.filter(pk=matching_event.pk).update(created_at=now)
+        AuthAuditEvent.objects.filter(pk=other_status_event.pk).update(created_at=now)
+        AuthAuditEvent.objects.filter(pk=other_user_event.pk).update(created_at=now)
+
+        response = self.client.get(
+            reverse("auth-me-activity"),
+            {
+                "event_type": AuthAuditEvent.EVENT_LOGIN_FAILED,
+                "status": AuthAuditEvent.STATUS_FAILED,
+                "date_from": yesterday.isoformat(),
+                "date_to": today.isoformat(),
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        event_ids = {event["id"] for event in response.data["results"]}
+        self.assertIn(matching_event.id, event_ids)
+        self.assertNotIn(older_event.id, event_ids)
+        self.assertNotIn(other_status_event.id, event_ids)
+        self.assertNotIn(other_user_event.id, event_ids)
+        self.assertEqual(response.data["filters"]["event_type"], AuthAuditEvent.EVENT_LOGIN_FAILED)
+        self.assertEqual(response.data["filters"]["status"], AuthAuditEvent.STATUS_FAILED)
+        self.assertEqual(response.data["filters"]["date_from"], yesterday.isoformat())
+        self.assertEqual(response.data["filters"]["date_to"], today.isoformat())
+
+    def test_me_activity_rejects_invalid_filters(self):
+        self.authenticate(self.admin_user.username)
+
+        response = self.client.get(
+            reverse("auth-me-activity"),
+            {"event_type": "NOT_REAL"},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("event_type", response.data)
+
+        response = self.client.get(
+            reverse("auth-me-activity"),
+            {"date_from": "2026-05-03", "date_to": "2026-05-02"},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("date_to", response.data)
 
     def test_session_returns_authenticated_user_for_valid_access_token(self):
         login_response = self.client.post(
@@ -1250,6 +1816,22 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         self.assertIn("errors", response.data)
         self.assertIn("current_password", response.data)
 
+    def test_change_password_requires_strong_new_password(self):
+        self.authenticate(self.chv_user.username)
+        response = self.client.post(
+            reverse("auth-change-password"),
+            {
+                "current_password": self.password,
+                "new_password": "longpasswordonly",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "Validation error.")
+        self.assertIn("new_password", response.data["errors"])
+        self.assertIn("uppercase", " ".join(response.data["errors"]["new_password"]).lower())
+
     @patch("accounts.views.send_password_reset_email")
     def test_password_reset_request_returns_generic_success_and_sends_email_for_existing_user(self, mock_send):
         response = self.client.post(
@@ -1371,6 +1953,24 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
             {"token": "not-a-real-token"},
         )
         self.assertEqual(invalid_get_response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_password_reset_confirm_requires_strong_new_password(self):
+        token_record = PasswordResetToken.objects.create(
+            user=self.chv_user,
+            token="weak-reset-token-123",
+            expires_at=timezone.now() + timedelta(hours=1),
+        )
+
+        response = self.client.post(
+            reverse("auth-password-reset-confirm"),
+            {"token": token_record.token, "new_password": "longpasswordonly"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "Validation error.")
+        self.assertIn("new_password", response.data["errors"])
+        self.assertIn("uppercase", " ".join(response.data["errors"]["new_password"]).lower())
 
     @patch("accounts.views.send_access_request_acknowledgement")
     def test_access_request_submission_creates_record_and_sends_acknowledgement(self, mock_send):
@@ -1979,10 +2579,18 @@ class RateLimitTestCase(AuthenticatedAPITestCase):
     def test_auth_and_ussd_views_have_expected_throttle_scopes(self):
         self.assertEqual(LoginAPIView.throttle_scope, "auth_login")
         self.assertEqual(RefreshAPIView.throttle_scope, "auth_refresh")
+        self.assertEqual(VerifyTwoFactorAPIView.throttle_scope, "auth_2fa")
         self.assertEqual(LogoutAPIView.throttle_scope, "auth_write")
         self.assertEqual(ChangePasswordAPIView.throttle_scope, "auth_write")
         self.assertEqual(DeactivateUserAPIView.throttle_scope, "auth_write")
         self.assertEqual(ReactivateUserAPIView.throttle_scope, "auth_write")
+        self.assertEqual(RegenerateTwoFactorRecoveryCodesAPIView.throttle_scope, "auth_2fa")
+        self.assertEqual(RegenerateTwoFactorRecoveryCodesAPIView.secondary_throttle_scope, "auth_write")
+        throttle_class_names = {
+            klass.__name__ for klass in RegenerateTwoFactorRecoveryCodesAPIView.throttle_classes
+        }
+        self.assertIn("AuthScopedRateThrottle", throttle_class_names)
+        self.assertIn("SecondaryAuthScopedRateThrottle", throttle_class_names)
         self.assertEqual(USSDMenuAPIView.throttle_scope, "public_ussd")
 
 
@@ -2653,6 +3261,51 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["latest_model_version"], "v0-test")
+
+    def test_ward_detail_rejects_ungated_live_baseline_metadata(self):
+        ungated_run = ModelRun.objects.create(
+            algorithm_name="logistic-regression-baseline",
+            model_version="lr-ungated-live-v1",
+            status=ModelRun.STATUS_SUCCESS,
+            month=4,
+            feature_schema_version="baseline-v1",
+            feature_keys=self.model_run.feature_keys,
+            training_dataset_ref="ungated-training",
+            inference_dataset_ref="ungated-inference",
+            training_row_count=8,
+            inference_row_count=2,
+            evaluation_metrics={"training_accuracy": 0.99},
+            metadata={
+                "algorithm": "logistic_regression",
+                "promotion_target": "live_baseline",
+                "promotion_state": "promoted",
+                "alert_eligible": True,
+                "execution_context": "manual_command",
+                "run_purpose": "live_scoring",
+            },
+            completed_at=timezone.now(),
+        )
+        RiskScore.objects.create(
+            ward=self.ward,
+            model_run=ungated_run,
+            score=0.99,
+            risk_level=Ward.RISK_HIGH,
+            rainfall_mm=160.0,
+            flood_indicator=0.95,
+            predicted_cases=22,
+            source=RiskScore.SOURCE_MODEL,
+            model_version="lr-ungated-live-v1",
+            generated_at=timezone.now() + timedelta(minutes=5),
+        )
+
+        self.authenticate(self.analyst_user.username)
+        detail_response = self.client.get(reverse("ward-detail", kwargs={"pk": self.ward.id}))
+        alignment_response = self.client.get(reverse("model-alignment"))
+
+        self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(detail_response.data["latest_model_version"], "v0-test")
+        self.assertEqual(alignment_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(alignment_response.data["current_live_baseline"]["model_version"], "v0-test")
 
     def test_model_alignment_endpoint_exposes_backend_truth_surface(self):
         self.authenticate(self.analyst_user.username)
@@ -5752,12 +6405,19 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(dashboard_alert.delivery_backend, "internal-dashboard")
         self.assertEqual(dashboard_alert.attempt_count, 1)
         self.assertEqual(dashboard_alert.message, "Please review field conditions in Ward One.")
-        self.assertEqual(dashboard_alert.guided_request_metadata, {})
+        self.assertEqual(
+            dashboard_alert.guided_request_metadata["surveillance_evidence"]["label_truth_state"],
+            "no_surveillance_label_window",
+        )
+        self.assertFalse(
+            dashboard_alert.guided_request_metadata["surveillance_evidence"]["proxy_only_as_confirmed_allowed"]
+        )
         self.assertEqual(sms_alert.status, Alert.STATUS_QUEUED)
         self.assertEqual(sms_alert.delivery_backend, "stub")
         self.assertEqual(sms_alert.attempt_count, 0)
         self.assertEqual(sms_alert.max_attempts, 3)
         self.assertEqual(sms_alert.message, "Please review field conditions in Ward One.")
+        self.assertIn("surveillance_evidence", sms_alert.guided_request_metadata)
 
     def test_create_alerts_for_riskscore_persists_guided_request_metadata_on_alerts(self):
         alerts = create_alerts_for_riskscore(
@@ -5870,6 +6530,148 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
     def test_get_sms_provider_raises_for_unknown_provider(self):
         with self.assertRaisesMessage(ValueError, "Unsupported SMS provider: unknown-provider"):
             get_sms_provider("unknown-provider")
+
+
+class SystemControlContractsTestCase(AuthenticatedAPITestCase):
+    def test_system_control_status_exposes_admin_contracts(self):
+        self.authenticate(self.admin_user.username)
+
+        response = self.client.get(reverse("system-control-status"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["mode"], "control_contracts_enabled")
+        self.assertTrue(response.data["can_retry_background_jobs"])
+        self.assertTrue(response.data["can_run_manual_risk_scoring"])
+        self.assertTrue(response.data["can_pause_alert_delivery"])
+        self.assertFalse(response.data["alert_delivery_paused"])
+
+    def test_system_control_status_is_read_only_for_analysts(self):
+        self.authenticate(self.analyst_user.username)
+
+        response = self.client.get(reverse("system-control-status"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data["can_retry_background_jobs"])
+        self.assertFalse(response.data["can_run_manual_risk_scoring"])
+        self.assertFalse(response.data["can_pause_alert_delivery"])
+
+    @patch("risk.views.deliver_alert_task.delay", return_value=SimpleNamespace(id="delivery-task"))
+    def test_retry_control_queues_retryable_alert_delivery_tasks(self, mock_delay):
+        queued_alert = Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_SMS,
+            recipient=self.chv.phone_number,
+            message="Queued alert",
+            status=Alert.STATUS_QUEUED,
+        )
+        retry_alert = Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_SMS,
+            recipient=self.chv.phone_number,
+            message="Retry alert",
+            status=Alert.STATUS_RETRY_PENDING,
+            next_retry_at=timezone.now() - timedelta(minutes=1),
+        )
+        Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_SMS,
+            recipient=self.chv.phone_number,
+            message="Delivered alert",
+            status=Alert.STATUS_DELIVERED,
+        )
+        self.authenticate(self.admin_user.username)
+
+        response = self.client.post(reverse("system-control-retry"), {"limit": 10}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        self.assertEqual(response.data["queued_alert_delivery_count"], 2)
+        called_alert_ids = {call.args[0] for call in mock_delay.call_args_list}
+        self.assertEqual(called_alert_ids, {queued_alert.id, retry_alert.id})
+        self.assertEqual(response.data["task_ids"], ["delivery-task", "delivery-task"])
+
+    @patch("risk.views.run_risk_model_task.delay", return_value=SimpleNamespace(id="risk-task"))
+    def test_manual_risk_scoring_control_queues_model_task(self, mock_delay):
+        self.authenticate(self.admin_user.username)
+
+        response = self.client.post(
+            reverse("system-control-manual-risk-scoring"),
+            {"month": 5, "trigger_alerts": False, "send_sms": False},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        self.assertEqual(response.data["task_id"], "risk-task")
+        mock_delay.assert_called_once_with(
+            month=5,
+            model_version="lr-v1",
+            algorithm="logistic_regression",
+            trigger_alerts=False,
+            send_sms=False,
+            dual_model=False,
+            execution_context="manual_system_page",
+            run_purpose="manual_live_scoring",
+        )
+
+    @patch("risk.services.send_sms")
+    def test_alert_delivery_pause_persists_and_defers_sms_attempts(self, mock_send_sms):
+        self.authenticate(self.admin_user.username)
+        pause_response = self.client.post(
+            reverse("system-control-alert-delivery-pause"),
+            {"paused": True, "duration_minutes": 30, "reason": "Maintenance window"},
+            format="json",
+        )
+        alert = Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_SMS,
+            recipient=self.chv.phone_number,
+            message="Escalate immediately",
+            status=Alert.STATUS_QUEUED,
+        )
+
+        delivered_alert = deliver_alert(alert)
+        alert.refresh_from_db()
+        control = SystemControlState.objects.get(control_key=SystemControlState.KEY_ALERT_DELIVERY_PAUSE)
+
+        self.assertEqual(pause_response.status_code, status.HTTP_200_OK)
+        self.assertTrue(pause_response.data["alert_delivery_paused"])
+        self.assertTrue(control.is_currently_active())
+        self.assertEqual(delivered_alert.status, Alert.STATUS_RETRY_PENDING)
+        self.assertEqual(alert.status, Alert.STATUS_RETRY_PENDING)
+        self.assertEqual(alert.attempt_count, 0)
+        self.assertEqual(alert.error_message, "Alert delivery paused by system control.")
+        self.assertIsNotNone(alert.next_retry_at)
+        mock_send_sms.assert_not_called()
+
+    def test_alert_delivery_resume_clears_pause(self):
+        self.authenticate(self.admin_user.username)
+        self.client.post(
+            reverse("system-control-alert-delivery-pause"),
+            {"paused": True, "duration_minutes": 30, "reason": "Maintenance window"},
+            format="json",
+        )
+
+        response = self.client.post(
+            reverse("system-control-alert-delivery-pause"),
+            {"paused": False, "reason": "Maintenance complete"},
+            format="json",
+        )
+
+        control = SystemControlState.objects.get(control_key=SystemControlState.KEY_ALERT_DELIVERY_PAUSE)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data["alert_delivery_paused"])
+        self.assertFalse(control.is_currently_active())
+        self.assertIsNone(control.active_until)
+
+    def test_supervisor_cannot_mutate_system_controls(self):
+        self.authenticate(self.supervisor_user.username)
+
+        response = self.client.post(reverse("system-control-retry"), {"limit": 1}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
 
 class EmailProviderFoundationTestCase(AuthenticatedAPITestCase):
@@ -6935,14 +7737,112 @@ class SeedAndModelCommandTestCase(APITestCase):
         self.assertEqual(FeatureDatasetRow.objects.filter(dataset=model_run.training_feature_dataset).count(), 8)
         self.assertEqual(FeatureDatasetRow.objects.filter(dataset=model_run.inference_feature_dataset).count(), 2)
         self.assertEqual(model_run.metadata["algorithm"], "logistic_regression")
-        self.assertEqual(model_run.metadata["promotion_state"], "promoted")
-        self.assertTrue(model_run.metadata["alert_eligible"])
+        self.assertEqual(model_run.metadata["promotion_state"], "promotion_blocked")
+        self.assertTrue(model_run.metadata["requested_alert_eligible"])
+        self.assertFalse(model_run.metadata["alert_eligible"])
         self.assertEqual(model_run.metadata["operational_trust"]["prediction_state"], TRUST_STATE_DEGRADED)
         self.assertTrue(model_run.metadata["automatic_alerts_blocked_by_trust_policy"] is False)
         self.assertEqual(model_run.metadata["execution_context"], "manual_command")
         self.assertEqual(model_run.metadata["run_purpose"], "live_scoring")
-        self.assertEqual(model_run.metadata["promotion_target"], "live_baseline")
+        self.assertEqual(model_run.metadata["promotion_target"], "benchmark_only")
+        self.assertIn(
+            "surveillance_training_labels_not_goal_aligned",
+            model_run.metadata["live_promotion_policy"]["blockers"],
+        )
+        self.assertIn("phase_4_temporal_promotion_missing", model_run.metadata["live_promotion_policy"]["blockers"])
         self.assertEqual(model_run.metadata["retraining_policy"], "manual_promotion_only")
+
+    @patch("risk.tasks.trigger_alerts_task.delay", return_value=SimpleNamespace(id="truth-policy-task"))
+    def test_seeded_training_fallback_blocks_live_promotion_even_with_fresh_rainfall(self, mock_delay):
+        ward = Ward.objects.create(
+            name="Ward Truth Policy",
+            county="Migori",
+            sub_county="Rongo",
+            current_risk_level=Ward.RISK_LOW,
+            current_risk_score=0.20,
+            is_active=True,
+        )
+        ETLHeartbeat.objects.create(component=ETLHeartbeat.COMPONENT_SCHEDULER)
+        ETLHeartbeat.objects.create(component=ETLHeartbeat.COMPONENT_WORKER)
+        rainfall_run = IngestionRun.objects.create(
+            run_type=IngestionRun.RUN_TYPE_RAINFALL,
+            status=IngestionRun.STATUS_SUCCESS,
+            source_mode="live",
+            source_kind=IngestionRun.SOURCE_KIND_LIVE,
+            source_name="open-meteo-forecast",
+            source_timestamp=timezone.now(),
+            freshness_state=IngestionRun.FRESHNESS_FRESH,
+            fallback_used=False,
+            records_seen=1,
+            records_loaded=1,
+            completed_at=timezone.now(),
+        )
+        training_dataset = FeatureDataset.objects.create(
+            dataset_ref="training-seeded-truth-policy",
+            dataset_kind=FeatureDataset.KIND_TRAINING,
+            schema_version="baseline-v1",
+            source_kind=FeatureDataset.SOURCE_KIND_SEEDED,
+            month=4,
+            feature_keys=["rainfall_mm", "flood_indicator", "historical_cases", "month", "seasonality", "population_proxy"],
+            row_count=2,
+            lineage_metadata={
+                "surveillance_label_usage": "seeded_training_baseline_not_goal_aligned",
+                "training_label_seeded_demo_row_count": 2,
+                "training_label_readiness": {
+                    "ready": False,
+                    "reason": "missing_surveillance_label_dataset",
+                },
+                "surveillance_label_truth_gate": {
+                    "proxy_only_as_confirmed_allowed": False,
+                    "confirmed_truth_required_for_confirmed_outbreak_claims": True,
+                },
+            },
+        )
+        inference_dataset = FeatureDataset.objects.create(
+            dataset_ref="inference-live-truth-policy",
+            dataset_kind=FeatureDataset.KIND_INFERENCE,
+            schema_version="baseline-v1",
+            source_kind=FeatureDataset.SOURCE_KIND_LIVE,
+            month=4,
+            feature_keys=["rainfall_mm", "flood_indicator", "historical_cases", "month", "seasonality", "population_proxy"],
+            row_count=1,
+            lineage_metadata={},
+        )
+        training_rows = [
+            WardFeatureRow(1, "Train A", 120.0, 0.8, 14, 4, 5400, 1),
+            WardFeatureRow(2, "Train B", 60.0, 0.3, 5, 4, 4700, 0),
+        ]
+        inference_rows = [WardFeatureRow(ward.id, ward.name, 115.0, 0.78, 12, 4, 5000, None)]
+
+        with patch(
+            "risk.ml.pipeline.build_training_feature_dataset",
+            return_value=TrainingDataset(rows=training_rows, feature_dataset=training_dataset),
+        ), patch(
+            "risk.ml.pipeline.build_inference_feature_dataset",
+            return_value=InferenceDataset(
+                rows=inference_rows,
+                feature_dataset=inference_dataset,
+                rainfall_ingestion_run=rainfall_run,
+            ),
+        ):
+            created_scores = run_mock_prediction_pipeline(
+                month=4,
+                model_version="lr-truth-policy-v1",
+                trigger_alerts=True,
+            )
+
+        self.assertEqual(len(created_scores), 1)
+        model_run = ModelRun.objects.get(model_version="lr-truth-policy-v1")
+        self.assertEqual(model_run.metadata["operational_trust"]["alert_state"], ALERT_STATE_ALLOWED)
+        self.assertTrue(model_run.metadata["requested_alert_eligible"])
+        self.assertFalse(model_run.metadata["alert_eligible"])
+        self.assertEqual(model_run.metadata["promotion_state"], "promotion_blocked")
+        self.assertEqual(model_run.metadata["promotion_target"], "benchmark_only")
+        self.assertTrue(model_run.metadata["automatic_alerts_blocked_by_promotion_policy"])
+        self.assertFalse(model_run.metadata["automatic_alerts_blocked_by_trust_policy"])
+        self.assertIn("seeded_training_labels_present", model_run.metadata["live_promotion_policy"]["blockers"])
+        self.assertIn("phase_4_temporal_promotion_missing", model_run.metadata["live_promotion_policy"]["blockers"])
+        mock_delay.assert_not_called()
 
     def test_run_risk_model_dual_model_mode_persists_shared_dataset_lineage(self):
         Ward.objects.create(
@@ -6988,12 +7888,14 @@ class SeedAndModelCommandTestCase(APITestCase):
         self.assertEqual(benchmark_run.metadata["run_purpose"], "benchmark_scoring")
         self.assertEqual(primary_run.metadata["execution_context"], "manual_command")
         self.assertEqual(benchmark_run.metadata["execution_context"], "manual_command")
-        self.assertTrue(primary_run.metadata["alert_eligible"])
+        self.assertTrue(primary_run.metadata["requested_alert_eligible"])
+        self.assertFalse(primary_run.metadata["alert_eligible"])
         self.assertFalse(benchmark_run.metadata["alert_eligible"])
-        self.assertEqual(primary_run.metadata["promotion_state"], "promoted")
+        self.assertEqual(primary_run.metadata["promotion_state"], "promotion_blocked")
         self.assertEqual(benchmark_run.metadata["promotion_state"], "benchmark_only")
-        self.assertEqual(primary_run.metadata["promotion_target"], "live_baseline")
+        self.assertEqual(primary_run.metadata["promotion_target"], "benchmark_only")
         self.assertEqual(benchmark_run.metadata["promotion_target"], "benchmark_only")
+        self.assertIn("phase_4_temporal_promotion_missing", primary_run.metadata["live_promotion_policy"]["blockers"])
         self.assertEqual(primary_run.metadata["benchmark_group_ref"], benchmark_run.metadata["benchmark_group_ref"])
         self.assertEqual(
             RiskScore.objects.filter(model_run=primary_run, source=RiskScore.SOURCE_MODEL).count(),
@@ -7004,7 +7906,20 @@ class SeedAndModelCommandTestCase(APITestCase):
             2,
         )
         self.assertEqual(FeatureDataset.objects.filter(dataset_kind=FeatureDataset.KIND_TRAINING).count(), 1)
-        self.assertEqual(FeatureDataset.objects.filter(dataset_kind=FeatureDataset.KIND_INFERENCE).count(), 1)
+        self.assertEqual(
+            FeatureDataset.objects.filter(
+                dataset_kind=FeatureDataset.KIND_INFERENCE,
+                schema_version=primary_run.feature_schema_version,
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            FeatureDataset.objects.filter(
+                dataset_kind=FeatureDataset.KIND_INFERENCE,
+                schema_version=POPULATION_EXPOSURE_FEATURE_SCHEMA_VERSION,
+            ).count(),
+            1,
+        )
 
     def test_run_random_forest_benchmark_command_creates_benchmark_only_outputs(self):
         Ward.objects.create(
@@ -7092,6 +8007,7 @@ class SeedAndModelCommandTestCase(APITestCase):
         self.assertEqual(model_run.metadata["operational_trust"]["prediction_state"], TRUST_STATE_DEGRADED)
         self.assertEqual(model_run.metadata["operational_trust"]["alert_state"], ALERT_STATE_BLOCKED)
         self.assertTrue(model_run.metadata["automatic_alerts_blocked_by_trust_policy"])
+        self.assertTrue(model_run.metadata["automatic_alerts_blocked_by_promotion_policy"])
         self.assertFalse(model_run.metadata["trigger_alerts"])
         mock_delay.assert_not_called()
 
@@ -7305,14 +8221,18 @@ class SeedAndModelCommandTestCase(APITestCase):
         self.assertEqual(payload["decision"]["recommended_primary_model"], "logistic_regression")
         self.assertEqual(payload["decision"]["governance_mode"], "shadow_benchmark_mode")
         self.assertEqual(payload["decision"]["promotion_readiness"], "not_ready_for_promotion")
-        self.assertEqual(payload["decision"]["live_alert_task"], "risk.tasks.run_risk_model_task")
+        self.assertEqual(payload["decision"]["candidate_scoring_task"], "risk.tasks.run_risk_model_task")
+        self.assertEqual(payload["decision"]["live_alert_task"], None)
+        self.assertEqual(payload["decision"]["dashboard_wording_impact"], "do_not_label_candidate_scores_as_live_promoted")
         self.assertEqual(payload["decision"]["benchmark_only_tasks"], ["risk.tasks.run_random_forest_benchmark_task"])
         self.assertEqual(payload["logistic_regression"]["model_version"], "lr-compare-v1")
         self.assertEqual(payload["random_forest"]["model_version"], "rf-compare-v1")
         self.assertTrue(payload["comparison"]["same_feature_schema"])
         self.assertIn("lead_time_evidence_missing", payload["decision"]["promotion_blockers"])
         self.assertIn("out_of_time_validation_missing", payload["decision"]["promotion_blockers"])
+        self.assertIn("training_truth_gate_missing", payload["decision"]["promotion_blockers"])
         self.assertFalse(payload["decision"]["evidence_assessment"]["calibration_score"]["logistic_regression"])
+        self.assertFalse(payload["decision"]["evidence_assessment"]["phase_4_training_truth_gate_passed"]["logistic_regression"])
         self.assertEqual(payload["decision"]["retraining_task"], None)
 
     def test_build_model_comparison_summary_marks_input_mismatch_as_promotion_blocker(self):
@@ -7357,7 +8277,9 @@ class SeedAndModelCommandTestCase(APITestCase):
         call_command("describe_boosting_readiness", stdout=out)
         payload = json.loads(out.getvalue())
 
-        self.assertEqual(payload["live_state"]["current_live_baseline"], "logistic_regression")
+        self.assertIsNone(payload["live_state"]["current_live_baseline"])
+        self.assertEqual(payload["live_state"]["primary_scoring_candidate"], "logistic_regression")
+        self.assertEqual(payload["live_state"]["promotion_state"], "candidate_scoring_until_phase_4_promotion")
         self.assertEqual(payload["live_state"]["current_benchmark_model"], "random_forest")
         self.assertFalse(payload["candidate_models"]["xgboost"]["runnable"])
         self.assertFalse(payload["candidate_models"]["lightgbm"]["runnable"])

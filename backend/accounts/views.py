@@ -3,13 +3,14 @@ import logging
 from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.core.cache import cache
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Count, IntegerField, OuterRef, Q, Subquery, Value
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from rest_framework import generics, permissions
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 from rest_framework.filters import OrderingFilter
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.generics import get_object_or_404
@@ -34,13 +35,17 @@ from .serializers import (
     CCHISTokenObtainPairSerializer,
     ChangePasswordSerializer,
     ConfirmTwoFactorEnrollmentSerializer,
+    OwnAuthActivityQuerySerializer,
+    OwnAuthActivityEventSerializer,
+    RegenerateTwoFactorRecoveryCodesSerializer,
     RegisterSerializer,
     AuthAuditEventSerializer,
-    UserAppearanceSerializer,
+    UserProfileUpdateSerializer,
     UserSerializer,
     PasswordResetRequestSerializer,
     PasswordResetConfirmSerializer,
     VerifyTwoFactorSerializer,
+    VerifyAuthenticatedTwoFactorSerializer,
     AccessRequestSerializer,
     AccessRequestAdminSerializer,
     AccessRequestOptionsSerializer,
@@ -48,20 +53,32 @@ from .serializers import (
     TwoFactorEnrollmentSetupSerializer,
 )
 from .turnstile import is_turnstile_enabled, verify_turnstile_token
-from .throttles import AuthScopedRateThrottle
+from .throttles import AuthScopedRateThrottle, SecondaryAuthScopedRateThrottle
 from .two_factor import (
+    consume_recovery_code,
     consume_pre_auth_token,
+    generate_recovery_codes,
     generate_totp_secret,
     get_pre_auth_token,
+    get_recovery_code_status,
     get_two_factor_policy_for_user,
     is_totp_enrolled,
+    normalize_recovery_code,
     user_requires_two_factor,
+    verify_recovery_code,
     verify_totp_code,
 )
 
 
 User = get_user_model()
 security_logger = logging.getLogger("accounts.security")
+RECOVERY_CODE_LOW_THRESHOLD = 2
+
+
+class OwnAuthActivityPagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = "page_size"
+    max_page_size = 50
 
 
 def get_refresh_cookie_name() -> str:
@@ -70,6 +87,25 @@ def get_refresh_cookie_name() -> str:
 
 def get_refresh_cookie_value(request) -> str:
     return str(request.COOKIES.get(get_refresh_cookie_name()) or "")
+
+
+def get_user_from_refresh_cookie(request):
+    refresh_token = get_refresh_cookie_value(request)
+    refresh_fingerprint = fingerprint_refresh_token(refresh_token)
+
+    if not refresh_token or is_refresh_cooldown_active(request, refresh_fingerprint):
+        return None
+
+    try:
+        refresh = RefreshToken(refresh_token)
+        refresh.check_blacklist()
+        user = User.objects.filter(id=refresh["user_id"]).first()
+    except (KeyError, TokenError):
+        register_failed_refresh_attempt(request, refresh_fingerprint)
+        return None
+
+    clear_failed_refresh_attempts(request, refresh_fingerprint)
+    return user
 
 
 def set_refresh_cookie(response: Response, refresh_token: str) -> None:
@@ -176,6 +212,58 @@ def clear_failed_two_factor_attempts(request, user_id: int | None) -> None:
 
 def is_two_factor_cooldown_active(request, user_id: int | None) -> bool:
     return bool(cache.get(build_two_factor_cooldown_key(request, user_id)))
+
+
+def verify_second_factor_code(user, code: str) -> dict | None:
+    normalized_code = normalize_recovery_code(code)
+
+    if normalized_code.isdigit() and len(normalized_code) == 6 and verify_totp_code(user.totp_secret, normalized_code):
+        return {"method": "totp"}
+
+    recovery_code_record = verify_recovery_code(user, code)
+    if not recovery_code_record:
+        return None
+
+    consumed_recovery_code = consume_recovery_code(recovery_code_record)
+    if not consumed_recovery_code:
+        return None
+
+    recovery_code_status = get_recovery_code_status(user)
+    return {
+        "method": "recovery_code",
+        "recovery_code": consumed_recovery_code,
+        "recovery_code_status": recovery_code_status,
+    }
+
+
+def build_recovery_code_response_metadata(verification: dict) -> dict:
+    if verification.get("method") != "recovery_code":
+        return {}
+
+    recovery_code_status = verification.get("recovery_code_status") or {}
+    remaining_count = recovery_code_status.get("remaining_count", 0)
+    return {
+        "second_factor_method": "recovery_code",
+        "recovery_codes_remaining": remaining_count,
+        "recovery_codes_low": remaining_count <= RECOVERY_CODE_LOW_THRESHOLD,
+    }
+
+
+def looks_like_recovery_code_input(code: str) -> bool:
+    normalized_code = normalize_recovery_code(code)
+    return not (normalized_code.isdigit() and len(normalized_code) == 6)
+
+
+def build_profile_identity_step_up_key(user_id: int) -> str:
+    return f"auth:profile_identity_step_up:{user_id}"
+
+
+def mark_profile_identity_step_up_verified(user_id: int) -> None:
+    cache.set(build_profile_identity_step_up_key(user_id), True, timeout=300)
+
+
+def has_profile_identity_step_up(user_id: int) -> bool:
+    return bool(cache.get(build_profile_identity_step_up_key(user_id)))
 
 
 def build_refresh_attempt_key(request, token_fingerprint: str) -> str:
@@ -511,10 +599,130 @@ class MeAPIView(APIView):
         return Response(UserSerializer(request.user).data)
 
     def patch(self, request):
-        serializer = UserAppearanceSerializer(request.user, data=request.data, partial=True)
+        identity_fields = {"username", "email", "full_name", "phone_number"}
+        identity_update_requested = any(field in request.data for field in identity_fields)
+
+        serializer = UserProfileUpdateSerializer(request.user, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
+
+        if identity_update_requested:
+            if not request.user.is_active:
+                raise PermissionDenied("Identity updates are not available for this account state.")
+
+            if not is_totp_enrolled(request.user):
+                raise PermissionDenied("Set up two-factor authentication before editing personal details.")
+
+            if not has_profile_identity_step_up(request.user.id):
+                raise PermissionDenied("Verify two-factor authentication before editing personal details.")
+
         serializer.save()
         return Response(UserSerializer(request.user).data, status=status.HTTP_200_OK)
+
+
+class VerifyProfileIdentityTwoFactorAPIView(APIView):
+    permission_classes = [permissions.AllowAny]
+    throttle_scope = "auth_2fa"
+
+    def post(self, request):
+        serializer = VerifyAuthenticatedTwoFactorSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = request.user if getattr(request.user, "is_authenticated", False) else get_user_from_refresh_cookie(request)
+
+        if not user:
+            return Response({"detail": "Authentication required."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        if not user.is_active:
+            raise PermissionDenied("Identity updates are not available for this account state.")
+
+        if not is_totp_enrolled(user):
+            raise PermissionDenied("Set up two-factor authentication before editing personal details.")
+
+        if is_two_factor_cooldown_active(request, user.id):
+            record_auth_event(
+                request=request,
+                event_type=AuthAuditEvent.EVENT_2FA_FAILED,
+                status=AuthAuditEvent.STATUS_FAILED,
+                actor=user,
+                target_user=user,
+                metadata={"reason": "cooldown_active", "purpose": "profile_identity_update"},
+            )
+            return Response(
+                {"detail": "Too many verification attempts. Please wait and try again."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        if not verify_totp_code(user.totp_secret, serializer.validated_data["code"]):
+            register_failed_two_factor_attempt(request, user.id)
+            record_auth_event(
+                request=request,
+                event_type=AuthAuditEvent.EVENT_2FA_FAILED,
+                status=AuthAuditEvent.STATUS_FAILED,
+                actor=user,
+                target_user=user,
+                metadata={"reason": "invalid_code", "purpose": "profile_identity_update"},
+            )
+            return Response(
+                {"detail": "Invalid or expired code. Please try again."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        clear_failed_two_factor_attempts(request, user.id)
+        mark_profile_identity_step_up_verified(user.id)
+        record_auth_event(
+            request=request,
+            event_type=AuthAuditEvent.EVENT_2FA_VERIFIED,
+            status=AuthAuditEvent.STATUS_SUCCESS,
+            actor=user,
+            target_user=user,
+            metadata={"purpose": "profile_identity_update"},
+        )
+        return Response({"detail": "Personal details unlocked for editing."}, status=status.HTTP_200_OK)
+
+
+class MeActivityAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = OwnAuthActivityPagination
+
+    def get(self, request):
+        query_serializer = OwnAuthActivityQuerySerializer(data=request.query_params)
+        query_serializer.is_valid(raise_exception=True)
+        filters = query_serializer.validated_data
+
+        events = AuthAuditEvent.objects.select_related("actor", "target_user").filter(
+            Q(actor=request.user) | Q(target_user=request.user)
+        )
+
+        if filters.get("event_type"):
+            events = events.filter(event_type=filters["event_type"])
+        if filters.get("status"):
+            events = events.filter(status=filters["status"])
+        if filters.get("date_from"):
+            events = events.filter(created_at__date__gte=filters["date_from"])
+        if filters.get("date_to"):
+            events = events.filter(created_at__date__lte=filters["date_to"])
+        if filters.get("security_only", True) and not filters.get("include_refresh_events", False):
+            events = events.exclude(event_type=AuthAuditEvent.EVENT_REFRESH_SUCCESS)
+
+        events = events.order_by("-created_at", "-id")
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(events, request, view=self)
+        serialized_events = OwnAuthActivityEventSerializer(page, many=True).data
+        response = paginator.get_paginated_response(serialized_events)
+        response.data["filters"] = {
+            "event_type": filters.get("event_type", ""),
+            "status": filters.get("status", ""),
+            "date_from": filters["date_from"].isoformat() if filters.get("date_from") else "",
+            "date_to": filters["date_to"].isoformat() if filters.get("date_to") else "",
+            "security_only": filters.get("security_only", True),
+            "include_refresh_events": filters.get("include_refresh_events", False),
+            "page": paginator.page.number,
+            "page_size": paginator.get_page_size(request),
+        }
+        response.data["capabilities"] = {
+            "can_view_own_activity": request.user.is_active,
+            "mode": "self_scoped_auth_activity",
+        }
+        return response
 
 
 class SessionAPIView(APIView):
@@ -621,15 +829,25 @@ class VerifyTwoFactorAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if not verify_totp_code(user.totp_secret, serializer.validated_data["code"]):
+        verification = verify_second_factor_code(user, serializer.validated_data["code"])
+        if not verification:
             register_failed_two_factor_attempt(request, user.id)
+            if looks_like_recovery_code_input(serializer.validated_data["code"]):
+                record_auth_event(
+                    request=request,
+                    event_type=AuthAuditEvent.EVENT_2FA_RECOVERY_CODE_FAILED,
+                    status=AuthAuditEvent.STATUS_FAILED,
+                    actor=user,
+                    target_user=user,
+                    metadata={"reason": "invalid_code", "purpose": "login"},
+                )
             record_auth_event(
                 request=request,
                 event_type=AuthAuditEvent.EVENT_2FA_FAILED,
                 status=AuthAuditEvent.STATUS_FAILED,
                 actor=user,
                 target_user=user,
-                metadata={"reason": "invalid_code"},
+                metadata={"reason": "invalid_code", "purpose": "login"},
             )
             return Response(
                 {"detail": "Invalid or expired code. Please try again."},
@@ -639,13 +857,40 @@ class VerifyTwoFactorAPIView(APIView):
         consume_pre_auth_token(token_record)
         clear_failed_two_factor_attempts(request, user.id)
         token_response = CCHISTokenObtainPairSerializer.build_token_response(user)
+        token_response["second_factor_method"] = verification["method"]
+        token_response.update(build_recovery_code_response_metadata(verification))
         record_auth_event(
             request=request,
             event_type=AuthAuditEvent.EVENT_2FA_VERIFIED,
             status=AuthAuditEvent.STATUS_SUCCESS,
             actor=user,
             target_user=user,
+            metadata={"second_factor_method": verification["method"]},
         )
+        if verification["method"] == "recovery_code":
+            recovery_code_status = verification["recovery_code_status"]
+            remaining_count = recovery_code_status["remaining_count"]
+            record_auth_event(
+                request=request,
+                event_type=AuthAuditEvent.EVENT_2FA_RECOVERY_CODE_USED,
+                status=AuthAuditEvent.STATUS_SUCCESS,
+                actor=user,
+                target_user=user,
+                metadata={
+                    "purpose": "login",
+                    "remaining_count": remaining_count,
+                    "code_hint": verification["recovery_code"].code_hint,
+                },
+            )
+            if remaining_count <= RECOVERY_CODE_LOW_THRESHOLD:
+                record_auth_event(
+                    request=request,
+                    event_type=AuthAuditEvent.EVENT_2FA_RECOVERY_CODES_LOW,
+                    status=AuthAuditEvent.STATUS_SUCCESS,
+                    actor=user,
+                    target_user=user,
+                    metadata={"purpose": "login", "remaining_count": remaining_count},
+                )
         record_auth_event(
             request=request,
             event_type=AuthAuditEvent.EVENT_LOGIN_SUCCESS,
@@ -668,7 +913,13 @@ class BeginTwoFactorEnrollmentAPIView(APIView):
 
         token_value = serializer.validated_data.get("token", "")
         token_record = get_pre_auth_token(token_value) if token_value else None
-        user = request.user if getattr(request.user, "is_authenticated", False) else token_record.user if token_record else None
+        user = (
+            request.user
+            if getattr(request.user, "is_authenticated", False)
+            else token_record.user
+            if token_record
+            else get_user_from_refresh_cookie(request)
+        )
 
         if not user:
             return Response({"detail": "Authentication or a valid enrollment token is required."}, status=status.HTTP_401_UNAUTHORIZED)
@@ -703,7 +954,13 @@ class ConfirmTwoFactorEnrollmentAPIView(APIView):
 
         token_value = serializer.validated_data.get("token", "")
         token_record = get_pre_auth_token(token_value) if token_value else None
-        user = request.user if getattr(request.user, "is_authenticated", False) else token_record.user if token_record else None
+        user = (
+            request.user
+            if getattr(request.user, "is_authenticated", False)
+            else token_record.user
+            if token_record
+            else get_user_from_refresh_cookie(request)
+        )
 
         if not user:
             return Response({"detail": "Authentication or a valid enrollment token is required."}, status=status.HTTP_401_UNAUTHORIZED)
@@ -721,8 +978,11 @@ class ConfirmTwoFactorEnrollmentAPIView(APIView):
             )
             return Response({"detail": "Invalid or expired code. Please try again."}, status=status.HTTP_400_BAD_REQUEST)
 
-        user.is_totp_enabled = True
-        user.save(update_fields=["is_totp_enabled"])
+        with transaction.atomic():
+            user.is_totp_enabled = True
+            user.save(update_fields=["is_totp_enabled"])
+            recovery_codes = generate_recovery_codes(user)
+
         record_auth_event(
             request=request,
             event_type=AuthAuditEvent.EVENT_2FA_ENROLLMENT_COMPLETED,
@@ -730,11 +990,21 @@ class ConfirmTwoFactorEnrollmentAPIView(APIView):
             actor=user if getattr(request.user, "is_authenticated", False) else None,
             target_user=user,
         )
+        record_auth_event(
+            request=request,
+            event_type=AuthAuditEvent.EVENT_2FA_RECOVERY_CODES_GENERATED,
+            status=AuthAuditEvent.STATUS_SUCCESS,
+            actor=user if getattr(request.user, "is_authenticated", False) else None,
+            target_user=user,
+            metadata={"purpose": "setup", "remaining_count": len(recovery_codes)},
+        )
 
         if token_record:
             consume_pre_auth_token(token_record)
             token_response = CCHISTokenObtainPairSerializer.build_token_response(user)
             token_response["enrollment_completed"] = True
+            token_response["recovery_codes"] = recovery_codes
+            token_response["recovery_codes_generated"] = True
             response = Response(token_response, status=status.HTTP_200_OK)
             set_refresh_cookie(response, token_response["refresh"])
             return response
@@ -744,6 +1014,114 @@ class ConfirmTwoFactorEnrollmentAPIView(APIView):
                 "detail": "Two-factor enrollment completed successfully.",
                 "user": UserSerializer(user).data,
                 "enrollment_completed": True,
+                "recovery_codes": recovery_codes,
+                "recovery_codes_generated": True,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class TwoFactorRecoveryCodesAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        if not is_totp_enrolled(request.user):
+            raise PermissionDenied("Set up two-factor authentication before managing recovery codes.")
+
+        return Response(get_recovery_code_status(request.user), status=status.HTTP_200_OK)
+
+
+class RegenerateTwoFactorRecoveryCodesAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [AuthScopedRateThrottle, SecondaryAuthScopedRateThrottle]
+    throttle_scope = "auth_2fa"
+    secondary_throttle_scope = "auth_write"
+
+    def post(self, request):
+        if not is_totp_enrolled(request.user):
+            raise PermissionDenied("Set up two-factor authentication before managing recovery codes.")
+
+        serializer = RegenerateTwoFactorRecoveryCodesSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+
+        if is_two_factor_cooldown_active(request, request.user.id):
+            record_auth_event(
+                request=request,
+                event_type=AuthAuditEvent.EVENT_2FA_FAILED,
+                status=AuthAuditEvent.STATUS_FAILED,
+                actor=request.user,
+                target_user=request.user,
+                metadata={"reason": "cooldown_active", "purpose": "recovery_code_regeneration"},
+            )
+            return Response(
+                {"detail": "Too many verification attempts. Please wait and try again."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        verification = verify_second_factor_code(request.user, serializer.validated_data["code"])
+        if not verification:
+            register_failed_two_factor_attempt(request, request.user.id)
+            if looks_like_recovery_code_input(serializer.validated_data["code"]):
+                record_auth_event(
+                    request=request,
+                    event_type=AuthAuditEvent.EVENT_2FA_RECOVERY_CODE_FAILED,
+                    status=AuthAuditEvent.STATUS_FAILED,
+                    actor=request.user,
+                    target_user=request.user,
+                    metadata={
+                        "reason": "invalid_code",
+                        "purpose": "recovery_code_regeneration",
+                    },
+                )
+            record_auth_event(
+                request=request,
+                event_type=AuthAuditEvent.EVENT_2FA_FAILED,
+                status=AuthAuditEvent.STATUS_FAILED,
+                actor=request.user,
+                target_user=request.user,
+                metadata={"reason": "invalid_code", "purpose": "recovery_code_regeneration"},
+            )
+            return Response(
+                {"detail": "Invalid or expired code. Please try again."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        recovery_codes = generate_recovery_codes(request.user)
+        recovery_code_status = get_recovery_code_status(request.user)
+        clear_failed_two_factor_attempts(request, request.user.id)
+
+        if verification["method"] == "recovery_code":
+            record_auth_event(
+                request=request,
+                event_type=AuthAuditEvent.EVENT_2FA_RECOVERY_CODE_USED,
+                status=AuthAuditEvent.STATUS_SUCCESS,
+                actor=request.user,
+                target_user=request.user,
+                metadata={
+                    "purpose": "recovery_code_regeneration",
+                    "remaining_count": verification["recovery_code_status"]["remaining_count"],
+                    "code_hint": verification["recovery_code"].code_hint,
+                },
+            )
+
+        record_auth_event(
+            request=request,
+            event_type=AuthAuditEvent.EVENT_2FA_RECOVERY_CODES_REGENERATED,
+            status=AuthAuditEvent.STATUS_SUCCESS,
+            actor=request.user,
+            target_user=request.user,
+            metadata={
+                "purpose": "recovery_code_regeneration",
+                "remaining_count": recovery_code_status["remaining_count"],
+                "second_factor_method": verification["method"],
+            },
+        )
+
+        return Response(
+            {
+                "recovery_codes": recovery_codes,
+                "recovery_codes_generated": True,
+                **recovery_code_status,
             },
             status=status.HTTP_200_OK,
         )

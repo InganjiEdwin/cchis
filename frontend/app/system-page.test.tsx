@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import SystemPage from "@/app/(dashboard)/system/page";
@@ -8,6 +8,11 @@ import type { SystemSnapshot } from "@/queries/use-system-query";
 const mockUseAuth = vi.fn();
 const mockUseSystemQuery = vi.fn();
 const mockRefetch = vi.fn();
+const dashboardMocks = vi.hoisted(() => ({
+  retrySystemBackgroundJobsViaBff: vi.fn(),
+  runManualRiskScoringViaBff: vi.fn(),
+  setAlertDeliveryPauseViaBff: vi.fn(),
+}));
 
 vi.mock("@/components/auth-provider", () => ({
   useAuth: () => mockUseAuth(),
@@ -33,6 +38,12 @@ vi.mock("@/components/role-gate", () => ({
 
 vi.mock("@/queries/use-system-query", () => ({
   useSystemQuery: (...args: unknown[]) => mockUseSystemQuery(...args),
+}));
+
+vi.mock("@/lib/dashboard", () => ({
+  retrySystemBackgroundJobsViaBff: dashboardMocks.retrySystemBackgroundJobsViaBff,
+  runManualRiskScoringViaBff: dashboardMocks.runManualRiskScoringViaBff,
+  setAlertDeliveryPauseViaBff: dashboardMocks.setAlertDeliveryPauseViaBff,
 }));
 
 function buildSystemSnapshot(overrides: Partial<SystemSnapshot> = {}): SystemSnapshot {
@@ -62,6 +73,17 @@ function buildSystemSnapshot(overrides: Partial<SystemSnapshot> = {}): SystemSna
     syncPayloads24h: 2,
     ussdSessions24h: 1,
     deliveryBackends: [{ name: "internal-dashboard", count: 5 }],
+    controlStatus: {
+      mode: "control_contracts_enabled",
+      can_retry_background_jobs: true,
+      can_run_manual_risk_scoring: true,
+      can_pause_alert_delivery: true,
+      alert_delivery_paused: false,
+      alert_delivery_paused_until: null,
+      alert_delivery_pause_reason: "",
+      alert_delivery_pause_updated_at: null,
+      alert_delivery_pause_updated_by: null,
+    },
     ...overrides,
   };
 }
@@ -78,11 +100,36 @@ function renderSystemPage(snapshot: SystemSnapshot) {
   render(React.createElement(SystemPage));
 }
 
+async function flushControlAction() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
 describe("SystemPage", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-30T12:00:00Z"));
     vi.clearAllMocks();
+    mockRefetch.mockResolvedValue({});
+    dashboardMocks.retrySystemBackgroundJobsViaBff.mockResolvedValue({
+      detail: "Background retry request accepted.",
+      queued_alert_delivery_count: 1,
+      failed_sync_payload_count: 0,
+      task_ids: ["delivery-task"],
+      control_status: buildSystemSnapshot().controlStatus,
+    });
+    dashboardMocks.runManualRiskScoringViaBff.mockResolvedValue({
+      detail: "Manual risk scoring request accepted.",
+      task_id: "risk-task",
+      control_status: buildSystemSnapshot().controlStatus,
+    });
+    dashboardMocks.setAlertDeliveryPauseViaBff.mockResolvedValue({
+      ...buildSystemSnapshot().controlStatus,
+      alert_delivery_paused: true,
+      alert_delivery_paused_until: "2026-04-30T13:00:00Z",
+    });
 
     mockUseAuth.mockReturnValue({
       currentUser: {
@@ -104,11 +151,11 @@ describe("SystemPage", () => {
     vi.useRealTimers();
   });
 
-  it("renders the System Status layout without pipeline or fake control sections", () => {
+  it("renders the System Status layout with explicit control contracts", () => {
     renderSystemPage(buildSystemSnapshot());
 
-    expect(screen.getByText(/System Status \| Read-only system status from dashboard records/i)).toBeInTheDocument();
-    expect(screen.getByText("Current capability mode")).toBeInTheDocument();
+    expect(screen.getByText(/System Status \| System status and explicit control contracts/i)).toBeInTheDocument();
+    expect(screen.getByText("System controls")).toBeInTheDocument();
     expect(screen.getByText("Observed Activity")).toBeInTheDocument();
     expect(screen.getByText("Latest record summaries")).toBeInTheDocument();
 
@@ -117,17 +164,48 @@ describe("SystemPage", () => {
     expect(screen.queryByText("Retry jobs unavailable")).not.toBeInTheDocument();
     expect(screen.queryByText("Manual risk scoring unavailable")).not.toBeInTheDocument();
     expect(screen.queryByText("Alert pause unavailable")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /retry jobs/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /manual risk scoring/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /alert pause/i })).not.toBeInTheDocument();
-
     expect(screen.getByRole("button", { name: /refresh visible records/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /retry background jobs/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /run risk scoring/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /pause alert delivery/i })).toBeInTheDocument();
     expect(screen.queryByText("Refresh view")).not.toBeInTheDocument();
-    expect(screen.getByText("Refresh visible records.")).toBeInTheDocument();
-    expect(screen.getByText("Background-processing retry controls.")).toBeInTheDocument();
-    expect(screen.getByText("Manual risk-scoring controls.")).toBeInTheDocument();
-    expect(screen.getByText("Alert delivery pause controls.")).toBeInTheDocument();
-    expect(screen.getByText("No manual controls are exposed on this page.")).toBeInTheDocument();
+    expect(screen.queryByText("Background-processing retry controls.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Manual risk-scoring controls.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Alert delivery pause controls.")).not.toBeInTheDocument();
+    expect(screen.getByText("Control contracts are wired to backend endpoints.")).toBeInTheDocument();
+  });
+
+  it("wires system control buttons to BFF contracts", async () => {
+    renderSystemPage(buildSystemSnapshot());
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /retry background jobs/i }));
+    });
+    expect(dashboardMocks.retrySystemBackgroundJobsViaBff).toHaveBeenCalledWith({ limit: 25 });
+    await flushControlAction();
+    expect(screen.getByText("1 alert delivery retry tasks were queued.")).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /run risk scoring/i }));
+    });
+    expect(dashboardMocks.runManualRiskScoringViaBff).toHaveBeenCalledWith({
+      month: 4,
+      trigger_alerts: false,
+      send_sms: false,
+    });
+    await flushControlAction();
+    expect(screen.getByText("Manual risk scoring was queued as task risk-task.")).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /pause alert delivery/i }));
+    });
+    expect(dashboardMocks.setAlertDeliveryPauseViaBff).toHaveBeenCalledWith({
+      paused: true,
+      duration_minutes: 60,
+      reason: "Paused from system page.",
+    });
+    await flushControlAction();
+    expect(mockRefetch).toHaveBeenCalledTimes(3);
   });
 
   it("renders missing timestamps as neutral data-incomplete copy with low-confidence qualifiers", () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, KeyRound, Shield, ShieldAlert, Smartphone } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Copy, Download, KeyRound, Printer, Shield, ShieldAlert, Smartphone } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/public-shell";
 import { getDefaultRoute } from "@/lib/navigation";
 import { isDashboardRole } from "@/lib/roles";
+import type { CurrentUser } from "@/lib/auth";
 
 type SetupState = {
   manual_entry_key: string;
@@ -43,9 +44,17 @@ export default function SetupTwoFactorPage() {
   const [isLoadingSetup, setIsLoadingSetup] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showManualSetup, setShowManualSetup] = useState(false);
+  const [confirmedUser, setConfirmedUser] = useState<CurrentUser | null>(null);
+  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
+  const [hasSavedRecoveryCodes, setHasSavedRecoveryCodes] = useState(false);
+  const [copyMessage, setCopyMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (isHydrating) {
+      return;
+    }
+
+    if (recoveryCodes.length > 0) {
       return;
     }
 
@@ -83,7 +92,7 @@ export default function SetupTwoFactorPage() {
     return () => {
       isActive = false;
     };
-  }, [beginTwoFactorEnrollment, isAuthenticated, isHydrating, pendingEnrollment, router]);
+  }, [beginTwoFactorEnrollment, isAuthenticated, isHydrating, pendingEnrollment, recoveryCodes.length, router]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -91,14 +100,23 @@ export default function SetupTwoFactorPage() {
     setIsSubmitting(true);
 
     try {
-      const user = await confirmTwoFactorEnrollment(code);
+      const response = await confirmTwoFactorEnrollment(code);
+      const user = response.user;
 
       if (!isDashboardRole(user.role)) {
         router.replace("/unauthorized");
         return;
       }
 
-      router.replace(getDefaultRoute(user.role));
+      const codes = Array.isArray(response.recovery_codes) ? response.recovery_codes : [];
+      setConfirmedUser(user);
+      setRecoveryCodes(codes);
+      setHasSavedRecoveryCodes(false);
+      setCopyMessage(null);
+
+      if (codes.length === 0) {
+        router.replace(getDefaultRoute(user.role));
+      }
     } catch (submissionError) {
       const message =
         submissionError instanceof Error ? submissionError.message : "Invalid or expired code. Please try again.";
@@ -113,6 +131,65 @@ export default function SetupTwoFactorPage() {
       clearPendingEnrollment();
     }
     router.replace(currentUser ? "/profile" : "/login");
+  }
+
+  async function handleCopyRecoveryCodes() {
+    if (recoveryCodes.length === 0) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(recoveryCodes.join("\n"));
+      setCopyMessage("Copied");
+    } catch {
+      setCopyMessage("Copy unavailable");
+    }
+  }
+
+  function handleDownloadRecoveryCodes() {
+    if (recoveryCodes.length === 0) {
+      return;
+    }
+
+    const blob = new Blob(
+      [
+        [
+          "CCHIS recovery codes",
+          "",
+          ...recoveryCodes,
+          "",
+          "Each code can be used once.",
+        ].join("\n"),
+      ],
+      { type: "text/plain" },
+    );
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "cchis-recovery-codes.txt";
+    link.click();
+    window.URL.revokeObjectURL(url);
+    setCopyMessage("Download started");
+  }
+
+  function handlePrintRecoveryCodes() {
+    if (recoveryCodes.length === 0) {
+      return;
+    }
+
+    window.print();
+    setCopyMessage("Print dialog opened");
+  }
+
+  function handleContinue() {
+    const user = confirmedUser || currentUser;
+
+    if (!user) {
+      router.replace("/login");
+      return;
+    }
+
+    router.replace(getDefaultRoute(user.role));
   }
 
   return (
@@ -158,7 +235,67 @@ export default function SetupTwoFactorPage() {
             </div>
           ) : null}
 
-          {isLoadingSetup ? (
+          {recoveryCodes.length > 0 ? (
+            <div className="mt-6 space-y-5">
+              <PublicAlert tone="success">
+                <span className="inline-flex items-center gap-2">
+                  <CheckCircle2 className="size-4" aria-hidden="true" />
+                  Two-factor authentication is enabled.
+                </span>
+              </PublicAlert>
+
+              <div>
+                <h2 className="text-2xl font-semibold text-panel-strong">Save your recovery codes</h2>
+                <p className="mt-2 text-sm leading-6 text-panel-copy">
+                  Each code works once if your authenticator is unavailable. Store them somewhere private; they will not be shown again after you leave this screen.
+                </p>
+              </div>
+
+              <div className="rounded-[1.5rem] border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] p-4">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {recoveryCodes.map((recoveryCode) => (
+                    <code
+                      key={recoveryCode}
+                      className="rounded-[0.9rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_20%,transparent)] px-3 py-2 text-center font-mono text-sm font-semibold text-panel-strong"
+                    >
+                      {recoveryCode}
+                    </code>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Button type="button" variant="secondary" onClick={() => void handleCopyRecoveryCodes()}>
+                  <Copy className="size-4" aria-hidden="true" />
+                  Copy codes
+                </Button>
+                <Button type="button" variant="secondary" onClick={handleDownloadRecoveryCodes}>
+                  <Download className="size-4" aria-hidden="true" />
+                  Download codes
+                </Button>
+                <Button type="button" variant="secondary" onClick={handlePrintRecoveryCodes}>
+                  <Printer className="size-4" aria-hidden="true" />
+                  Print codes
+                </Button>
+              </div>
+
+              {copyMessage ? <p className="text-sm font-medium text-panel-muted">{copyMessage}</p> : null}
+
+              <label className="flex items-start gap-3 rounded-[1rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-3 text-sm font-medium text-panel-copy">
+                <input
+                  type="checkbox"
+                  checked={hasSavedRecoveryCodes}
+                  onChange={(event) => setHasSavedRecoveryCodes(event.target.checked)}
+                  className="mt-1 size-4 accent-[var(--login-submit-start)]"
+                />
+                I have saved these recovery codes.
+              </label>
+
+              <Button className="w-full" type="button" size="lg" disabled={!hasSavedRecoveryCodes} onClick={handleContinue}>
+                Continue
+              </Button>
+            </div>
+          ) : isLoadingSetup ? (
             <div className="mt-4">
               <PublicAlert>Preparing your two-factor setup details...</PublicAlert>
             </div>
@@ -191,38 +328,42 @@ export default function SetupTwoFactorPage() {
             </div>
           ) : null}
 
-          <form className="mt-6 flex flex-col gap-4" onSubmit={handleSubmit}>
-            <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-panel-copy">Verification code</span>
-              <input
-                id="code"
-                name="code"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                maxLength={6}
-                value={code}
-                onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
-                placeholder="Enter the 6-digit code"
-                required
-                className="h-11 rounded-pill border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 text-sm text-panel-strong outline-none placeholder:text-panel-subtle focus:border-[var(--dashboard-icon-button-border)]"
-              />
-            </label>
+          {recoveryCodes.length === 0 ? (
+            <>
+              <form className="mt-6 flex flex-col gap-4" onSubmit={handleSubmit}>
+                <label className="flex flex-col gap-2">
+                  <span className="text-sm font-medium text-panel-copy">Verification code</span>
+                  <input
+                    id="code"
+                    name="code"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    value={code}
+                    onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                    placeholder="Enter the 6-digit code"
+                    required
+                    className="h-11 rounded-pill border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 text-sm text-panel-strong outline-none placeholder:text-panel-subtle focus:border-[var(--dashboard-icon-button-border)]"
+                  />
+                </label>
 
-            <Button className="w-full" type="submit" size="lg" disabled={isSubmitting || isLoadingSetup || !setup || code.length !== 6}>
-              <KeyRound className="size-4" aria-hidden="true" />
-              {isSubmitting ? "Finishing setup..." : "Finish Two-Factor Setup"}
-            </Button>
-          </form>
+                <Button className="w-full" type="submit" size="lg" disabled={isSubmitting || isLoadingSetup || !setup || code.length !== 6}>
+                  <KeyRound className="size-4" aria-hidden="true" />
+                  {isSubmitting ? "Finishing setup..." : "Finish Two-Factor Setup"}
+                </Button>
+              </form>
 
-          <div className="mt-6 flex flex-col items-center gap-3 text-sm">
-            <button type="button" className="inline-flex items-center gap-2 text-[var(--totp-link-muted)] transition hover:text-[var(--totp-link)]" onClick={handleBack}>
-              <ArrowLeft className="size-4" aria-hidden="true" />
-              Back to profile summary
-            </button>
-            <Link href={currentUser ? "/profile" : "/login"} className="text-[var(--totp-link-muted)] transition hover:text-[var(--totp-link)]">
-              Return to profile summary without completing setup
-            </Link>
-          </div>
+              <div className="mt-6 flex flex-col items-center gap-3 text-sm">
+                <button type="button" className="inline-flex items-center gap-2 text-[var(--totp-link-muted)] transition hover:text-[var(--totp-link)]" onClick={handleBack}>
+                  <ArrowLeft className="size-4" aria-hidden="true" />
+                  Back to profile summary
+                </button>
+                <Link href={currentUser ? "/profile" : "/login"} className="text-[var(--totp-link-muted)] transition hover:text-[var(--totp-link)]">
+                  Return to profile summary without completing setup
+                </Link>
+              </div>
+            </>
+          ) : null}
         </div>
 
         <PublicFooter />

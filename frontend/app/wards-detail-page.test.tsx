@@ -76,6 +76,300 @@ function buildWardDetailState(overrides: Record<string, unknown> = {}) {
       expected_cases_7d: 12,
       risk_score: 86,
     },
+    operationalEvidence: {
+      schema_version: "ward-operational-evidence-v1",
+      ward_id: 12,
+      forecast_horizon: {
+        label: "7 to 14 day forecast horizon",
+        min_days: 7,
+        max_days: 14,
+        display_value: "7 to 14 days",
+        expected_cases_label: "Expected cases in the next 7 days",
+        lead_time_supported_days: [7, 14],
+        validation_status: "ready_for_lead_time_review",
+        mode: "lead_time_validation",
+      },
+      model_readiness: {
+        state: "promoted",
+        label: "Promoted",
+        tone: "success",
+        detail: "The current ward score is attached to the promoted live-baseline model run.",
+        evidence: ["model_version=v1", "promotion_target=live_baseline"],
+      },
+      source_badges: [
+        {
+          id: "source_freshness",
+          label: "Source freshness",
+          value: "Fresh",
+          tone: "success",
+          detail: "Current ward data is inside the freshness window.",
+        },
+        {
+          id: "source_confidence",
+          label: "Source confidence",
+          value: "High",
+          tone: "success",
+          detail: "Confidence inferred from LIVE and visible surveillance/exposure context.",
+        },
+        {
+          id: "surveillance_truth",
+          label: "Surveillance truth",
+          value: "Confirmed Surveillance Truth",
+          tone: "success",
+          detail: "Confirmed surveillance label window is linked.",
+        },
+      ],
+      alert_candidate_review: {
+        review_state: "needs_human_review",
+        alert_decision: "alert_candidate",
+        policy_version: "ward-risk-policy-test",
+        risk_level: "HIGH",
+        risk_score: 0.86,
+        predicted_cases: 12,
+        automatic_alert_allowed: true,
+        automatic_alert_blockers: [],
+        reason_codes: ["score_threshold_crossed"],
+        recommended_action: "Review the ward now and decide whether to create an operational alert request.",
+        active_alert_count: 1,
+      },
+      outcome_evaluation: {
+        mode: "prediction_vs_surveillance_labels",
+        evaluated_count: 2,
+        hit_count: 1,
+        false_alert_count: 1,
+        missed_outbreak_count: 0,
+        pending_label_count: 0,
+        correct_quiet_count: 0,
+        precision_review_note: "Only rows with surveillance label windows are counted as evaluated.",
+        rows: [],
+      },
+      prediction_label_history: [
+        {
+          risk_score_id: 1,
+          prediction_generated_at: "2026-04-22T18:00:00Z",
+          forecast_window_start: "2026-04-29",
+          forecast_window_end: "2026-05-06",
+          risk_level: "HIGH",
+          risk_score: 0.86,
+          predicted_cases: 12,
+          alert_decision: "alert_candidate",
+          policy_version: "ward-risk-policy-test",
+          observed_label: "ACTIVE",
+          observed_truth_level: "confirmed_surveillance",
+          observed_suspected_cases: 6,
+          observed_confirmed_cases: 2,
+          observed_proxy_cases: 0,
+          label_window_ref: "surveillance_label_window:1",
+          label_dataset_ref: "phase6-labels",
+          classification: "hit",
+          review_required: false,
+          confidence_caveat: "Confirmed surveillance truth",
+        },
+        {
+          risk_score_id: 2,
+          prediction_generated_at: "2026-04-20T18:00:00Z",
+          forecast_window_start: "2026-04-27",
+          forecast_window_end: "2026-05-04",
+          risk_level: "HIGH",
+          risk_score: 0.8,
+          predicted_cases: 10,
+          alert_decision: "alert_candidate",
+          policy_version: "ward-risk-policy-test",
+          observed_label: "NONE",
+          observed_truth_level: "confirmed_surveillance",
+          observed_suspected_cases: 0,
+          observed_confirmed_cases: 0,
+          observed_proxy_cases: 0,
+          label_window_ref: "surveillance_label_window:2",
+          label_dataset_ref: "phase6-labels",
+          classification: "false_alert",
+          review_required: true,
+          confidence_caveat: "Confirmed surveillance truth",
+        },
+      ],
+      outcome_feedback: {
+        mode: "alert_to_action_outcome_feedback",
+        reference_at: "2026-04-22T18:05:00Z",
+        model_quality_state: "prediction_hit",
+        response_quality_state: "response_gap",
+        attribution: "response_quality_review",
+        accountability_note:
+          "Prediction outcome and response execution are shown separately so misses are not attributed to the model when alert delivery or CHV action failed downstream.",
+        observed_outcome: {
+          state: "escalated",
+          label: "Outbreak escalated",
+          detail: "Observed label is active with 6 suspected and 2 confirmed cases; response quality is response gap.",
+          observed_label: "ACTIVE",
+          observed_truth_level: "confirmed_surveillance",
+          suspected_case_count: 6,
+          confirmed_case_count: 2,
+        },
+        summary: {
+          step_count: 9,
+          recorded_step_count: 5,
+          downstream_failure_count: 1,
+          in_progress_step_count: 1,
+          review_item_count: 1,
+        },
+        steps: [
+          {
+            key: "alert_issued",
+            label: "Alert issued",
+            status: "recorded",
+            tone: "success",
+            detail: "1 alert record exists; 0 delivered and 0 failed.",
+            occurred_at: "2026-04-22T18:05:00Z",
+            evidence_level: "direct",
+            evidence_refs: ["alert-7"],
+          },
+          {
+            key: "chv_notified",
+            label: "CHV notified",
+            status: "recorded",
+            tone: "success",
+            detail: "Alert-linked coverage request exists as operational proxy evidence.",
+            occurred_at: "2026-04-22T18:08:00Z",
+            evidence_level: "coverage_request_proxy",
+            evidence_refs: ["coverage-1"],
+          },
+          {
+            key: "chv_acknowledged",
+            label: "CHV acknowledged",
+            status: "recorded",
+            tone: "success",
+            detail: "1 active CHV assignment exists; assignment start is proxy acknowledgement evidence.",
+            occurred_at: null,
+            evidence_level: "assignment_proxy",
+            evidence_refs: ["coverage-1"],
+          },
+          {
+            key: "household_follow_up_started",
+            label: "Household follow-up started",
+            status: "in_progress",
+            tone: "warning",
+            detail: "Household follow-up has started through active CHV assignment or in-progress coverage request.",
+            occurred_at: null,
+            evidence_level: "assignment_proxy",
+            evidence_refs: ["coverage-1"],
+          },
+          {
+            key: "facility_readiness_action_started",
+            label: "Facility readiness action started",
+            status: "missing",
+            tone: "danger",
+            detail: "No facility readiness action is visible after the alert.",
+            occurred_at: null,
+            evidence_level: "direct",
+            evidence_refs: [],
+          },
+          {
+            key: "supplies_or_staffing_escalated",
+            label: "Supplies or staffing escalated",
+            status: "missing",
+            tone: "danger",
+            detail: "No supply or staffing escalation is visible after the alert.",
+            occurred_at: null,
+            evidence_level: "direct",
+            evidence_refs: [],
+          },
+          {
+            key: "suspected_cases_observed",
+            label: "Suspected cases observed",
+            status: "recorded",
+            tone: "success",
+            detail: "6 suspected cases recorded in the matched label window.",
+            occurred_at: null,
+            evidence_level: "direct",
+            evidence_refs: ["surveillance_label_window:1"],
+          },
+          {
+            key: "confirmed_cases_observed",
+            label: "Confirmed cases observed",
+            status: "recorded",
+            tone: "success",
+            detail: "2 confirmed cases recorded in the matched label window.",
+            occurred_at: null,
+            evidence_level: "direct",
+            evidence_refs: ["surveillance_label_window:1"],
+          },
+          {
+            key: "outbreak_trajectory",
+            label: "Outbreak avoided, reduced, or escalated",
+            status: "recorded",
+            tone: "success",
+            detail: "Observed label is active with 6 suspected and 2 confirmed cases; response quality is response gap.",
+            occurred_at: null,
+            evidence_level: "direct",
+            evidence_refs: ["surveillance_label_window:1"],
+          },
+        ],
+        review_items: [
+          {
+            category: "response_quality",
+            severity: "high",
+            title: "Active outbreak with downstream response gap",
+            detail:
+              "Do not blame this outcome only on the model; alert delivery, CHV acknowledgement, or household follow-up evidence is missing or failed.",
+            step_keys: ["household_follow_up_started"],
+          },
+        ],
+        facility_action_evidence: {
+          reviews: [],
+          update_requests: [],
+          escalations: [],
+        },
+      },
+      false_missed_review: {
+        mode: "ward_prediction_outcome_review",
+        open_review_count: 1,
+        workflow_label: "Outcome review required",
+        items: [
+          {
+            classification: "false_alert",
+            risk_score_id: 2,
+            prediction_generated_at: "2026-04-20T18:00:00Z",
+            label_window_ref: "surveillance_label_window:2",
+            observed_label: "NONE",
+            recommended_review_action: "Review alert threshold, source confidence, and CHV follow-through for this false alert.",
+          },
+        ],
+      },
+      chv_action_status: {
+        mode: "chv_coverage_requests_linked_to_alerts",
+        summary: {
+          visible_request_count: 1,
+          active_request_count: 1,
+          linked_alert_count: 1,
+          latest_status: "IN_PROGRESS",
+        },
+        requests: [
+          {
+            public_id: "coverage-1",
+            status: "IN_PROGRESS",
+            priority: "HIGH",
+            trigger_source: "ALERT_DRIVEN",
+            created_at: "2026-04-22T18:08:00Z",
+            expected_response_by: "2026-04-22T22:08:00Z",
+            resolved_at: null,
+            linked_alert_public_ids: ["alert-7"],
+            linked_alert_statuses: [
+              {
+                public_id: "alert-7",
+                status: "QUEUED",
+                channel: "SMS",
+                created_at: "2026-04-22T18:05:00Z",
+              },
+            ],
+            assignment_counts: {
+              active: 1,
+              completed: 0,
+              cancelled: 0,
+              total: 1,
+            },
+          },
+        ],
+      },
+    },
     riskHistory: [
       {
         id: 1,
@@ -238,6 +532,26 @@ describe("WardDetailPage", () => {
     expect(screen.getByText("Risk history")).toBeInTheDocument();
     expect(screen.getByText("Recent alerts")).toBeInTheDocument();
     expect(screen.getByText("Recommended action")).toBeInTheDocument();
+  });
+
+  it("renders phase 6 evidence for horizon, confidence, outcomes, review workflow, and CHV follow-through", async () => {
+    render(React.createElement(WardDetailPage));
+
+    expect(await screen.findByText("Forecast horizon and evidence")).toBeInTheDocument();
+    expect(screen.getAllByText("7 to 14 days").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Promoted").length).toBeGreaterThan(0);
+    expect(screen.getByText("High confidence")).toBeInTheDocument();
+    expect(screen.getByText("Prediction outcomes")).toBeInTheDocument();
+    expect(screen.getByText("False alerts")).toBeInTheDocument();
+    expect(screen.getAllByText("False alert").length).toBeGreaterThan(0);
+    expect(screen.getByText("Outcome feedback loop")).toBeInTheDocument();
+    expect(screen.getAllByText("Response Quality Review").length).toBeGreaterThan(0);
+    expect(screen.getByText("Model quality")).toBeInTheDocument();
+    expect(screen.getByText("Response quality")).toBeInTheDocument();
+    expect(screen.getByText("Active outbreak with downstream response gap")).toBeInTheDocument();
+    expect(screen.getByText("Alert candidate review")).toBeInTheDocument();
+    expect(screen.getByText("CHV action status")).toBeInTheDocument();
+    expect(screen.getByText(/linked alerts: alert-7/i)).toBeInTheDocument();
   });
 
   it("shows a read-only recommendation state for non-trigger roles", async () => {

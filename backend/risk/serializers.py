@@ -71,6 +71,7 @@ class WardIntelligenceCurrentRiskSerializer(serializers.Serializer):
     risk_level = serializers.CharField(allow_null=True)
     risk_score = serializers.FloatField(allow_null=True)
     predicted_cases = serializers.IntegerField()
+    decision_policy = serializers.DictField(required=False)
     generated_at = serializers.DateTimeField(allow_null=True)
     source = serializers.CharField(allow_null=True)
     model_version = serializers.CharField(allow_null=True)
@@ -564,6 +565,31 @@ class RiskScoreSerializer(serializers.ModelSerializer):
     ward_name = serializers.CharField(source="ward.name", read_only=True)
     model_run_status = serializers.CharField(source="model_run.status", read_only=True)
     model_run_version = serializers.CharField(source="model_run.model_version", read_only=True)
+    model_run_promotion_target = serializers.SerializerMethodField()
+    model_run_promotion_state = serializers.SerializerMethodField()
+    model_run_alert_eligible = serializers.SerializerMethodField()
+    model_run_phase_4_promotion_evidence_persisted = serializers.SerializerMethodField()
+    model_run_phase_4_promotion_gates_passed = serializers.SerializerMethodField()
+
+    def _model_run_metadata_value(self, obj: RiskScore, key: str, default=None):
+        if not obj.model_run:
+            return default
+        return (obj.model_run.metadata or {}).get(key, default)
+
+    def get_model_run_promotion_target(self, obj: RiskScore):
+        return self._model_run_metadata_value(obj, "promotion_target")
+
+    def get_model_run_promotion_state(self, obj: RiskScore):
+        return self._model_run_metadata_value(obj, "promotion_state")
+
+    def get_model_run_alert_eligible(self, obj: RiskScore):
+        return self._model_run_metadata_value(obj, "alert_eligible")
+
+    def get_model_run_phase_4_promotion_evidence_persisted(self, obj: RiskScore):
+        return self._model_run_metadata_value(obj, "phase_4_promotion_evidence_persisted", False)
+
+    def get_model_run_phase_4_promotion_gates_passed(self, obj: RiskScore):
+        return self._model_run_metadata_value(obj, "phase_4_promotion_gates_passed", False)
 
     class Meta:
         model = RiskScore
@@ -574,11 +600,17 @@ class RiskScoreSerializer(serializers.ModelSerializer):
             "model_run",
             "model_run_status",
             "model_run_version",
+            "model_run_promotion_target",
+            "model_run_promotion_state",
+            "model_run_alert_eligible",
+            "model_run_phase_4_promotion_evidence_persisted",
+            "model_run_phase_4_promotion_gates_passed",
             "score",
             "risk_level",
             "rainfall_mm",
             "flood_indicator",
             "predicted_cases",
+            "decision_policy",
             "source",
             "model_version",
             "notes",
@@ -850,7 +882,10 @@ class AlertIntelligenceRiskContextSerializer(serializers.Serializer):
     trend_label = serializers.CharField()
     summary = serializers.CharField()
     recorded_risk_score = serializers.FloatField(allow_null=True)
-    threshold = serializers.IntegerField(allow_null=True)
+    threshold = serializers.FloatField(allow_null=True)
+    policy_version = serializers.CharField(required=False, allow_null=True)
+    alert_decision = serializers.CharField(required=False, allow_null=True)
+    reason_codes = serializers.ListField(child=serializers.CharField(), required=False)
     mode = serializers.CharField()
 
 
@@ -1259,6 +1294,7 @@ class FacilityIntelligenceForecastingSerializer(serializers.Serializer):
     projected_readiness_state = serializers.CharField()
     driving_ward_ids = serializers.ListField(child=serializers.IntegerField())
     dashboard_truth_state = serializers.CharField()
+    population_exposure = serializers.DictField(required=False)
 
 
 class FacilityReadinessDecisionSummaryPrioritySerializer(serializers.Serializer):
@@ -1317,6 +1353,7 @@ class FacilityIntelligenceSerializer(serializers.Serializer):
     readiness = FacilityIntelligenceReadinessSerializer()
     context = FacilityIntelligenceContextSerializer()
     forecasting = FacilityIntelligenceForecastingSerializer()
+    population_exposure = serializers.DictField(required=False)
     freshness = FacilityIntelligenceFreshnessSerializer()
     decision_summary = FacilityReadinessDecisionSummarySerializer()
     timeline = FacilityIntelligenceTimelineEntrySerializer(many=True)
@@ -1418,6 +1455,8 @@ class FacilityForecastFactorSerializer(serializers.Serializer):
     value = serializers.JSONField()
     source = serializers.CharField()
     mode = serializers.CharField()
+    truth_class_counts = serializers.DictField(required=False)
+    caveat = serializers.CharField(required=False, allow_blank=True)
 
 
 class FacilityForecastPreviewSerializer(serializers.Serializer):
@@ -1463,6 +1502,9 @@ class WardIntelligenceSerializer(serializers.Serializer):
     workflow = WardIntelligenceWorkflowSerializer()
     decision_summary = WardIntelligenceDecisionSummarySerializer()
     header_context = WardIntelligenceHeaderContextSerializer()
+    population_exposure = serializers.DictField(required=False)
+    surveillance = serializers.DictField(required=False)
+    operational_evidence = serializers.DictField(required=False)
     risk_history = RiskScoreSerializer(many=True)
     related_alerts = AlertSerializer(many=True)
 
@@ -1567,6 +1609,44 @@ class TriggerAlertRequestSerializer(serializers.Serializer):
     message_override = serializers.CharField(required=False, allow_blank=True, max_length=320)
 
  
+class SystemControlStatusSerializer(serializers.Serializer):
+    mode = serializers.CharField()
+    can_retry_background_jobs = serializers.BooleanField()
+    can_run_manual_risk_scoring = serializers.BooleanField()
+    can_pause_alert_delivery = serializers.BooleanField()
+    alert_delivery_paused = serializers.BooleanField()
+    alert_delivery_paused_until = serializers.DateTimeField(allow_null=True)
+    alert_delivery_pause_reason = serializers.CharField(allow_blank=True)
+    alert_delivery_pause_updated_at = serializers.DateTimeField(allow_null=True)
+    alert_delivery_pause_updated_by = serializers.CharField(allow_null=True)
+    ward_risk_decision_policy = serializers.DictField()
+
+
+class SystemRetryControlsRequestSerializer(serializers.Serializer):
+    limit = serializers.IntegerField(required=False, default=25, min_value=1, max_value=100)
+    retry_alert_delivery = serializers.BooleanField(default=True)
+    retry_failed_sync_payloads = serializers.BooleanField(default=False)
+
+
+class ManualRiskScoringRequestSerializer(serializers.Serializer):
+    month = serializers.IntegerField(required=False, min_value=1, max_value=12)
+    model_version = serializers.CharField(required=False, default="lr-v1", max_length=40)
+    algorithm = serializers.ChoiceField(
+        required=False,
+        default="logistic_regression",
+        choices=["logistic_regression", "random_forest"],
+    )
+    trigger_alerts = serializers.BooleanField(default=False)
+    send_sms = serializers.BooleanField(default=False)
+    dual_model = serializers.BooleanField(default=False)
+
+
+class AlertDeliveryPauseRequestSerializer(serializers.Serializer):
+    paused = serializers.BooleanField()
+    duration_minutes = serializers.IntegerField(required=False, default=60, min_value=1, max_value=1440)
+    reason = serializers.CharField(required=False, allow_blank=True, max_length=500)
+
+
 class TriggerAlertRequestStatusResponseSerializer(serializers.Serializer):
     request_id = serializers.CharField()
     status = serializers.ChoiceField(choices=["PENDING_CREATION", "MATERIALIZED"])

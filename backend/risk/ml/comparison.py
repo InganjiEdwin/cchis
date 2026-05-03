@@ -5,15 +5,23 @@ from risk.models import ModelRun
 
 REQUIRED_PROMOTION_EVIDENCE_KEYS = {
     "out_of_time_score": "out_of_time_validation_missing",
+    "lead_time_recall": "lead_time_recall_evidence_missing",
+    "precision": "precision_evidence_missing",
+    "balanced_accuracy": "balanced_accuracy_evidence_missing",
+    "false_alerts_per_true_hit": "false_alert_cost_evidence_missing",
+    "positive_class_balance": "class_balance_evidence_missing",
     "calibration_score": "calibration_evidence_missing",
     "lead_time_days_supported": "lead_time_evidence_missing",
     "temporal_validation_window_count": "temporal_robustness_evidence_missing",
+    "promotion_truth_and_leakage_checks_passed": "truth_or_leakage_gate_missing",
+    "phase_4_training_truth_gate_passed": "training_truth_gate_missing",
 }
 
 
 def _run_summary(run: ModelRun) -> dict:
     metadata = run.metadata or {}
     evaluation_metrics = run.evaluation_metrics or {}
+    temporal_report = evaluation_metrics.get("temporal_backtest_report") or {}
     return {
         "model_version": run.model_version,
         "algorithm_name": run.algorithm_name,
@@ -24,6 +32,23 @@ def _run_summary(run: ModelRun) -> dict:
         "execution_context": metadata.get("execution_context"),
         "run_purpose": metadata.get("run_purpose"),
         "promotion_target": metadata.get("promotion_target"),
+        "phase_4_promotion_evidence_persisted": metadata.get("phase_4_promotion_evidence_persisted", False),
+        "phase_4_promotion_gates_passed": metadata.get("phase_4_promotion_gates_passed", False),
+        "temporal_backtest_summary": {
+            "schema_version": temporal_report.get("schema_version"),
+            "row_counts": temporal_report.get("row_counts", {}),
+            "promotion_gates": temporal_report.get("promotion_gates", {}),
+            "rainfall_threshold_baseline_accuracy": evaluation_metrics.get("rainfall_threshold_baseline_accuracy"),
+            "selected_model_metrics": {
+                "out_of_time_score": evaluation_metrics.get("out_of_time_score"),
+                "lead_time_recall": evaluation_metrics.get("lead_time_recall"),
+                "precision": evaluation_metrics.get("precision"),
+                "balanced_accuracy": evaluation_metrics.get("balanced_accuracy"),
+                "false_alerts_per_true_hit": evaluation_metrics.get("false_alerts_per_true_hit"),
+                "positive_class_balance": evaluation_metrics.get("positive_class_balance"),
+                "training_truth_gate_passed": evaluation_metrics.get("phase_4_training_truth_gate_passed"),
+            },
+        },
         "evaluation_metrics": evaluation_metrics,
     }
 
@@ -34,9 +59,18 @@ def _promotion_evidence_assessment(*, logistic_run: ModelRun, random_forest_run:
 
     evidence = {}
     for key, blocker in REQUIRED_PROMOTION_EVIDENCE_KEYS.items():
+        if key in {"promotion_truth_and_leakage_checks_passed", "phase_4_training_truth_gate_passed"}:
+            logistic_available = logistic_metrics.get(key) is True
+            random_forest_available = random_forest_metrics.get(key) is True
+        elif key == "lead_time_days_supported":
+            logistic_available = bool(logistic_metrics.get(key))
+            random_forest_available = bool(random_forest_metrics.get(key))
+        else:
+            logistic_available = logistic_metrics.get(key) is not None
+            random_forest_available = random_forest_metrics.get(key) is not None
         evidence[key] = {
-            "logistic_regression": key in logistic_metrics,
-            "random_forest": key in random_forest_metrics,
+            "logistic_regression": logistic_available,
+            "random_forest": random_forest_available,
             "blocker": blocker,
         }
     return evidence
@@ -54,6 +88,12 @@ def build_model_comparison_summary(
     logistic_accuracy = float((logistic_run.evaluation_metrics or {}).get("training_accuracy", 0.0))
     random_forest_accuracy = float((random_forest_run.evaluation_metrics or {}).get("training_accuracy", 0.0))
     accuracy_delta = round(random_forest_accuracy - logistic_accuracy, 4)
+    logistic_temporal_report = (logistic_run.evaluation_metrics or {}).get("temporal_backtest_report") or {}
+    random_forest_temporal_report = (random_forest_run.evaluation_metrics or {}).get("temporal_backtest_report") or {}
+    rainfall_baseline_accuracy = (
+        (logistic_run.evaluation_metrics or {}).get("rainfall_threshold_baseline_accuracy")
+        or (random_forest_run.evaluation_metrics or {}).get("rainfall_threshold_baseline_accuracy")
+    )
 
     comparison_validity = "comparable_inputs"
     if not (same_training_dataset and same_inference_dataset and same_feature_schema):
@@ -82,10 +122,12 @@ def build_model_comparison_summary(
         "promotion_blockers": promotion_blockers,
         "decision_reason": (
             "Random Forest is benchmark-capable, but early-phase promotion evidence is still incomplete. "
-            "Keep Logistic Regression as the live primary model and retain Random Forest in shadow benchmark mode."
+            "Keep Logistic Regression as the primary scoring candidate and retain Random Forest in shadow "
+            "benchmark mode until Phase 4 promotion gates pass."
         ),
-        "dashboard_wording_impact": "none",
-        "live_alert_task": "risk.tasks.run_risk_model_task",
+        "dashboard_wording_impact": "do_not_label_candidate_scores_as_live_promoted",
+        "candidate_scoring_task": "risk.tasks.run_risk_model_task",
+        "live_alert_task": None,
         "benchmark_only_tasks": ["risk.tasks.run_random_forest_benchmark_task"],
         "retraining_task": None,
         "retraining_mode": "manual_only_no_scheduled_retraining_task",
@@ -108,6 +150,11 @@ def build_model_comparison_summary(
             "same_inference_dataset": same_inference_dataset,
             "same_feature_schema": same_feature_schema,
             "training_accuracy_delta_rf_minus_lr": accuracy_delta,
+            "rainfall_threshold_baseline_accuracy": rainfall_baseline_accuracy,
+            "phase_4_temporal_backtest_reports_present": {
+                "logistic_regression": bool(logistic_temporal_report),
+                "random_forest": bool(random_forest_temporal_report),
+            },
         },
         "decision": decision,
     }

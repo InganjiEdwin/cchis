@@ -543,7 +543,187 @@ export type RiskScoreRecord = {
   source: string;
   model_version: string;
   notes: string;
+  decision_policy?: Record<string, unknown>;
   generated_at: string;
+};
+
+export type WardOperationalEvidenceTone = "success" | "warning" | "danger" | "default";
+
+export type WardOperationalEvidenceBadge = {
+  id: string;
+  label: string;
+  value: string;
+  tone: WardOperationalEvidenceTone;
+  detail: string;
+};
+
+export type WardPredictionOutcomeClassification =
+  | "hit"
+  | "false_alert"
+  | "missed_outbreak"
+  | "correct_quiet"
+  | "pending_label";
+
+export type WardPredictionLabelHistoryRow = {
+  risk_score_id: number;
+  prediction_generated_at: string;
+  forecast_window_start: string;
+  forecast_window_end: string;
+  risk_level: "LOW" | "MEDIUM" | "HIGH";
+  risk_score: number;
+  predicted_cases: number;
+  alert_decision: string;
+  policy_version: string;
+  observed_label: string;
+  observed_truth_level: string;
+  observed_suspected_cases: number;
+  observed_confirmed_cases: number;
+  observed_proxy_cases: number;
+  label_window_ref: string;
+  label_dataset_ref: string;
+  classification: WardPredictionOutcomeClassification;
+  review_required: boolean;
+  confidence_caveat: string;
+};
+
+export type WardOutcomeFeedback = {
+  mode: string;
+  reference_at: string | null;
+  model_quality_state: string;
+  response_quality_state: string;
+  attribution: string;
+  accountability_note: string;
+  observed_outcome: {
+    state: string;
+    label: string;
+    detail: string;
+    observed_label: string;
+    observed_truth_level: string;
+    suspected_case_count: number;
+    confirmed_case_count: number;
+  };
+  summary: {
+    step_count: number;
+    recorded_step_count: number;
+    downstream_failure_count: number;
+    in_progress_step_count: number;
+    review_item_count: number;
+  };
+  steps: Array<{
+    key: string;
+    label: string;
+    status: "recorded" | "in_progress" | "missing" | "failed" | "not_applicable" | "pending";
+    tone: WardOperationalEvidenceTone;
+    detail: string;
+    occurred_at: string | null;
+    evidence_level: string;
+    evidence_refs: string[];
+  }>;
+  review_items: Array<{
+    category: string;
+    severity: "low" | "medium" | "high" | string;
+    title: string;
+    detail: string;
+    step_keys: string[];
+  }>;
+  facility_action_evidence: {
+    reviews: Array<Record<string, unknown>>;
+    update_requests: Array<Record<string, unknown>>;
+    escalations: Array<Record<string, unknown>>;
+  };
+};
+
+export type WardOperationalEvidence = {
+  schema_version: string;
+  ward_id: number;
+  forecast_horizon: {
+    label: string;
+    min_days: number;
+    max_days: number;
+    display_value: string;
+    expected_cases_label: string;
+    lead_time_supported_days: number[];
+    validation_status: string | null;
+    mode: string;
+  };
+  model_readiness: {
+    state: "seeded_demo" | "proxy_backed" | "evaluated" | "promoted";
+    label: string;
+    tone: WardOperationalEvidenceTone;
+    detail: string;
+    evidence: string[];
+  };
+  source_badges: WardOperationalEvidenceBadge[];
+  alert_candidate_review: {
+    review_state: "alert_active" | "needs_human_review" | "routine_monitoring";
+    alert_decision: string;
+    policy_version: string;
+    risk_level: "LOW" | "MEDIUM" | "HIGH" | null;
+    risk_score: number | null;
+    predicted_cases: number;
+    automatic_alert_allowed: boolean;
+    automatic_alert_blockers: string[];
+    reason_codes: string[];
+    recommended_action: string;
+    active_alert_count: number;
+  };
+  outcome_evaluation: {
+    mode: string;
+    evaluated_count: number;
+    hit_count: number;
+    false_alert_count: number;
+    missed_outbreak_count: number;
+    pending_label_count: number;
+    correct_quiet_count: number;
+    precision_review_note?: string;
+    rows: WardPredictionLabelHistoryRow[];
+  };
+  prediction_label_history: WardPredictionLabelHistoryRow[];
+  outcome_feedback?: WardOutcomeFeedback;
+  false_missed_review: {
+    mode: string;
+    open_review_count: number;
+    workflow_label: string;
+    items: Array<{
+      classification: "false_alert" | "missed_outbreak";
+      risk_score_id: number;
+      prediction_generated_at: string;
+      label_window_ref: string;
+      observed_label: string;
+      recommended_review_action: string;
+    }>;
+  };
+  chv_action_status: {
+    mode: string;
+    summary: {
+      visible_request_count: number;
+      active_request_count: number;
+      linked_alert_count: number;
+      latest_status: ChvCoverageRequestStatus | "NO_REQUEST";
+    };
+    requests: Array<{
+      public_id: string;
+      status: ChvCoverageRequestStatus;
+      priority: ChvCoverageRequestPriority;
+      trigger_source: ChvCoverageRequestTriggerSource;
+      created_at: string;
+      expected_response_by: string | null;
+      resolved_at: string | null;
+      linked_alert_public_ids: string[];
+      linked_alert_statuses: Array<{
+        public_id: string;
+        status: AlertRecord["status"];
+        channel: AlertRecord["channel"];
+        created_at: string;
+      }>;
+      assignment_counts: {
+        active: number;
+        completed: number;
+        cancelled: number;
+        total: number;
+      };
+    }>;
+  };
 };
 
 export type WardIntelligenceTrend = {
@@ -1334,6 +1514,7 @@ export type WardIntelligenceRouteResponse = {
     risk_level: "LOW" | "MEDIUM" | "HIGH" | null;
     risk_score: number | null;
     predicted_cases: number;
+    decision_policy?: Record<string, unknown>;
     generated_at: string | null;
     source: string | null;
     model_version: string | null;
@@ -1380,6 +1561,8 @@ export type WardIntelligenceRouteResponse = {
     expected_cases_7d: number;
     risk_score: number | null;
   };
+  surveillance?: Record<string, unknown>;
+  operational_evidence?: WardOperationalEvidence;
 };
 
 type AlertDetailRouteResponse = {
@@ -1473,7 +1656,33 @@ export type FacilityListRouteResponse = PaginatedResponse<FacilityRecord> & {
   workflow_states: FacilityReadinessWorkflowState[];
 };
 
-type SystemRouteResponse = {
+export type SystemControlStatus = {
+  mode: "control_contracts_enabled";
+  can_retry_background_jobs: boolean;
+  can_run_manual_risk_scoring: boolean;
+  can_pause_alert_delivery: boolean;
+  alert_delivery_paused: boolean;
+  alert_delivery_paused_until: string | null;
+  alert_delivery_pause_reason: string;
+  alert_delivery_pause_updated_at: string | null;
+  alert_delivery_pause_updated_by: string | null;
+};
+
+export type SystemRetryControlResponse = {
+  detail: string;
+  queued_alert_delivery_count: number;
+  failed_sync_payload_count: number;
+  task_ids: string[];
+  control_status: SystemControlStatus;
+};
+
+export type SystemManualRiskScoringResponse = {
+  detail: string;
+  task_id: string;
+  control_status: SystemControlStatus;
+};
+
+export type SystemRouteResponse = {
   wards: PaginatedResponse<WardSummary>;
   latestRisks: LatestWardRisk[];
   alerts: PaginatedResponse<AlertRecord>;
@@ -1483,6 +1692,7 @@ type SystemRouteResponse = {
   deliveredAlerts: PaginatedResponse<AlertRecord>;
   facilities: PaginatedResponse<FacilityRecord>;
   chvOperations: ChvOperationsRecord[];
+  controlStatus: SystemControlStatus;
 };
 
 async function requestDashboardRoute<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -1800,4 +2010,34 @@ export async function markAllNotificationsSeenViaBff() {
 
 export async function fetchSystemDataViaBff() {
   return requestDashboardRoute<SystemRouteResponse>("/api/dashboard/system");
+}
+
+export async function retrySystemBackgroundJobsViaBff(payload: { limit?: number } = {}) {
+  return requestDashboardRoute<SystemRetryControlResponse>("/api/dashboard/system/retry", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function runManualRiskScoringViaBff(payload: {
+  month?: number;
+  trigger_alerts?: boolean;
+  send_sms?: boolean;
+  dual_model?: boolean;
+} = {}) {
+  return requestDashboardRoute<SystemManualRiskScoringResponse>("/api/dashboard/system/risk-scoring", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function setAlertDeliveryPauseViaBff(payload: {
+  paused: boolean;
+  duration_minutes?: number;
+  reason?: string;
+}) {
+  return requestDashboardRoute<SystemControlStatus>("/api/dashboard/system/alert-delivery-pause", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }

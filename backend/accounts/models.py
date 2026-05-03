@@ -1,3 +1,5 @@
+import uuid
+
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.utils import timezone
@@ -63,6 +65,11 @@ class AuthAuditEvent(models.Model):
     EVENT_2FA_REQUIRED = "TWO_FACTOR_REQUIRED"
     EVENT_2FA_VERIFIED = "TWO_FACTOR_VERIFIED"
     EVENT_2FA_FAILED = "TWO_FACTOR_FAILED"
+    EVENT_2FA_RECOVERY_CODES_GENERATED = "TWO_FACTOR_RECOVERY_CODES_GENERATED"
+    EVENT_2FA_RECOVERY_CODES_REGENERATED = "TWO_FACTOR_RECOVERY_CODES_REGENERATED"
+    EVENT_2FA_RECOVERY_CODE_USED = "TWO_FACTOR_RECOVERY_CODE_USED"
+    EVENT_2FA_RECOVERY_CODE_FAILED = "TWO_FACTOR_RECOVERY_CODE_FAILED"
+    EVENT_2FA_RECOVERY_CODES_LOW = "TWO_FACTOR_RECOVERY_CODES_LOW"
     EVENT_USER_CREATED = "USER_CREATED"
     EVENT_USER_DEACTIVATED = "USER_DEACTIVATED"
     EVENT_USER_REACTIVATED = "USER_REACTIVATED"
@@ -81,6 +88,11 @@ class AuthAuditEvent(models.Model):
         (EVENT_2FA_REQUIRED, "Two-Factor Required"),
         (EVENT_2FA_VERIFIED, "Two-Factor Verified"),
         (EVENT_2FA_FAILED, "Two-Factor Failed"),
+        (EVENT_2FA_RECOVERY_CODES_GENERATED, "Two-Factor Recovery Codes Generated"),
+        (EVENT_2FA_RECOVERY_CODES_REGENERATED, "Two-Factor Recovery Codes Regenerated"),
+        (EVENT_2FA_RECOVERY_CODE_USED, "Two-Factor Recovery Code Used"),
+        (EVENT_2FA_RECOVERY_CODE_FAILED, "Two-Factor Recovery Code Failed"),
+        (EVENT_2FA_RECOVERY_CODES_LOW, "Two-Factor Recovery Codes Low"),
         (EVENT_USER_CREATED, "User Created"),
         (EVENT_USER_DEACTIVATED, "User Deactivated"),
         (EVENT_USER_REACTIVATED, "User Reactivated"),
@@ -225,3 +237,32 @@ class PreAuthToken(models.Model):
     @property
     def is_usable(self) -> bool:
         return self.used_at is None and not self.is_expired
+
+
+class TwoFactorRecoveryCode(models.Model):
+    user = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.CASCADE,
+        related_name="two_factor_recovery_codes",
+    )
+    code_hash = models.CharField(max_length=255)
+    code_hint = models.CharField(max_length=12, blank=True)
+    batch_id = models.UUIDField(default=uuid.uuid4)
+    used_at = models.DateTimeField(null=True, blank=True)
+    invalidated_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["user", "batch_id"]),
+            models.Index(fields=["user", "used_at", "invalidated_at"]),
+            models.Index(fields=["batch_id", "created_at"]),
+        ]
+
+    @property
+    def is_usable(self) -> bool:
+        return self.used_at is None and self.invalidated_at is None
+
+    def __str__(self) -> str:
+        return f"Recovery code {self.code_hint or 'unhinted'} for {self.user_id}"

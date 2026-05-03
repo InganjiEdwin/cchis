@@ -21,16 +21,33 @@ from .models import (
     FacilityReadinessReview,
     FacilityReadinessReviewEvent,
     FacilityReadinessUpdateRequest,
+    FeatureDatasetRow,
     HealthFacility,
     RiskScore,
     ScenarioSimulationRun,
     SyncQueue,
+    SystemControlState,
+    SurveillanceLabelWindow,
+    SurveillanceOutbreakLabel,
+    SurveillanceTruthLevel,
     TriageSession,
     UssdSessionLog,
     Ward,
 )
-from .ml.alignment import latest_promoted_riskscore_for_ward, promoted_risk_scores
+from .ml.alignment import is_promoted_model_run, latest_promoted_riskscore_for_ward, promoted_risk_scores
+from .ml.decision_policy import (
+    DECISION_ALERT_CANDIDATE,
+    DECISION_ROUTINE_MONITORING,
+    DECISION_URGENT_ALERT,
+    DECISION_WATCHLIST_ONLY,
+    current_ward_risk_decision_policy,
+)
+from .population_exposure_features import (
+    build_population_exposure_context_for_facility,
+    build_population_exposure_context_for_ward,
+)
 from .providers import DeliveryResult, get_sms_provider
+from .surveillance_features import build_surveillance_feature_context_for_ward
 
 
 alerts_logger = logging.getLogger("risk.alerts")
@@ -289,6 +306,9 @@ def _ward_workflow_summary(workflow: AlertWorkflowState) -> dict:
 
 
 def _recommended_trigger_type_for_workflow(workflow: AlertWorkflowState) -> str:
+    decision_policy = (workflow.metadata or {}).get("decision_policy") or {}
+    if decision_policy.get("alert_decision") in {DECISION_URGENT_ALERT, DECISION_ALERT_CANDIDATE}:
+        return TRIGGER_TYPE_HIGH_RISK_ESCALATION
     if workflow.alert_delivery_state in {"triggered_failed", "triggered_retry_pending"}:
         return TRIGGER_TYPE_DELIVERY_RETRY
     if workflow.active_alert_count > 0 or workflow.alert_delivery_state in {"triggered_queued", "triggered_delivered"}:
@@ -316,6 +336,8 @@ def _what_happens_if_no_action(workflow: AlertWorkflowState) -> str:
 
 def _why_this_might_need_an_alert(workflow: AlertWorkflowState) -> list[str]:
     reasons: list[str] = []
+    decision_policy = (workflow.metadata or {}).get("decision_policy") or {}
+    alert_decision = decision_policy.get("alert_decision")
     if workflow.active_alert_count > 0:
         reasons.append(
             f"{workflow.active_alert_count} active alert{'s' if workflow.active_alert_count != 1 else ''} require follow-up."
@@ -326,6 +348,12 @@ def _why_this_might_need_an_alert(workflow: AlertWorkflowState) -> list[str]:
         reasons.append("Delivery retry is still pending in the current cycle.")
     elif workflow.alert_delivery_state == "triggered_queued":
         reasons.append("A queued trigger request is still awaiting first delivery work.")
+    elif alert_decision == DECISION_URGENT_ALERT:
+        reasons.append("The active decision policy classified this ward as an urgent alert.")
+    elif alert_decision == DECISION_ALERT_CANDIDATE:
+        reasons.append("The active decision policy classified this ward as an alert candidate.")
+    elif alert_decision == DECISION_WATCHLIST_ONLY:
+        reasons.append("The active decision policy classified this ward as watchlist-only.")
     elif workflow.risk_level == Ward.RISK_HIGH:
         reasons.append("The ward is currently in the promoted high-risk band.")
     elif workflow.risk_level == Ward.RISK_MEDIUM:
@@ -333,6 +361,80 @@ def _why_this_might_need_an_alert(workflow: AlertWorkflowState) -> list[str]:
     else:
         reasons.append("Recent workflow state suggests a guided review before taking action.")
     return reasons
+
+
+def _surveillance_alert_evidence_for_ward(ward: Ward) -> dict:
+    context = build_surveillance_feature_context_for_ward(ward)
+    return {
+        "schema_version": context["schema_version"],
+        "ward_id": ward.id,
+        "ward_name": ward.name,
+        "recent_suspected_cases_28d": context["surveillance_recent_suspected_cases_28d"],
+        "recent_confirmed_cases_28d": context["surveillance_recent_confirmed_cases_28d"],
+        "recent_proxy_cases_28d": context["surveillance_recent_proxy_cases_28d"],
+        "recent_total_cases_28d": context["surveillance_recent_total_cases_28d"],
+        "active_label_count_28d": context["surveillance_active_label_count_28d"],
+        "watch_label_count_28d": context["surveillance_watch_label_count_28d"],
+        "confirmed_label_window_count_28d": context["surveillance_confirmed_label_window_count_28d"],
+        "proxy_only_label_window_count_28d": context["surveillance_proxy_only_label_window_count_28d"],
+        "delayed_or_stale_record_count_28d": context["surveillance_delayed_or_stale_record_count_28d"],
+        "latest_label_window_ref": context["surveillance_latest_label_window_ref"],
+        "latest_label_dataset_ref": context["surveillance_latest_label_dataset_ref"],
+        "latest_label_truth_level": context["surveillance_latest_label_truth_level"],
+        "latest_freshness_state": context["surveillance_latest_freshness_state"],
+        "label_truth_state": context["surveillance_label_truth_state"],
+        "source_coverage_summary": context["surveillance_source_coverage_summary"],
+        "truth_gate": context["truth_gate"],
+        "proxy_only_as_confirmed_allowed": False,
+        "caveat": context["surveillance_display_caveat"],
+    }
+
+
+def _surveillance_trigger_reason_items(evidence: dict) -> list[dict]:
+    items = []
+    latest_label_ref = evidence.get("latest_label_window_ref")
+    label_truth_state = evidence.get("label_truth_state") or "no_surveillance_label_window"
+    if latest_label_ref:
+        items.append(
+            {
+                "label": "Surveillance label window",
+                "detail": (
+                    f"Latest label window {latest_label_ref} is classified as {label_truth_state}; "
+                    f"freshness is {evidence.get('latest_freshness_state') or 'unknown'}."
+                ),
+                "tone": "info" if label_truth_state == "confirmed_surveillance_truth" else "warning",
+            }
+        )
+    if int(evidence.get("recent_total_cases_28d") or 0) > 0:
+        items.append(
+            {
+                "label": "Recent surveillance cases",
+                "detail": (
+                    f"{evidence.get('recent_total_cases_28d')} recent surveillance cases are visible "
+                    "in the 28 day context window."
+                ),
+                "tone": "warning",
+            }
+        )
+    if int(evidence.get("proxy_only_label_window_count_28d") or 0) > 0 and not int(
+        evidence.get("confirmed_label_window_count_28d") or 0
+    ):
+        items.append(
+            {
+                "label": "Proxy-only surveillance evidence",
+                "detail": "The visible surveillance label context is proxy-only and must not be treated as confirmed outbreak truth.",
+                "tone": "warning",
+            }
+        )
+    if int(evidence.get("delayed_or_stale_record_count_28d") or 0) > 0:
+        items.append(
+            {
+                "label": "Delayed or stale surveillance reporting",
+                "detail": "Some surveillance records in the context window are delayed or stale.",
+                "tone": "warning",
+            }
+        )
+    return items
 
 
 def _workflow_payload_for_ward(ward: Ward, latest_risk: RiskScore | None, alerts: list[Alert], *, manual_request_queued_at=None) -> dict:
@@ -346,6 +448,12 @@ def _workflow_payload_for_ward(ward: Ward, latest_risk: RiskScore | None, alerts
     risk_level = latest_risk.risk_level if latest_risk else ward.current_risk_level
     risk_score = latest_risk.score if latest_risk else ward.current_risk_score
     predicted_cases = latest_risk.predicted_cases if latest_risk else 0
+    decision_policy = latest_risk.decision_policy if latest_risk else {}
+    alert_decision = decision_policy.get("alert_decision")
+    has_decision_policy_trace = bool(
+        decision_policy.get("policy_version") or decision_policy.get("schema_version") or alert_decision
+    )
+    surveillance_evidence = _surveillance_alert_evidence_for_ward(ward)
 
     timestamps = [value for value in [manual_request_queued_at, latest_risk.generated_at if latest_risk else None, *(alert.created_at for alert in alerts)] if value]
     triggered_at = max(timestamps) if timestamps else None
@@ -459,42 +567,108 @@ def _workflow_payload_for_ward(ward: Ward, latest_risk: RiskScore | None, alerts
             {"label": "Delivered alert", "detail": "At least one alert has already been delivered for this ward.", "tone": "info"}
         ]
         eligible_actions = ["view_alerts", "investigate"]
-    elif risk_level == Ward.RISK_HIGH:
+    elif alert_decision in {DECISION_URGENT_ALERT, DECISION_ALERT_CANDIDATE} or risk_level == Ward.RISK_HIGH:
         status = AlertWorkflowState.STATUS_REVIEW_PENDING
-        decision_mode = "risk_only"
-        confidence = "moderate"
+        decision_mode = "decision_policy" if has_decision_policy_trace else "risk_only"
+        confidence = "high" if alert_decision == DECISION_URGENT_ALERT else "moderate"
         trigger_severity = AlertWorkflowState.SEVERITY_HIGH
-        reason_flagged = f"{ward.name} is the highest current risk ward in the visible scope."
-        trigger_reason = f"{ward.name} crossed the promoted high-risk threshold and is waiting for human confirmation."
+        reason_flagged = (
+            f"{ward.name} is an alert candidate under the active ward-risk decision policy."
+            if has_decision_policy_trace
+            else f"{ward.name} is high risk and needs review before an operational alert is created."
+        )
+        trigger_reason = (
+            f"{ward.name} crossed the urgent alert policy and is waiting for human confirmation."
+            if alert_decision == DECISION_URGENT_ALERT
+            else f"{ward.name} crossed the alert-candidate policy and is waiting for human confirmation."
+            if has_decision_policy_trace
+            else f"{ward.name} is high risk and is waiting for human confirmation."
+        )
         recommended_action = "Review the ward now and decide whether to create an operational alert request."
         recommended_response = recommended_action
         expected_operational_effect = "Preserves a human-reviewed trigger path before the system creates response work."
-        rules_basis = _workflow_rule_basis(
-            "high_risk_review_before_alerting",
-            "High-risk ward review before alerting",
-            ["promoted high-risk threshold crossed", "no alert created yet"],
+        rules_basis = (
+            _workflow_rule_basis(
+                "decision_policy_review_before_alerting",
+                "Decision-policy review before alerting",
+                [
+                    f"policy_version={decision_policy.get('policy_version') or 'unknown'}",
+                    f"alert_decision={alert_decision or 'risk_high'}",
+                    "no alert created yet",
+                ],
+            )
+            if has_decision_policy_trace
+            else _workflow_rule_basis(
+                "high_risk_review_before_alerting",
+                "High-risk review before alerting",
+                [
+                    f"risk_level={risk_level or 'unknown'}",
+                    f"risk_score={risk_score if risk_score is not None else 'unknown'}",
+                    "no alert created yet",
+                ],
+            )
         )
         trigger_reason_items = [
-            {"label": "Threshold breach", "detail": f"{ward.name} is currently in the promoted high-risk band.", "tone": "danger"}
+            {
+                "label": "Decision policy threshold" if has_decision_policy_trace else "High risk",
+                "detail": (
+                    f"{ward.name} is currently classified as {alert_decision or 'risk_high'}."
+                    if has_decision_policy_trace
+                    else f"{ward.name} is currently classified as high risk."
+                ),
+                "tone": "danger",
+            }
         ]
         eligible_actions = ["investigate", "view_alerts", "send_message"]
-    elif risk_level == Ward.RISK_MEDIUM:
+    elif alert_decision == DECISION_WATCHLIST_ONLY or risk_level == Ward.RISK_MEDIUM:
         status = AlertWorkflowState.STATUS_REVIEW_PENDING
-        decision_mode = "risk_only"
+        decision_mode = "decision_policy" if has_decision_policy_trace else "risk_only"
         confidence = "review"
         trigger_severity = AlertWorkflowState.SEVERITY_MEDIUM
-        reason_flagged = f"{ward.name} is the strongest watch-level candidate in the visible scope."
-        trigger_reason = f"{ward.name} is currently at watch level and should be reviewed before escalation."
+        reason_flagged = (
+            f"{ward.name} is the strongest watch-level candidate in the visible scope."
+            if has_decision_policy_trace
+            else f"{ward.name} has medium risk and should be reviewed before escalation."
+        )
+        trigger_reason = (
+            f"{ward.name} is currently a watchlist-only signal and should be reviewed before escalation."
+            if has_decision_policy_trace
+            else f"{ward.name} is currently a medium-risk signal and should be reviewed before escalation."
+        )
         recommended_action = "Review this watch-level ward and compare adjacent conditions before escalating."
         recommended_response = recommended_action
         expected_operational_effect = "Keeps watch-level wards visible without overstating them as triggered response work."
-        rules_basis = _workflow_rule_basis(
-            "watch_level_review_before_escalation",
-            "Watch-level review before escalation",
-            ["watch-level ward visible", "adjacent comparison still required"],
+        rules_basis = (
+            _workflow_rule_basis(
+                "watchlist_policy_review_before_escalation",
+                "Watchlist policy review before escalation",
+                [
+                    f"policy_version={decision_policy.get('policy_version') or 'unknown'}",
+                    "watchlist-only signal visible",
+                    "adjacent comparison still required",
+                ],
+            )
+            if has_decision_policy_trace
+            else _workflow_rule_basis(
+                "medium_risk_review_before_escalation",
+                "Medium-risk review before escalation",
+                [
+                    f"risk_level={risk_level or 'unknown'}",
+                    f"risk_score={risk_score if risk_score is not None else 'unknown'}",
+                    "adjacent comparison still required",
+                ],
+            )
         )
         trigger_reason_items = [
-            {"label": "Watch escalation", "detail": f"{ward.name} is currently at watch level and needs closer operator review.", "tone": "warning"}
+            {
+                "label": "Watch escalation" if has_decision_policy_trace else "Medium risk",
+                "detail": (
+                    f"{ward.name} is currently at watch level and needs closer operator review."
+                    if has_decision_policy_trace
+                    else f"{ward.name} is currently at medium risk and needs closer operator review."
+                ),
+                "tone": "warning",
+            }
         ]
         eligible_actions = ["investigate", "view_alerts"]
     else:
@@ -519,6 +693,10 @@ def _workflow_payload_for_ward(ward: Ward, latest_risk: RiskScore | None, alerts
 
     if status == AlertWorkflowState.STATUS_RESOLVED and active_alert_count == 0:
         delivery_state = "no_active_delivery"
+    trigger_reason_items = [
+        *trigger_reason_items,
+        *_surveillance_trigger_reason_items(surveillance_evidence),
+    ]
 
     return {
         "alert": alerts[0] if alerts else None,
@@ -551,6 +729,9 @@ def _workflow_payload_for_ward(ward: Ward, latest_risk: RiskScore | None, alerts
         "metadata": {
             "materialized_from": "backend_alert_and_risk_records",
             "delivery_state": delivery_state,
+            "surveillance_evidence": surveillance_evidence,
+            "surveillance_truth_gate": surveillance_evidence["truth_gate"],
+            "decision_policy": decision_policy,
         },
         "last_evaluated_at": timezone.now(),
     }
@@ -769,6 +950,90 @@ def alert_retry_delay() -> timedelta:
     return timedelta(minutes=config("ALERT_RETRY_DELAY_MINUTES", cast=int, default=5))
 
 
+def get_alert_delivery_pause_state() -> dict:
+    control = SystemControlState.objects.filter(
+        control_key=SystemControlState.KEY_ALERT_DELIVERY_PAUSE,
+    ).select_related("updated_by").first()
+
+    if control is None:
+        return {
+            "is_active": False,
+            "paused_until": None,
+            "reason": "",
+            "updated_at": None,
+            "updated_by": None,
+        }
+
+    return {
+        "is_active": control.is_currently_active(),
+        "paused_until": control.active_until,
+        "reason": control.reason,
+        "updated_at": control.updated_at,
+        "updated_by": control.updated_by.username if control.updated_by_id else None,
+    }
+
+
+def build_system_control_status(*, can_write: bool = False) -> dict:
+    pause_state = get_alert_delivery_pause_state()
+    decision_policy = current_ward_risk_decision_policy()
+    return {
+        "mode": "control_contracts_enabled",
+        "can_retry_background_jobs": can_write,
+        "can_run_manual_risk_scoring": can_write,
+        "can_pause_alert_delivery": can_write,
+        "alert_delivery_paused": pause_state["is_active"],
+        "alert_delivery_paused_until": pause_state["paused_until"],
+        "alert_delivery_pause_reason": pause_state["reason"],
+        "alert_delivery_pause_updated_at": pause_state["updated_at"],
+        "alert_delivery_pause_updated_by": pause_state["updated_by"],
+        "ward_risk_decision_policy": {
+            "schema_version": decision_policy["schema_version"],
+            "policy_version": decision_policy["policy_version"],
+            "policy_name": decision_policy.get("policy_name", ""),
+            "thresholds": decision_policy["thresholds"],
+            "active_control": decision_policy.get("active_control"),
+            "audit_history": decision_policy.get("audit_history", []),
+        },
+    }
+
+
+def set_alert_delivery_pause(
+    *,
+    paused: bool,
+    actor=None,
+    duration_minutes: int = 60,
+    reason: str = "",
+) -> dict:
+    bounded_duration = max(1, min(duration_minutes, 1440))
+    with transaction.atomic():
+        control, _ = SystemControlState.objects.select_for_update().get_or_create(
+            control_key=SystemControlState.KEY_ALERT_DELIVERY_PAUSE,
+        )
+        if paused:
+            control.is_active = True
+            control.active_until = timezone.now() + timedelta(minutes=bounded_duration)
+            control.reason = reason.strip()
+            control.metadata = {
+                **(control.metadata or {}),
+                "last_action": "paused",
+                "duration_minutes": bounded_duration,
+            }
+        else:
+            control.is_active = False
+            control.active_until = None
+            control.reason = reason.strip()
+            control.metadata = {
+                **(control.metadata or {}),
+                "last_action": "resumed",
+            }
+
+        if getattr(actor, "is_authenticated", False):
+            control.updated_by = actor
+        control.save(update_fields=["is_active", "active_until", "reason", "metadata", "updated_by", "updated_at"])
+
+    return get_alert_delivery_pause_state()
+
+
 def build_alert_message(
     ward: Ward,
     risk_score: RiskScore,
@@ -867,6 +1132,16 @@ def create_alerts_for_riskscore(
 ) -> list[Alert]:
     ward = risk_score.ward
     alerts_created: list[Alert] = []
+    request_metadata = {
+        **(guided_request_metadata or {}),
+        "surveillance_evidence": (guided_request_metadata or {}).get("surveillance_evidence")
+        or _surveillance_alert_evidence_for_ward(ward),
+        "model_run_evidence": (guided_request_metadata or {}).get("model_run_evidence")
+        or _model_run_alert_evidence_for_riskscore(risk_score),
+        "decision_policy": (guided_request_metadata or {}).get("decision_policy")
+        or risk_score.decision_policy
+        or {},
+    }
     message, _message_mode = build_alert_message(
         ward,
         risk_score,
@@ -894,7 +1169,7 @@ def create_alerts_for_riskscore(
         message=message,
         status=Alert.STATUS_DELIVERED,
         delivery_backend="internal-dashboard",
-        guided_request_metadata=guided_request_metadata or {},
+        guided_request_metadata=request_metadata,
         attempt_count=1,
         max_attempts=1,
         last_attempted_at=delivered_at,
@@ -914,7 +1189,7 @@ def create_alerts_for_riskscore(
                 message=message,
                 status=Alert.STATUS_QUEUED,
                 delivery_backend=config("SMS_PROVIDER", default="stub").strip().lower() or "stub",
-                guided_request_metadata=guided_request_metadata or {},
+                guided_request_metadata=request_metadata,
                 max_attempts=config("ALERT_MAX_ATTEMPTS", cast=int, default=3),
             )
             alerts_created.append(alert)
@@ -932,6 +1207,129 @@ def create_alerts_for_riskscore(
     return alerts_created
 
 
+def _model_run_alert_evidence_for_riskscore(risk_score: RiskScore) -> dict:
+    model_run = risk_score.model_run
+    if model_run is None:
+        return {
+            "model_run_id": None,
+            "model_version": risk_score.model_version,
+            "promotion_target": None,
+            "phase_4_promotion_evidence_persisted": False,
+            "phase_4_promotion_gates_passed": False,
+            "promotion_truth_and_leakage_checks_passed": False,
+        }
+
+    metadata = model_run.metadata or {}
+    evaluation_metrics = model_run.evaluation_metrics or {}
+    feature_lineage = _feature_lineage_for_riskscore(risk_score)
+    return {
+        "model_run_id": model_run.id,
+        "model_version": model_run.model_version,
+        "algorithm_name": model_run.algorithm_name,
+        "promotion_target": metadata.get("promotion_target"),
+        "promotion_state": metadata.get("promotion_state"),
+        "alert_eligible": metadata.get("alert_eligible"),
+        "phase_4_promotion_evidence_persisted": metadata.get("phase_4_promotion_evidence_persisted", False),
+        "phase_4_promotion_gates_passed": metadata.get("phase_4_promotion_gates_passed", False),
+        "promotion_truth_and_leakage_checks_passed": evaluation_metrics.get(
+            "promotion_truth_and_leakage_checks_passed",
+            False,
+        ),
+        "temporal_backtest_schema_version": evaluation_metrics.get("phase_4_temporal_backtest_schema_version"),
+        "promotion_evaluation_metrics": {
+            "out_of_time_score": evaluation_metrics.get("out_of_time_score"),
+            "lead_time_recall": evaluation_metrics.get("lead_time_recall"),
+            "precision": evaluation_metrics.get("precision"),
+            "balanced_accuracy": evaluation_metrics.get("balanced_accuracy"),
+            "f1_score": evaluation_metrics.get("f1_score"),
+            "false_alert_rate": evaluation_metrics.get("false_alert_rate"),
+            "false_alerts_per_true_hit": evaluation_metrics.get("false_alerts_per_true_hit"),
+            "area_under_precision_recall_curve": evaluation_metrics.get(
+                "area_under_precision_recall_curve"
+            ),
+        },
+        "feature_lineage": feature_lineage,
+    }
+
+
+def _append_lineage_values(target: set[str], value) -> None:
+    if isinstance(value, str):
+        if value:
+            target.add(value)
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            _append_lineage_values(target, item)
+
+
+def _collect_feature_lineage_refs(payload) -> tuple[list[str], list[str]]:
+    source_refs: set[str] = set()
+    source_record_refs: set[str] = set()
+
+    def walk(value) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in {"source_ref", "source_refs"}:
+                    _append_lineage_values(source_refs, item)
+                    continue
+                if key in {"source_record_ref", "source_record_refs", "record_refs"}:
+                    _append_lineage_values(source_record_refs, item)
+                    continue
+                walk(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                walk(item)
+
+    walk(payload)
+    return sorted(source_refs), sorted(source_record_refs)
+
+
+def _feature_lineage_for_riskscore(risk_score: RiskScore) -> dict:
+    model_run = risk_score.model_run
+    dataset = model_run.inference_feature_dataset if model_run else None
+    if dataset is None:
+        return {
+            "inference_feature_dataset_id": None,
+            "inference_feature_dataset_ref": getattr(model_run, "inference_dataset_ref", None),
+            "lineage_available": False,
+            "ward_feature_row_count": 0,
+            "feature_row_refs": [],
+            "source_refs": [],
+            "source_record_refs": [],
+            "prediction_dates": [],
+            "source_cutoff_timestamps": [],
+        }
+
+    ward_rows = FeatureDatasetRow.objects.filter(dataset=dataset, ward=risk_score.ward).order_by("-id")
+    row_count = ward_rows.count()
+    rows = list(ward_rows[:5])
+    source_refs: set[str] = set()
+    source_record_refs: set[str] = set()
+    prediction_dates: list[str] = []
+    source_cutoff_timestamps: list[str] = []
+    for row in rows:
+        values = row.feature_values or {}
+        row_source_refs, row_source_record_refs = _collect_feature_lineage_refs(values)
+        source_refs.update(row_source_refs)
+        source_record_refs.update(row_source_record_refs)
+        if values.get("prediction_date"):
+            prediction_dates.append(values["prediction_date"])
+        if values.get("source_cutoff_timestamp"):
+            source_cutoff_timestamps.append(values["source_cutoff_timestamp"])
+
+    return {
+        "inference_feature_dataset_id": dataset.id,
+        "inference_feature_dataset_ref": dataset.dataset_ref,
+        "lineage_available": bool(rows),
+        "ward_feature_row_count": row_count,
+        "feature_row_refs": [f"feature_dataset_row:{row.id}" for row in rows],
+        "source_refs": sorted(source_refs),
+        "source_record_refs": sorted(source_record_refs),
+        "prediction_dates": list(dict.fromkeys(prediction_dates)),
+        "source_cutoff_timestamps": list(dict.fromkeys(source_cutoff_timestamps)),
+    }
+
+
 def deliver_alert(alert: Alert) -> Alert:
     if alert.channel == Alert.CHANNEL_DASHBOARD:
         sync_alert_workflow_for_ward(alert.ward)
@@ -941,6 +1339,15 @@ def deliver_alert(alert: Alert) -> Alert:
         alert.status = Alert.STATUS_FAILED
         alert.error_message = f"Unsupported alert channel: {alert.channel}"
         alert.next_retry_at = None
+        alert.save(update_fields=["status", "error_message", "next_retry_at"])
+        sync_alert_workflow_for_ward(alert.ward)
+        return alert
+
+    pause_state = get_alert_delivery_pause_state()
+    if pause_state["is_active"]:
+        alert.status = Alert.STATUS_RETRY_PENDING
+        alert.error_message = "Alert delivery paused by system control."
+        alert.next_retry_at = pause_state["paused_until"] or timezone.now() + alert_retry_delay()
         alert.save(update_fields=["status", "error_message", "next_retry_at"])
         sync_alert_workflow_for_ward(alert.ward)
         return alert
@@ -1107,23 +1514,55 @@ def build_alert_intelligence_snapshot(
     }
 
     risk_score_value = alert.risk_score.score if alert.risk_score else None
-    if risk_score_value is not None and risk_score_value >= 75:
+    decision_policy = request_metadata.get("decision_policy") or (
+        alert.risk_score.decision_policy if alert.risk_score else {}
+    )
+    policy_version = decision_policy.get("policy_version")
+    alert_decision = decision_policy.get("alert_decision")
+    reason_codes = decision_policy.get("reason_codes", [])
+    risk_thresholds = (decision_policy.get("thresholds") or {}).get("risk_level") or {}
+    high_threshold = risk_thresholds.get("high_min_probability", 0.75)
+    medium_threshold = risk_thresholds.get("medium_min_probability", 0.45)
+
+    if alert_decision == DECISION_URGENT_ALERT:
+        risk_context = {
+            "level_label": "High Risk",
+            "trend_label": "Urgent",
+            "summary": "The recorded score crossed the urgent alert policy. Review linked ward and delivery records closely.",
+            "recorded_risk_score": risk_score_value,
+            "threshold": high_threshold,
+            "policy_version": policy_version,
+            "alert_decision": alert_decision,
+            "reason_codes": reason_codes,
+            "mode": "derived_from_decision_policy",
+        }
+    elif alert_decision == DECISION_ALERT_CANDIDATE or (
+        risk_score_value is not None and risk_score_value >= high_threshold
+    ):
         risk_context = {
             "level_label": "High Risk",
             "trend_label": "Escalating",
-            "summary": "Threshold crossed in the recorded risk score. Review linked ward and delivery records closely.",
+            "summary": "The recorded score is an alert candidate under the active decision policy.",
             "recorded_risk_score": risk_score_value,
-            "threshold": 75,
-            "mode": "derived_from_risk_score",
+            "threshold": high_threshold,
+            "policy_version": policy_version,
+            "alert_decision": alert_decision,
+            "reason_codes": reason_codes,
+            "mode": "derived_from_decision_policy" if decision_policy else "derived_from_risk_score",
         }
-    elif risk_score_value is not None and risk_score_value >= 40:
+    elif alert_decision == DECISION_WATCHLIST_ONLY or (
+        risk_score_value is not None and risk_score_value >= medium_threshold
+    ):
         risk_context = {
             "level_label": "Medium Risk",
             "trend_label": "Monitoring",
             "summary": "Watch closely and prepare ward follow-up if indicators rise again.",
             "recorded_risk_score": risk_score_value,
-            "threshold": 75,
-            "mode": "derived_from_risk_score",
+            "threshold": medium_threshold,
+            "policy_version": policy_version,
+            "alert_decision": alert_decision,
+            "reason_codes": reason_codes,
+            "mode": "derived_from_decision_policy" if decision_policy else "derived_from_risk_score",
         }
     else:
         risk_context = {
@@ -1135,8 +1574,13 @@ def build_alert_intelligence_snapshot(
                 else "No linked risk score is available for interpretation on this alert record."
             ),
             "recorded_risk_score": risk_score_value,
-            "threshold": 75 if risk_score_value is not None else None,
-            "mode": "derived_from_risk_score" if risk_score_value is not None else "unavailable",
+            "threshold": medium_threshold if risk_score_value is not None else None,
+            "policy_version": policy_version,
+            "alert_decision": alert_decision or DECISION_ROUTINE_MONITORING,
+            "reason_codes": reason_codes,
+            "mode": "derived_from_decision_policy" if decision_policy else "derived_from_risk_score"
+            if risk_score_value is not None
+            else "unavailable",
         }
 
     delivery = {
@@ -1181,6 +1625,7 @@ def build_alert_intelligence_snapshot(
             "trigger_type": "",
             "preview_text": "",
         }
+    surveillance_evidence = request_metadata.get("surveillance_evidence") or _surveillance_alert_evidence_for_ward(alert.ward)
 
     chv_total = CHV.objects.filter(ward=alert.ward, is_active=True).count()
     facility_total = HealthFacility.objects.filter(ward=alert.ward, is_active=True).count()
@@ -1360,6 +1805,20 @@ def build_alert_intelligence_snapshot(
             ),
             "tone": "warning" if risk_score_value is not None and risk_score_value >= 75 else "neutral",
         },
+        {
+            "label": (
+                f"Surveillance truth: {surveillance_evidence.get('label_truth_state')}"
+                if surveillance_evidence.get("latest_label_window_ref")
+                else "No surveillance label window linked"
+            ),
+            "tone": (
+                "success"
+                if surveillance_evidence.get("label_truth_state") == "confirmed_surveillance_truth"
+                else "warning"
+                if surveillance_evidence.get("latest_label_window_ref")
+                else "neutral"
+            ),
+        },
     ]
 
     timeline = [
@@ -1446,6 +1905,30 @@ def build_alert_intelligence_snapshot(
             ],
         },
     ]
+    if surveillance_evidence.get("latest_label_window_ref"):
+        timeline.append(
+            {
+                "id": "surveillance-label-window",
+                "title": "Surveillance label context",
+                "description": "The alert candidate is linked to canonical surveillance label-window context.",
+                "timestamp": alert.created_at,
+                "tone": (
+                    "success"
+                    if surveillance_evidence.get("label_truth_state") == "confirmed_surveillance_truth"
+                    else "warning"
+                ),
+                "category": "surveillance",
+                "actor": "Backend",
+                "event_type": "evidence_linked",
+                "message": "Surveillance label and freshness truth attached to alert reasoning.",
+                "meta": surveillance_evidence.get("latest_label_window_ref"),
+                "details": [
+                    f"Truth state: {surveillance_evidence.get('label_truth_state')}",
+                    f"Freshness: {surveillance_evidence.get('latest_freshness_state') or 'unknown'}",
+                    "Proxy-only labels are not confirmed outbreak truth.",
+                ],
+            }
+        )
     if alert.next_retry_at:
         timeline.append(
             {
@@ -1555,6 +2038,7 @@ def build_alert_intelligence_snapshot(
         "delivery": delivery,
         "delivery_summary": delivery,
         "message_source": message_source,
+        "surveillance_evidence": surveillance_evidence,
         "chv_response_summary": chv_response_summary,
         "facility_response_summary": facility_response_summary,
         "recommended_next_action": recommended_next_action,
@@ -1563,6 +2047,920 @@ def build_alert_intelligence_snapshot(
         "freshness": freshness,
         "timeline": timeline,
         "capabilities": capabilities,
+    }
+
+
+def _evidence_badge_tone(state: str | None) -> str:
+    normalized = (state or "").lower()
+    if normalized in {"fresh", "high", "promoted", "evaluated", "hit", "correct_quiet", "confirmed_surveillance"}:
+        return "success"
+    if normalized in {"stale", "low", "proxy_backed", "seeded_demo", "false_alert", "missed_outbreak"}:
+        return "warning"
+    if normalized in {"failed", "blocked"}:
+        return "danger"
+    return "default"
+
+
+def _model_readiness_evidence(latest_risk: RiskScore | None, population_exposure_context: dict) -> dict:
+    if latest_risk is None or latest_risk.model_run is None:
+        return {
+            "state": "seeded_demo",
+            "label": "Seeded demo",
+            "tone": "warning",
+            "detail": "No promoted model run is attached to the current ward score.",
+            "evidence": ["current score has no promoted model-run lineage"],
+        }
+
+    model_run = latest_risk.model_run
+    metadata = model_run.metadata or {}
+    metrics = model_run.evaluation_metrics or {}
+    dataset_source_kinds = {
+        dataset.source_kind
+        for dataset in [model_run.training_feature_dataset, model_run.inference_feature_dataset]
+        if dataset is not None
+    }
+    exposure_modes = {
+        factor.get("mode")
+        for factor in population_exposure_context.get("factor_items", [])
+        if factor.get("mode")
+    }
+
+    evidence = [
+        f"model_version={model_run.model_version}",
+        f"status={model_run.status}",
+    ]
+    if metadata.get("promotion_target"):
+        evidence.append(f"promotion_target={metadata.get('promotion_target')}")
+    live_promotion_policy = metadata.get("live_promotion_policy") or {}
+    live_promotion_blockers = live_promotion_policy.get("blockers") or []
+    if live_promotion_blockers:
+        evidence.append(f"live_promotion_blockers={','.join(live_promotion_blockers)}")
+    if metrics:
+        evidence.append("evaluation_metrics_present")
+    if dataset_source_kinds:
+        evidence.append(f"dataset_source={','.join(sorted(dataset_source_kinds))}")
+    if exposure_modes:
+        evidence.append(f"exposure_mode={','.join(sorted(exposure_modes))}")
+
+    if is_promoted_model_run(model_run):
+        state = "promoted"
+        label = "Promoted"
+        detail = "The current ward score is attached to a Phase 4-gated promoted live-baseline model run."
+    elif "SEEDED" in dataset_source_kinds or metadata.get("execution_context") in {"demo", "seeded_demo", "test_fixture"}:
+        state = "seeded_demo"
+        label = "Seeded demo"
+        detail = "The current score uses seeded or demo/test lineage and should not be treated as production-grade evidence."
+    elif live_promotion_policy.get("requested_live_promotion") and live_promotion_blockers:
+        state = "proxy_backed"
+        label = "Promotion blocked"
+        detail = "The model run is not live-promoted because promotion evidence or production training truth is incomplete."
+    elif metrics and model_run.status == model_run.STATUS_SUCCESS:
+        state = "evaluated"
+        label = "Evaluated"
+        detail = "The model run has stored evaluation metrics but is not Phase 4 promoted."
+    else:
+        state = "proxy_backed"
+        label = "Proxy-backed"
+        detail = "The current score depends on proxy or incomplete lineage and needs cautious interpretation."
+
+    if state not in {"seeded_demo", "promoted"} and any("proxy" in str(mode) for mode in exposure_modes):
+        state = "proxy_backed"
+        label = "Proxy-backed"
+        detail = "Population or exposure inputs include proxy-derived context."
+
+    return {
+        "state": state,
+        "label": label,
+        "tone": _evidence_badge_tone(state),
+        "detail": detail,
+        "evidence": evidence,
+    }
+
+
+def _forecast_horizon_evidence(latest_risk: RiskScore | None) -> dict:
+    validation = {}
+    if latest_risk and latest_risk.model_run:
+        metrics = latest_risk.model_run.evaluation_metrics or {}
+        metadata = latest_risk.model_run.metadata or {}
+        validation = metrics.get("surveillance_lead_time_validation") or metadata.get("surveillance_lead_time_validation") or {}
+
+    horizons = validation.get("horizons") if isinstance(validation, dict) else {}
+    horizon_7 = horizons.get("7") if isinstance(horizons, dict) else None
+    horizon_14 = horizons.get("14") if isinstance(horizons, dict) else None
+    supported = []
+    for horizon, payload in [(7, horizon_7), (14, horizon_14)]:
+        if isinstance(payload, dict) and payload.get("matching_label_window_count", 0):
+            supported.append(horizon)
+
+    return {
+        "label": "7 to 14 day forecast horizon",
+        "min_days": 7,
+        "max_days": 14,
+        "display_value": "7 to 14 days",
+        "expected_cases_label": "Expected cases in the next 7 days",
+        "lead_time_supported_days": supported,
+        "validation_status": validation.get("status") if isinstance(validation, dict) else None,
+        "mode": "lead_time_validation" if validation else "default_policy_window",
+    }
+
+
+def _source_evidence_badges(
+    *,
+    current_risk: dict,
+    freshness: dict,
+    surveillance_context: dict,
+    population_exposure_context: dict,
+) -> list[dict]:
+    decision_policy = current_risk.get("decision_policy") or {}
+    policy_inputs = decision_policy.get("inputs") or {}
+    source_freshness = policy_inputs.get("source_freshness") or {}
+    source_confidence = policy_inputs.get("source_confidence") or {}
+
+    freshness_state = source_freshness.get("combined_state") or ("STALE" if freshness.get("is_stale") else "FRESH")
+    confidence_state = source_confidence.get("confidence")
+    if not confidence_state:
+        if surveillance_context.get("surveillance_label_truth_state") == "confirmed_surveillance_truth":
+            confidence_state = "high"
+        elif population_exposure_context.get("coverage", {}).get("record_count"):
+            confidence_state = "moderate"
+        else:
+            confidence_state = "low"
+
+    source_kind = source_confidence.get("source_kind") or current_risk.get("source") or "unknown"
+    surveillance_truth = surveillance_context.get("surveillance_label_truth_state") or "no_surveillance_label_window"
+
+    return [
+        {
+            "id": "source_freshness",
+            "label": "Source freshness",
+            "value": str(freshness_state).replace("_", " ").title(),
+            "tone": _evidence_badge_tone(str(freshness_state)),
+            "detail": source_freshness.get("detail")
+            or ("Current ward data is inside the freshness window." if not freshness.get("is_stale") else "Current ward data is stale."),
+        },
+        {
+            "id": "source_confidence",
+            "label": "Source confidence",
+            "value": str(confidence_state).replace("_", " ").title(),
+            "tone": _evidence_badge_tone(str(confidence_state)),
+            "detail": source_confidence.get("detail") or f"Confidence inferred from {source_kind} and visible surveillance/exposure context.",
+        },
+        {
+            "id": "surveillance_truth",
+            "label": "Surveillance truth",
+            "value": surveillance_truth.replace("_", " ").title(),
+            "tone": "success" if surveillance_truth == "confirmed_surveillance_truth" else "warning",
+            "detail": surveillance_context.get("surveillance_display_caveat") or "No confirmed surveillance label window is linked yet.",
+        },
+    ]
+
+
+def _label_for_prediction(risk_score: RiskScore, label_windows: list[SurveillanceLabelWindow]) -> SurveillanceLabelWindow | None:
+    prediction_date = risk_score.generated_at.date()
+    horizon_start = prediction_date + timedelta(days=7)
+    horizon_end = prediction_date + timedelta(days=14)
+    for label_window in label_windows:
+        if label_window.label_window_start <= horizon_end and label_window.label_window_end >= horizon_start:
+            return label_window
+    return None
+
+
+def _prediction_outcome_classification(risk_score: RiskScore, label_window: SurveillanceLabelWindow | None) -> str:
+    decision_policy = risk_score.decision_policy or {}
+    alert_decision = decision_policy.get("alert_decision")
+    predicted_positive = risk_score.risk_level == Ward.RISK_HIGH or alert_decision in {
+        DECISION_URGENT_ALERT,
+        DECISION_ALERT_CANDIDATE,
+    }
+    if label_window is None:
+        return "pending_label"
+
+    observed_active = label_window.outbreak_label == SurveillanceOutbreakLabel.ACTIVE
+    if predicted_positive and observed_active:
+        return "hit"
+    if predicted_positive and not observed_active:
+        return "false_alert"
+    if not predicted_positive and observed_active:
+        return "missed_outbreak"
+    return "correct_quiet"
+
+
+def _prediction_label_history(risk_history: list[RiskScore]) -> tuple[list[dict], dict]:
+    if not risk_history:
+        return [], {
+            "mode": "no_prediction_history",
+            "evaluated_count": 0,
+            "hit_count": 0,
+            "false_alert_count": 0,
+            "missed_outbreak_count": 0,
+            "pending_label_count": 0,
+            "correct_quiet_count": 0,
+        }
+
+    ward = risk_history[0].ward
+    min_prediction_date = min(risk.generated_at.date() + timedelta(days=7) for risk in risk_history)
+    max_prediction_date = max(risk.generated_at.date() + timedelta(days=14) for risk in risk_history)
+    label_windows = list(
+        SurveillanceLabelWindow.objects.filter(
+            ward=ward,
+            label_window_start__lte=max_prediction_date,
+            label_window_end__gte=min_prediction_date,
+        ).order_by("label_window_start", "label_window_end", "id")
+    )
+
+    rows: list[dict] = []
+    counts = {
+        "hit": 0,
+        "false_alert": 0,
+        "missed_outbreak": 0,
+        "pending_label": 0,
+        "correct_quiet": 0,
+    }
+    for risk_score in risk_history:
+        label_window = _label_for_prediction(risk_score, label_windows)
+        classification = _prediction_outcome_classification(risk_score, label_window)
+        counts[classification] += 1
+        decision_policy = risk_score.decision_policy or {}
+        rows.append(
+            {
+                "risk_score_id": risk_score.id,
+                "prediction_generated_at": risk_score.generated_at,
+                "forecast_window_start": risk_score.generated_at.date() + timedelta(days=7),
+                "forecast_window_end": risk_score.generated_at.date() + timedelta(days=14),
+                "risk_level": risk_score.risk_level,
+                "risk_score": risk_score.score,
+                "predicted_cases": risk_score.predicted_cases,
+                "alert_decision": decision_policy.get("alert_decision") or "",
+                "policy_version": decision_policy.get("policy_version") or "",
+                "observed_label": label_window.outbreak_label if label_window else "PENDING",
+                "observed_truth_level": label_window.label_truth_level if label_window else "",
+                "observed_suspected_cases": label_window.suspected_case_count if label_window else 0,
+                "observed_confirmed_cases": label_window.confirmed_case_count if label_window else 0,
+                "observed_proxy_cases": label_window.proxy_case_count if label_window else 0,
+                "label_window_ref": f"surveillance_label_window:{label_window.id}" if label_window else "",
+                "label_dataset_ref": label_window.dataset_ref if label_window else "",
+                "classification": classification,
+                "review_required": classification in {"false_alert", "missed_outbreak"},
+                "confidence_caveat": (
+                    "Confirmed surveillance truth"
+                    if label_window and label_window.label_truth_level == SurveillanceTruthLevel.CONFIRMED_SURVEILLANCE
+                    else "Proxy, suspected, demo, or pending label evidence"
+                ),
+            }
+        )
+
+    evaluated_count = len(rows) - counts["pending_label"]
+    return rows, {
+        "mode": "prediction_vs_surveillance_labels",
+        "evaluated_count": evaluated_count,
+        "hit_count": counts["hit"],
+        "false_alert_count": counts["false_alert"],
+        "missed_outbreak_count": counts["missed_outbreak"],
+        "pending_label_count": counts["pending_label"],
+        "correct_quiet_count": counts["correct_quiet"],
+        "precision_review_note": (
+            "Only rows with surveillance label windows are counted as evaluated; pending rows remain visible but are not scored."
+        ),
+    }
+
+
+def _alert_candidate_review_evidence(current_risk: dict, workflow: AlertWorkflowState, related_alerts: list[Alert]) -> dict:
+    decision_policy = current_risk.get("decision_policy") or {}
+    alert_decision = decision_policy.get("alert_decision") or DECISION_ROUTINE_MONITORING
+    blockers = decision_policy.get("automatic_alert_blockers") or []
+    has_active_alert = bool(related_alerts) or workflow.active_alert_count > 0
+    review_state = (
+        "alert_active"
+        if has_active_alert
+        else "needs_human_review"
+        if alert_decision in {DECISION_URGENT_ALERT, DECISION_ALERT_CANDIDATE, DECISION_WATCHLIST_ONLY}
+        or workflow.status == AlertWorkflowState.STATUS_REVIEW_PENDING
+        else "routine_monitoring"
+    )
+    return {
+        "review_state": review_state,
+        "alert_decision": alert_decision,
+        "policy_version": decision_policy.get("policy_version") or "",
+        "risk_level": current_risk.get("risk_level"),
+        "risk_score": current_risk.get("risk_score"),
+        "predicted_cases": current_risk.get("predicted_cases"),
+        "automatic_alert_allowed": bool(decision_policy.get("automatic_alert_allowed", False)),
+        "automatic_alert_blockers": blockers,
+        "reason_codes": decision_policy.get("reason_codes") or [],
+        "recommended_action": workflow.recommended_action,
+        "active_alert_count": workflow.active_alert_count,
+    }
+
+
+def _chv_action_evidence_for_ward(ward: Ward) -> dict:
+    coverage_requests = list(
+        CHVCoverageRequest.objects.filter(ward=ward)
+        .prefetch_related("assignments", "linked_alert_links__alert")
+        .order_by("-created_at")[:4]
+    )
+    active_statuses = {
+        CHVCoverageRequest.STATUS_OPEN,
+        CHVCoverageRequest.STATUS_APPROVED,
+        CHVCoverageRequest.STATUS_IN_PROGRESS,
+    }
+    rows = []
+    for request in coverage_requests:
+        assignments = list(request.assignments.all())
+        linked_alerts = [link.alert for link in request.linked_alert_links.all()]
+        rows.append(
+            {
+                "public_id": str(request.public_id),
+                "status": request.status,
+                "priority": request.priority,
+                "trigger_source": request.trigger_source,
+                "created_at": request.created_at,
+                "expected_response_by": request.expected_response_by,
+                "resolved_at": request.resolved_at,
+                "linked_alert_public_ids": [str(alert.public_id) for alert in linked_alerts],
+                "linked_alert_statuses": [
+                    {
+                        "public_id": str(alert.public_id),
+                        "status": alert.status,
+                        "channel": alert.channel,
+                        "created_at": alert.created_at,
+                    }
+                    for alert in linked_alerts
+                ],
+                "assignment_counts": {
+                    "active": sum(1 for assignment in assignments if assignment.status == CHVAssignment.STATUS_ACTIVE),
+                    "completed": sum(1 for assignment in assignments if assignment.status == CHVAssignment.STATUS_COMPLETED),
+                    "cancelled": sum(1 for assignment in assignments if assignment.status == CHVAssignment.STATUS_CANCELLED),
+                    "total": len(assignments),
+                },
+            }
+        )
+
+    active_count = sum(1 for request in coverage_requests if request.status in active_statuses)
+    linked_alert_count = sum(len(row["linked_alert_public_ids"]) for row in rows)
+    return {
+        "mode": "chv_coverage_requests_linked_to_alerts",
+        "summary": {
+            "visible_request_count": len(rows),
+            "active_request_count": active_count,
+            "linked_alert_count": linked_alert_count,
+            "latest_status": rows[0]["status"] if rows else "NO_REQUEST",
+        },
+        "requests": rows,
+    }
+
+
+def _outcome_feedback_step(
+    *,
+    key: str,
+    label: str,
+    status: str,
+    detail: str,
+    occurred_at=None,
+    evidence_level: str = "direct",
+    evidence_refs: list[str] | None = None,
+) -> dict:
+    tone = "default"
+    if status == "recorded":
+        tone = "success"
+    elif status in {"in_progress", "pending", "not_applicable"}:
+        tone = "warning" if status == "in_progress" else "default"
+    elif status in {"missing", "failed"}:
+        tone = "danger"
+    return {
+        "key": key,
+        "label": label,
+        "status": status,
+        "tone": tone,
+        "detail": detail,
+        "occurred_at": occurred_at,
+        "evidence_level": evidence_level,
+        "evidence_refs": evidence_refs or [],
+    }
+
+
+def _latest_evaluated_prediction_row(prediction_rows: list[dict]) -> dict | None:
+    for row in prediction_rows:
+        if row["classification"] != "pending_label":
+            return row
+    return prediction_rows[0] if prediction_rows else None
+
+
+def _phase_7_reference_time(related_alerts: list[Alert], prediction_rows: list[dict]):
+    if related_alerts:
+        return max(alert.created_at for alert in related_alerts if alert.created_at)
+    prediction_times = [row["prediction_generated_at"] for row in prediction_rows if row.get("prediction_generated_at")]
+    if prediction_times:
+        return max(prediction_times)
+    return timezone.now() - timedelta(days=30)
+
+
+def _recent_facility_action_evidence_for_ward(ward: Ward, *, reference_at) -> dict:
+    window_start = reference_at - timedelta(hours=1) if reference_at else timezone.now() - timedelta(days=30)
+    reviews = list(
+        FacilityReadinessReview.objects.filter(ward=ward, created_at__gte=window_start)
+        .prefetch_related("update_requests", "escalations")
+        .order_by("-created_at")[:4]
+    )
+    review_rows = []
+    update_request_rows = []
+    escalation_rows = []
+    for review in reviews:
+        review_rows.append(
+            {
+                "public_id": str(review.public_id),
+                "status": review.status,
+                "severity": review.severity,
+                "created_at": review.created_at,
+                "acknowledged_at": review.acknowledged_at,
+                "resolved_at": review.resolved_at,
+            }
+        )
+        for update_request in review.update_requests.all():
+            update_request_rows.append(
+                {
+                    "public_id": str(update_request.public_id),
+                    "status": update_request.status,
+                    "channel": update_request.channel,
+                    "requested_at": update_request.requested_at,
+                    "sent_at": update_request.sent_at,
+                    "acknowledged_at": update_request.acknowledged_at,
+                }
+            )
+        for escalation in review.escalations.all():
+            escalation_rows.append(
+                {
+                    "public_id": str(escalation.public_id),
+                    "status": escalation.status,
+                    "severity": escalation.severity,
+                    "created_at": escalation.created_at,
+                    "acknowledged_at": escalation.acknowledged_at,
+                    "resolved_at": escalation.resolved_at,
+                }
+            )
+
+    if not escalation_rows:
+        direct_escalations = FacilityReadinessEscalation.objects.filter(ward=ward, created_at__gte=window_start).order_by(
+            "-created_at"
+        )[:4]
+        escalation_rows = [
+            {
+                "public_id": str(escalation.public_id),
+                "status": escalation.status,
+                "severity": escalation.severity,
+                "created_at": escalation.created_at,
+                "acknowledged_at": escalation.acknowledged_at,
+                "resolved_at": escalation.resolved_at,
+            }
+            for escalation in direct_escalations
+        ]
+
+    return {
+        "reviews": review_rows,
+        "update_requests": update_request_rows,
+        "escalations": escalation_rows,
+    }
+
+
+def _phase_7_observed_outbreak_outcome(*, latest_row: dict | None, response_quality_state: str, response_started: bool) -> dict:
+    if latest_row is None or latest_row["classification"] == "pending_label":
+        return {
+            "state": "pending",
+            "label": "Pending outcome label",
+            "detail": "The 7 to 14 day label window has not been observed yet.",
+        }
+
+    observed_label = latest_row["observed_label"]
+    suspected_cases = int(latest_row.get("observed_suspected_cases") or 0)
+    confirmed_cases = int(latest_row.get("observed_confirmed_cases") or 0)
+    if observed_label == SurveillanceOutbreakLabel.ACTIVE:
+        return {
+            "state": "escalated",
+            "label": "Outbreak escalated",
+            "detail": (
+                f"Observed label is active with {suspected_cases} suspected and {confirmed_cases} confirmed cases; "
+                f"response quality is {response_quality_state.replace('_', ' ')}."
+            ),
+        }
+    if response_started and observed_label in {SurveillanceOutbreakLabel.NONE, SurveillanceOutbreakLabel.WATCH}:
+        return {
+            "state": "possibly_avoided_or_reduced",
+            "label": "Possibly avoided or reduced",
+            "detail": (
+                "No active outbreak label is visible after recorded response work. This is evidence for review, "
+                "not proof that response alone prevented the outbreak."
+            ),
+        }
+    return {
+        "state": "no_outbreak_observed",
+        "label": "No outbreak observed",
+        "detail": "No active outbreak label is visible in the matched surveillance window.",
+    }
+
+
+def _build_phase_7_outcome_feedback(
+    *,
+    ward: Ward,
+    related_alerts: list[Alert],
+    prediction_rows: list[dict],
+    chv_action_status: dict,
+) -> dict:
+    latest_row = _latest_evaluated_prediction_row(prediction_rows)
+    classification = (latest_row or {}).get("classification") or "pending_label"
+    response_required = bool(related_alerts) or classification in {"hit", "false_alert"}
+    reference_at = _phase_7_reference_time(related_alerts, prediction_rows)
+    window_start = reference_at - timedelta(hours=1) if reference_at else timezone.now() - timedelta(days=30)
+    alert_refs = [str(alert.public_id) for alert in related_alerts]
+    latest_alert = related_alerts[0] if related_alerts else None
+    delivered_alerts = [alert for alert in related_alerts if alert.status == Alert.STATUS_DELIVERED]
+    failed_alerts = [alert for alert in related_alerts if alert.status == Alert.STATUS_FAILED]
+
+    if related_alerts:
+        alert_status = "recorded" if delivered_alerts or len(failed_alerts) != len(related_alerts) else "failed"
+        alert_detail = (
+            f"{len(related_alerts)} alert record{'s' if len(related_alerts) != 1 else ''} exist; "
+            f"{len(delivered_alerts)} delivered and {len(failed_alerts)} failed."
+        )
+        alert_occurred_at = latest_alert.created_at if latest_alert else None
+    else:
+        alert_status = "missing"
+        alert_detail = "No alert record is visible for this ward in the current intelligence window."
+        alert_occurred_at = None
+
+    chv_messages = list(
+        CHVMessage.objects.filter(ward=ward, created_at__gte=window_start).order_by("-created_at")[:6]
+    )
+    delivered_messages = [
+        message
+        for message in chv_messages
+        if message.status in {CHVMessage.STATUS_SENT, CHVMessage.STATUS_DELIVERED}
+    ]
+    queued_messages = [message for message in chv_messages if message.status == CHVMessage.STATUS_QUEUED]
+    failed_messages = [message for message in chv_messages if message.status == CHVMessage.STATUS_FAILED]
+
+    coverage_rows = chv_action_status.get("requests", [])
+    alert_linked_coverage_rows = [
+        row
+        for row in coverage_rows
+        if row.get("linked_alert_public_ids") or row.get("trigger_source") == CHVCoverageRequest.TRIGGER_SOURCE_ALERT_DRIVEN
+    ]
+    coverage_rows_for_feedback = alert_linked_coverage_rows or coverage_rows
+    assignment_active_count = sum(row["assignment_counts"]["active"] for row in coverage_rows_for_feedback)
+    assignment_completed_count = sum(row["assignment_counts"]["completed"] for row in coverage_rows_for_feedback)
+    assignment_total_count = sum(row["assignment_counts"]["total"] for row in coverage_rows_for_feedback)
+    coverage_resolved_count = sum(1 for row in coverage_rows_for_feedback if row["status"] == CHVCoverageRequest.STATUS_RESOLVED)
+    coverage_in_progress_count = sum(
+        1
+        for row in coverage_rows_for_feedback
+        if row["status"] in {CHVCoverageRequest.STATUS_OPEN, CHVCoverageRequest.STATUS_APPROVED, CHVCoverageRequest.STATUS_IN_PROGRESS}
+    )
+
+    if delivered_messages:
+        chv_notified_status = "recorded"
+        chv_notified_detail = f"{len(delivered_messages)} direct CHV message record{'s' if len(delivered_messages) != 1 else ''} sent or delivered."
+        chv_notified_occurred_at = delivered_messages[0].created_at
+        chv_notified_evidence_level = "direct"
+        chv_notified_refs = [str(message.public_id) for message in delivered_messages]
+    elif queued_messages:
+        chv_notified_status = "in_progress"
+        chv_notified_detail = "CHV notification is queued but not yet sent or delivered."
+        chv_notified_occurred_at = queued_messages[0].created_at
+        chv_notified_evidence_level = "direct"
+        chv_notified_refs = [str(message.public_id) for message in queued_messages]
+    elif failed_messages:
+        chv_notified_status = "failed"
+        chv_notified_detail = "The latest CHV notification attempt failed."
+        chv_notified_occurred_at = failed_messages[0].created_at
+        chv_notified_evidence_level = "direct"
+        chv_notified_refs = [str(message.public_id) for message in failed_messages]
+    elif coverage_rows_for_feedback:
+        chv_notified_status = "recorded"
+        chv_notified_detail = "No direct CHV message is linked, but an alert-linked coverage request exists as operational proxy evidence."
+        chv_notified_occurred_at = coverage_rows_for_feedback[0]["created_at"]
+        chv_notified_evidence_level = "coverage_request_proxy"
+        chv_notified_refs = [row["public_id"] for row in coverage_rows_for_feedback]
+    else:
+        chv_notified_status = "missing" if response_required else "not_applicable"
+        chv_notified_detail = "No CHV notification or alert-linked coverage request is visible after the alert."
+        chv_notified_occurred_at = None
+        chv_notified_evidence_level = "missing"
+        chv_notified_refs = []
+
+    if assignment_completed_count > 0:
+        chv_ack_status = "recorded"
+        chv_ack_detail = f"{assignment_completed_count} CHV assignment{'s' if assignment_completed_count != 1 else ''} completed."
+    elif assignment_active_count > 0:
+        chv_ack_status = "recorded"
+        chv_ack_detail = f"{assignment_active_count} active CHV assignment{'s' if assignment_active_count != 1 else ''} exists; assignment start is proxy acknowledgement evidence."
+    elif coverage_in_progress_count > 0:
+        chv_ack_status = "in_progress"
+        chv_ack_detail = "A coverage request exists, but no CHV assignment acknowledgement proxy is recorded yet."
+    else:
+        chv_ack_status = "missing" if response_required else "not_applicable"
+        chv_ack_detail = "No CHV acknowledgement or assignment proxy is visible after the alert."
+
+    if assignment_completed_count > 0 or coverage_resolved_count > 0:
+        follow_up_status = "recorded"
+        follow_up_detail = "Household follow-up is recorded through completed CHV assignment or resolved coverage request."
+    elif assignment_active_count > 0 or coverage_in_progress_count > 0:
+        follow_up_status = "in_progress"
+        follow_up_detail = "Household follow-up has started through active CHV assignment or in-progress coverage request."
+    else:
+        follow_up_status = "missing" if response_required else "not_applicable"
+        follow_up_detail = "No household follow-up start is visible after the alert."
+
+    facility_evidence = _recent_facility_action_evidence_for_ward(ward, reference_at=reference_at)
+    review_rows = facility_evidence["reviews"]
+    update_request_rows = facility_evidence["update_requests"]
+    escalation_rows = facility_evidence["escalations"]
+    if any(row["status"] == FacilityReadinessReview.STATUS_RESOLVED for row in review_rows) or any(
+        row["status"] == FacilityReadinessUpdateRequest.STATUS_ACKNOWLEDGED for row in update_request_rows
+    ):
+        facility_status = "recorded"
+        facility_detail = "Facility readiness work has a resolved review or acknowledged update request."
+    elif review_rows or update_request_rows:
+        facility_status = "in_progress"
+        facility_detail = "Facility readiness action has started through review or update-request records."
+    else:
+        facility_status = "missing" if response_required else "not_applicable"
+        facility_detail = "No facility readiness action is visible after the alert."
+
+    if any(row["status"] == FacilityReadinessEscalation.STATUS_RESOLVED for row in escalation_rows):
+        escalation_status = "recorded"
+        escalation_detail = "Supply or staffing escalation was resolved."
+    elif escalation_rows:
+        escalation_status = "in_progress"
+        escalation_detail = "Supply or staffing escalation has started and remains open or acknowledged."
+    else:
+        escalation_status = "missing" if response_required else "not_applicable"
+        escalation_detail = "No supply or staffing escalation is visible after the alert."
+
+    suspected_cases = int((latest_row or {}).get("observed_suspected_cases") or 0)
+    confirmed_cases = int((latest_row or {}).get("observed_confirmed_cases") or 0)
+    observed_label = (latest_row or {}).get("observed_label") or "PENDING"
+    observed_truth_level = (latest_row or {}).get("observed_truth_level") or ""
+    label_ref = (latest_row or {}).get("label_window_ref") or ""
+    observed_status = "pending" if latest_row is None or latest_row["classification"] == "pending_label" else "recorded"
+
+    steps = [
+        _outcome_feedback_step(
+            key="alert_issued",
+            label="Alert issued",
+            status=alert_status,
+            detail=alert_detail,
+            occurred_at=alert_occurred_at,
+            evidence_refs=alert_refs,
+        ),
+        _outcome_feedback_step(
+            key="chv_notified",
+            label="CHV notified",
+            status=chv_notified_status,
+            detail=chv_notified_detail,
+            occurred_at=chv_notified_occurred_at,
+            evidence_level=chv_notified_evidence_level,
+            evidence_refs=chv_notified_refs,
+        ),
+        _outcome_feedback_step(
+            key="chv_acknowledged",
+            label="CHV acknowledged",
+            status=chv_ack_status,
+            detail=chv_ack_detail,
+            evidence_level="assignment_proxy" if assignment_total_count else "missing",
+            evidence_refs=[row["public_id"] for row in coverage_rows_for_feedback],
+        ),
+        _outcome_feedback_step(
+            key="household_follow_up_started",
+            label="Household follow-up started",
+            status=follow_up_status,
+            detail=follow_up_detail,
+            evidence_level="assignment_proxy" if assignment_total_count else "missing",
+            evidence_refs=[row["public_id"] for row in coverage_rows_for_feedback],
+        ),
+        _outcome_feedback_step(
+            key="facility_readiness_action_started",
+            label="Facility readiness action started",
+            status=facility_status,
+            detail=facility_detail,
+            evidence_refs=[row["public_id"] for row in [*review_rows, *update_request_rows]],
+        ),
+        _outcome_feedback_step(
+            key="supplies_or_staffing_escalated",
+            label="Supplies or staffing escalated",
+            status=escalation_status,
+            detail=escalation_detail,
+            evidence_refs=[row["public_id"] for row in escalation_rows],
+        ),
+        _outcome_feedback_step(
+            key="suspected_cases_observed",
+            label="Suspected cases observed",
+            status=observed_status,
+            detail=f"{suspected_cases} suspected cases recorded in the matched label window.",
+            evidence_refs=[label_ref] if label_ref else [],
+        ),
+        _outcome_feedback_step(
+            key="confirmed_cases_observed",
+            label="Confirmed cases observed",
+            status=observed_status,
+            detail=f"{confirmed_cases} confirmed cases recorded in the matched label window.",
+            evidence_refs=[label_ref] if label_ref else [],
+        ),
+    ]
+
+    required_response_keys = {"alert_issued", "chv_notified", "chv_acknowledged", "household_follow_up_started"}
+    required_response_steps = [step for step in steps if step["key"] in required_response_keys]
+    downstream_failure_steps = (
+        [step for step in required_response_steps if step["status"] in {"missing", "failed"}] if response_required else []
+    )
+    in_progress_steps = [step for step in required_response_steps if step["status"] == "in_progress"] if response_required else []
+    response_started = any(
+        step["key"]
+        in {
+            "chv_notified",
+            "chv_acknowledged",
+            "household_follow_up_started",
+            "facility_readiness_action_started",
+            "supplies_or_staffing_escalated",
+        }
+        and step["status"] in {"recorded", "in_progress"}
+        for step in steps
+    )
+    if not response_required:
+        response_quality_state = "response_not_required"
+    elif downstream_failure_steps:
+        response_quality_state = "response_gap"
+    elif in_progress_steps:
+        response_quality_state = "response_in_progress"
+    elif response_required:
+        response_quality_state = "response_complete"
+    else:
+        response_quality_state = "response_not_required"
+
+    model_quality_state = {
+        "hit": "prediction_hit",
+        "false_alert": "possible_false_alert",
+        "missed_outbreak": "missed_outbreak",
+        "correct_quiet": "correct_quiet",
+        "pending_label": "pending_label",
+    }.get(classification, "pending_label")
+
+    if classification == "missed_outbreak":
+        attribution = "model_quality_review"
+    elif classification == "hit" and response_quality_state == "response_gap":
+        attribution = "response_quality_review"
+    elif classification == "hit" and response_quality_state == "response_in_progress":
+        attribution = "mixed_pending_response_review"
+    elif classification == "false_alert" and response_started:
+        attribution = "possible_response_success_or_model_false_positive"
+    elif classification == "false_alert":
+        attribution = "model_quality_review"
+    elif classification == "correct_quiet":
+        attribution = "no_issue_detected"
+    else:
+        attribution = "pending_outcome"
+
+    outbreak_outcome = _phase_7_observed_outbreak_outcome(
+        latest_row=latest_row,
+        response_quality_state=response_quality_state,
+        response_started=response_started,
+    )
+    steps.append(
+        _outcome_feedback_step(
+            key="outbreak_trajectory",
+            label="Outbreak avoided, reduced, or escalated",
+            status="pending" if outbreak_outcome["state"] == "pending" else "recorded",
+            detail=outbreak_outcome["detail"],
+            evidence_refs=[label_ref] if label_ref else [],
+        )
+    )
+
+    review_items = []
+    if downstream_failure_steps and observed_label == SurveillanceOutbreakLabel.ACTIVE:
+        review_items.append(
+            {
+                "category": "response_quality",
+                "severity": "high",
+                "title": "Active outbreak with downstream response gap",
+                "detail": (
+                    "Do not blame this outcome only on the model; alert delivery, CHV acknowledgement, "
+                    "or household follow-up evidence is missing or failed."
+                ),
+                "step_keys": [step["key"] for step in downstream_failure_steps],
+            }
+        )
+    if classification == "false_alert" and response_started:
+        review_items.append(
+            {
+                "category": "model_vs_response_quality",
+                "severity": "medium",
+                "title": "False-alert review needs response context",
+                "detail": (
+                    "A quiet observed label after downstream action may be a false alert, a reduced outbreak, "
+                    "or an avoided outbreak; review action timing before treating it as pure model error."
+                ),
+                "step_keys": ["household_follow_up_started", "suspected_cases_observed", "confirmed_cases_observed"],
+            }
+        )
+
+    return {
+        "mode": "alert_to_action_outcome_feedback",
+        "reference_at": reference_at,
+        "model_quality_state": model_quality_state,
+        "response_quality_state": response_quality_state,
+        "attribution": attribution,
+        "accountability_note": (
+            "Prediction outcome and response execution are shown separately so misses are not attributed to the model "
+            "when alert delivery or CHV action failed downstream."
+        ),
+        "observed_outcome": {
+            **outbreak_outcome,
+            "observed_label": observed_label,
+            "observed_truth_level": observed_truth_level,
+            "suspected_case_count": suspected_cases,
+            "confirmed_case_count": confirmed_cases,
+        },
+        "summary": {
+            "step_count": len(steps),
+            "recorded_step_count": sum(1 for step in steps if step["status"] == "recorded"),
+            "downstream_failure_count": len(downstream_failure_steps),
+            "in_progress_step_count": sum(1 for step in steps if step["status"] == "in_progress"),
+            "review_item_count": len(review_items),
+        },
+        "steps": steps,
+        "review_items": review_items,
+        "facility_action_evidence": facility_evidence,
+    }
+
+
+def _false_missed_review_evidence(outcome_rows: list[dict]) -> dict:
+    review_items = []
+    for row in outcome_rows:
+        if row["classification"] not in {"false_alert", "missed_outbreak"}:
+            continue
+        review_items.append(
+            {
+                "classification": row["classification"],
+                "risk_score_id": row["risk_score_id"],
+                "prediction_generated_at": row["prediction_generated_at"],
+                "label_window_ref": row["label_window_ref"],
+                "observed_label": row["observed_label"],
+                "recommended_review_action": (
+                    "Review alert threshold, source confidence, and CHV follow-through for this false alert."
+                    if row["classification"] == "false_alert"
+                    else "Review missed-outbreak pathway, source freshness, and whether the threshold was too conservative."
+                ),
+            }
+        )
+
+    return {
+        "mode": "ward_prediction_outcome_review",
+        "open_review_count": len(review_items),
+        "items": review_items,
+        "workflow_label": (
+            "Outcome review required"
+            if review_items
+            else "No false-alert or missed-outbreak review items in the visible ward history"
+        ),
+    }
+
+
+def _build_phase_6_operational_evidence(
+    *,
+    ward: Ward,
+    latest_risk: RiskScore | None,
+    risk_history: list[RiskScore],
+    current_risk: dict,
+    freshness: dict,
+    workflow: AlertWorkflowState,
+    related_alerts: list[Alert],
+    population_exposure_context: dict,
+    surveillance_context: dict,
+) -> dict:
+    prediction_rows, outcome_summary = _prediction_label_history(risk_history)
+    chv_action_status = _chv_action_evidence_for_ward(ward)
+    return {
+        "schema_version": "ward-operational-evidence-v1",
+        "ward_id": ward.id,
+        "forecast_horizon": _forecast_horizon_evidence(latest_risk),
+        "model_readiness": _model_readiness_evidence(latest_risk, population_exposure_context),
+        "source_badges": _source_evidence_badges(
+            current_risk=current_risk,
+            freshness=freshness,
+            surveillance_context=surveillance_context,
+            population_exposure_context=population_exposure_context,
+        ),
+        "alert_candidate_review": _alert_candidate_review_evidence(current_risk, workflow, related_alerts),
+        "outcome_evaluation": {
+            **outcome_summary,
+            "rows": prediction_rows,
+        },
+        "prediction_label_history": prediction_rows,
+        "false_missed_review": _false_missed_review_evidence(prediction_rows),
+        "chv_action_status": chv_action_status,
+        "outcome_feedback": _build_phase_7_outcome_feedback(
+            ward=ward,
+            related_alerts=related_alerts,
+            prediction_rows=prediction_rows,
+            chv_action_status=chv_action_status,
+        ),
     }
 
 
@@ -1579,6 +2977,8 @@ def build_ward_intelligence_snapshot(ward: Ward, *, stale_threshold_minutes: int
     )
     latest_risk = risk_history[0] if risk_history else latest_riskscore_for_ward(ward)
     previous_risk = risk_history[1] if len(risk_history) > 1 else None
+    population_exposure_context = build_population_exposure_context_for_ward(ward)
+    surveillance_context = build_surveillance_feature_context_for_ward(ward)
 
     generated_at = latest_risk.generated_at if latest_risk else None
     is_stale = True
@@ -1589,6 +2989,7 @@ def build_ward_intelligence_snapshot(ward: Ward, *, stale_threshold_minutes: int
         "risk_level": latest_risk.risk_level if latest_risk else ward.current_risk_level,
         "risk_score": latest_risk.score if latest_risk else ward.current_risk_score,
         "predicted_cases": latest_risk.predicted_cases if latest_risk else 0,
+        "decision_policy": latest_risk.decision_policy if latest_risk else {},
         "generated_at": generated_at,
         "source": latest_risk.source if latest_risk else None,
         "model_version": latest_risk.model_version if latest_risk else None,
@@ -1654,6 +3055,43 @@ def build_ward_intelligence_snapshot(ward: Ward, *, stale_threshold_minutes: int
                 }
             )
 
+    for factor in population_exposure_context.get("factor_items", [])[:4]:
+        mode = factor.get("mode") or ""
+        driver_items.append(
+            {
+                "text": f"{factor.get('summary_text')} {factor.get('display_caveat')}",
+                "tone": "warning" if "proxy" in mode or "seeded" in mode else "info",
+                "source_field": f"population_exposure.{factor.get('factor_type')}",
+            }
+        )
+    if surveillance_context["surveillance_recent_total_cases_28d"] > 0:
+        driver_items.append(
+            {
+                "text": (
+                    f"Surveillance context shows {surveillance_context['surveillance_recent_total_cases_28d']} "
+                    "recent case records in the 28 day window."
+                ),
+                "tone": "warning",
+                "source_field": "surveillance.recent_total_cases_28d",
+            }
+        )
+    if surveillance_context["surveillance_latest_label_window_ref"]:
+        driver_items.append(
+            {
+                "text": (
+                    "Latest surveillance label window is "
+                    f"{surveillance_context['surveillance_label_truth_state']} with freshness "
+                    f"{surveillance_context['surveillance_latest_freshness_state'] or 'unknown'}."
+                ),
+                "tone": (
+                    "info"
+                    if surveillance_context["surveillance_label_truth_state"] == "confirmed_surveillance_truth"
+                    else "warning"
+                ),
+                "source_field": "surveillance.latest_label_window",
+            }
+        )
+
     driver_summary = {
         "mode": "derived_from_latest_record" if latest_risk else "unavailable",
         "items": driver_items
@@ -1691,6 +3129,14 @@ def build_ward_intelligence_snapshot(ward: Ward, *, stale_threshold_minutes: int
             "Continue monitoring until a fresher ward record is available.",
             "Review the next model run before taking new action from this page.",
         ]
+    if population_exposure_context["coverage"]["record_count"]:
+        guidance_items.append(
+            "Use population and exposure values as baseline/proxy context with lineage, not exact census or exposure truth."
+        )
+    if surveillance_context["surveillance_proxy_only_label_window_count_28d"] > 0:
+        guidance_items.append(
+            "Treat proxy-only surveillance label windows as weak evidence and avoid calling them confirmed outbreaks."
+        )
 
     guidance_summary = {
         "mode": "static_risk_playbook",
@@ -1709,6 +3155,17 @@ def build_ward_intelligence_snapshot(ward: Ward, *, stale_threshold_minutes: int
         "mode": "timestamp_and_record_availability",
     }
     workflow = sync_alert_workflow_for_ward(ward, record_event=False)
+    operational_evidence = _build_phase_6_operational_evidence(
+        ward=ward,
+        latest_risk=latest_risk,
+        risk_history=risk_history,
+        current_risk=current_risk,
+        freshness=freshness,
+        workflow=workflow,
+        related_alerts=related_alerts,
+        population_exposure_context=population_exposure_context,
+        surveillance_context=surveillance_context,
+    )
 
     return {
         "ward": ward,
@@ -1720,6 +3177,9 @@ def build_ward_intelligence_snapshot(ward: Ward, *, stale_threshold_minutes: int
         "workflow": _ward_workflow_summary(workflow),
         "decision_summary": _ward_decision_summary_for_workflow(workflow),
         "header_context": _ward_header_context(ward, workflow, current_risk, freshness, related_alerts),
+        "population_exposure": population_exposure_context,
+        "surveillance": surveillance_context,
+        "operational_evidence": operational_evidence,
         "risk_history": risk_history,
         "related_alerts": related_alerts,
     }
@@ -2599,6 +4059,7 @@ def build_facility_intelligence_snapshot(
     chv_operations = _facility_chv_operations_navigation_payload(facility, user=user)
     promoted_forecast = latest_promoted_facility_forecast_for_facility(facility)
     latest_forecast = promoted_forecast or latest_facility_forecast_for_facility(facility)
+    population_exposure_context = build_population_exposure_context_for_facility(facility)
 
     ward_risk_level = latest_risk.risk_level if latest_risk else facility.ward.current_risk_level
     ward_risk_score = latest_risk.score if latest_risk else facility.ward.current_risk_score
@@ -2711,6 +4172,28 @@ def build_facility_intelligence_snapshot(
             "dashboard_truth_state": dashboard_truth_state,
         }
 
+    population_exposure_values = population_exposure_context.get("values") or {}
+    forecast_summary["population_exposure"] = {
+        "status": population_exposure_context.get("status"),
+        "catchment_population_estimate": population_exposure_values.get("catchment_population_estimate"),
+        "ward_population_total": population_exposure_values.get("population_total"),
+        "exposed_population_proxy": population_exposure_values.get("exposed_population_proxy"),
+        "truth_class_counts": (population_exposure_context.get("source_lineage") or {}).get("truth_class_counts", {}),
+        "display_caveat": population_exposure_context.get("display_caveat"),
+    }
+    if population_exposure_context["coverage"]["has_catchment_population"]:
+        action_reasoning.append(
+            "Catchment population is available as an estimate with lineage; use it for context, not as facility census truth."
+        )
+    elif population_exposure_context["coverage"]["record_count"]:
+        action_reasoning.append(
+            "Population/exposure context is available, but no facility catchment estimate exists for this facility yet."
+        )
+    else:
+        action_reasoning.append(
+            "No source-fed population or exposure context is available for this facility yet."
+        )
+
     if readiness_backing_source == "unavailable":
         inferred_status_banner_label = "Facility readiness currently unavailable"
         inferred_context_summary = (
@@ -2763,6 +4246,28 @@ def build_facility_intelligence_snapshot(
             "details": [f"Facility code: {facility.facility_code}"],
         }
     ]
+
+    if population_exposure_context["coverage"]["record_count"]:
+        factor_labels = [
+            factor.get("label")
+            for factor in population_exposure_context.get("factor_items", [])[:3]
+            if factor.get("label")
+        ]
+        timeline.append(
+            {
+                "id": "population-exposure-context",
+                "title": "Population and exposure context available",
+                "description": (
+                    "Population, exposure, or catchment values are attached with truth-class metadata. "
+                    "Use them as baseline/proxy context rather than exact census truth."
+                ),
+                "timestamp": freshness_updated_at,
+                "tone": "info",
+                "category": "system",
+                "meta": population_exposure_context.get("status"),
+                "details": factor_labels,
+            }
+        )
 
     if latest_forecast and latest_forecast.forecast_run.status == latest_forecast.forecast_run.STATUS_SUCCESS:
         timeline.insert(
@@ -2862,6 +4367,7 @@ def build_facility_intelligence_snapshot(
             "action_reasoning": action_reasoning,
         },
         "forecasting": forecast_summary,
+        "population_exposure": population_exposure_context,
         "freshness": {
             "updated_at": freshness_updated_at,
             "is_stale": is_stale,

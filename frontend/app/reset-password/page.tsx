@@ -1,11 +1,13 @@
 "use client";
 
 import { Suspense, useEffect, useMemo, useState, type FormEvent } from "react";
+import { Copy, KeyRound } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { PasswordField } from "@/components/ui/password-field";
+import { PasswordPolicyChecklist } from "@/components/ui/password-policy-checklist";
 import {
   PublicAlert,
   PublicCard,
@@ -16,6 +18,7 @@ import {
   SectionBackLink,
 } from "@/components/ui/public-shell";
 import { confirmPasswordReset, validatePasswordResetToken } from "@/lib/auth";
+import { generateStrongPassword, getPasswordPolicyError } from "@/lib/password-policy";
 
 type ResetState = "checking" | "ready" | "invalid" | "success";
 
@@ -56,6 +59,8 @@ function ResetPasswordPageContent() {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [generatedPassword, setGeneratedPassword] = useState<string | null>(null);
+  const [passwordGeneratorMessage, setPasswordGeneratorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     const checkToken = async () => {
@@ -79,10 +84,54 @@ function ResetPasswordPageContent() {
     };
 
     setError(null);
+    setPasswordGeneratorMessage(null);
     setSuccessMessage(null);
     setState("checking");
     void checkToken();
   }, [token]);
+
+  function handleNewPasswordChange(value: string) {
+    setNewPassword(value);
+    setGeneratedPassword(null);
+    setPasswordGeneratorMessage(null);
+  }
+
+  function handleGeneratePassword() {
+    try {
+      const generated = generateStrongPassword();
+
+      setNewPassword(generated);
+      setConfirmPassword(generated);
+      setGeneratedPassword(generated);
+      setError(null);
+      setPasswordGeneratorMessage("Generated and filled a strong password. Copy it before saving.");
+    } catch (generationError) {
+      setError(
+        generationError instanceof Error
+          ? generationError.message
+          : "Secure password generation is unavailable in this browser.",
+      );
+    }
+  }
+
+  async function handleCopyGeneratedPassword() {
+    if (!generatedPassword) {
+      return;
+    }
+
+    if (!navigator.clipboard?.writeText) {
+      setError("Clipboard access is unavailable in this browser.");
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(generatedPassword);
+      setError(null);
+      setPasswordGeneratorMessage("Generated password copied.");
+    } catch {
+      setError("Unable to copy the generated password.");
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -90,6 +139,13 @@ function ResetPasswordPageContent() {
 
     if (newPassword !== confirmPassword) {
       setError("Passwords do not match.");
+      return;
+    }
+
+    const passwordPolicyError = getPasswordPolicyError(newPassword);
+
+    if (passwordPolicyError) {
+      setError(passwordPolicyError);
       return;
     }
 
@@ -101,6 +157,8 @@ function ResetPasswordPageContent() {
       setState("success");
       setNewPassword("");
       setConfirmPassword("");
+      setGeneratedPassword(null);
+      setPasswordGeneratorMessage(null);
     } catch (submissionError) {
       setError(
         submissionError instanceof Error
@@ -143,9 +201,27 @@ function ResetPasswordPageContent() {
                 label="New Password"
                 autoComplete="new-password"
                 value={newPassword}
-                onChange={setNewPassword}
+                onChange={handleNewPasswordChange}
                 placeholder="Enter your new password"
               />
+
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Button type="button" variant="secondary" onClick={handleGeneratePassword}>
+                  <KeyRound className="size-4" aria-hidden="true" />
+                  Generate strong password
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => void handleCopyGeneratedPassword()}
+                  disabled={!generatedPassword}
+                >
+                  <Copy className="size-4" aria-hidden="true" />
+                  Copy generated password
+                </Button>
+              </div>
+
+              <PasswordPolicyChecklist password={newPassword} />
 
               <PasswordField
                 id="confirm_password"
@@ -156,6 +232,7 @@ function ResetPasswordPageContent() {
                 placeholder="Confirm your new password"
               />
 
+              {passwordGeneratorMessage ? <PublicAlert>{passwordGeneratorMessage}</PublicAlert> : null}
               {error ? <PublicAlert tone="error">{error}</PublicAlert> : null}
 
               <Button className="w-full" size="lg" type="submit" disabled={isSubmitting}>

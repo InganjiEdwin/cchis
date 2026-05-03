@@ -6,7 +6,7 @@ from risk.tasks import run_random_forest_benchmark_task
 
 
 class Command(BaseCommand):
-    help = "Run or queue the explicit Random Forest benchmark path without changing the live baseline."
+    help = "Run or queue the explicit Random Forest benchmark path without changing model-promotion state."
 
     def add_arguments(self, parser):
         parser.add_argument("--month", type=int, default=timezone.now().month)

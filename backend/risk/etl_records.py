@@ -3,7 +3,15 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from risk.models import HealthFacility, SyncQueue, TriageSession, Ward
+from risk.models import (
+    CatchmentPopulationRecord,
+    ExposureFeatureRecord,
+    HealthFacility,
+    PopulationBaselineRecord,
+    SyncQueue,
+    TriageSession,
+    Ward,
+)
 
 
 ETL_SCHEMA_VERSION = "cchis.etl.v1"
@@ -79,6 +87,61 @@ class CanonicalCHVResponseRecord:
     suspected_case_count: int | None
     household_visit_count: int | None
     alert_response_state: str | None
+
+
+@dataclass(frozen=True)
+class CanonicalPopulationBaselineRecord:
+    entity_type: str
+    schema_version: str
+    ward_public_id: str
+    ward_name: str
+    county: str
+    recorded_at: str | None
+    population_total: int
+    population_under_five: int | None
+    household_count_proxy: int | None
+    truth_class: str
+    source_name: str
+    source_kind: str
+    freshness_state: str
+    release_version: str
+    supersedes_record_ref: str | None
+    revision_number: int
+
+
+@dataclass(frozen=True)
+class CanonicalExposureFeatureRecord:
+    entity_type: str
+    schema_version: str
+    ward_public_id: str
+    ward_name: str
+    county: str
+    recorded_at: str | None
+    exposure_type: str
+    exposure_value: float
+    unit: str
+    truth_class: str
+    source_name: str
+    aggregation_method: str
+    spatial_resolution: str
+    source_ref: str
+    notes: str
+
+
+@dataclass(frozen=True)
+class CanonicalCatchmentPopulationRecord:
+    entity_type: str
+    schema_version: str
+    facility_public_id: str
+    facility_code: str
+    facility_name: str
+    recorded_at: str | None
+    catchment_population_estimate: float
+    catchment_under_five_estimate: float | None
+    assigned_ward_ids: list[int]
+    assignment_method: str
+    truth_class: str
+    source_ref: str
 
 
 def _boolean_symptom_summary(*, diarrhea: bool, vomiting: bool, dehydration: bool, fever: bool) -> str | None:
@@ -289,6 +352,64 @@ def chv_response_record_from_sync_queue(
         suspected_case_count=1 if any(payload.get(flag, False) for flag in ["diarrhea", "vomiting", "dehydration"]) else 0,
         household_visit_count=1,
         alert_response_state=sync_item.status.lower() if sync_item.status else None,
+    )
+
+
+def population_baseline_record_from_model(record: PopulationBaselineRecord) -> CanonicalPopulationBaselineRecord:
+    return CanonicalPopulationBaselineRecord(
+        entity_type="population_baseline_record",
+        schema_version=ETL_SCHEMA_VERSION,
+        ward_public_id=str(record.ward.public_id) if record.ward and record.ward.public_id else "",
+        ward_name=record.ward.name if record.ward_id else "",
+        county=record.ward.county if record.ward_id else "",
+        recorded_at=record.recorded_at.isoformat() if record.recorded_at else None,
+        population_total=record.population_total,
+        population_under_five=record.population_under_five,
+        household_count_proxy=record.household_count_proxy,
+        truth_class=record.truth_class,
+        source_name=record.source_name,
+        source_kind=record.source_kind,
+        freshness_state=record.freshness_state,
+        release_version=record.release_version,
+        supersedes_record_ref=record.supersedes_record_ref or None,
+        revision_number=record.revision_number,
+    )
+
+
+def exposure_feature_record_from_model(record: ExposureFeatureRecord) -> CanonicalExposureFeatureRecord:
+    return CanonicalExposureFeatureRecord(
+        entity_type="exposure_feature_record",
+        schema_version=ETL_SCHEMA_VERSION,
+        ward_public_id=str(record.ward.public_id) if record.ward and record.ward.public_id else "",
+        ward_name=record.ward.name if record.ward_id else "",
+        county=record.ward.county if record.ward_id else "",
+        recorded_at=record.recorded_at.isoformat() if record.recorded_at else None,
+        exposure_type=record.exposure_type,
+        exposure_value=record.exposure_value,
+        unit=record.unit,
+        truth_class=record.truth_class,
+        source_name=record.source_name,
+        aggregation_method=record.aggregation_method,
+        spatial_resolution=record.spatial_resolution,
+        source_ref=record.source_ref,
+        notes=record.notes,
+    )
+
+
+def catchment_population_record_from_model(record: CatchmentPopulationRecord) -> CanonicalCatchmentPopulationRecord:
+    return CanonicalCatchmentPopulationRecord(
+        entity_type="catchment_population_record",
+        schema_version=ETL_SCHEMA_VERSION,
+        facility_public_id=str(record.facility.public_id) if record.facility and record.facility.public_id else "",
+        facility_code=record.facility.facility_code if record.facility_id else "",
+        facility_name=record.facility.name if record.facility_id else "",
+        recorded_at=record.recorded_at.isoformat() if record.recorded_at else None,
+        catchment_population_estimate=record.catchment_population_estimate,
+        catchment_under_five_estimate=record.catchment_under_five_estimate,
+        assigned_ward_ids=record.assigned_ward_ids or [],
+        assignment_method=record.assignment_method,
+        truth_class=record.truth_class,
+        source_ref=record.source_ref,
     )
 
 

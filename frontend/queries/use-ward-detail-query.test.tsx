@@ -114,6 +114,99 @@ describe("useWardDetailQuery", () => {
         expected_cases_7d: 9,
         risk_score: 0.91,
       },
+      operational_evidence: {
+        schema_version: "ward-operational-evidence-v1",
+        ward_id: 12,
+        forecast_horizon: {
+          label: "7 to 14 day forecast horizon",
+          min_days: 7,
+          max_days: 14,
+          display_value: "7 to 14 days",
+          expected_cases_label: "Expected cases in the next 7 days",
+          lead_time_supported_days: [7, 14],
+          validation_status: "ready_for_lead_time_review",
+          mode: "lead_time_validation",
+        },
+        model_readiness: {
+          state: "promoted",
+          label: "Promoted",
+          tone: "success",
+          detail: "Promoted run",
+          evidence: ["promotion_target=live_baseline"],
+        },
+        source_badges: [],
+        alert_candidate_review: {
+          review_state: "needs_human_review",
+          alert_decision: "alert_candidate",
+          policy_version: "ward-risk-policy-test",
+          risk_level: "HIGH",
+          risk_score: 0.91,
+          predicted_cases: 9,
+          automatic_alert_allowed: true,
+          automatic_alert_blockers: [],
+          reason_codes: [],
+          recommended_action: "Review ward",
+          active_alert_count: 0,
+        },
+        outcome_evaluation: {
+          mode: "prediction_vs_surveillance_labels",
+          evaluated_count: 0,
+          hit_count: 0,
+          false_alert_count: 0,
+          missed_outbreak_count: 0,
+          pending_label_count: 0,
+          correct_quiet_count: 0,
+          rows: [],
+        },
+        prediction_label_history: [],
+        outcome_feedback: {
+          mode: "alert_to_action_outcome_feedback",
+          reference_at: null,
+          model_quality_state: "pending_label",
+          response_quality_state: "response_not_required",
+          attribution: "pending_outcome",
+          accountability_note: "Prediction outcome and response execution are shown separately.",
+          observed_outcome: {
+            state: "pending",
+            label: "Pending outcome label",
+            detail: "The 7 to 14 day label window has not been observed yet.",
+            observed_label: "PENDING",
+            observed_truth_level: "",
+            suspected_case_count: 0,
+            confirmed_case_count: 0,
+          },
+          summary: {
+            step_count: 0,
+            recorded_step_count: 0,
+            downstream_failure_count: 0,
+            in_progress_step_count: 0,
+            review_item_count: 0,
+          },
+          steps: [],
+          review_items: [],
+          facility_action_evidence: {
+            reviews: [],
+            update_requests: [],
+            escalations: [],
+          },
+        },
+        false_missed_review: {
+          mode: "ward_prediction_outcome_review",
+          open_review_count: 0,
+          workflow_label: "No review items",
+          items: [],
+        },
+        chv_action_status: {
+          mode: "chv_coverage_requests_linked_to_alerts",
+          summary: {
+            visible_request_count: 0,
+            active_request_count: 0,
+            linked_alert_count: 0,
+            latest_status: "NO_REQUEST",
+          },
+          requests: [],
+        },
+      },
       risk_history: [],
       related_alerts: [],
     });
@@ -141,6 +234,9 @@ describe("useWardDetailQuery", () => {
       updatedAt: "2026-04-27T08:30:00Z",
       lastAlertAt: "2026-04-27T08:34:00Z",
     });
+    expect(result.current.data?.operationalEvidence?.forecast_horizon.display_value).toBe("7 to 14 days");
+    expect(result.current.data?.operationalEvidence?.model_readiness.state).toBe("promoted");
+    expect(result.current.data?.operationalEvidence?.outcome_feedback?.mode).toBe("alert_to_action_outcome_feedback");
   });
 
   it("falls back safely when header_context and decision_summary are missing", async () => {
