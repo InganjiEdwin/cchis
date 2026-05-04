@@ -29,6 +29,7 @@ import { cn } from "@/lib/cn";
 import type {
   ChvCoverageRequestPriority,
   ChvCoverageRequestRecord,
+  ChvOfflineAuditStatus,
   ChvOperationsRecord,
   LatestWardRisk,
   WardMapFeature,
@@ -212,6 +213,28 @@ function syncTone(sync: SyncHealth) {
     default:
       return "default" as const;
   }
+}
+
+function auditStatusTone(status: ChvOfflineAuditStatus) {
+  switch (status) {
+    case "PASS":
+      return "success" as const;
+    case "FAIL":
+      return "danger" as const;
+    case "WARN":
+    default:
+      return "warning" as const;
+  }
+}
+
+function formatLatency(minutes: number | null | undefined) {
+  if (typeof minutes !== "number") {
+    return "No data";
+  }
+  if (minutes < 60) {
+    return `${minutes.toLocaleString()} min`;
+  }
+  return `${(minutes / 60).toFixed(1)} hr`;
 }
 
 function getCoverageStatus(feature: WardMapFeature) {
@@ -416,6 +439,12 @@ export default function ChvsPage() {
   const wardMap = data?.wardMap ?? null;
   const coverageRequests = data?.coverageRequests ?? [];
   const coverageByWard = data?.coverageByWard ?? {};
+  const offlineMonitoring = data?.offlineMonitoring ?? null;
+  const offlineMetrics = offlineMonitoring?.metrics ?? null;
+  const offlineAuditChecks = offlineMonitoring?.audit_checks ?? [];
+  const offlineSyncHealthByWard = offlineMonitoring?.sync_health_by_ward ?? [];
+  const recentSyncDecisions = offlineMonitoring?.recent_sync_decisions ?? [];
+  const recentRejectedSubmissionAudits = offlineMonitoring?.recent_rejected_submission_audits ?? [];
   const mapFeatures = wardMap?.features ?? [];
 
   const latestTimestamp = useMemo(
@@ -424,8 +453,9 @@ export default function ChvsPage() {
         ...chvs.flatMap((item) => [item.created_at, item.last_activity_at, item.last_sync_at].filter(Boolean)),
         ...latestRisks.map((item) => item.generated_at),
         ...alerts.map((item) => item.created_at),
+        offlineMonitoring?.generated_at,
       ]),
-    [alerts, chvs, latestRisks],
+    [alerts, chvs, latestRisks, offlineMonitoring],
   );
 
   const freshness = useMemo(
@@ -570,6 +600,12 @@ export default function ChvsPage() {
       0,
     );
   const delayedOrOfflineCount = registryRows.filter((row) => row.syncHealth !== "ONLINE").length;
+  const offlineAuditIssueCount = offlineAuditChecks.filter((check) => check.status !== "PASS").length;
+  const latestRejectedSyncDecision = recentSyncDecisions.find((decision) => decision.decision === "REJECTED") ?? null;
+  const latestPreValidationRejection = recentRejectedSubmissionAudits[0] ?? null;
+  const visibleOfflineSyncRows = selectedWard === "ALL"
+    ? offlineSyncHealthByWard.slice(0, 4)
+    : offlineSyncHealthByWard.filter((row) => row.ward_id === Number(selectedWard.slice(3))).slice(0, 4);
   const totalVisibleLabel = isLoading ? "..." : filteredChvs.length.toLocaleString();
   const activeVisibleLabel = isLoading ? "..." : activeChvs.toLocaleString();
   const casesVisibleLabel = isLoading ? "..." : highUrgencyCases.toLocaleString();
@@ -735,6 +771,9 @@ export default function ChvsPage() {
     highUrgencyCases > 0
       ? `${highUrgencyCases} triage session${highUrgencyCases === 1 ? "" : "s"} were recorded in the last 24 hours.`
       : "No triage sessions were recorded in the visible scope during the last 24 hours.",
+    offlineMetrics
+      ? `${offlineMetrics.pending_uploads.toLocaleString()} pending offline upload${offlineMetrics.pending_uploads === 1 ? "" : "s"}, ${offlineMetrics.failed_syncs_24h.toLocaleString()} failed sync${offlineMetrics.failed_syncs_24h === 1 ? "" : "s"}, and ${offlineMetrics.pre_validation_rejections_24h.toLocaleString()} pre-validation reject${offlineMetrics.pre_validation_rejections_24h === 1 ? "" : "s"} were recorded in the monitoring window.`
+      : "Offline sync monitoring is not available for the visible scope yet.",
   ];
 
   useEffect(() => {
@@ -831,6 +870,196 @@ export default function ChvsPage() {
             </span>
             <div className="mt-3 text-4xl font-semibold leading-none text-panel-strong">{casesVisibleLabel}</div>
             <p className="mt-4 text-sm text-panel-muted">{highPriorityReferrals.toLocaleString()} referrals in high-risk wards (calculated)</p>
+          </Card>
+        </section>
+
+        <section className="grid gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(22rem,0.95fr)]">
+          <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 className="text-2xl font-semibold text-panel-strong">Offline Sync Health</h2>
+                <p className="mt-2 text-sm text-panel-muted">
+                  Device activity, queued uploads, conflicts, and ward-level sync freshness
+                </p>
+              </div>
+              <span className="inline-flex size-11 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--brand)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--brand)_20%,transparent)]">
+                <Smartphone className="size-5" aria-hidden="true" />
+              </span>
+            </div>
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              {[
+                {
+                  label: "Active devices",
+                  value: offlineMetrics ? offlineMetrics.active_chv_devices.toLocaleString() : "...",
+                  detail: offlineMetrics ? `${offlineMetrics.registered_chv_devices.toLocaleString()} registered` : "Loading",
+                  icon: <Smartphone className="size-4" aria-hidden="true" />,
+                },
+                {
+                  label: "Successful syncs (24h)",
+                  value: offlineMetrics ? offlineMetrics.successful_syncs_24h.toLocaleString() : "...",
+                  detail: "Accepted uploads",
+                  icon: <Wifi className="size-4" aria-hidden="true" />,
+                },
+                {
+                  label: "Failed syncs (24h)",
+                  value: offlineMetrics ? offlineMetrics.failed_syncs_24h.toLocaleString() : "...",
+                  detail: "Rejected uploads",
+                  icon: <WifiOff className="size-4" aria-hidden="true" />,
+                },
+                {
+                  label: "Avg task latency",
+                  value: offlineMetrics ? formatLatency(offlineMetrics.offline_task_completion_latency_minutes) : "...",
+                  detail: "Offline completion",
+                  icon: <Clock3 className="size-4" aria-hidden="true" />,
+                },
+              ].map((metric) => (
+                <div
+                  key={metric.label}
+                  className="rounded-[1.25rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-icon-button-surface)_76%,transparent)] px-4 py-3"
+                >
+                  <div className="flex items-center justify-between gap-3 text-panel-muted">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-panel-subtle">
+                      {metric.label}
+                    </span>
+                    {metric.icon}
+                  </div>
+                  <strong className="mt-3 block text-2xl font-semibold text-panel-strong">{metric.value}</strong>
+                  <p className="mt-1 text-xs text-panel-muted">{metric.detail}</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-[1.25rem] border border-panel-table-wrap px-4 py-3 text-sm">
+                <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-panel-subtle">Pending uploads</span>
+                <strong className="mt-2 block text-xl text-panel-strong">
+                  {offlineMetrics ? offlineMetrics.pending_uploads.toLocaleString() : "..."}
+                </strong>
+              </div>
+              <div className="rounded-[1.25rem] border border-panel-table-wrap px-4 py-3 text-sm">
+                <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-panel-subtle">Stale bundles</span>
+                <strong className="mt-2 block text-xl text-panel-strong">
+                  {offlineMetrics ? offlineMetrics.stale_guidance_bundles.toLocaleString() : "..."}
+                </strong>
+              </div>
+              <div className="rounded-[1.25rem] border border-panel-table-wrap px-4 py-3 text-sm">
+                <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-panel-subtle">Pre-validation rejects</span>
+                <strong className="mt-2 block text-xl text-panel-strong">
+                  {offlineMetrics ? offlineMetrics.pre_validation_rejections_24h.toLocaleString() : "..."}
+                </strong>
+              </div>
+              <div className="rounded-[1.25rem] border border-panel-table-wrap px-4 py-3 text-sm">
+                <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-panel-subtle">Conflicts (7d)</span>
+                <strong className="mt-2 block text-xl text-panel-strong">
+                  {offlineMetrics ? offlineMetrics.conflict_count_7d.toLocaleString() : "..."}
+                </strong>
+              </div>
+            </div>
+
+            <div className="mt-5 space-y-3">
+              {visibleOfflineSyncRows.length ? (
+                visibleOfflineSyncRows.map((row) => (
+                  <div
+                    key={row.ward_id}
+                    className="flex flex-col gap-3 rounded-[1.25rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-icon-button-surface)_70%,transparent)] px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div>
+                      <strong className="text-sm text-panel-strong">{row.ward_name}</strong>
+                      <p className="mt-1 text-xs text-panel-muted">
+                        {row.active_device_count}/{row.registered_device_count} active devices, {row.pending_upload_count} pending uploads, {row.pre_validation_rejection_count_24h} pre-validation rejects
+                      </p>
+                    </div>
+                    <StatusBadge tone={syncTone(row.sync_health)}>{toSyncHealthLabel(row.sync_health)}</StatusBadge>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-[1.25rem] border border-dashed border-panel-table-wrap px-4 py-4 text-sm text-panel-muted">
+                  No ward sync health rows are available for this scope.
+                </div>
+              )}
+            </div>
+          </Card>
+
+          <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-2xl font-semibold text-panel-strong">Offline Sync Audit</h2>
+                <p className="mt-2 text-sm text-panel-muted">
+                  Accepted and rejected submissions grouped by assignment, bundle, and linkage checks
+                </p>
+              </div>
+              <StatusBadge tone={offlineAuditIssueCount ? "warning" : "success"}>
+                {offlineAuditIssueCount ? `${offlineAuditIssueCount} flagged` : "Clear"}
+              </StatusBadge>
+            </div>
+
+            <div className="mt-5 space-y-3">
+              {offlineAuditChecks.length ? (
+                offlineAuditChecks.map((check) => (
+                  <div
+                    key={check.key}
+                    className="rounded-[1.25rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-icon-button-surface)_76%,transparent)] px-4 py-3"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <strong className="text-sm text-panel-strong">{check.title}</strong>
+                        <p className="mt-1 text-xs leading-5 text-panel-muted">{check.summary}</p>
+                      </div>
+                      <StatusBadge tone={auditStatusTone(check.status)}>{check.status}</StatusBadge>
+                    </div>
+                    <div className="mt-3 flex items-center gap-2 text-xs text-panel-subtle">
+                      <Activity className="size-3.5" aria-hidden="true" />
+                      <span>{check.count.toLocaleString()} record{check.count === 1 ? "" : "s"}</span>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-[1.25rem] border border-dashed border-panel-table-wrap px-4 py-4 text-sm text-panel-muted">
+                  No audit checks are available for this scope.
+                </div>
+              )}
+            </div>
+
+            <div className="mt-5 rounded-[1.25rem] border border-panel-table-wrap bg-panel px-4 py-4">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Latest backend decision</span>
+              {recentSyncDecisions[0] ? (
+                <div className="mt-3 space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <strong className="text-sm text-panel-strong">{recentSyncDecisions[0].upload_type}</strong>
+                    <StatusBadge tone={recentSyncDecisions[0].decision === "ACCEPTED" ? "success" : recentSyncDecisions[0].decision === "REJECTED" ? "danger" : "warning"}>
+                      {recentSyncDecisions[0].decision}
+                    </StatusBadge>
+                  </div>
+                  <p className="text-sm leading-6 text-panel-copy">{recentSyncDecisions[0].explanation}</p>
+                  {latestRejectedSyncDecision ? (
+                    <p className="text-xs leading-5 text-panel-muted">
+                      Latest rejection: {latestRejectedSyncDecision.explanation}
+                    </p>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="mt-3 text-sm text-panel-muted">No sync decisions have been recorded for this scope.</p>
+              )}
+              {latestPreValidationRejection ? (
+                <div className="mt-4 rounded-[1rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-icon-button-surface)_72%,transparent)] px-3 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <strong className="text-sm text-panel-strong">
+                      {latestPreValidationRejection.upload_type || latestPreValidationRejection.rejection_stage}
+                    </strong>
+                    <StatusBadge tone="danger">PRE-VALIDATION</StatusBadge>
+                  </div>
+                  <p className="mt-2 text-xs leading-5 text-panel-muted">
+                    Latest pre-validation rejection: {latestPreValidationRejection.safe_error_summary}
+                  </p>
+                  {latestPreValidationRejection.field_paths.length ? (
+                    <p className="mt-1 text-xs leading-5 text-panel-subtle">
+                      Fields: {latestPreValidationRejection.field_paths.slice(0, 3).join(", ")}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
           </Card>
         </section>
 

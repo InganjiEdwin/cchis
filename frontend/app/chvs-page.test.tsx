@@ -59,6 +59,137 @@ function buildFeature(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function buildOfflineMonitoring(overrides: Record<string, unknown> = {}) {
+  return {
+    schema_version: "chv-offline-monitoring-v1",
+    generated_at: "2026-04-28T09:15:00Z",
+    scope: {
+      ward_ids: [12, 13],
+      ward_count: 2,
+      window_hours: 24,
+      audit_window_days: 7,
+    },
+    metrics: {
+      registered_chv_devices: 3,
+      active_chv_devices: 2,
+      successful_syncs_24h: 8,
+      failed_syncs_24h: 1,
+      pre_validation_rejections_24h: 1,
+      pending_uploads: 2,
+      stale_guidance_bundles: 1,
+      conflict_count_7d: 1,
+      offline_task_completion_latency_minutes: 42,
+    },
+    audit_checks: [
+      {
+        key: "out_of_assignment_data",
+        title: "CHV data outside assignment",
+        status: "PASS",
+        count: 0,
+        summary: "No offline CHV action audit events were outside the actor assignment.",
+        sample_records: [],
+      },
+      {
+        key: "repeated_rejected_uploads",
+        title: "Repeated rejected uploads",
+        status: "WARN",
+        count: 1,
+        summary: "1 rejected upload came from devices crossing the repeat threshold.",
+        sample_records: [{ source_device_id: "field-device-003", rejected_count: 1 }],
+      },
+      {
+        key: "pre_validation_rejections",
+        title: "Rejected before sync persistence",
+        status: "WARN",
+        count: 1,
+        summary: "1 CHV sync submission was rejected before sync persistence.",
+        sample_records: [{ source_device_id: "field-device-prevalidation", rejection_stage: "PII_MINIMIZATION" }],
+      },
+    ],
+    sync_health_by_ward: [
+      {
+        ward_id: 12,
+        ward_name: "North Kamagambo",
+        registered_device_count: 2,
+        active_device_count: 1,
+        successful_syncs_24h: 6,
+        pending_upload_count: 1,
+        failed_upload_count_24h: 1,
+        pre_validation_rejection_count_24h: 1,
+        conflict_count_7d: 1,
+        last_successful_sync_at: "2026-04-28T09:10:00Z",
+        sync_health: "DELAYED",
+      },
+      {
+        ward_id: 13,
+        ward_name: "Got Kachola",
+        registered_device_count: 1,
+        active_device_count: 1,
+        successful_syncs_24h: 2,
+        pending_upload_count: 0,
+        failed_upload_count_24h: 0,
+        pre_validation_rejection_count_24h: 0,
+        conflict_count_7d: 0,
+        last_successful_sync_at: "2026-04-28T09:00:00Z",
+        sync_health: "ONLINE",
+      },
+    ],
+    recent_sync_decisions: [
+      {
+        id: 14,
+        created_at: "2026-04-28T09:12:00Z",
+        processed_at: "2026-04-28T09:12:30Z",
+        ward_id: 12,
+        ward_name: "North Kamagambo",
+        upload_type: "prevention_visit",
+        status: "PROCESSED",
+        decision: "ACCEPTED",
+        conflict_state: "NONE",
+        client_submission_id: "visit-001",
+        idempotency_key: "visit-idem-001",
+        download_bundle_version: "bundle-current",
+        domain_record: { type: "preparedness_action" },
+        explanation: "Accepted prevention_visit and linked it to preparedness_action.",
+      },
+      {
+        id: 13,
+        created_at: "2026-04-28T09:11:00Z",
+        processed_at: "2026-04-28T09:11:30Z",
+        ward_id: 12,
+        ward_name: "North Kamagambo",
+        upload_type: "task_ack",
+        status: "FAILED",
+        decision: "REJECTED",
+        conflict_state: "SCOPE_MISMATCH",
+        client_submission_id: "ack-001",
+        idempotency_key: "ack-idem-001",
+        download_bundle_version: "bundle-old",
+        domain_record: {},
+        explanation: "Preparedness action not found.",
+      },
+    ],
+    recent_rejected_submission_audits: [
+      {
+        public_id: "audit-prevalidation-1",
+        created_at: "2026-04-28T09:13:00Z",
+        ward_id: 12,
+        ward_name: "North Kamagambo",
+        source_device_id: "field-device-prevalidation",
+        client_submission_id: "unsafe-001",
+        idempotency_key: "unsafe-idem-001",
+        upload_type: "symptom_triage",
+        contract_version: "chv-offline-v1",
+        rejection_stage: "PII_MINIMIZATION",
+        error_code: "chv_offline_pii_minimization_failed",
+        safe_error_summary: "Rejected before sync persistence during pii_minimization.",
+        field_paths: ["uploads.0.payload.household_name"],
+        status_code: 400,
+      },
+    ],
+    ...overrides,
+  };
+}
+
 vi.mock("@/components/auth-provider", () => ({
   useAuth: () => mockUseAuth(),
 }));
@@ -306,6 +437,7 @@ describe("ChvsPage", () => {
             },
           },
         },
+        offlineMonitoring: buildOfflineMonitoring(),
       },
       isPending: false,
       error: null,
@@ -368,6 +500,21 @@ describe("ChvsPage", () => {
     expect(screen.queryByText("Alert delivery rate")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Planning Summary" })).not.toBeInTheDocument();
     expect(screen.getByText(/Gap = 0 active CHVs/i)).toBeInTheDocument();
+  }, 20000);
+
+  it("renders offline sync monitoring metrics and backend decisions", () => {
+    render(React.createElement(ChvsPage));
+
+    expect(screen.getByRole("heading", { name: "Offline Sync Health" })).toBeInTheDocument();
+    expect(screen.getByText("Active devices")).toBeInTheDocument();
+    expect(screen.getByText("Successful syncs (24h)")).toBeInTheDocument();
+    expect(screen.getByText("Pre-validation rejects")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Offline Sync Audit" })).toBeInTheDocument();
+    expect(screen.getByText("Repeated rejected uploads")).toBeInTheDocument();
+    expect(screen.getByText("Rejected before sync persistence")).toBeInTheDocument();
+    expect(screen.getByText("Accepted prevention_visit and linked it to preparedness_action.")).toBeInTheDocument();
+    expect(screen.getByText("Latest rejection: Preparedness action not found.")).toBeInTheDocument();
+    expect(screen.getByText("Latest pre-validation rejection: Rejected before sync persistence during pii_minimization.")).toBeInTheDocument();
   }, 20000);
 
   it("lets map selection drive the selected ward actions and registry view", () => {

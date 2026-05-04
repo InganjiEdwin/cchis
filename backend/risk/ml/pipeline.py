@@ -6,6 +6,7 @@ from uuid import uuid4
 from django.db import transaction
 from django.utils import timezone
 
+from risk.climate_coverage import climate_alert_evidence_from_prediction
 from risk.models import ModelRun, RiskScore, Ward
 from risk.surveillance_features import build_surveillance_lead_time_validation_summary
 
@@ -441,6 +442,7 @@ def _persist_model_outputs(
                 guided_request_metadata={
                     "source": "risk_model_pipeline",
                     "surveillance_evidence": _surveillance_alert_metadata_from_prediction(prediction),
+                    "climate_evidence": climate_alert_evidence_from_prediction(prediction),
                     "decision_policy": decision_policy_evaluation,
                 },
             )

@@ -16,6 +16,7 @@ import {
   type AlertIntelligenceStateItem,
   type AlertIntelligenceTimelineEntry,
   type AlertRecord,
+  type ClimateEvidence,
   type WardDetailSummary,
 } from "@/lib/dashboard";
 import { queryKeys } from "@/lib/query-keys";
@@ -29,6 +30,7 @@ type AlertDetailData = {
   delivery: AlertIntelligenceDelivery;
   delivery_summary: AlertIntelligenceDelivery;
   message_source: AlertIntelligenceMessageSource;
+  climate_evidence?: ClimateEvidence;
   chv_response_summary: AlertIntelligenceResponseSummary;
   facility_response_summary: AlertIntelligenceResponseSummary;
   recommended_next_action: AlertIntelligenceRecommendedAction;

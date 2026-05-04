@@ -298,14 +298,20 @@ These are the main v1 contract expectations for current backend consumers.
 
 ### Field and Low-Connectivity Endpoints
 
+- `GET /api/v1/chv/offline/contract/`
+  - operational user roles only
+  - returns the versioned offline workflow, bundle, upload envelope, and sync health contract for the user's assigned ward
+- `POST /api/v1/chv/device-registrations/`
+  - operational user roles only
+  - registers or refreshes a CHV offline device against the user's assigned ward and current contract version
 - `POST /api/v1/chv/triage/`
   - operational user roles only
   - accepts ward and symptom data
   - returns triage guidance and referral decision
 - `POST /api/v1/chv/sync/`
   - operational user roles only
-  - accepts one or more offline payloads
-  - returns sync processing results
+  - accepts legacy `payloads` or versioned `uploads` envelopes for supported offline submissions
+  - returns sync processing results, conflict state, server receipts, and sync health
 - `POST /api/v1/ussd/menu/`
   - public
   - accepts provider-style session payloads

@@ -40,14 +40,21 @@ class WardRiskTemporalBacktestingPhaseFourTestCase(TestCase):
             current_risk_score=0.80,
         )
 
-    def _create_feature_and_label_datasets(self, *, leak_validation_row=False):
+    def _create_feature_and_label_datasets(self, *, leak_validation_row=False, insufficient_validation_climate=False):
         feature_dataset = FeatureDataset.objects.create(
             dataset_ref=f"phase4-features-{timezone.now().timestamp()}",
             dataset_kind=FeatureDataset.KIND_INFERENCE,
             schema_version=LEAD_TIME_FEATURE_SCHEMA_VERSION,
             source_kind=FeatureDataset.SOURCE_KIND_LIVE,
             month=4,
-            feature_keys=["prediction_date", "rainfall_total_14d", "leakage_proof"],
+            feature_keys=[
+                "prediction_date",
+                "rainfall_total_14d",
+                "forecast_coverage_days",
+                "forecast_missing_lead_days",
+                "claimed_lead_time_climate_coverage_sufficient",
+                "leakage_proof",
+            ],
             row_count=6,
             lineage_metadata={"builder": "phase4-test"},
         )
@@ -76,6 +83,26 @@ class WardRiskTemporalBacktestingPhaseFourTestCase(TestCase):
         ]
         for prediction_date, ward, rainfall_total, label, truth_level in rows:
             leakage_passed = not (leak_validation_row and prediction_date == date(2026, 4, 15) and ward == self.ward_b)
+            climate_shortfall = insufficient_validation_climate and prediction_date == date(2026, 4, 15)
+            covered_lead_days = list(range(1, 4)) if climate_shortfall else list(range(1, 15))
+            missing_lead_days = [day for day in range(1, 15) if day not in covered_lead_days]
+            climate_coverage = {
+                "record_type": "forecast",
+                "source_provider": "open-meteo-forecast",
+                "observed_vs_forecast_source_label": "Forecast rainfall",
+                "claimed_forecast_horizon_days": 14,
+                "forecast_coverage_days": len(covered_lead_days),
+                "forecast_covered_lead_days": covered_lead_days,
+                "forecast_missing_lead_days": missing_lead_days,
+                "forecast_horizon_7d_sufficient": not climate_shortfall,
+                "forecast_horizon_14d_sufficient": not climate_shortfall,
+                "claimed_lead_time_climate_coverage_sufficient": not climate_shortfall,
+                "fallback_static_rainfall_used": False,
+                "climate_coverage_status": "insufficient_forecast_horizon" if climate_shortfall else "sufficient",
+                "climate_coverage_caveats": ["forecast_missing_claimed_lead_days"] if climate_shortfall else [],
+                "climate_source_confidence": 0.55 if climate_shortfall else 1.0,
+                "climate_source_confidence_label": "moderate" if climate_shortfall else "high",
+            }
             FeatureDatasetRow.objects.create(
                 dataset=feature_dataset,
                 ward=ward,
@@ -100,6 +127,25 @@ class WardRiskTemporalBacktestingPhaseFourTestCase(TestCase):
                     "floodplain_exposure": 0.2,
                     "water_body_proximity": 0.3,
                     "wash_vulnerability": 0.5,
+                    "record_type": climate_coverage["record_type"],
+                    "source_provider": climate_coverage["source_provider"],
+                    "observed_vs_forecast_source_label": climate_coverage[
+                        "observed_vs_forecast_source_label"
+                    ],
+                    "claimed_forecast_horizon_days": climate_coverage["claimed_forecast_horizon_days"],
+                    "forecast_coverage_days": climate_coverage["forecast_coverage_days"],
+                    "forecast_covered_lead_days": climate_coverage["forecast_covered_lead_days"],
+                    "forecast_missing_lead_days": climate_coverage["forecast_missing_lead_days"],
+                    "forecast_horizon_7d_sufficient": climate_coverage["forecast_horizon_7d_sufficient"],
+                    "forecast_horizon_14d_sufficient": climate_coverage["forecast_horizon_14d_sufficient"],
+                    "claimed_lead_time_climate_coverage_sufficient": climate_coverage[
+                        "claimed_lead_time_climate_coverage_sufficient"
+                    ],
+                    "fallback_static_rainfall_used": climate_coverage["fallback_static_rainfall_used"],
+                    "climate_coverage_status": climate_coverage["climate_coverage_status"],
+                    "climate_coverage_caveats": climate_coverage["climate_coverage_caveats"],
+                    "climate_source_confidence": climate_coverage["climate_source_confidence"],
+                    "climate_source_confidence_label": climate_coverage["climate_source_confidence_label"],
                     "source_refs": [f"rainfall:phase4:{ward.ward_code}:{prediction_date.isoformat()}"],
                     "source_record_refs": [f"rainfall_record:phase4:{ward.ward_code}:{prediction_date.isoformat()}"],
                     "source_lineage": {
@@ -109,6 +155,7 @@ class WardRiskTemporalBacktestingPhaseFourTestCase(TestCase):
                                 f"rainfall_record:phase4:{ward.ward_code}:{prediction_date.isoformat()}"
                             ],
                         },
+                        "climate_coverage": climate_coverage,
                         "surveillance": {
                             "source_refs": [f"surveillance:phase4:{ward.ward_code}"],
                             "source_record_refs": [
@@ -245,6 +292,9 @@ class WardRiskTemporalBacktestingPhaseFourTestCase(TestCase):
         self.assertIn("long_rains", report["metrics"]["logistic_regression"]["by_season"])
         self.assertIn("confirmed_surveillance", report["metrics"]["logistic_regression"]["by_truth_level"])
         self.assertTrue(report["promotion_gates"]["passed"])
+        self.assertTrue(report["climate_coverage_summary"]["ready_for_claimed_forecast_horizon"])
+        self.assertTrue(report["validation_climate_coverage_summary"]["ready_for_claimed_forecast_horizon"])
+        self.assertTrue(report["promotion_gates"]["checks"]["climate_coverage_ready"])
         promotion_metric_thresholds = report["promotion_gates"]["checks"]["promotion_metric_thresholds"]
         self.assertTrue(promotion_metric_thresholds["algorithm_results"]["logistic_regression"]["passed"])
         self.assertEqual(report["promotion_gates"]["checks"]["accepted_outbreak_validation_row_count"], 1)
@@ -273,7 +323,10 @@ class WardRiskTemporalBacktestingPhaseFourTestCase(TestCase):
         self.assertEqual(model_run.evaluation_metrics["balanced_accuracy"], 1.0)
         self.assertEqual(model_run.evaluation_metrics["false_alert_rate"], 0.0)
         self.assertEqual(model_run.evaluation_metrics["temporal_validation_window_count"], 1)
+        self.assertTrue(model_run.evaluation_metrics["climate_coverage_gate_passed"])
+        self.assertEqual(model_run.evaluation_metrics["climate_coverage_readiness_caveats"], [])
         self.assertIn("temporal_backtest_report", model_run.evaluation_metrics)
+        self.assertTrue(model_run.metadata["climate_coverage_gate"]["passed"])
         self.assertEqual(model_run.metadata["risk_score_model_run_linkage"]["risk_score_count"], 1)
         self.assertEqual(model_run.metadata["promoted_risk_scores_materialized_to_wards"], 1)
         self.ward_b.refresh_from_db()
@@ -292,6 +345,11 @@ class WardRiskTemporalBacktestingPhaseFourTestCase(TestCase):
         self.assertTrue(model_run_evidence["phase_4_promotion_gates_passed"])
         self.assertTrue(model_run_evidence["promotion_truth_and_leakage_checks_passed"])
         self.assertEqual(model_run_evidence["promotion_evaluation_metrics"]["lead_time_recall"], 1.0)
+        self.assertTrue(model_run_evidence["climate_coverage_summary"]["ready_for_claimed_forecast_horizon"])
+        self.assertEqual(
+            dashboard_alert.guided_request_metadata["climate_evidence"]["observed_vs_forecast_source_label"],
+            "Forecast rainfall",
+        )
         feature_lineage = model_run_evidence["feature_lineage"]
         self.assertEqual(feature_lineage["inference_feature_dataset_ref"], feature_dataset.dataset_ref)
         self.assertTrue(feature_lineage["lineage_available"])
@@ -299,6 +357,7 @@ class WardRiskTemporalBacktestingPhaseFourTestCase(TestCase):
         self.assertTrue(feature_lineage["feature_row_refs"])
         self.assertTrue(feature_lineage["source_refs"])
         self.assertTrue(feature_lineage["source_record_refs"])
+        self.assertIn("Forecast rainfall", feature_lineage["climate_source_labels"])
 
     def test_promotion_fails_when_report_is_not_bound_to_model_run_feature_dataset(self):
         feature_dataset, label_dataset = self._create_feature_and_label_datasets()
@@ -367,6 +426,29 @@ class WardRiskTemporalBacktestingPhaseFourTestCase(TestCase):
         self.assertFalse(report["promotion_gates"]["passed"])
         self.assertIn("leakage_checks_not_passing", report["promotion_gates"]["blockers"])
         with self.assertRaises(ValueError):
+            persist_temporal_backtest_report(model_run=model_run, report=report, promote=True)
+
+    def test_promotion_fails_when_climate_forecast_horizon_is_insufficient(self):
+        feature_dataset, label_dataset = self._create_feature_and_label_datasets(
+            insufficient_validation_climate=True,
+        )
+        model_run = self._model_run(feature_dataset=feature_dataset)
+        report = build_temporal_backtest_report(
+            feature_dataset=feature_dataset,
+            label_dataset=label_dataset,
+            train_end_date=date(2026, 4, 8),
+            validation_start_date=date(2026, 4, 15),
+            rainfall_threshold_mm=50,
+        )
+
+        self.assertFalse(report["promotion_gates"]["passed"])
+        self.assertFalse(report["promotion_gates"]["checks"]["climate_coverage_ready"])
+        self.assertIn("climate_coverage_readiness_caveat", report["promotion_gates"]["blockers"])
+        self.assertIn(
+            "insufficient_forecast_horizon_for_some_rows",
+            report["validation_climate_coverage_summary"]["readiness_caveats"],
+        )
+        with self.assertRaisesMessage(ValueError, "climate_coverage_readiness_caveat"):
             persist_temporal_backtest_report(model_run=model_run, report=report, promote=True)
 
     def test_promotion_fails_when_validation_truth_is_seeded_demo_only(self):

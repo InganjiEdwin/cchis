@@ -25,7 +25,14 @@ import { Card } from "@/components/ui/card";
 import { StatusBanner } from "@/components/ui/status-banner";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { cn } from "@/lib/cn";
-import { type AlertRecord, type WardDetailSummary } from "@/lib/dashboard";
+import {
+  createSensitiveExportViaBff,
+  downloadSensitiveExportFile,
+  downloadSensitiveExportViaBff,
+  type AlertRecord,
+  type ClimateEvidence,
+} from "@/lib/dashboard";
+import { canExportSensitiveReports } from "@/lib/roles";
 import { useAlertDetailQuery } from "@/queries/use-alert-detail-query";
 import { useCreateChvCoverageRequestFromAlertMutation } from "@/queries/use-create-chv-coverage-request-from-alert-mutation";
 import { useCreateChvCoverageRequestMutation } from "@/queries/use-create-chv-coverage-request-mutation";
@@ -87,6 +94,71 @@ function formatTimeOnly(timestamp: string | null) {
   });
 }
 
+function formatDateOnly(value: string | null | undefined) {
+  if (!value) {
+    return "Unavailable";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "Invalid date";
+  }
+
+  return date.toLocaleDateString([], {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function formatClimateValidRange(climate: ClimateEvidence | null) {
+  if (!climate?.valid_date) {
+    return "Unavailable";
+  }
+
+  const endDate = new Date(climate.valid_date);
+  if (Number.isNaN(endDate.getTime())) {
+    return "Invalid date";
+  }
+
+  const leadDay = climate.lead_day ?? climate.forecast_horizon_days;
+  if (typeof leadDay === "number" && leadDay > 1) {
+    const startDate = new Date(endDate);
+    startDate.setDate(endDate.getDate() - leadDay + 1);
+    return `${startDate.toLocaleDateString([], { day: "2-digit", month: "short" })} - ${endDate.toLocaleDateString([], { day: "2-digit", month: "short", year: "numeric" })}`;
+  }
+
+  return formatDateOnly(climate.valid_date);
+}
+
+function formatLeadDays(days: number[] | undefined) {
+  if (!days?.length) {
+    return "None";
+  }
+  if (days.length <= 8) {
+    return days.join(", ");
+  }
+  return `${days.slice(0, 8).join(", ")} +${days.length - 8} more`;
+}
+
+function getClimateTone(climate: ClimateEvidence | null) {
+  if (!climate) return "default" as const;
+  if (climate.fallback_static_rainfall_used || climate.forecast_missing_lead_days.length > 0) {
+    return "warning" as const;
+  }
+  return climate.claimed_lead_time_climate_coverage_sufficient ? ("success" as const) : ("warning" as const);
+}
+
+function formatClimateStatus(value: string | undefined) {
+  if (!value) return "Coverage unavailable";
+  return value
+    .toLowerCase()
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 function formatRelativeShort(timestamp: string | null) {
   if (!timestamp) {
     return "No recent update";
@@ -117,36 +189,6 @@ function formatRelativeShort(timestamp: string | null) {
 
 function formatAlertPublicId(alertId: number) {
   return `AL-${String(alertId).padStart(4, "0")}`;
-}
-
-function exportAlertReport(alert: AlertRecord, wardDetail: WardDetailSummary | null) {
-  const rows = [
-    ["Field", "Value"],
-    ["Alert ID", formatAlertPublicId(alert.id)],
-    ["Ward", alert.ward_name],
-    ["Channel", alert.channel],
-    ["Status", alert.status],
-    ["Created", alert.created_at],
-    ["Sent", alert.sent_at ?? ""],
-    ["Backend", alert.delivery_backend || ""],
-    ["Recipient", alert.recipient],
-    ["Message", alert.message],
-    ["Error", alert.error_message || ""],
-    ["Ward risk level", wardDetail?.current_risk_level ?? ""],
-    ["Ward risk score", wardDetail?.current_risk_score ?? ""],
-  ];
-
-  const csv = rows
-    .map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(","))
-    .join("\n");
-
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `${formatAlertPublicId(alert.id).toLowerCase()}-report.csv`;
-  link.click();
-  URL.revokeObjectURL(url);
 }
 
 function getToneSurface(tone: "red" | "amber" | "orange" | "blue" | "slate") {
@@ -213,6 +255,9 @@ export default function AlertDetailPage() {
   const [timelineFilter, setTimelineFilter] = useState<"all" | "system" | "communication" | "field_activity" | "escalation" | "resolution">("all");
   const [expandedTimelineItemId, setExpandedTimelineItemId] = useState<string | null>("delivery-status");
   const [coverageRequestFeedback, setCoverageRequestFeedback] = useState<string | null>(null);
+  const [exportFeedback, setExportFeedback] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
 
   const alertId = useMemo(() => Number(params.id), [params.id]);
   const alertDetailQuery = useAlertDetailQuery({
@@ -222,6 +267,7 @@ export default function AlertDetailPage() {
   const createFromAlertMutation = useCreateChvCoverageRequestFromAlertMutation();
   const createCoverageRequestMutation = useCreateChvCoverageRequestMutation();
   const alert = alertDetailQuery.data?.alert ?? null;
+  const privacyContext = alert?.privacy_context ?? null;
   const wardDetail = alertDetailQuery.data?.ward_detail ?? null;
   const classification = alertDetailQuery.data?.classification ?? null;
   const riskContext = alertDetailQuery.data?.risk_context ?? null;
@@ -229,6 +275,7 @@ export default function AlertDetailPage() {
   const delivery = alertDetailQuery.data?.delivery ?? null;
   const deliverySummary = alertDetailQuery.data?.delivery_summary ?? null;
   const messageSource = alertDetailQuery.data?.message_source ?? null;
+  const climateEvidence = alertDetailQuery.data?.climate_evidence ?? null;
   const chvResponseSummary = alertDetailQuery.data?.chv_response_summary ?? null;
   const facilityResponseSummary = alertDetailQuery.data?.facility_response_summary ?? null;
   const recommendedNextAction = alertDetailQuery.data?.recommended_next_action ?? null;
@@ -254,6 +301,7 @@ export default function AlertDetailPage() {
         messageSource.mode !== "unavailable"),
   );
   const canRequestCoverage = currentUser?.role === "ADMIN" || currentUser?.role === "SUPERVISOR";
+  const canExportReport = canExportSensitiveReports(currentUser?.role);
   const isCoverageRequestPending = createFromAlertMutation.isPending || createCoverageRequestMutation.isPending;
   const liveCoverageRequestQuery = useLiveChvCoverageRequestForWardQuery({
     wardId: alert?.ward ?? null,
@@ -266,6 +314,37 @@ export default function AlertDetailPage() {
   const coverageRequestPendingLabel = liveCoverageRequest
     ? "Opening CHV coverage request..."
     : "Preparing CHV coverage request...";
+
+  async function handleAlertReportExport() {
+    if (!alert) {
+      return;
+    }
+
+    setExportFeedback(null);
+    setExportError(null);
+    setIsExporting(true);
+
+    try {
+      const exportRequest = await createSensitiveExportViaBff({
+        export_type: "ALERT_DETAIL_REPORT",
+        purpose: "Operator requested alert detail report for delivery review.",
+        filters: { alert_id: alert.id },
+      });
+
+      if (exportRequest.approval_state !== "APPROVED") {
+        setExportFeedback("Sensitive export request is pending admin approval.");
+        return;
+      }
+
+      const download = await downloadSensitiveExportViaBff(exportRequest.public_id);
+      downloadSensitiveExportFile(download);
+      setExportFeedback("Sensitive export downloaded and audited.");
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : "Unable to request sensitive export.");
+    } finally {
+      setIsExporting(false);
+    }
+  }
 
   if (!currentUser) {
     return null;
@@ -298,9 +377,26 @@ export default function AlertDetailPage() {
           {createCoverageRequestMutation.error.message}
         </StatusBanner>
       ) : null}
+      {exportError ? (
+        <StatusBanner tone="danger" icon={<AlertTriangle aria-hidden="true" />}>
+          {exportError}
+        </StatusBanner>
+      ) : null}
       {coverageRequestFeedback ? (
         <StatusBanner tone="success" icon={<CheckCircle2 aria-hidden="true" />}>
           {coverageRequestFeedback}
+        </StatusBanner>
+      ) : null}
+      {exportFeedback ? (
+        <StatusBanner tone="info" icon={<ShieldAlert aria-hidden="true" />}>
+          {exportFeedback}
+        </StatusBanner>
+      ) : null}
+      {privacyContext ? (
+        <StatusBanner tone={privacyContext.redacted ? "info" : "warning"} icon={<ShieldAlert aria-hidden="true" />}>
+          {privacyContext.redacted
+            ? `Sensitive contact details are redacted for this view. ${privacyContext.reason}`
+            : `Sensitive contact details are visible in this view. ${privacyContext.reason}`}
         </StatusBanner>
       ) : null}
 
@@ -334,10 +430,17 @@ export default function AlertDetailPage() {
             </p>
           </div>
 
-          {alert ? (
-            <Button variant="secondary" className="px-4" onClick={() => exportAlertReport(alert, wardDetail)}>
+          {alert && canExportReport ? (
+            <Button
+              variant="secondary"
+              className="px-4"
+              onClick={() => {
+                void handleAlertReportExport();
+              }}
+              disabled={isExporting}
+            >
               <Download className="size-4" aria-hidden="true" />
-              <span>Export Report</span>
+              <span>{isExporting ? "Requesting Export" : "Export Report"}</span>
             </Button>
           ) : null}
         </div>
@@ -518,6 +621,57 @@ export default function AlertDetailPage() {
                   </div>
                 ))}
               </div>
+            </Card>
+
+            <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h2 className="text-2xl font-semibold text-panel-strong">Climate Source Evidence</h2>
+                  <p className="mt-2 text-sm text-panel-muted">
+                    {climateEvidence?.observed_vs_forecast_source_label ?? "Climate source unavailable"}
+                  </p>
+                </div>
+                <StatusBadge tone={getClimateTone(climateEvidence)} className="w-max px-3 py-1.5 tracking-[0.14em]">
+                  {formatClimateStatus(climateEvidence?.climate_coverage_status)}
+                </StatusBadge>
+              </div>
+
+              <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                {[
+                  ["Source label", climateEvidence?.observed_vs_forecast_source_label ?? "Unavailable"],
+                  ["Provider", climateEvidence?.source_provider || "Unavailable"],
+                  ["Issue time", formatTimeStamp(climateEvidence?.issue_time ?? null)],
+                  ["Valid dates", formatClimateValidRange(climateEvidence)],
+                  [
+                    "Forecast coverage",
+                    `${climateEvidence?.forecast_coverage_days ?? 0}/${climateEvidence?.claimed_forecast_horizon_days ?? 14} days`,
+                  ],
+                  ["Missing lead days", formatLeadDays(climateEvidence?.forecast_missing_lead_days)],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-[1.2rem] border border-panel-table-wrap px-4 py-3">
+                    <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">{label}</p>
+                    <p className="mt-2 text-sm font-semibold text-panel-strong">{value}</p>
+                  </div>
+                ))}
+              </div>
+
+              {climateEvidence?.fallback_static_rainfall_used ? (
+                <div className="mt-5 flex items-start gap-2 rounded-[1.2rem] border border-[color-mix(in_srgb,var(--warning)_20%,var(--dashboard-table-line))] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] px-4 py-3">
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[color:var(--warning)]" aria-hidden="true" />
+                  <p className="text-sm leading-6 text-panel-copy">
+                    Fallback source warning: static rainfall is present and is not live forecast evidence.
+                  </p>
+                </div>
+              ) : null}
+
+              {climateEvidence?.forecast_missing_lead_days?.length ? (
+                <div className="mt-5 flex items-start gap-2 rounded-[1.2rem] border border-[color-mix(in_srgb,var(--warning)_20%,var(--dashboard-table-line))] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] px-4 py-3">
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[color:var(--warning)]" aria-hidden="true" />
+                  <p className="text-sm leading-6 text-panel-copy">
+                    Missing forecast lead days: {formatLeadDays(climateEvidence.forecast_missing_lead_days)}.
+                  </p>
+                </div>
+              ) : null}
             </Card>
 
             <Card className="rounded-[2rem] px-5 py-5 sm:px-6">

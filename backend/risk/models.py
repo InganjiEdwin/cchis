@@ -1,8 +1,47 @@
+import hashlib
+import json
+import re
 import uuid
+from string import Formatter
 
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.contrib.gis.db import models
 from django.conf import settings
 from django.utils import timezone
+
+
+MESSAGE_TEMPLATE_PLACEHOLDER_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def _stable_identity_digest(payload: dict) -> str:
+    serialized = json.dumps(payload, default=str, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _message_template_body_placeholders(body: str) -> set[str]:
+    placeholders: set[str] = set()
+    try:
+        parsed = Formatter().parse(body or "")
+    except ValueError as exc:
+        raise ValidationError(f"Template body has invalid placeholder syntax: {exc}") from exc
+
+    for _literal, field_name, format_spec, conversion in parsed:
+        if field_name is None:
+            continue
+        if format_spec or conversion or "." in field_name or "[" in field_name:
+            raise ValidationError(
+                "Template placeholders must be simple names like {ward_name}; "
+                "format specifiers, conversions, attribute access, and indexes are not supported."
+            )
+        if not MESSAGE_TEMPLATE_PLACEHOLDER_RE.match(field_name):
+            raise ValidationError(
+                "Template placeholders must use lowercase letters, numbers, and underscores, "
+                "and start with a letter."
+            )
+        placeholders.add(field_name)
+    return placeholders
 
 
 class Ward(models.Model):
@@ -141,6 +180,1047 @@ class FacilityContact(models.Model):
     def __str__(self) -> str:
         label = self.name or self.role or "Facility contact"
         return f"{label} ({self.facility.name})"
+
+
+class ContactPreference(models.Model):
+    AUDIENCE_HOUSEHOLD = "HOUSEHOLD"
+    AUDIENCE_CHV = "CHV"
+    AUDIENCE_FACILITY_CONTACT = "FACILITY_CONTACT"
+    AUDIENCE_OPERATOR = "OPERATOR"
+    AUDIENCE_CHOICES = [
+        (AUDIENCE_HOUSEHOLD, "Household"),
+        (AUDIENCE_CHV, "CHV"),
+        (AUDIENCE_FACILITY_CONTACT, "Facility contact"),
+        (AUDIENCE_OPERATOR, "Operator"),
+    ]
+
+    CHANNEL_SMS = "SMS"
+    CHANNEL_EMAIL = "EMAIL"
+    CHANNEL_USSD = "USSD"
+    CHANNEL_SYSTEM = "SYSTEM"
+    CHANNEL_CHOICES = [
+        (CHANNEL_SMS, "SMS"),
+        (CHANNEL_EMAIL, "Email"),
+        (CHANNEL_USSD, "USSD"),
+        (CHANNEL_SYSTEM, "System"),
+    ]
+
+    CONSENT_UNKNOWN = "UNKNOWN"
+    CONSENT_GRANTED = "GRANTED"
+    CONSENT_DENIED = "DENIED"
+    CONSENT_EXPIRED = "EXPIRED"
+    CONSENT_CHOICES = [
+        (CONSENT_UNKNOWN, "Unknown"),
+        (CONSENT_GRANTED, "Granted"),
+        (CONSENT_DENIED, "Denied"),
+        (CONSENT_EXPIRED, "Expired"),
+    ]
+
+    OPT_OUT_NOT_OPTED_OUT = "NOT_OPTED_OUT"
+    OPT_OUT_OPTED_OUT = "OPTED_OUT"
+    OPT_OUT_CHOICES = [
+        (OPT_OUT_NOT_OPTED_OUT, "Not opted out"),
+        (OPT_OUT_OPTED_OUT, "Opted out"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    audience_type = models.CharField(max_length=32, choices=AUDIENCE_CHOICES)
+    channel = models.CharField(max_length=20, choices=CHANNEL_CHOICES, default=CHANNEL_SMS)
+    phone_number = models.CharField(max_length=20, blank=True)
+    contact_reference = models.CharField(max_length=180, blank=True)
+    consent_status = models.CharField(max_length=20, choices=CONSENT_CHOICES, default=CONSENT_UNKNOWN)
+    opt_out_status = models.CharField(max_length=20, choices=OPT_OUT_CHOICES, default=OPT_OUT_NOT_OPTED_OUT)
+    source = models.CharField(max_length=120)
+    source_reference = models.CharField(max_length=180, blank=True)
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="contact_preferences_recorded",
+    )
+    recorded_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-recorded_at", "-created_at"]
+        indexes = [
+            models.Index(fields=["audience_type", "channel", "phone_number"], name="risk_contactpref_phone_idx"),
+            models.Index(fields=["audience_type", "channel", "contact_reference"], name="risk_contactpref_ref_idx"),
+            models.Index(fields=["opt_out_status", "recorded_at"], name="risk_contactpref_opt_idx"),
+            models.Index(fields=["consent_status", "recorded_at"], name="risk_contactpref_con_idx"),
+            models.Index(fields=["expires_at", "recorded_at"], name="risk_contactpref_exp_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(phone_number__gt="") | models.Q(contact_reference__gt=""),
+                name="contact_preference_requires_phone_or_ref",
+            ),
+        ]
+
+    @staticmethod
+    def normalize_phone_number(value: str) -> str:
+        compact = (value or "").strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+        if compact.startswith("+254") and len(compact) == 13 and compact[1:].isdigit():
+            return compact
+        if compact.startswith("254") and len(compact) == 12 and compact.isdigit():
+            return f"+{compact}"
+        if compact.startswith("0") and len(compact) == 10 and compact.isdigit():
+            return f"+254{compact[1:]}"
+        return compact
+
+    @classmethod
+    def is_valid_phone_number(cls, value: str) -> bool:
+        normalized = cls.normalize_phone_number(value)
+        return bool(
+            normalized.startswith("+254")
+            and len(normalized) == 13
+            and normalized[1:].isdigit()
+            and normalized[4] in {"1", "7"}
+        )
+
+    @property
+    def is_expired(self) -> bool:
+        return bool(self.expires_at and self.expires_at <= timezone.now())
+
+    def save(self, *args, **kwargs):
+        self.phone_number = self.normalize_phone_number(self.phone_number)
+        self.contact_reference = self.contact_reference.strip()
+        self.source = self.source.strip()
+        self.source_reference = self.source_reference.strip()
+        super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        contact = self.contact_reference or self.phone_number
+        return f"{self.audience_type} {self.channel} preference for {contact}"
+
+
+class ContactPreferenceAuditEvent(models.Model):
+    ACTION_RECORDED = "RECORDED"
+    ACTION_ALLOWED = "ALLOWED"
+    ACTION_BLOCKED_OPT_OUT = "BLOCKED_OPT_OUT"
+    ACTION_BLOCKED_CONSENT_REQUIRED = "BLOCKED_CONSENT_REQUIRED"
+    ACTION_BLOCKED_CONSENT_DENIED = "BLOCKED_CONSENT_DENIED"
+    ACTION_BLOCKED_CONSENT_EXPIRED = "BLOCKED_CONSENT_EXPIRED"
+    ACTION_EMERGENCY_OVERRIDE_USED = "EMERGENCY_OVERRIDE_USED"
+    ACTION_CHOICES = [
+        (ACTION_RECORDED, "Recorded"),
+        (ACTION_ALLOWED, "Allowed"),
+        (ACTION_BLOCKED_OPT_OUT, "Blocked by opt-out"),
+        (ACTION_BLOCKED_CONSENT_REQUIRED, "Blocked because consent is required"),
+        (ACTION_BLOCKED_CONSENT_DENIED, "Blocked because consent was denied"),
+        (ACTION_BLOCKED_CONSENT_EXPIRED, "Blocked because consent expired"),
+        (ACTION_EMERGENCY_OVERRIDE_USED, "Emergency override used"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    preference = models.ForeignKey(
+        ContactPreference,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="audit_events",
+    )
+    action = models.CharField(max_length=40, choices=ACTION_CHOICES)
+    audience_type = models.CharField(max_length=32, choices=ContactPreference.AUDIENCE_CHOICES)
+    channel = models.CharField(max_length=20, choices=ContactPreference.CHANNEL_CHOICES, default=ContactPreference.CHANNEL_SMS)
+    phone_number = models.CharField(max_length=20, blank=True)
+    contact_reference = models.CharField(max_length=180, blank=True)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="contact_preference_audit_events",
+    )
+    reason = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["action", "created_at"], name="risk_contactaudit_action_idx"),
+            models.Index(fields=["audience_type", "channel", "created_at"], name="risk_contactaudit_aud_idx"),
+            models.Index(fields=["contact_reference", "created_at"], name="risk_contactaudit_ref_idx"),
+            models.Index(fields=["phone_number", "created_at"], name="risk_contactaudit_phone_idx"),
+        ]
+
+    def save(self, *args, **kwargs):
+        self.phone_number = ContactPreference.normalize_phone_number(self.phone_number)
+        self.contact_reference = self.contact_reference.strip()
+        super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        contact = self.contact_reference or self.phone_number
+        return f"{self.action} {self.audience_type} {contact}"
+
+
+class MessageTemplate(models.Model):
+    AUDIENCE_CHV = "chv"
+    AUDIENCE_HOUSEHOLD = "household"
+    AUDIENCE_FACILITY_CONTACT = "facility_contact"
+    AUDIENCE_COUNTY_OPERATOR = "county_operator"
+    AUDIENCE_SYSTEM_OPERATOR = "system_operator"
+    AUDIENCE_CHOICES = [
+        (AUDIENCE_CHV, "CHV"),
+        (AUDIENCE_HOUSEHOLD, "Household"),
+        (AUDIENCE_FACILITY_CONTACT, "Facility contact"),
+        (AUDIENCE_COUNTY_OPERATOR, "County operator"),
+        (AUDIENCE_SYSTEM_OPERATOR, "System operator"),
+    ]
+
+    CHANNEL_SMS = "sms"
+    CHANNEL_USSD = "ussd"
+    CHANNEL_DASHBOARD = "dashboard"
+    CHANNEL_OFFLINE_CHV_BUNDLE = "offline_chv_bundle"
+    CHANNEL_CHOICES = [
+        (CHANNEL_SMS, "SMS"),
+        (CHANNEL_USSD, "USSD"),
+        (CHANNEL_DASHBOARD, "Dashboard"),
+        (CHANNEL_OFFLINE_CHV_BUNDLE, "Offline CHV bundle"),
+    ]
+
+    RISK_LOW = "low"
+    RISK_MEDIUM = "medium"
+    RISK_HIGH = "high"
+    RISK_CRITICAL = "critical"
+    RISK_CHOICES = [
+        (RISK_LOW, "Low"),
+        (RISK_MEDIUM, "Medium"),
+        (RISK_HIGH, "High"),
+        (RISK_CRITICAL, "Critical"),
+    ]
+
+    APPROVAL_DRAFT = "draft"
+    APPROVAL_PENDING_REVIEW = "pending_review"
+    APPROVAL_APPROVED = "approved"
+    APPROVAL_REJECTED = "rejected"
+    APPROVAL_RETIRED = "retired"
+    APPROVAL_CHOICES = [
+        (APPROVAL_DRAFT, "Draft"),
+        (APPROVAL_PENDING_REVIEW, "Pending review"),
+        (APPROVAL_APPROVED, "Approved"),
+        (APPROVAL_REJECTED, "Rejected"),
+        (APPROVAL_RETIRED, "Retired"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    template_key = models.CharField(max_length=120)
+    audience_type = models.CharField(max_length=32, choices=AUDIENCE_CHOICES)
+    channel = models.CharField(max_length=32, choices=CHANNEL_CHOICES)
+    language = models.CharField(max_length=20, default="en")
+    version = models.PositiveIntegerField(default=1)
+    title = models.CharField(max_length=160)
+    body = models.TextField()
+    placeholders = models.JSONField(default=list, blank=True)
+    approval_status = models.CharField(max_length=32, choices=APPROVAL_CHOICES, default=APPROVAL_DRAFT)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="message_templates_approved",
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    retired_at = models.DateTimeField(null=True, blank=True)
+    owner = models.CharField(max_length=120)
+    risk_level = models.CharField(max_length=20, choices=RISK_CHOICES, default=RISK_MEDIUM)
+    public_health_caveats = models.TextField(blank=True)
+    lineage_metadata = models.JSONField(default=dict, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="message_templates_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["template_key", "language", "-version"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["template_key", "language", "version"],
+                name="risk_msgtmpl_key_lang_ver_uniq",
+            ),
+            models.CheckConstraint(
+                check=models.Q(version__gte=1),
+                name="risk_msgtmpl_version_positive",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["template_key", "language", "version"], name="risk_msgtmpl_lookup_idx"),
+            models.Index(fields=["audience_type", "channel", "approval_status"], name="risk_msgtmpl_status_idx"),
+            models.Index(fields=["approval_status", "retired_at"], name="risk_msgtmpl_active_idx"),
+        ]
+
+    @property
+    def is_approved(self) -> bool:
+        return self.approval_status == self.APPROVAL_APPROVED and self.retired_at is None
+
+    def clean(self):
+        errors: dict[str, list[str]] = {}
+        declared_placeholders = self.placeholders or []
+        if not isinstance(declared_placeholders, list):
+            errors["placeholders"] = ["Placeholders must be a list of simple placeholder names."]
+        else:
+            invalid_names = [
+                name
+                for name in declared_placeholders
+                if not isinstance(name, str) or not MESSAGE_TEMPLATE_PLACEHOLDER_RE.match(name)
+            ]
+            if invalid_names:
+                errors["placeholders"] = [
+                    "Placeholders must use lowercase letters, numbers, and underscores, and start with a letter."
+                ]
+            elif len(set(declared_placeholders)) != len(declared_placeholders):
+                errors["placeholders"] = ["Placeholders must not contain duplicate names."]
+
+        try:
+            body_placeholders = _message_template_body_placeholders(self.body)
+        except ValidationError as exc:
+            errors["body"] = exc.messages
+            body_placeholders = set()
+
+        if isinstance(declared_placeholders, list) and not errors.get("placeholders"):
+            declared_set = set(declared_placeholders)
+            undeclared = sorted(body_placeholders - declared_set)
+            unused = sorted(declared_set - body_placeholders)
+            if undeclared or unused:
+                details = []
+                if undeclared:
+                    details.append("undeclared in registry: " + ", ".join(undeclared))
+                if unused:
+                    details.append("declared but unused in body: " + ", ".join(unused))
+                errors["placeholders"] = ["Template placeholders must match the body (" + "; ".join(details) + ")."]
+
+        if self.approval_status == self.APPROVAL_APPROVED and self.approved_at is None:
+            errors["approved_at"] = ["Approved templates require an approval timestamp."]
+        if self.approved_at is not None and self.approval_status != self.APPROVAL_APPROVED:
+            errors["approval_status"] = ["Only approved templates may carry an approval timestamp."]
+        if self.retired_at is not None and self.approval_status != self.APPROVAL_RETIRED:
+            errors["approval_status"] = ["Templates with retired_at must use retired approval status."]
+
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        self.template_key = self.template_key.strip()
+        self.language = self.language.strip().lower() or "en"
+        self.owner = self.owner.strip()
+        self.title = self.title.strip()
+        super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.template_key} v{self.version} ({self.language})"
+
+
+class PrivacyRetentionHold(models.Model):
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT, related_name="privacy_retention_holds")
+    object_id = models.CharField(max_length=80)
+    target = GenericForeignKey("content_type", "object_id")
+    reason = models.TextField()
+    case_reference = models.CharField(max_length=160, blank=True)
+    is_active = models.BooleanField(default=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="privacy_retention_holds_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["content_type", "object_id"], name="risk_privhold_target_idx"),
+            models.Index(fields=["is_active", "expires_at"], name="risk_privhold_active_idx"),
+            models.Index(fields=["case_reference", "created_at"], name="risk_privhold_case_idx"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["content_type", "object_id"],
+                condition=models.Q(is_active=True),
+                name="risk_privhold_active_target_uniq",
+            ),
+        ]
+
+    def is_currently_active(self) -> bool:
+        if not self.is_active:
+            return False
+        if self.expires_at is None:
+            return True
+        return self.expires_at > timezone.now()
+
+    def __str__(self) -> str:
+        return f"{self.content_type.app_label}.{self.content_type.model}:{self.object_id}"
+
+
+class PrivacyRetentionAuditEvent(models.Model):
+    ACTION_DRY_RUN = "DRY_RUN"
+    ACTION_ANONYMIZED = "ANONYMIZED"
+    ACTION_DELETED = "DELETED"
+    ACTION_HELD = "HELD"
+    ACTION_SKIPPED = "SKIPPED"
+    ACTION_SUMMARY = "SUMMARY"
+    ACTION_CHOICES = [
+        (ACTION_DRY_RUN, "Dry run"),
+        (ACTION_ANONYMIZED, "Anonymized"),
+        (ACTION_DELETED, "Deleted"),
+        (ACTION_HELD, "Held"),
+        (ACTION_SKIPPED, "Skipped"),
+        (ACTION_SUMMARY, "Summary"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    run_id = models.UUIDField(db_index=True)
+    action = models.CharField(max_length=24, choices=ACTION_CHOICES)
+    record_family = models.CharField(max_length=80)
+    model_label = models.CharField(max_length=120, blank=True)
+    object_id = models.CharField(max_length=80, blank=True)
+    cutoff_at = models.DateTimeField(null=True, blank=True)
+    window_days = models.PositiveIntegerField(null=True, blank=True)
+    dry_run = models.BooleanField(default=True)
+    hold = models.ForeignKey(
+        PrivacyRetentionHold,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="audit_events",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="privacy_retention_audit_events",
+    )
+    decision_reason = models.TextField(blank=True)
+    before_state = models.JSONField(default=dict, blank=True)
+    after_state = models.JSONField(default=dict, blank=True)
+    aggregate_metrics = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["record_family", "created_at"], name="risk_privaudit_family_idx"),
+            models.Index(fields=["model_label", "object_id"], name="risk_privaudit_target_idx"),
+            models.Index(fields=["action", "created_at"], name="risk_privaudit_action_idx"),
+        ]
+
+    def __str__(self) -> str:
+        target = f" {self.model_label}:{self.object_id}" if self.model_label and self.object_id else ""
+        return f"{self.record_family} {self.action}{target}"
+
+
+class SensitiveExportRequest(models.Model):
+    EXPORT_ALERT_LIST_CSV = "ALERT_LIST_CSV"
+    EXPORT_ALERT_DETAIL_REPORT = "ALERT_DETAIL_REPORT"
+    EXPORT_TYPE_CHOICES = [
+        (EXPORT_ALERT_LIST_CSV, "Alert list CSV"),
+        (EXPORT_ALERT_DETAIL_REPORT, "Alert detail report"),
+    ]
+
+    APPROVAL_PENDING = "PENDING"
+    APPROVAL_APPROVED = "APPROVED"
+    APPROVAL_REJECTED = "REJECTED"
+    APPROVAL_EXPIRED = "EXPIRED"
+    APPROVAL_CHOICES = [
+        (APPROVAL_PENDING, "Pending"),
+        (APPROVAL_APPROVED, "Approved"),
+        (APPROVAL_REJECTED, "Rejected"),
+        (APPROVAL_EXPIRED, "Expired"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    export_type = models.CharField(max_length=40, choices=EXPORT_TYPE_CHOICES)
+    requester = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="sensitive_export_requests",
+    )
+    purpose = models.TextField()
+    filters = models.JSONField(default=dict, blank=True)
+    sensitive_fields_included = models.JSONField(default=list, blank=True)
+    approval_state = models.CharField(max_length=20, choices=APPROVAL_CHOICES, default=APPROVAL_PENDING)
+    requires_approval = models.BooleanField(default=True)
+    generated_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="sensitive_exports_approved",
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    rejected_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="sensitive_exports_rejected",
+    )
+    rejected_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
+    generated_filename = models.CharField(max_length=180, blank=True)
+    generated_content_type = models.CharField(max_length=80, default="text/csv")
+    generated_payload = models.TextField(blank=True)
+    payload_sha256 = models.CharField(max_length=64, blank=True)
+    row_count = models.PositiveIntegerField(default=0)
+    download_count = models.PositiveIntegerField(default=0)
+    last_downloaded_at = models.DateTimeField(null=True, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["requester", "created_at"], name="risk_sensexp_requester_idx"),
+            models.Index(fields=["export_type", "approval_state"], name="risk_sensexp_type_state_idx"),
+            models.Index(fields=["expires_at", "approval_state"], name="risk_sensexp_expiry_idx"),
+        ]
+
+    def is_expired(self) -> bool:
+        return bool(self.expires_at and self.expires_at <= timezone.now())
+
+    def __str__(self) -> str:
+        return f"{self.export_type} export {self.public_id} [{self.approval_state}]"
+
+
+class SensitiveExportDownloadAudit(models.Model):
+    OUTCOME_DOWNLOADED = "DOWNLOADED"
+    OUTCOME_BLOCKED_NOT_APPROVED = "BLOCKED_NOT_APPROVED"
+    OUTCOME_BLOCKED_EXPIRED = "BLOCKED_EXPIRED"
+    OUTCOME_BLOCKED_PERMISSION = "BLOCKED_PERMISSION"
+    OUTCOME_CHOICES = [
+        (OUTCOME_DOWNLOADED, "Downloaded"),
+        (OUTCOME_BLOCKED_NOT_APPROVED, "Blocked because export is not approved"),
+        (OUTCOME_BLOCKED_EXPIRED, "Blocked because export expired"),
+        (OUTCOME_BLOCKED_PERMISSION, "Blocked by permission"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    export_request = models.ForeignKey(
+        SensitiveExportRequest,
+        on_delete=models.PROTECT,
+        related_name="download_audits",
+    )
+    downloader = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="sensitive_export_download_audits",
+    )
+    outcome = models.CharField(max_length=40, choices=OUTCOME_CHOICES)
+    reason = models.TextField(blank=True)
+    request_metadata = models.JSONField(default=dict, blank=True)
+    downloaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-downloaded_at"]
+        indexes = [
+            models.Index(fields=["export_request", "downloaded_at"], name="risk_sensdown_export_idx"),
+            models.Index(fields=["downloader", "downloaded_at"], name="risk_sensdown_user_idx"),
+            models.Index(fields=["outcome", "downloaded_at"], name="risk_sensdown_outcome_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.export_request.public_id} {self.outcome}"
+
+
+class ExternalSystem(models.Model):
+    STATUS_ACTIVE = "ACTIVE"
+    STATUS_INACTIVE = "INACTIVE"
+    STATUS_CHOICES = [
+        (STATUS_ACTIVE, "Active"),
+        (STATUS_INACTIVE, "Inactive"),
+    ]
+
+    SYSTEM_DHIS2 = "DHIS2"
+    SYSTEM_CSV_PARTNER = "CSV_PARTNER"
+    SYSTEM_OTHER = "OTHER"
+    SYSTEM_TYPE_CHOICES = [
+        (SYSTEM_DHIS2, "DHIS2"),
+        (SYSTEM_CSV_PARTNER, "CSV partner"),
+        (SYSTEM_OTHER, "Other"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    system_key = models.CharField(max_length=80, unique=True)
+    display_name = models.CharField(max_length=160)
+    system_type = models.CharField(max_length=40, choices=SYSTEM_TYPE_CHOICES, default=SYSTEM_OTHER)
+    owner = models.CharField(max_length=160)
+    default_exchange_format = models.CharField(max_length=40, default="CSV")
+    auth_config_reference = models.CharField(max_length=160, blank=True)
+    api_base_url = models.URLField(blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
+    lineage_metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["system_key"]
+        indexes = [
+            models.Index(fields=["system_key", "status"], name="risk_extsys_key_status_idx"),
+            models.Index(fields=["system_type", "status"], name="risk_extsys_type_status_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.display_name} [{self.system_key}]"
+
+
+class InteroperabilityMappingVersion(models.Model):
+    STATUS_DRAFT = "DRAFT"
+    STATUS_ACTIVE = "ACTIVE"
+    STATUS_RETIRED = "RETIRED"
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, "Draft"),
+        (STATUS_ACTIVE, "Active"),
+        (STATUS_RETIRED, "Retired"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    system = models.ForeignKey(
+        ExternalSystem,
+        on_delete=models.PROTECT,
+        related_name="mapping_versions",
+    )
+    version_label = models.CharField(max_length=120)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT)
+    effective_date = models.DateField(default=timezone.localdate)
+    retired_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="interoperability_mapping_versions_reviewed",
+    )
+    lineage_metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["system__system_key", "-effective_date", "-created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["system", "version_label"], name="risk_iopmapver_unique_label"),
+        ]
+        indexes = [
+            models.Index(fields=["system", "status"], name="risk_iopmapver_system_idx"),
+            models.Index(fields=["effective_date", "status"], name="risk_iopmapver_effective_idx"),
+        ]
+
+    def clean(self):
+        if self.status != self.STATUS_RETIRED and self.retired_at is not None:
+            raise ValidationError("Only retired interoperability mapping versions may set retired_at.")
+
+    def __str__(self) -> str:
+        return f"{self.system.system_key} {self.version_label} [{self.status}]"
+
+
+class InteroperabilityMappingStatus(models.TextChoices):
+    ACTIVE = "ACTIVE", "Active"
+    NEEDS_REVIEW = "NEEDS_REVIEW", "Needs review"
+    RETIRED = "RETIRED", "Retired"
+    REJECTED = "REJECTED", "Rejected"
+
+
+class ExternalOrgUnitMapping(models.Model):
+    INTERNAL_WARD = "WARD"
+    INTERNAL_FACILITY = "HEALTH_FACILITY"
+    INTERNAL_OBJECT_TYPE_CHOICES = [
+        (INTERNAL_WARD, "Ward"),
+        (INTERNAL_FACILITY, "Health facility"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    system = models.ForeignKey(
+        ExternalSystem,
+        on_delete=models.PROTECT,
+        related_name="org_unit_mappings",
+    )
+    mapping_version = models.ForeignKey(
+        InteroperabilityMappingVersion,
+        on_delete=models.PROTECT,
+        related_name="org_unit_mappings",
+    )
+    external_identifier = models.CharField(max_length=160)
+    external_display_name = models.CharField(max_length=200, blank=True)
+    internal_object_type = models.CharField(max_length=40, choices=INTERNAL_OBJECT_TYPE_CHOICES)
+    internal_object_public_id = models.CharField(max_length=80)
+    internal_object_code = models.CharField(max_length=80, blank=True)
+    ward = models.ForeignKey(Ward, on_delete=models.PROTECT, null=True, blank=True, related_name="external_mappings")
+    facility = models.ForeignKey(
+        HealthFacility,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="external_mappings",
+    )
+    mapping_confidence = models.FloatField(default=1.0)
+    status = models.CharField(
+        max_length=20,
+        choices=InteroperabilityMappingStatus.choices,
+        default=InteroperabilityMappingStatus.NEEDS_REVIEW,
+    )
+    effective_date = models.DateField(default=timezone.localdate)
+    retired_date = models.DateField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="external_org_unit_mappings_reviewed",
+    )
+    lineage_metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["system__system_key", "external_identifier"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["system", "mapping_version", "external_identifier"],
+                name="risk_extorg_unique_external",
+            ),
+            models.CheckConstraint(
+                check=models.Q(mapping_confidence__gte=0) & models.Q(mapping_confidence__lte=1),
+                name="risk_extorg_confidence_range",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["system", "status"], name="risk_extorg_system_status_idx"),
+            models.Index(fields=["internal_object_type", "internal_object_public_id"], name="risk_extorg_internal_idx"),
+            models.Index(fields=["external_identifier"], name="risk_extorg_external_idx"),
+        ]
+
+    def clean(self):
+        if self.internal_object_type == self.INTERNAL_WARD and not self.ward_id:
+            raise ValidationError("Ward mappings must link to a Ward.")
+        if self.internal_object_type == self.INTERNAL_FACILITY and not self.facility_id:
+            raise ValidationError("Facility mappings must link to a HealthFacility.")
+        if self.status != InteroperabilityMappingStatus.RETIRED and self.retired_date is not None:
+            raise ValidationError("Only retired interoperability mappings may set retired_date.")
+
+    def __str__(self) -> str:
+        return f"{self.system.system_key}:{self.external_identifier} -> {self.internal_object_type}"
+
+
+class ExternalDataElementMapping(models.Model):
+    VALUE_TYPE_NUMBER = "NUMBER"
+    VALUE_TYPE_TEXT = "TEXT"
+    VALUE_TYPE_BOOLEAN = "BOOLEAN"
+    VALUE_TYPE_DATE = "DATE"
+    VALUE_TYPE_CHOICES = [
+        (VALUE_TYPE_NUMBER, "Number"),
+        (VALUE_TYPE_TEXT, "Text"),
+        (VALUE_TYPE_BOOLEAN, "Boolean"),
+        (VALUE_TYPE_DATE, "Date"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    system = models.ForeignKey(
+        ExternalSystem,
+        on_delete=models.PROTECT,
+        related_name="data_element_mappings",
+    )
+    mapping_version = models.ForeignKey(
+        InteroperabilityMappingVersion,
+        on_delete=models.PROTECT,
+        related_name="data_element_mappings",
+    )
+    exchange_type = models.CharField(max_length=80)
+    external_identifier = models.CharField(max_length=160)
+    external_display_name = models.CharField(max_length=200, blank=True)
+    internal_field = models.CharField(max_length=120)
+    value_type = models.CharField(max_length=20, choices=VALUE_TYPE_CHOICES, default=VALUE_TYPE_NUMBER)
+    required_for_exchange = models.BooleanField(default=True)
+    mapping_confidence = models.FloatField(default=1.0)
+    status = models.CharField(
+        max_length=20,
+        choices=InteroperabilityMappingStatus.choices,
+        default=InteroperabilityMappingStatus.NEEDS_REVIEW,
+    )
+    effective_date = models.DateField(default=timezone.localdate)
+    retired_date = models.DateField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="external_data_element_mappings_reviewed",
+    )
+    lineage_metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["system__system_key", "exchange_type", "internal_field"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["system", "mapping_version", "exchange_type", "internal_field"],
+                name="risk_extde_unique_internal",
+            ),
+            models.CheckConstraint(
+                check=models.Q(mapping_confidence__gte=0) & models.Q(mapping_confidence__lte=1),
+                name="risk_extde_confidence_range",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["system", "exchange_type", "status"], name="risk_extde_exchange_idx"),
+            models.Index(fields=["external_identifier"], name="risk_extde_external_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.exchange_type}:{self.internal_field} -> {self.external_identifier}"
+
+
+class ExternalValueSetMapping(models.Model):
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    system = models.ForeignKey(
+        ExternalSystem,
+        on_delete=models.PROTECT,
+        related_name="value_set_mappings",
+    )
+    mapping_version = models.ForeignKey(
+        InteroperabilityMappingVersion,
+        on_delete=models.PROTECT,
+        related_name="value_set_mappings",
+    )
+    value_set_key = models.CharField(max_length=120)
+    external_value = models.CharField(max_length=160)
+    external_label = models.CharField(max_length=200, blank=True)
+    internal_value = models.CharField(max_length=160)
+    internal_label = models.CharField(max_length=200, blank=True)
+    mapping_confidence = models.FloatField(default=1.0)
+    status = models.CharField(
+        max_length=20,
+        choices=InteroperabilityMappingStatus.choices,
+        default=InteroperabilityMappingStatus.NEEDS_REVIEW,
+    )
+    effective_date = models.DateField(default=timezone.localdate)
+    retired_date = models.DateField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="external_value_set_mappings_reviewed",
+    )
+    lineage_metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["system__system_key", "value_set_key", "internal_value"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["system", "mapping_version", "value_set_key", "internal_value"],
+                name="risk_extval_unique_internal",
+            ),
+            models.CheckConstraint(
+                check=models.Q(mapping_confidence__gte=0) & models.Q(mapping_confidence__lte=1),
+                name="risk_extval_confidence_range",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["system", "value_set_key", "status"], name="risk_extval_valueset_idx"),
+            models.Index(fields=["external_value"], name="risk_extval_external_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.value_set_key}:{self.internal_value} -> {self.external_value}"
+
+
+class InteroperabilityRun(models.Model):
+    DIRECTION_IMPORT = "IMPORT"
+    DIRECTION_EXPORT = "EXPORT"
+    DIRECTION_CHOICES = [
+        (DIRECTION_IMPORT, "Import"),
+        (DIRECTION_EXPORT, "Export"),
+    ]
+
+    EXCHANGE_SURVEILLANCE_CASE_COUNT_IMPORT = "surveillance_case_count_import"
+    EXCHANGE_OUTBREAK_LABEL_IMPORT = "outbreak_label_import"
+    EXCHANGE_FACILITY_IMPORT = "facility_import"
+    EXCHANGE_WARD_ORG_UNIT_MAPPING_IMPORT = "ward_org_unit_mapping_import"
+    EXCHANGE_POPULATION_EXPOSURE_IMPORT = "population_exposure_import"
+    EXCHANGE_AGGREGATE_REPORT_EXPORT = "aggregate_report_export"
+    EXCHANGE_ALERT_ACTION_SUMMARY_EXPORT = "alert_action_summary_export"
+    EXCHANGE_CHOICES = [
+        (EXCHANGE_SURVEILLANCE_CASE_COUNT_IMPORT, "Surveillance case count import"),
+        (EXCHANGE_OUTBREAK_LABEL_IMPORT, "Outbreak label import"),
+        (EXCHANGE_FACILITY_IMPORT, "Facility import"),
+        (EXCHANGE_WARD_ORG_UNIT_MAPPING_IMPORT, "Ward/org-unit mapping import"),
+        (EXCHANGE_POPULATION_EXPOSURE_IMPORT, "Population/exposure import"),
+        (EXCHANGE_AGGREGATE_REPORT_EXPORT, "Aggregate report export"),
+        (EXCHANGE_ALERT_ACTION_SUMMARY_EXPORT, "Alert/action summary export"),
+    ]
+
+    STATUS_DRAFT = "DRAFT"
+    STATUS_READY_FOR_CONFIRMATION = "READY_FOR_CONFIRMATION"
+    STATUS_COMPLETED = "COMPLETED"
+    STATUS_PARTIAL = "PARTIAL"
+    STATUS_FAILED = "FAILED"
+    STATUS_RETRY_CREATED = "RETRY_CREATED"
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, "Draft"),
+        (STATUS_READY_FOR_CONFIRMATION, "Ready for confirmation"),
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_PARTIAL, "Partial"),
+        (STATUS_FAILED, "Failed"),
+        (STATUS_RETRY_CREATED, "Retry created"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    direction = models.CharField(max_length=20, choices=DIRECTION_CHOICES)
+    exchange_type = models.CharField(max_length=80, choices=EXCHANGE_CHOICES)
+    system = models.ForeignKey(ExternalSystem, on_delete=models.PROTECT, related_name="interoperability_runs")
+    mapping_version = models.ForeignKey(
+        InteroperabilityMappingVersion,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="interoperability_runs",
+    )
+    retry_of = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="retry_runs",
+    )
+    status = models.CharField(max_length=40, choices=STATUS_CHOICES, default=STATUS_DRAFT)
+    dry_run = models.BooleanField(default=True)
+    source_file_name = models.CharField(max_length=200, blank=True)
+    endpoint_url = models.CharField(max_length=500, blank=True)
+    records_seen = models.PositiveIntegerField(default=0)
+    records_accepted = models.PositiveIntegerField(default=0)
+    records_rejected = models.PositiveIntegerField(default=0)
+    mapping_coverage = models.FloatField(default=0.0)
+    operator = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="interoperability_runs",
+    )
+    error_summary = models.TextField(blank=True)
+    dry_run_preview = models.JSONField(default=dict, blank=True)
+    export_payload = models.JSONField(default=dict, blank=True)
+    connector_config = models.JSONField(default=dict, blank=True)
+    lineage_metadata = models.JSONField(default=dict, blank=True)
+    started_at = models.DateTimeField(default=timezone.now)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-started_at", "-created_at"]
+        indexes = [
+            models.Index(fields=["direction", "exchange_type", "started_at"], name="risk_ioprun_exchange_idx"),
+            models.Index(fields=["system", "status", "started_at"], name="risk_ioprun_system_idx"),
+            models.Index(fields=["retry_of", "created_at"], name="risk_ioprun_retry_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.exchange_type} {self.direction} [{self.status}]"
+
+
+class InteroperabilityRunItem(models.Model):
+    STATUS_ACCEPTED = "ACCEPTED"
+    STATUS_REJECTED = "REJECTED"
+    STATUS_UNMAPPED = "UNMAPPED"
+    STATUS_PREVIEW = "PREVIEW"
+    STATUS_CHOICES = [
+        (STATUS_ACCEPTED, "Accepted"),
+        (STATUS_REJECTED, "Rejected"),
+        (STATUS_UNMAPPED, "Unmapped"),
+        (STATUS_PREVIEW, "Preview"),
+    ]
+
+    ACTION_IMPORT_MAPPING = "IMPORT_MAPPING"
+    ACTION_EXPORT_RECORD = "EXPORT_RECORD"
+    ACTION_NOOP = "NOOP"
+    ACTION_CHOICES = [
+        (ACTION_IMPORT_MAPPING, "Import mapping"),
+        (ACTION_EXPORT_RECORD, "Export record"),
+        (ACTION_NOOP, "No-op"),
+    ]
+
+    run = models.ForeignKey(InteroperabilityRun, on_delete=models.CASCADE, related_name="items")
+    row_number = models.PositiveIntegerField(default=0)
+    external_identifier = models.CharField(max_length=160, blank=True)
+    internal_object_type = models.CharField(max_length=40, blank=True)
+    internal_object_public_id = models.CharField(max_length=80, blank=True)
+    internal_object_code = models.CharField(max_length=80, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    action = models.CharField(max_length=40, choices=ACTION_CHOICES, default=ACTION_NOOP)
+    safe_context = models.JSONField(default=dict, blank=True)
+    source_record_ref = models.CharField(max_length=180, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["run", "row_number", "id"]
+        indexes = [
+            models.Index(fields=["run", "status"], name="risk_iopitem_run_status_idx"),
+            models.Index(fields=["external_identifier"], name="risk_iopitem_external_idx"),
+            models.Index(fields=["internal_object_type", "internal_object_public_id"], name="risk_iopitem_internal_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.run.public_id} row {self.row_number} [{self.status}]"
+
+
+class InteroperabilityRunError(models.Model):
+    SEVERITY_INFO = "INFO"
+    SEVERITY_WARNING = "WARNING"
+    SEVERITY_ERROR = "ERROR"
+    SEVERITY_CHOICES = [
+        (SEVERITY_INFO, "Info"),
+        (SEVERITY_WARNING, "Warning"),
+        (SEVERITY_ERROR, "Error"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    run = models.ForeignKey(InteroperabilityRun, on_delete=models.CASCADE, related_name="errors")
+    item = models.ForeignKey(
+        InteroperabilityRunItem,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="errors",
+    )
+    severity = models.CharField(max_length=20, choices=SEVERITY_CHOICES, default=SEVERITY_ERROR)
+    error_code = models.CharField(max_length=80)
+    field_path = models.CharField(max_length=160, blank=True)
+    safe_message = models.TextField()
+    remediation_hint = models.TextField(blank=True)
+    raw_value_digest = models.CharField(max_length=64, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["run", "item__row_number", "id"]
+        indexes = [
+            models.Index(fields=["run", "severity"], name="risk_ioperr_run_severity_idx"),
+            models.Index(fields=["error_code", "created_at"], name="risk_ioperr_code_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.error_code} [{self.severity}]"
 
 
 class FacilityReadinessReview(models.Model):
@@ -323,7 +1403,17 @@ class FacilityReadinessUpdateRequest(models.Model):
         related_name="facility_readiness_update_requests",
     )
     channel = models.CharField(max_length=20, choices=CHANNEL_CHOICES, default=CHANNEL_SMS)
+    template = models.ForeignKey(
+        "risk.MessageTemplate",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="facility_update_requests",
+    )
+    template_key = models.CharField(max_length=120, blank=True)
+    template_version = models.PositiveIntegerField(null=True, blank=True)
     message_body = models.TextField()
+    governance_metadata = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_QUEUED)
     provider_reference = models.CharField(max_length=120, blank=True)
     failure_reason = models.TextField(blank=True)
@@ -351,6 +1441,7 @@ class FacilityReadinessUpdateRequest(models.Model):
             models.Index(fields=["status", "requested_at"], name="risk_facupd_status_idx"),
             models.Index(fields=["review", "status"], name="risk_facupd_review_idx"),
             models.Index(fields=["facility", "status"], name="risk_facupd_facility_idx"),
+            models.Index(fields=["template_key", "template_version"], name="risk_facupd_tpl_idx"),
         ]
 
     def __str__(self) -> str:
@@ -467,6 +1558,59 @@ class CHV(models.Model):
         return f"{self.name} ({self.ward.name})"
 
 
+class CHVDeviceRegistration(models.Model):
+    PLATFORM_ANDROID = "ANDROID"
+    PLATFORM_IOS = "IOS"
+    PLATFORM_WEB = "WEB"
+    PLATFORM_UNKNOWN = "UNKNOWN"
+    PLATFORM_CHOICES = [
+        (PLATFORM_ANDROID, "Android"),
+        (PLATFORM_IOS, "iOS"),
+        (PLATFORM_WEB, "Web/PWA"),
+        (PLATFORM_UNKNOWN, "Unknown"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    device_id = models.CharField(max_length=120)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="chv_device_registrations",
+    )
+    chv = models.ForeignKey(
+        "risk.CHV",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="device_registrations",
+    )
+    ward = models.ForeignKey("risk.Ward", on_delete=models.PROTECT, related_name="chv_device_registrations")
+    contract_version = models.CharField(max_length=64, default="chv-offline-v1")
+    app_version = models.CharField(max_length=64, blank=True)
+    platform = models.CharField(max_length=20, choices=PLATFORM_CHOICES, default=PLATFORM_UNKNOWN)
+    last_bundle_version = models.CharField(max_length=96, blank=True)
+    last_sync_at = models.DateTimeField(null=True, blank=True)
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    registered_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-last_seen_at", "-registered_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["user", "device_id"], name="risk_chvdev_user_device_uniq"),
+        ]
+        indexes = [
+            models.Index(fields=["ward", "is_active"], name="risk_chvdev_ward_active_idx"),
+            models.Index(fields=["chv", "is_active"], name="risk_chvdev_chv_active_idx"),
+            models.Index(fields=["contract_version", "last_seen_at"], name="risk_chvdev_contract_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.device_id} [{self.contract_version}]"
+
+
 class CHVMessage(models.Model):
     CHANNEL_SMS = "SMS"
     CHANNEL_CHOICES = [
@@ -506,7 +1650,17 @@ class CHVMessage(models.Model):
         related_name="chv_messages_sent",
     )
     channel = models.CharField(max_length=20, choices=CHANNEL_CHOICES, default=CHANNEL_SMS)
+    template = models.ForeignKey(
+        "risk.MessageTemplate",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="chv_messages",
+    )
+    template_key = models.CharField(max_length=120, blank=True)
+    template_version = models.PositiveIntegerField(null=True, blank=True)
     message_body = models.TextField()
+    governance_metadata = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_QUEUED)
     delivery_kind = models.CharField(max_length=20, choices=DELIVERY_KIND_CHOICES, default=DELIVERY_KIND_UNAVAILABLE)
     delivery_backend = models.CharField(max_length=50, blank=True)
@@ -520,6 +1674,7 @@ class CHVMessage(models.Model):
         indexes = [
             models.Index(fields=["chv", "created_at"], name="risk_chvmsg_chv_6a85ae_idx"),
             models.Index(fields=["status", "created_at"], name="risk_chvmsg_status_8f9cc6_idx"),
+            models.Index(fields=["template_key", "template_version"], name="risk_chvmsg_tpl_idx"),
         ]
 
     def __str__(self) -> str:
@@ -629,6 +1784,111 @@ class IngestionRun(models.Model):
 
     def __str__(self) -> str:
         return f"{self.run_type} [{self.status}] {self.started_at}"
+
+
+class ClimateRecordType(models.TextChoices):
+    OBSERVED = "observed", "Observed"
+    FORECAST = "forecast", "Forecast"
+    DERIVED_ROLLING_WINDOW = "derived_rolling_window", "Derived rolling window"
+    DERIVED_ANOMALY = "derived_anomaly", "Derived anomaly"
+    FALLBACK_STATIC = "fallback_static", "Fallback static"
+
+
+class ClimateRecordQualityFlag(models.TextChoices):
+    ACCEPTED = "accepted", "Accepted"
+    DEGRADED_FALLBACK = "degraded_fallback", "Degraded fallback"
+    MISSING_FORECAST_CONTRACT = "missing_forecast_contract", "Missing forecast contract"
+    MISSING_OBSERVED_TIMESTAMP = "missing_observed_timestamp", "Missing observed timestamp"
+    DERIVED = "derived", "Derived"
+    UNKNOWN = "unknown", "Unknown"
+
+
+class ClimateRecord(models.Model):
+    ward = models.ForeignKey(Ward, on_delete=models.PROTECT, related_name="climate_records")
+    ingestion_run = models.ForeignKey(
+        IngestionRun,
+        on_delete=models.PROTECT,
+        related_name="climate_records",
+    )
+    record_type = models.CharField(
+        max_length=40,
+        choices=ClimateRecordType.choices,
+        default=ClimateRecordType.OBSERVED,
+    )
+    source_provider = models.CharField(max_length=120)
+    source_kind = models.CharField(
+        max_length=20,
+        choices=IngestionRun.SOURCE_KIND_CHOICES,
+        default=IngestionRun.SOURCE_KIND_UNKNOWN,
+    )
+    source_mode = models.CharField(max_length=20, blank=True)
+    issue_time = models.DateTimeField(null=True, blank=True)
+    valid_date = models.DateField(null=True, blank=True)
+    lead_day = models.PositiveSmallIntegerField(null=True, blank=True)
+    observed_timestamp = models.DateTimeField(null=True, blank=True)
+    forecast_horizon_days = models.PositiveSmallIntegerField(default=0)
+    rainfall_mm = models.FloatField()
+    quality_flag = models.CharField(
+        max_length=40,
+        choices=ClimateRecordQualityFlag.choices,
+        default=ClimateRecordQualityFlag.UNKNOWN,
+    )
+    fallback_flag = models.BooleanField(default=False)
+    source_run = models.CharField(max_length=160)
+    source_ref = models.CharField(max_length=255)
+    lineage_metadata = models.JSONField(default=dict, blank=True)
+    raw_payload = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-valid_date", "-issue_time", "ward__name", "record_type"]
+        indexes = [
+            models.Index(fields=["ward", "record_type", "valid_date"], name="risk_climrec_ward_type_idx"),
+            models.Index(fields=["source_provider", "issue_time"], name="risk_climrec_src_issue_idx"),
+            models.Index(fields=["lead_day", "valid_date"], name="risk_climrec_lead_valid_idx"),
+            models.Index(fields=["fallback_flag", "record_type"], name="risk_climrec_fallback_idx"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["ingestion_run", "source_ref"],
+                name="risk_climrec_run_ref_uniq",
+            ),
+            models.CheckConstraint(
+                check=(
+                    ~models.Q(record_type=ClimateRecordType.FORECAST)
+                    | (
+                        models.Q(issue_time__isnull=False)
+                        & models.Q(valid_date__isnull=False)
+                        & models.Q(lead_day__isnull=False)
+                    )
+                ),
+                name="risk_climrec_forecast_contract",
+            ),
+            models.CheckConstraint(
+                check=(
+                    ~models.Q(record_type=ClimateRecordType.OBSERVED)
+                    | models.Q(observed_timestamp__isnull=False)
+                ),
+                name="risk_climrec_observed_contract",
+            ),
+            models.CheckConstraint(
+                check=(
+                    ~models.Q(record_type=ClimateRecordType.FALLBACK_STATIC)
+                    | models.Q(fallback_flag=True)
+                ),
+                name="risk_climrec_fallback_flag",
+            ),
+            models.CheckConstraint(
+                check=(
+                    models.Q(lead_day__isnull=True)
+                    | models.Q(forecast_horizon_days__gte=models.F("lead_day"))
+                ),
+                name="risk_climrec_horizon_lead",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.ward.name} {self.record_type} {self.rainfall_mm}mm [{self.source_provider}]"
 
 
 class SurveillanceSource(models.Model):
@@ -945,6 +2205,393 @@ class SurveillanceLabelWindow(models.Model):
                 name="risk_survlbl_window_order",
             ),
         ]
+
+    def __str__(self) -> str:
+        return f"{self.ward.name} {self.label_window_start}:{self.label_window_end} [{self.outbreak_label}]"
+
+
+class PredictionFeedbackTrainingUsageState(models.TextChoices):
+    NOT_TRAINING_ELIGIBLE = "not_training_eligible", "Not training eligible"
+    NEEDS_REVIEW = "needs_review", "Needs review"
+    ADJUDICATED_LABEL_CANDIDATE = "adjudicated_label_candidate", "Adjudicated label candidate"
+    TRAINING_ELIGIBLE = "training_eligible", "Training eligible"
+    REJECTED = "rejected", "Rejected"
+    SUPERSEDED_BY_SURVEILLANCE_TRUTH = (
+        "superseded_by_surveillance_truth",
+        "Superseded by surveillance truth",
+    )
+
+
+class PredictionFeedbackSourceConfidence(models.TextChoices):
+    SYSTEM_MATCHED_LABEL = "system_matched_label", "System matched label"
+    COUNTY_SURVEILLANCE_OFFICER = "county_surveillance_officer", "County surveillance officer"
+    FACILITY_CONTACT = "facility_contact", "Facility contact"
+    ASSIGNED_CHV = "assigned_chv", "Assigned CHV"
+    COUNTY_OPERATOR = "county_operator", "County operator"
+    COMMUNITY_REPORT = "community_report", "Community report"
+    ANONYMOUS_PUBLIC = "anonymous_public", "Anonymous public"
+    AUTOMATED_PROXY = "automated_proxy", "Automated proxy"
+
+
+class PredictionFeedbackPrivacyClassification(models.TextChoices):
+    NON_SENSITIVE = "non_sensitive", "Non-sensitive"
+    DEIDENTIFIED = "deidentified", "De-identified"
+    SENSITIVE_OPERATIONAL = "sensitive_operational", "Sensitive operational"
+    CONTAINS_PII = "contains_pii", "Contains PII"
+
+
+class PredictionFeedback(models.Model):
+    FEEDBACK_PREDICTION_REVIEWED_CORRECT = "prediction_reviewed_correct"
+    FEEDBACK_PREDICTION_REVIEWED_WRONG = "prediction_reviewed_wrong"
+    FEEDBACK_SUSPECTED_MISSED_OUTBREAK = "suspected_missed_outbreak"
+    FEEDBACK_SUSPECTED_FALSE_ALERT = "suspected_false_alert"
+    FEEDBACK_LOCAL_SURVEILLANCE_CORRECTION = "local_surveillance_correction"
+    FEEDBACK_FACILITY_BURDEN_CORRECTION = "facility_burden_correction"
+    FEEDBACK_CHV_FIELD_OBSERVATION = "chv_field_observation"
+    FEEDBACK_HOUSEHOLD_FOLLOW_UP_OUTCOME = "household_follow_up_outcome"
+    FEEDBACK_ALERT_DELIVERY_OR_RESPONSE_FAILURE = "alert_delivery_or_response_failure"
+    FEEDBACK_DATA_QUALITY_COMPLAINT = "data_quality_complaint"
+    FEEDBACK_USABILITY_FEEDBACK = "usability_feedback"
+    FEEDBACK_TYPE_CHOICES = [
+        (FEEDBACK_PREDICTION_REVIEWED_CORRECT, "Prediction reviewed as correct"),
+        (FEEDBACK_PREDICTION_REVIEWED_WRONG, "Prediction reviewed as wrong"),
+        (FEEDBACK_SUSPECTED_MISSED_OUTBREAK, "Suspected missed outbreak"),
+        (FEEDBACK_SUSPECTED_FALSE_ALERT, "Suspected false alert"),
+        (FEEDBACK_LOCAL_SURVEILLANCE_CORRECTION, "Local surveillance correction"),
+        (FEEDBACK_FACILITY_BURDEN_CORRECTION, "Facility burden correction"),
+        (FEEDBACK_CHV_FIELD_OBSERVATION, "CHV field observation"),
+        (FEEDBACK_HOUSEHOLD_FOLLOW_UP_OUTCOME, "Household follow-up outcome"),
+        (FEEDBACK_ALERT_DELIVERY_OR_RESPONSE_FAILURE, "Alert delivery or response failure"),
+        (FEEDBACK_DATA_QUALITY_COMPLAINT, "Data-quality complaint"),
+        (FEEDBACK_USABILITY_FEEDBACK, "Usability feedback"),
+    ]
+
+    SOURCE_TYPE_SYSTEM = "system"
+    SOURCE_TYPE_REVIEWER = "reviewer"
+    SOURCE_TYPE_FIELD_OPERATOR = "field_operator"
+    SOURCE_TYPE_COMMUNITY = "community"
+    SOURCE_TYPE_AUTOMATED_PROXY = "automated_proxy"
+    SOURCE_TYPE_CHOICES = [
+        (SOURCE_TYPE_SYSTEM, "System"),
+        (SOURCE_TYPE_REVIEWER, "Reviewer"),
+        (SOURCE_TYPE_FIELD_OPERATOR, "Field operator"),
+        (SOURCE_TYPE_COMMUNITY, "Community"),
+        (SOURCE_TYPE_AUTOMATED_PROXY, "Automated proxy"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    risk_score = models.ForeignKey(
+        RiskScore,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="prediction_feedback",
+    )
+    model_run = models.ForeignKey(
+        "risk.ModelRun",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="prediction_feedback",
+    )
+    ward = models.ForeignKey(Ward, on_delete=models.PROTECT, related_name="prediction_feedback")
+    label_window = models.ForeignKey(
+        SurveillanceLabelWindow,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="prediction_feedback",
+    )
+    prediction_date = models.DateField(null=True, blank=True)
+    feedback_type = models.CharField(max_length=80, choices=FEEDBACK_TYPE_CHOICES)
+    feedback_source_type = models.CharField(max_length=40, choices=SOURCE_TYPE_CHOICES)
+    submitted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="prediction_feedback_submissions",
+    )
+    submitted_at = models.DateTimeField(default=timezone.now)
+    source_confidence = models.CharField(
+        max_length=80,
+        choices=PredictionFeedbackSourceConfidence.choices,
+        default=PredictionFeedbackSourceConfidence.COMMUNITY_REPORT,
+    )
+    note = models.TextField(blank=True)
+    attached_evidence_refs = models.JSONField(default=list, blank=True)
+    privacy_classification = models.CharField(
+        max_length=40,
+        choices=PredictionFeedbackPrivacyClassification.choices,
+        default=PredictionFeedbackPrivacyClassification.NON_SENSITIVE,
+    )
+    training_usage_state = models.CharField(
+        max_length=80,
+        choices=PredictionFeedbackTrainingUsageState.choices,
+        default=PredictionFeedbackTrainingUsageState.NEEDS_REVIEW,
+    )
+    lineage_metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-submitted_at", "-id"]
+        indexes = [
+            models.Index(fields=["ward", "submitted_at"], name="risk_predfb_ward_sub_idx"),
+            models.Index(fields=["risk_score", "submitted_at"], name="risk_predfb_score_sub_idx"),
+            models.Index(fields=["model_run", "submitted_at"], name="risk_predfb_run_sub_idx"),
+            models.Index(fields=["training_usage_state", "submitted_at"], name="risk_predfb_train_sub_idx"),
+            models.Index(fields=["source_confidence", "submitted_at"], name="risk_predfb_conf_sub_idx"),
+        ]
+
+    def clean(self):
+        if self.risk_score_id:
+            if self.risk_score.ward_id != self.ward_id:
+                raise ValidationError("Prediction feedback risk_score must belong to the feedback ward.")
+            if self.model_run_id and self.risk_score.model_run_id and self.risk_score.model_run_id != self.model_run_id:
+                raise ValidationError("Prediction feedback model_run must match the risk_score model_run.")
+        if self.label_window_id and self.label_window.ward_id != self.ward_id:
+            raise ValidationError("Prediction feedback label_window must belong to the feedback ward.")
+        if (
+            self.privacy_classification == PredictionFeedbackPrivacyClassification.CONTAINS_PII
+            and self.training_usage_state
+            not in {
+                PredictionFeedbackTrainingUsageState.NOT_TRAINING_ELIGIBLE,
+                PredictionFeedbackTrainingUsageState.NEEDS_REVIEW,
+                PredictionFeedbackTrainingUsageState.REJECTED,
+            }
+        ):
+            raise ValidationError("Feedback containing PII cannot be training eligible or a label candidate.")
+
+    def __str__(self) -> str:
+        return f"{self.ward.name} {self.feedback_type} [{self.training_usage_state}]"
+
+
+class PredictionFeedbackEvent(models.Model):
+    EVENT_CREATED = "CREATED"
+    EVENT_STATE_CHANGED = "STATE_CHANGED"
+    EVENT_ADJUDICATED = "ADJUDICATED"
+    EVENT_LABEL_CANDIDATE_CREATED = "LABEL_CANDIDATE_CREATED"
+    EVENT_SUPERSEDED = "SUPERSEDED"
+    EVENT_COMMENT = "COMMENT"
+    EVENT_CHOICES = [
+        (EVENT_CREATED, "Created"),
+        (EVENT_STATE_CHANGED, "State changed"),
+        (EVENT_ADJUDICATED, "Adjudicated"),
+        (EVENT_LABEL_CANDIDATE_CREATED, "Label candidate created"),
+        (EVENT_SUPERSEDED, "Superseded"),
+        (EVENT_COMMENT, "Comment"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    feedback = models.ForeignKey(PredictionFeedback, on_delete=models.PROTECT, related_name="events")
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="prediction_feedback_events",
+    )
+    event_type = models.CharField(max_length=40, choices=EVENT_CHOICES)
+    old_training_usage_state = models.CharField(max_length=80, blank=True)
+    new_training_usage_state = models.CharField(max_length=80, blank=True)
+    detail = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        indexes = [
+            models.Index(fields=["feedback", "created_at"], name="risk_predfbevt_fb_time_idx"),
+            models.Index(fields=["event_type", "created_at"], name="risk_predfbevt_type_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.feedback.public_id} {self.event_type}"
+
+
+class FeedbackAdjudicationState(models.TextChoices):
+    PENDING = "pending", "Pending"
+    ACCEPTED_AS_LABEL_CANDIDATE = "accepted_as_label_candidate", "Accepted as label candidate"
+    ACCEPTED_AS_RESPONSE_QUALITY_ISSUE = (
+        "accepted_as_response_quality_issue",
+        "Accepted as response-quality issue",
+    )
+    ACCEPTED_AS_DATA_QUALITY_ISSUE = "accepted_as_data_quality_issue", "Accepted as data-quality issue"
+    REJECTED = "rejected", "Rejected"
+    NEEDS_MORE_EVIDENCE = "needs_more_evidence", "Needs more evidence"
+    SUPERSEDED = "superseded", "Superseded"
+
+
+class FeedbackAdjudication(models.Model):
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    feedback = models.ForeignKey(PredictionFeedback, on_delete=models.PROTECT, related_name="adjudications")
+    reviewer = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="feedback_adjudications",
+    )
+    adjudication_state = models.CharField(
+        max_length=80,
+        choices=FeedbackAdjudicationState.choices,
+        default=FeedbackAdjudicationState.PENDING,
+    )
+    accepted_label_impact = models.JSONField(default=dict, blank=True)
+    response_quality_impact = models.JSONField(default=dict, blank=True)
+    data_quality_impact = models.JSONField(default=dict, blank=True)
+    reason = models.TextField(blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    superseded_by_surveillance_label = models.ForeignKey(
+        SurveillanceLabelWindow,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="superseding_feedback_adjudications",
+    )
+    evidence_refs = models.JSONField(default=list, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-reviewed_at", "-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["feedback", "adjudication_state"], name="risk_fbadj_fb_state_idx"),
+            models.Index(fields=["adjudication_state", "reviewed_at"], name="risk_fbadj_state_rev_idx"),
+            models.Index(fields=["reviewer", "reviewed_at"], name="risk_fbadj_reviewer_idx"),
+        ]
+
+    def clean(self):
+        terminal_states = {
+            FeedbackAdjudicationState.ACCEPTED_AS_LABEL_CANDIDATE,
+            FeedbackAdjudicationState.ACCEPTED_AS_RESPONSE_QUALITY_ISSUE,
+            FeedbackAdjudicationState.ACCEPTED_AS_DATA_QUALITY_ISSUE,
+            FeedbackAdjudicationState.REJECTED,
+            FeedbackAdjudicationState.SUPERSEDED,
+        }
+        if self.adjudication_state in terminal_states and self.reviewed_at is None:
+            raise ValidationError("Reviewed adjudications require reviewed_at.")
+        if self.adjudication_state == FeedbackAdjudicationState.ACCEPTED_AS_LABEL_CANDIDATE:
+            if not self.accepted_label_impact:
+                raise ValidationError("Label-candidate adjudications require accepted_label_impact.")
+            truth_level = self.accepted_label_impact.get("label_truth_level")
+            if truth_level == SurveillanceTruthLevel.CONFIRMED_SURVEILLANCE:
+                raise ValidationError("Feedback cannot be accepted as confirmed surveillance truth.")
+            outbreak_label = self.accepted_label_impact.get("outbreak_label")
+            valid_outbreak_labels = {choice[0] for choice in SurveillanceOutbreakLabel.choices}
+            if outbreak_label and outbreak_label not in valid_outbreak_labels:
+                raise ValidationError("accepted_label_impact.outbreak_label is not a valid outbreak label.")
+        if self.adjudication_state == FeedbackAdjudicationState.SUPERSEDED:
+            if self.superseded_by_surveillance_label_id is None:
+                raise ValidationError("Superseded adjudications require superseded_by_surveillance_label.")
+            if self.feedback_id and self.superseded_by_surveillance_label.ward_id != self.feedback.ward_id:
+                raise ValidationError("Superseding surveillance label must belong to the feedback ward.")
+
+    def __str__(self) -> str:
+        return f"{self.feedback.public_id} [{self.adjudication_state}]"
+
+
+class FeedbackLabelCandidate(models.Model):
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    candidate_ref = models.CharField(max_length=160, unique=True, blank=True)
+    feedback = models.ForeignKey(PredictionFeedback, on_delete=models.PROTECT, related_name="label_candidates")
+    adjudication = models.OneToOneField(
+        FeedbackAdjudication,
+        on_delete=models.PROTECT,
+        related_name="label_candidate",
+    )
+    ward = models.ForeignKey(Ward, on_delete=models.PROTECT, related_name="feedback_label_candidates")
+    risk_score = models.ForeignKey(
+        RiskScore,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="feedback_label_candidates",
+    )
+    model_run = models.ForeignKey(
+        "risk.ModelRun",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="feedback_label_candidates",
+    )
+    label_window_start = models.DateField()
+    label_window_end = models.DateField()
+    outbreak_label = models.CharField(
+        max_length=20,
+        choices=SurveillanceOutbreakLabel.choices,
+        default=SurveillanceOutbreakLabel.NONE,
+    )
+    label_truth_level = models.CharField(
+        max_length=40,
+        choices=SurveillanceTruthLevel.choices,
+        default=SurveillanceTruthLevel.FIELD_SIGNAL_ONLY,
+    )
+    source_confidence = models.CharField(
+        max_length=80,
+        choices=PredictionFeedbackSourceConfidence.choices,
+        default=PredictionFeedbackSourceConfidence.COMMUNITY_REPORT,
+    )
+    training_usage_state = models.CharField(
+        max_length=80,
+        choices=PredictionFeedbackTrainingUsageState.choices,
+        default=PredictionFeedbackTrainingUsageState.ADJUDICATED_LABEL_CANDIDATE,
+    )
+    superseded_by_surveillance_label = models.ForeignKey(
+        SurveillanceLabelWindow,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="superseding_feedback_label_candidates",
+    )
+    lineage_metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["ward", "label_window_start", "label_window_end"], name="risk_fblbl_ward_window_idx"),
+            models.Index(fields=["training_usage_state", "created_at"], name="risk_fblbl_train_idx"),
+            models.Index(fields=["label_truth_level", "created_at"], name="risk_fblbl_truth_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(label_window_start__lte=models.F("label_window_end")),
+                name="risk_fblbl_window_order",
+            ),
+            models.CheckConstraint(
+                check=~models.Q(label_truth_level=SurveillanceTruthLevel.CONFIRMED_SURVEILLANCE),
+                name="risk_fblbl_not_confirmed_truth",
+            ),
+        ]
+
+    def clean(self):
+        if self.label_truth_level == SurveillanceTruthLevel.CONFIRMED_SURVEILLANCE:
+            raise ValidationError("Feedback label candidates cannot be confirmed surveillance truth.")
+        if self.feedback_id and self.adjudication_id and self.adjudication.feedback_id != self.feedback_id:
+            raise ValidationError("Feedback label candidate adjudication must belong to the same feedback record.")
+        if self.feedback_id and self.ward_id and self.feedback.ward_id != self.ward_id:
+            raise ValidationError("Feedback label candidate ward must match the feedback ward.")
+        if self.risk_score_id and self.risk_score.ward_id != self.ward_id:
+            raise ValidationError("Feedback label candidate risk_score must belong to the candidate ward.")
+        if self.model_run_id and self.risk_score_id and self.risk_score.model_run_id:
+            if self.risk_score.model_run_id != self.model_run_id:
+                raise ValidationError("Feedback label candidate model_run must match the risk_score model_run.")
+        if self.superseded_by_surveillance_label_id:
+            label = self.superseded_by_surveillance_label
+            if label.ward_id != self.ward_id:
+                raise ValidationError("Superseding surveillance label must belong to the candidate ward.")
+            windows_overlap = label.label_window_start <= self.label_window_end and label.label_window_end >= self.label_window_start
+            if not windows_overlap:
+                raise ValidationError("Superseding surveillance label must overlap the feedback candidate window.")
+
+    def save(self, *args, **kwargs):
+        if not self.candidate_ref:
+            self.candidate_ref = f"feedback_label_candidate:{self.public_id}"
+        super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return f"{self.ward.name} {self.label_window_start}:{self.label_window_end} [{self.outbreak_label}]"
@@ -1404,6 +3051,450 @@ class ModelRun(models.Model):
         return f"{self.model_version} [{self.status}] {self.started_at}"
 
 
+class ModelRegistryPromotionState(models.TextChoices):
+    CANDIDATE = "CANDIDATE", "Candidate"
+    ACTIVE_PROMOTED = "ACTIVE_PROMOTED", "Active promoted"
+    RETIRED = "RETIRED", "Retired"
+    ROLLED_BACK = "ROLLED_BACK", "Rolled back"
+
+
+class ModelRegistryMonitoringState(models.TextChoices):
+    NOT_CONFIGURED = "NOT_CONFIGURED", "Not configured"
+    HEALTHY = "HEALTHY", "Healthy"
+    WARNING = "WARNING", "Warning"
+    BREACHED = "BREACHED", "Breached"
+    REVIEW_REQUIRED = "REVIEW_REQUIRED", "Review required"
+
+
+class ModelRegistryEntry(models.Model):
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    algorithm = models.CharField(max_length=80)
+    model_version = models.CharField(max_length=80)
+    model_run = models.OneToOneField(
+        "risk.ModelRun",
+        on_delete=models.PROTECT,
+        related_name="registry_entry",
+    )
+    promotion_event = models.ForeignKey(
+        "risk.ModelPromotionEvent",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="current_registry_entries",
+    )
+    promotion_state = models.CharField(
+        max_length=32,
+        choices=ModelRegistryPromotionState.choices,
+        default=ModelRegistryPromotionState.CANDIDATE,
+    )
+    active_from = models.DateTimeField(null=True, blank=True)
+    active_until = models.DateTimeField(null=True, blank=True)
+    retired_reason = models.TextField(blank=True)
+    rollback_target = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="rollback_sources",
+    )
+    monitoring_state = models.CharField(
+        max_length=32,
+        choices=ModelRegistryMonitoringState.choices,
+        default=ModelRegistryMonitoringState.NOT_CONFIGURED,
+    )
+    owner = models.CharField(max_length=160, blank=True)
+    review_due_date = models.DateField(null=True, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-active_from", "-created_at"]
+        indexes = [
+            models.Index(fields=["promotion_state", "active_from"], name="risk_modelreg_state_active_idx"),
+            models.Index(fields=["algorithm", "model_version"], name="risk_modelreg_alg_ver_idx"),
+            models.Index(fields=["monitoring_state", "review_due_date"], name="risk_modelreg_monitor_idx"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["promotion_state"],
+                condition=models.Q(promotion_state=ModelRegistryPromotionState.ACTIVE_PROMOTED),
+                name="risk_modelreg_one_active_promoted",
+            ),
+            models.CheckConstraint(
+                check=(
+                    models.Q(active_until__isnull=True)
+                    | models.Q(active_from__isnull=True)
+                    | models.Q(active_until__gte=models.F("active_from"))
+                ),
+                name="risk_modelreg_active_window_order",
+            ),
+            models.CheckConstraint(
+                check=(
+                    ~models.Q(promotion_state=ModelRegistryPromotionState.ACTIVE_PROMOTED)
+                    | (
+                        models.Q(active_from__isnull=False)
+                        & models.Q(active_until__isnull=True)
+                    )
+                ),
+                name="risk_modelreg_active_window_required",
+            ),
+        ]
+
+    def clean(self):
+        if self.promotion_state == ModelRegistryPromotionState.ACTIVE_PROMOTED:
+            if self.active_from is None:
+                raise ValidationError("Active promoted registry entries require active_from.")
+            if self.active_until is not None:
+                raise ValidationError("Active promoted registry entries require active_until to be empty.")
+            if self.promotion_event_id is None:
+                raise ValidationError("Active promoted registry entries require promotion_event.")
+        if self.active_until is not None and self.active_from is not None and self.active_until < self.active_from:
+            raise ValidationError("active_until must be after active_from.")
+        if self.promotion_event_id and self.id:
+            if self.promotion_event.registry_entry_id != self.id:
+                raise ValidationError("Registry entry promotion_event must point back to the registry entry.")
+            if self.promotion_event.model_run_id != self.model_run_id:
+                raise ValidationError("Registry entry promotion_event must reference the same model run.")
+
+    def __str__(self) -> str:
+        return f"{self.algorithm} {self.model_version} [{self.promotion_state}]"
+
+
+class ModelPromotionEvent(models.Model):
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    registry_entry = models.ForeignKey(
+        ModelRegistryEntry,
+        on_delete=models.PROTECT,
+        related_name="promotion_events",
+    )
+    model_run = models.ForeignKey(
+        "risk.ModelRun",
+        on_delete=models.PROTECT,
+        related_name="promotion_events",
+    )
+    previous_registry_entry = models.ForeignKey(
+        ModelRegistryEntry,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="superseding_promotion_events",
+    )
+    source = models.CharField(max_length=120, default="phase_4_temporal_backtest")
+    promoted_by = models.CharField(max_length=160, blank=True)
+    active_from = models.DateTimeField(default=timezone.now)
+    review_due_date = models.DateField(null=True, blank=True)
+    evidence_metadata = models.JSONField(default=dict, blank=True)
+    occurred_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["-occurred_at", "-id"]
+        indexes = [
+            models.Index(fields=["model_run", "occurred_at"], name="risk_modelprom_run_time_idx"),
+            models.Index(fields=["source", "occurred_at"], name="risk_modelprom_source_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"Promotion for {self.model_run.model_version} at {self.occurred_at}"
+
+
+class ModelRollbackEvent(models.Model):
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    rolled_back_from = models.ForeignKey(
+        ModelRegistryEntry,
+        on_delete=models.PROTECT,
+        related_name="rollback_events_from",
+    )
+    rollback_target = models.ForeignKey(
+        ModelRegistryEntry,
+        on_delete=models.PROTECT,
+        related_name="rollback_events_as_target",
+    )
+    rolled_back_by = models.CharField(max_length=160, blank=True)
+    reason = models.TextField()
+    metadata = models.JSONField(default=dict, blank=True)
+    occurred_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["-occurred_at", "-id"]
+        indexes = [
+            models.Index(fields=["rollback_target", "occurred_at"], name="risk_modelroll_target_idx"),
+            models.Index(fields=["rolled_back_from", "occurred_at"], name="risk_modelroll_from_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(reason__regex=r"\S"),
+                name="risk_modelroll_reason_not_blank",
+            ),
+            models.CheckConstraint(
+                check=models.Q(rolled_back_by__regex=r"\S"),
+                name="risk_modelroll_operator_not_blank",
+            ),
+            models.CheckConstraint(
+                check=~models.Q(rolled_back_from=models.F("rollback_target")),
+                name="risk_modelroll_target_diff",
+            ),
+        ]
+
+    def clean(self):
+        if (
+            self.rolled_back_from_id
+            and self.rollback_target_id
+            and self.rolled_back_from_id == self.rollback_target_id
+        ):
+            raise ValidationError("Rollback target must differ from the model being rolled back.")
+        if not (self.reason or "").strip():
+            raise ValidationError("Rollback reason is required.")
+        if not (self.rolled_back_by or "").strip():
+            raise ValidationError("Rollback operator is required.")
+
+    def __str__(self) -> str:
+        return f"Rollback {self.rolled_back_from_id} -> {self.rollback_target_id} at {self.occurred_at}"
+
+
+class ModelMonitoringState(models.TextChoices):
+    HEALTHY = "HEALTHY", "Healthy"
+    WARNING = "WARNING", "Warning"
+    BREACHED = "BREACHED", "Breached"
+    NOT_READY = "NOT_READY", "Not ready"
+
+
+class ModelMonitoringThresholdDirection(models.TextChoices):
+    HIGHER_IS_WORSE = "HIGHER_IS_WORSE", "Higher is worse"
+    LOWER_IS_WORSE = "LOWER_IS_WORSE", "Lower is worse"
+
+
+class ModelMonitoringThreshold(models.Model):
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    metric_name = models.CharField(max_length=120)
+    version = models.CharField(max_length=40, default="phase-2-default-v1")
+    warning_threshold = models.FloatField(null=True, blank=True)
+    breach_threshold = models.FloatField(null=True, blank=True)
+    direction = models.CharField(
+        max_length=32,
+        choices=ModelMonitoringThresholdDirection.choices,
+        default=ModelMonitoringThresholdDirection.HIGHER_IS_WORSE,
+    )
+    baseline_window = models.CharField(max_length=120, blank=True)
+    is_active = models.BooleanField(default=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["metric_name", "-version"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["metric_name", "version"],
+                name="risk_modelmon_thr_metric_ver_uniq",
+            ),
+            models.UniqueConstraint(
+                fields=["metric_name"],
+                condition=models.Q(is_active=True),
+                name="risk_modelmon_thr_one_active",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["metric_name", "is_active"], name="risk_modelmon_thr_active_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.metric_name}:{self.version}"
+
+
+class ModelMonitoringSnapshot(models.Model):
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    monitoring_run_id = models.UUIDField(default=uuid.uuid4)
+    registry_entry = models.ForeignKey(
+        ModelRegistryEntry,
+        on_delete=models.PROTECT,
+        related_name="monitoring_snapshots",
+    )
+    model_run = models.ForeignKey(
+        "risk.ModelRun",
+        on_delete=models.PROTECT,
+        related_name="monitoring_snapshots",
+    )
+    threshold = models.ForeignKey(
+        ModelMonitoringThreshold,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="snapshots",
+    )
+    metric_name = models.CharField(max_length=120)
+    metric_family = models.CharField(max_length=80, blank=True)
+    value = models.FloatField(null=True, blank=True)
+    baseline_value = models.FloatField(null=True, blank=True)
+    threshold_value = models.FloatField(null=True, blank=True)
+    threshold_version = models.CharField(max_length=40, blank=True)
+    state = models.CharField(
+        max_length=20,
+        choices=ModelMonitoringState.choices,
+        default=ModelMonitoringState.NOT_READY,
+    )
+    generated_at = models.DateTimeField(default=timezone.now)
+    source_dataset_refs = models.JSONField(default=list, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-generated_at", "metric_name"]
+        indexes = [
+            models.Index(fields=["registry_entry", "generated_at"], name="risk_modelmon_reg_time_idx"),
+            models.Index(fields=["model_run", "metric_name"], name="risk_modelmon_run_metric_idx"),
+            models.Index(fields=["metric_name", "state"], name="risk_modelmon_metric_state_idx"),
+            models.Index(fields=["monitoring_run_id"], name="risk_modelmon_runid_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.model_run.model_version}:{self.metric_name} [{self.state}]"
+
+    def clean(self):
+        if (
+            self.registry_entry_id
+            and self.model_run_id
+            and self.registry_entry.model_run_id != self.model_run_id
+        ):
+            raise ValidationError("Monitoring snapshot model_run must match registry_entry model_run.")
+        if self.threshold_id:
+            if self.metric_name and self.threshold.metric_name != self.metric_name:
+                raise ValidationError("Monitoring snapshot threshold must match metric_name.")
+            if self.threshold_version and self.threshold.version != self.threshold_version:
+                raise ValidationError("Monitoring snapshot threshold_version must match threshold.version.")
+
+
+class ModelRetrainingRecommendationState(models.TextChoices):
+    REVIEW_NOT_REQUIRED = "REVIEW_NOT_REQUIRED", "Review not required"
+    REVIEW_REQUIRED = "REVIEW_REQUIRED", "Review required"
+    RETRAINING_RECOMMENDED = "RETRAINING_RECOMMENDED", "Retraining recommended"
+
+
+class ModelRetrainingRecommendation(models.Model):
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    registry_entry = models.ForeignKey(
+        ModelRegistryEntry,
+        on_delete=models.PROTECT,
+        related_name="retraining_recommendations",
+    )
+    model_run = models.ForeignKey(
+        "risk.ModelRun",
+        on_delete=models.PROTECT,
+        related_name="retraining_recommendations",
+    )
+    recommendation_state = models.CharField(
+        max_length=40,
+        choices=ModelRetrainingRecommendationState.choices,
+        default=ModelRetrainingRecommendationState.REVIEW_NOT_REQUIRED,
+    )
+    recommended_action = models.CharField(max_length=160, default="continue_monitoring")
+    reason_codes = models.JSONField(default=list, blank=True)
+    trigger_summary = models.JSONField(default=dict, blank=True)
+    source_snapshot_refs = models.JSONField(default=list, blank=True)
+    new_label_count = models.PositiveIntegerField(default=0)
+    false_alert_count = models.PositiveIntegerField(default=0)
+    miss_count = models.PositiveIntegerField(default=0)
+    metadata = models.JSONField(default=dict, blank=True)
+    generated_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-generated_at", "-id"]
+        indexes = [
+            models.Index(fields=["registry_entry", "generated_at"], name="risk_modelrec_reg_time_idx"),
+            models.Index(fields=["model_run", "generated_at"], name="risk_modelrec_run_time_idx"),
+            models.Index(fields=["recommendation_state", "generated_at"], name="risk_modelrec_state_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.model_run.model_version} [{self.recommendation_state}]"
+
+    def clean(self):
+        if (
+            self.registry_entry_id
+            and self.model_run_id
+            and self.registry_entry.model_run_id != self.model_run_id
+        ):
+            raise ValidationError("Retraining recommendation model_run must match registry_entry model_run.")
+
+
+class ModelChallengerBenchmarkStatus(models.TextChoices):
+    BENCHMARK_ONLY = "BENCHMARK_ONLY", "Benchmark only"
+    NOT_COMPARABLE = "NOT_COMPARABLE", "Not comparable"
+    REVIEW_REQUIRED = "REVIEW_REQUIRED", "Review required"
+
+
+class ModelChampionChallengerComparison(models.Model):
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    champion_registry_entry = models.ForeignKey(
+        ModelRegistryEntry,
+        on_delete=models.PROTECT,
+        related_name="champion_comparisons",
+    )
+    champion_model_run = models.ForeignKey(
+        "risk.ModelRun",
+        on_delete=models.PROTECT,
+        related_name="champion_comparisons",
+    )
+    challenger_model_run = models.ForeignKey(
+        "risk.ModelRun",
+        on_delete=models.PROTECT,
+        related_name="challenger_comparisons",
+    )
+    challenger_algorithm = models.CharField(max_length=80)
+    challenger_model_version = models.CharField(max_length=80)
+    benchmark_status = models.CharField(
+        max_length=32,
+        choices=ModelChallengerBenchmarkStatus.choices,
+        default=ModelChallengerBenchmarkStatus.BENCHMARK_ONLY,
+    )
+    comparison_validity = models.CharField(max_length=80, default="comparable_inputs")
+    recommended_action = models.CharField(max_length=160, default="keep_champion_monitor_challenger")
+    input_alignment = models.JSONField(default=dict, blank=True)
+    operational_metrics = models.JSONField(default=dict, blank=True)
+    temporal_metrics = models.JSONField(default=dict, blank=True)
+    comparison_summary = models.JSONField(default=dict, blank=True)
+    promotion_blockers = models.JSONField(default=list, blank=True)
+    dashboard_summary = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    generated_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-generated_at", "-id"]
+        indexes = [
+            models.Index(
+                fields=["champion_registry_entry", "generated_at"],
+                name="risk_modelcc_champ_time_idx",
+            ),
+            models.Index(fields=["challenger_model_run", "generated_at"], name="risk_modelcc_chal_time_idx"),
+            models.Index(fields=["benchmark_status", "generated_at"], name="risk_modelcc_status_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=~models.Q(champion_model_run=models.F("challenger_model_run")),
+                name="risk_modelcc_champion_diff_challenger",
+            ),
+        ]
+
+    def clean(self):
+        if self.champion_model_run_id and self.challenger_model_run_id:
+            if self.champion_model_run_id == self.challenger_model_run_id:
+                raise ValidationError("Challenger model run must differ from the champion model run.")
+        if (
+            self.champion_registry_entry_id
+            and self.champion_model_run_id
+            and self.champion_registry_entry.model_run_id != self.champion_model_run_id
+        ):
+            raise ValidationError("Champion registry entry must reference the champion model run.")
+
+    def __str__(self) -> str:
+        return (
+            f"{self.champion_model_run.model_version} vs "
+            f"{self.challenger_model_version} [{self.benchmark_status}]"
+        )
+
+
 class FeatureDataset(models.Model):
     KIND_TRAINING = "TRAINING"
     KIND_INFERENCE = "INFERENCE"
@@ -1582,7 +3673,17 @@ class Alert(models.Model):
     )
     channel = models.CharField(max_length=20, choices=CHANNEL_CHOICES, default=CHANNEL_SMS)
     recipient = models.CharField(max_length=120)
+    template = models.ForeignKey(
+        "risk.MessageTemplate",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="alerts",
+    )
+    template_key = models.CharField(max_length=120, blank=True)
+    template_version = models.PositiveIntegerField(null=True, blank=True)
     message = models.TextField()
+    governance_metadata = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_QUEUED)
     delivery_backend = models.CharField(max_length=50, blank=True)
     attempt_count = models.PositiveSmallIntegerField(default=0)
@@ -1597,6 +3698,9 @@ class Alert(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["template_key", "template_version"], name="risk_alert_tpl_idx"),
+        ]
 
     def __str__(self) -> str:
         return f"{self.channel} to {self.recipient} [{self.status}]"
@@ -1629,20 +3733,133 @@ class TriageSession(models.Model):
         return f"{self.channel} triage {self.phone_number} {self.created_at}"
 
 
+class UssdMenuVersion(models.Model):
+    STATUS_DRAFT = "DRAFT"
+    STATUS_APPROVED = "APPROVED"
+    STATUS_RETIRED = "RETIRED"
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, "Draft"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_RETIRED, "Retired"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    menu_key = models.CharField(max_length=120, default="cholera_health_menu")
+    version_label = models.CharField(max_length=80)
+    language = models.CharField(max_length=20, default="en")
+    title = models.CharField(max_length=160)
+    menu_tree = models.JSONField(default=dict, blank=True)
+    safe_fallback_copy = models.TextField(default="END Invalid option. Please try again.")
+    session_outcome_taxonomy = models.JSONField(default=dict, blank=True)
+    approval_status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="ussd_menu_versions_approved",
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    retired_at = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=False)
+    lineage_metadata = models.JSONField(default=dict, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="ussd_menu_versions_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["menu_key", "language", "-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["menu_key", "language", "version_label"],
+                name="risk_ussdmenu_langver_uniq",
+            ),
+            models.UniqueConstraint(
+                fields=["menu_key", "language"],
+                condition=models.Q(is_active=True),
+                name="risk_ussdmenu_one_active_lang",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["menu_key", "language", "is_active"], name="risk_ussdmenu_active_idx"),
+            models.Index(fields=["approval_status", "retired_at"], name="risk_ussdmenu_status_idx"),
+        ]
+
+    def clean(self):
+        errors = {}
+        if self.is_active and self.approval_status != self.STATUS_APPROVED:
+            errors["is_active"] = ["Only approved USSD menu versions can be active."]
+        if self.approval_status == self.STATUS_APPROVED and self.approved_at is None:
+            errors["approved_at"] = ["Approved USSD menu versions require an approval timestamp."]
+        if self.retired_at is not None and self.approval_status != self.STATUS_RETIRED:
+            errors["approval_status"] = ["USSD menu versions with retired_at must use retired status."]
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        self.menu_key = self.menu_key.strip() or "cholera_health_menu"
+        self.version_label = self.version_label.strip()
+        self.language = self.language.strip().lower() or "en"
+        self.title = self.title.strip()
+        super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.menu_key} {self.version_label} ({self.language})"
+
+
 class UssdSessionLog(models.Model):
+    OUTCOME_STARTED = "STARTED"
+    OUTCOME_IN_PROGRESS = "IN_PROGRESS"
+    OUTCOME_COMPLETED = "COMPLETED"
+    OUTCOME_INVALID_INPUT = "INVALID_INPUT"
+    OUTCOME_ABANDONED_INFERRED = "ABANDONED_INFERRED"
+    OUTCOME_SAFE_FALLBACK = "SAFE_FALLBACK"
+    OUTCOME_CHOICES = [
+        (OUTCOME_STARTED, "Started"),
+        (OUTCOME_IN_PROGRESS, "In progress"),
+        (OUTCOME_COMPLETED, "Completed"),
+        (OUTCOME_INVALID_INPUT, "Invalid input"),
+        (OUTCOME_ABANDONED_INFERRED, "Abandoned inferred"),
+        (OUTCOME_SAFE_FALLBACK, "Safe fallback"),
+    ]
+
     session_id = models.CharField(max_length=120, db_index=True)
     phone_number = models.CharField(max_length=20, blank=True)
     service_code = models.CharField(max_length=40, blank=True)
     text = models.TextField(blank=True)
     response_text = models.TextField(blank=True)
     ward = models.ForeignKey(Ward, on_delete=models.SET_NULL, null=True, blank=True)
+    menu_version = models.ForeignKey(
+        UssdMenuVersion,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="session_logs",
+    )
+    menu_key = models.CharField(max_length=120, default="cholera_health_menu")
+    menu_version_label = models.CharField(max_length=80, blank=True)
+    language = models.CharField(max_length=20, default="en")
     menu_level = models.CharField(max_length=50, blank=True)
+    session_outcome = models.CharField(max_length=40, choices=OUTCOME_CHOICES, default=OUTCOME_IN_PROGRESS)
+    invalid_option = models.BooleanField(default=False)
+    abandonment_reason = models.CharField(max_length=160, blank=True)
+    is_terminal = models.BooleanField(default=False)
+    governance_metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["session_id", "created_at"]),
+            models.Index(fields=["menu_key", "menu_version_label", "language"], name="risk_ussdlog_menu_idx"),
+            models.Index(fields=["session_outcome", "created_at"], name="risk_ussdlog_outcome_idx"),
+            models.Index(fields=["invalid_option", "created_at"], name="risk_ussdlog_invalid_idx"),
         ]
 
     def __str__(self) -> str:
@@ -1650,6 +3867,21 @@ class UssdSessionLog(models.Model):
 
 
 class SyncQueue(models.Model):
+    CONTRACT_VERSION_DEFAULT = "chv-offline-v1"
+
+    UPLOAD_SYMPTOM_TRIAGE = "symptom_triage"
+    UPLOAD_SUSPECTED_CASE_SIGNAL = "suspected_case_signal"
+    UPLOAD_PREVENTION_VISIT = "prevention_visit"
+    UPLOAD_TASK_ACK = "task_ack"
+    UPLOAD_ALERT_ACK = "alert_ack"
+    UPLOAD_CHOICES = [
+        (UPLOAD_SYMPTOM_TRIAGE, "Symptom triage"),
+        (UPLOAD_SUSPECTED_CASE_SIGNAL, "Suspected case signal"),
+        (UPLOAD_PREVENTION_VISIT, "Household prevention visit"),
+        (UPLOAD_TASK_ACK, "Task acknowledgement"),
+        (UPLOAD_ALERT_ACK, "Alert acknowledgement"),
+    ]
+
     STATUS_PENDING = "PENDING"
     STATUS_PROCESSED = "PROCESSED"
     STATUS_FAILED = "FAILED"
@@ -1659,8 +3891,33 @@ class SyncQueue(models.Model):
         (STATUS_FAILED, "Failed"),
     ]
 
+    CONFLICT_NONE = "NONE"
+    CONFLICT_REPLAYED = "REPLAYED"
+    CONFLICT_SCOPE_MISMATCH = "SCOPE_MISMATCH"
+    CONFLICT_STALE_BUNDLE = "STALE_BUNDLE"
+    CONFLICT_UNSUPPORTED_UPLOAD = "UNSUPPORTED_UPLOAD"
+    CONFLICT_CHOICES = [
+        (CONFLICT_NONE, "None"),
+        (CONFLICT_REPLAYED, "Replayed"),
+        (CONFLICT_SCOPE_MISMATCH, "Scope mismatch"),
+        (CONFLICT_STALE_BUNDLE, "Stale bundle"),
+        (CONFLICT_UNSUPPORTED_UPLOAD, "Unsupported upload"),
+    ]
+
     source_device_id = models.CharField(max_length=120, blank=True)
+    device_registration = models.ForeignKey(
+        "risk.CHVDeviceRegistration",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="sync_queue_items",
+    )
+    contract_version = models.CharField(max_length=64, default=CONTRACT_VERSION_DEFAULT)
+    upload_type = models.CharField(max_length=40, choices=UPLOAD_CHOICES, default=UPLOAD_SYMPTOM_TRIAGE)
     client_submission_id = models.CharField(max_length=120)
+    idempotency_key = models.CharField(max_length=160, blank=True)
+    download_bundle_version = models.CharField(max_length=96, blank=True)
+    recorded_at = models.DateTimeField(null=True, blank=True)
     phone_number = models.CharField(max_length=20, blank=True)
     ward = models.ForeignKey(Ward, on_delete=models.SET_NULL, null=True, blank=True)
     triage_session = models.ForeignKey(
@@ -1672,6 +3929,8 @@ class SyncQueue(models.Model):
     )
     payload = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    conflict_state = models.CharField(max_length=32, choices=CONFLICT_CHOICES, default=CONFLICT_NONE)
+    server_receipt = models.JSONField(default=dict, blank=True)
     processed_at = models.DateTimeField(null=True, blank=True)
     error_message = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -1683,10 +3942,90 @@ class SyncQueue(models.Model):
                 fields=["source_device_id", "client_submission_id"],
                 name="unique_sync_submission_per_device",
             ),
+            models.UniqueConstraint(
+                fields=["source_device_id", "idempotency_key"],
+                condition=~models.Q(idempotency_key=""),
+                name="unique_sync_idempotency_per_device",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["device_registration", "created_at"], name="risk_sync_device_idx"),
+            models.Index(fields=["upload_type", "status"], name="risk_sync_upload_status_idx"),
+            models.Index(fields=["contract_version", "created_at"], name="risk_sync_contract_idx"),
         ]
 
     def __str__(self) -> str:
         return f"SyncQueue {self.id} [{self.status}]"
+
+
+class CHVOfflineRejectedSubmissionAudit(models.Model):
+    STAGE_ENVELOPE_VALIDATION = "ENVELOPE_VALIDATION"
+    STAGE_PAYLOAD_SCHEMA = "PAYLOAD_SCHEMA"
+    STAGE_PII_MINIMIZATION = "PII_MINIMIZATION"
+    STAGE_CONTRACT_VERSION = "CONTRACT_VERSION"
+    STAGE_WARD_SCOPE = "WARD_SCOPE"
+    STAGE_DEVICE_REGISTRATION = "DEVICE_REGISTRATION"
+    STAGE_CHOICES = [
+        (STAGE_ENVELOPE_VALIDATION, "Envelope validation"),
+        (STAGE_PAYLOAD_SCHEMA, "Payload schema"),
+        (STAGE_PII_MINIMIZATION, "PII minimization"),
+        (STAGE_CONTRACT_VERSION, "Contract version"),
+        (STAGE_WARD_SCOPE, "Ward scope"),
+        (STAGE_DEVICE_REGISTRATION, "Device registration"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="chv_offline_rejected_submission_audits",
+    )
+    ward = models.ForeignKey(
+        Ward,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="chv_offline_rejected_submission_audits",
+    )
+    device_registration = models.ForeignKey(
+        "risk.CHVDeviceRegistration",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="rejected_submission_audits",
+    )
+    source_device_id = models.CharField(max_length=120, blank=True)
+    client_submission_id = models.CharField(max_length=120, blank=True)
+    idempotency_key = models.CharField(max_length=160, blank=True)
+    upload_type = models.CharField(max_length=40, blank=True)
+    contract_version = models.CharField(max_length=64, blank=True)
+    rejection_stage = models.CharField(
+        max_length=40,
+        choices=STAGE_CHOICES,
+        default=STAGE_ENVELOPE_VALIDATION,
+    )
+    error_code = models.CharField(max_length=80, blank=True)
+    safe_error_summary = models.TextField(blank=True)
+    field_paths = models.JSONField(default=list, blank=True)
+    status_code = models.PositiveSmallIntegerField(default=400)
+    request_body_hmac = models.CharField(max_length=64, blank=True)
+    request_metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["ward", "created_at"], name="risk_chvrej_ward_created_idx"),
+            models.Index(fields=["user", "created_at"], name="risk_chvrej_user_created_idx"),
+            models.Index(fields=["source_device_id", "created_at"], name="risk_chvrej_device_created_idx"),
+            models.Index(fields=["rejection_stage", "created_at"], name="risk_chvrej_stage_created_idx"),
+            models.Index(fields=["request_body_hmac"], name="risk_chvrej_hmac_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"CHV offline rejection {self.public_id} [{self.rejection_stage}]"
 
 
 class SystemControlState(models.Model):
@@ -1857,18 +4196,181 @@ class WardGeometryFeature(models.Model):
         return f"{self.display_name_snapshot} [{self.dataset_version.version_label}]"
 
 
+class WardSpatialRelationshipType(models.TextChoices):
+    ADJACENT = "adjacent", "Adjacent"
+    NEARBY = "nearby", "Nearby"
+    UPSTREAM = "upstream", "Upstream"
+    SAME_FACILITY_CATCHMENT = "same_facility_catchment", "Same facility catchment"
+    MANUAL_PUBLIC_HEALTH_LINK = "manual_public_health_link", "Manual public health link"
+
+
+class WardSpatialRelationshipSource(models.TextChoices):
+    DERIVED_GEOMETRY = "derived_geometry", "Derived geometry"
+    DERIVED_FACILITY_CATCHMENT = "derived_facility_catchment", "Derived facility catchment"
+    MANUAL_PUBLIC_HEALTH = "manual_public_health", "Manual public health"
+
+
+class WardSpatialRelationship(models.Model):
+    source_ward = models.ForeignKey(
+        Ward,
+        on_delete=models.PROTECT,
+        related_name="outgoing_spatial_relationships",
+    )
+    target_ward = models.ForeignKey(
+        Ward,
+        on_delete=models.PROTECT,
+        related_name="incoming_spatial_relationships",
+    )
+    relationship_type = models.CharField(
+        max_length=40,
+        choices=WardSpatialRelationshipType.choices,
+        default=WardSpatialRelationshipType.ADJACENT,
+    )
+    geometry_dataset_version = models.ForeignKey(
+        WardGeometryDatasetVersion,
+        on_delete=models.PROTECT,
+        related_name="spatial_relationships",
+    )
+    shared_boundary_length = models.FloatField(null=True, blank=True)
+    centroid_distance = models.FloatField(null=True, blank=True)
+    distance_unit = models.CharField(max_length=40, default="source_crs_degrees")
+    confidence = models.FloatField(default=1.0)
+    generation_method = models.CharField(
+        max_length=40,
+        choices=WardSpatialRelationshipSource.choices,
+        default=WardSpatialRelationshipSource.DERIVED_GEOMETRY,
+    )
+    generated_at = models.DateTimeField(default=timezone.now)
+    lineage_metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["source_ward__county", "source_ward__name", "relationship_type", "target_ward__name"]
+        indexes = [
+            models.Index(fields=["source_ward", "relationship_type"], name="risk_sprel_src_type_idx"),
+            models.Index(fields=["target_ward", "relationship_type"], name="risk_sprel_tgt_type_idx"),
+            models.Index(fields=["geometry_dataset_version", "generation_method"], name="risk_sprel_geom_src_idx"),
+            models.Index(fields=["relationship_type", "generated_at"], name="risk_sprel_type_gen_idx"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "source_ward",
+                    "target_ward",
+                    "relationship_type",
+                    "geometry_dataset_version",
+                    "generation_method",
+                ],
+                name="risk_sprel_unique_edge",
+            ),
+            models.CheckConstraint(
+                check=~models.Q(source_ward_id=models.F("target_ward_id")),
+                name="risk_sprel_no_self_edge",
+            ),
+            models.CheckConstraint(
+                check=models.Q(confidence__gte=0.0) & models.Q(confidence__lte=1.0),
+                name="risk_sprel_conf_0_1",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.source_ward.name} -> {self.target_ward.name} [{self.relationship_type}]"
+
+
+class FacilityCatchmentMethod(models.TextChoices):
+    PRIMARY_WARD_ONLY = "primary_ward_only", "Primary ward only"
+    SPATIAL_GRAPH_ADJACENT_WARDS = "spatial_graph_adjacent_wards", "Spatial graph adjacent wards"
+    DISTANCE_THRESHOLD = "distance_threshold", "Distance threshold"
+    SOURCE_CATCHMENT_RECORD = "source_catchment_record", "Source catchment record"
+    EXTERNALLY_VERIFIED = "externally_verified", "Externally verified"
+
+
+class FacilityCatchmentSourceKind(models.TextChoices):
+    APPROXIMATED = "approximated", "Approximated"
+    EXTERNALLY_VERIFIED = "externally_verified", "Externally verified"
+    MANUAL_OVERRIDE = "manual_override", "Manual override"
+
+
+class FacilityCatchment(models.Model):
+    facility = models.ForeignKey(
+        HealthFacility,
+        on_delete=models.PROTECT,
+        related_name="facility_catchments",
+    )
+    primary_ward = models.ForeignKey(
+        Ward,
+        on_delete=models.PROTECT,
+        related_name="primary_facility_catchments",
+    )
+    covered_wards = models.ManyToManyField(Ward, related_name="facility_catchments", blank=True)
+    geometry_dataset_version = models.ForeignKey(
+        WardGeometryDatasetVersion,
+        on_delete=models.PROTECT,
+        related_name="facility_catchments",
+    )
+    catchment_method = models.CharField(
+        max_length=60,
+        choices=FacilityCatchmentMethod.choices,
+        default=FacilityCatchmentMethod.PRIMARY_WARD_ONLY,
+    )
+    source_kind = models.CharField(
+        max_length=40,
+        choices=FacilityCatchmentSourceKind.choices,
+        default=FacilityCatchmentSourceKind.APPROXIMATED,
+    )
+    distance_threshold = models.FloatField(null=True, blank=True)
+    distance_unit = models.CharField(max_length=40, default="source_crs_degrees")
+    population_estimate = models.FloatField(null=True, blank=True)
+    confidence = models.FloatField(default=0.5)
+    is_approximate = models.BooleanField(default=True)
+    generated_at = models.DateTimeField(default=timezone.now)
+    lineage_metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["facility__ward__name", "facility__name", "-generated_at"]
+        indexes = [
+            models.Index(fields=["facility", "generated_at"], name="risk_fcatch_fac_gen_idx"),
+            models.Index(fields=["primary_ward", "catchment_method"], name="risk_fcatch_ward_method_idx"),
+            models.Index(fields=["geometry_dataset_version", "source_kind"], name="risk_fcatch_geom_src_idx"),
+            models.Index(fields=["is_approximate", "generated_at"], name="risk_fcatch_approx_idx"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["facility", "geometry_dataset_version", "catchment_method", "source_kind"],
+                name="risk_fcatch_unique_method",
+            ),
+            models.CheckConstraint(
+                check=models.Q(confidence__gte=0.0) & models.Q(confidence__lte=1.0),
+                name="risk_fcatch_conf_0_1",
+            ),
+            models.CheckConstraint(
+                check=models.Q(distance_threshold__isnull=True) | models.Q(distance_threshold__gte=0.0),
+                name="risk_fcatch_distance_nonneg",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        label = "approximate" if self.is_approximate else "verified"
+        return f"{self.facility.name} catchment [{label}]"
+
+
 class DashboardNotification(models.Model):
     TYPE_WARD_RISK_HIGH = "WARD_RISK_HIGH"
     TYPE_ALERT_FAILED = "ALERT_FAILED"
     TYPE_ALERT_RETRY_PENDING = "ALERT_RETRY_PENDING"
     TYPE_FEED_STALE = "FEED_STALE"
     TYPE_CHV_COVERAGE_REQUEST_STATUS = "CHV_COVERAGE_REQUEST_STATUS"
+    TYPE_OPERATIONAL_KPI_THRESHOLD = "OPERATIONAL_KPI_THRESHOLD"
     TYPE_CHOICES = [
         (TYPE_WARD_RISK_HIGH, "Ward Risk High"),
         (TYPE_ALERT_FAILED, "Alert Failed"),
         (TYPE_ALERT_RETRY_PENDING, "Alert Retry Pending"),
         (TYPE_FEED_STALE, "Feed Stale"),
         (TYPE_CHV_COVERAGE_REQUEST_STATUS, "CHV Coverage Request Status"),
+        (TYPE_OPERATIONAL_KPI_THRESHOLD, "Operational KPI Threshold"),
     ]
 
     SEVERITY_INFO = "INFO"
@@ -2111,6 +4613,787 @@ class AlertWorkflowEvent(models.Model):
 
     def __str__(self) -> str:
         return f"{self.workflow.ward.name} {self.action}"
+
+
+class PreparednessAction(models.Model):
+    ACTION_CHV_FOLLOW_UP = "chv_follow_up"
+    ACTION_HOUSEHOLD_PREVENTION_MESSAGE = "household_prevention_message"
+    ACTION_FACILITY_ORS_REVIEW = "facility_ors_review"
+    ACTION_FACILITY_STAFFING_REVIEW = "facility_staffing_review"
+    ACTION_COUNTY_ESCALATION = "county_escalation"
+    ACTION_WATER_TREATMENT_DISTRIBUTION = "water_treatment_distribution"
+    ACTION_SURVEILLANCE_FOLLOW_UP = "surveillance_follow_up"
+    ACTION_FIELD_VERIFICATION = "field_verification"
+    ACTION_TYPE_CHOICES = [
+        (ACTION_CHV_FOLLOW_UP, "CHV follow-up"),
+        (ACTION_HOUSEHOLD_PREVENTION_MESSAGE, "Household prevention message"),
+        (ACTION_FACILITY_ORS_REVIEW, "Facility ORS review"),
+        (ACTION_FACILITY_STAFFING_REVIEW, "Facility staffing review"),
+        (ACTION_COUNTY_ESCALATION, "County escalation"),
+        (ACTION_WATER_TREATMENT_DISTRIBUTION, "Water treatment distribution"),
+        (ACTION_SURVEILLANCE_FOLLOW_UP, "Surveillance follow-up"),
+        (ACTION_FIELD_VERIFICATION, "Field verification"),
+    ]
+
+    SOURCE_MANUAL = "manual"
+    SOURCE_ALERT = "alert"
+    SOURCE_ALERT_WORKFLOW = "alert_workflow"
+    SOURCE_RISK_SCORE = "risk_score"
+    SOURCE_CHV_COVERAGE_REQUEST = "chv_coverage_request"
+    SOURCE_FACILITY_READINESS_REVIEW = "facility_readiness_review"
+    SOURCE_FACILITY_UPDATE_REQUEST = "facility_update_request"
+    SOURCE_FACILITY_ESCALATION = "facility_escalation"
+    SOURCE_OUTCOME_FEEDBACK = "outcome_feedback"
+    SOURCE_SYSTEM = "system"
+    SOURCE_TRIGGER_CHOICES = [
+        (SOURCE_MANUAL, "Manual"),
+        (SOURCE_ALERT, "Alert"),
+        (SOURCE_ALERT_WORKFLOW, "Alert workflow"),
+        (SOURCE_RISK_SCORE, "Risk score"),
+        (SOURCE_CHV_COVERAGE_REQUEST, "CHV coverage request"),
+        (SOURCE_FACILITY_READINESS_REVIEW, "Facility readiness review"),
+        (SOURCE_FACILITY_UPDATE_REQUEST, "Facility update request"),
+        (SOURCE_FACILITY_ESCALATION, "Facility escalation"),
+        (SOURCE_OUTCOME_FEEDBACK, "Outcome feedback"),
+        (SOURCE_SYSTEM, "System"),
+    ]
+
+    STATUS_DRAFT = "DRAFT"
+    STATUS_QUEUED = "QUEUED"
+    STATUS_ASSIGNED = "ASSIGNED"
+    STATUS_ACKNOWLEDGED = "ACKNOWLEDGED"
+    STATUS_IN_PROGRESS = "IN_PROGRESS"
+    STATUS_COMPLETED = "COMPLETED"
+    STATUS_BLOCKED = "BLOCKED"
+    STATUS_CANCELLED = "CANCELLED"
+    STATUS_ESCALATED = "ESCALATED"
+    STATUS_EXPIRED = "EXPIRED"
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, "Draft"),
+        (STATUS_QUEUED, "Queued"),
+        (STATUS_ASSIGNED, "Assigned"),
+        (STATUS_ACKNOWLEDGED, "Acknowledged"),
+        (STATUS_IN_PROGRESS, "In Progress"),
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_BLOCKED, "Blocked"),
+        (STATUS_CANCELLED, "Cancelled"),
+        (STATUS_ESCALATED, "Escalated"),
+        (STATUS_EXPIRED, "Expired"),
+    ]
+    ACTIVE_STATUSES = [
+        STATUS_DRAFT,
+        STATUS_QUEUED,
+        STATUS_ASSIGNED,
+        STATUS_ACKNOWLEDGED,
+        STATUS_IN_PROGRESS,
+        STATUS_BLOCKED,
+        STATUS_ESCALATED,
+    ]
+    CLOSED_STATUSES = [STATUS_COMPLETED, STATUS_CANCELLED, STATUS_EXPIRED]
+
+    PRIORITY_LOW = "LOW"
+    PRIORITY_MEDIUM = "MEDIUM"
+    PRIORITY_HIGH = "HIGH"
+    PRIORITY_URGENT = "URGENT"
+    PRIORITY_CHOICES = [
+        (PRIORITY_LOW, "Low"),
+        (PRIORITY_MEDIUM, "Medium"),
+        (PRIORITY_HIGH, "High"),
+        (PRIORITY_URGENT, "Urgent"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    action_type = models.CharField(max_length=64, choices=ACTION_TYPE_CHOICES)
+    source_trigger_type = models.CharField(max_length=64, choices=SOURCE_TRIGGER_CHOICES, default=SOURCE_MANUAL)
+    source_trigger_ref = models.CharField(max_length=160, blank=True)
+    ward = models.ForeignKey(Ward, on_delete=models.PROTECT, related_name="preparedness_actions")
+    facility = models.ForeignKey(
+        HealthFacility,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="preparedness_actions",
+    )
+    chv = models.ForeignKey(
+        CHV,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="preparedness_actions",
+    )
+    alert = models.ForeignKey(
+        Alert,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="preparedness_actions",
+    )
+    alert_workflow = models.ForeignKey(
+        AlertWorkflowState,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="preparedness_actions",
+    )
+    risk_score = models.ForeignKey(
+        RiskScore,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="preparedness_actions",
+    )
+    model_run = models.ForeignKey(
+        "risk.ModelRun",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="preparedness_actions",
+    )
+    facility_readiness_review = models.ForeignKey(
+        FacilityReadinessReview,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="preparedness_actions",
+    )
+    facility_update_request = models.ForeignKey(
+        FacilityReadinessUpdateRequest,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="preparedness_actions",
+    )
+    facility_escalation = models.ForeignKey(
+        FacilityReadinessEscalation,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="preparedness_actions",
+    )
+    chv_coverage_request = models.ForeignKey(
+        "risk.CHVCoverageRequest",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="preparedness_actions",
+    )
+    status = models.CharField(max_length=24, choices=STATUS_CHOICES, default=STATUS_QUEUED)
+    priority = models.CharField(max_length=10, choices=PRIORITY_CHOICES, default=PRIORITY_MEDIUM)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="preparedness_actions_created",
+    )
+    assigned_to = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="preparedness_actions_assigned",
+    )
+    assigned_to_team = models.CharField(max_length=120, blank=True)
+    decision_policy_version = models.CharField(max_length=80, blank=True)
+    due_at = models.DateTimeField(null=True, blank=True)
+    sla_target_at = models.DateTimeField(null=True, blank=True)
+    acknowledged_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    escalated_at = models.DateTimeField(null=True, blank=True)
+    completion_evidence = models.JSONField(default=dict, blank=True)
+    cancellation_reason = models.TextField(blank=True)
+    escalation_metadata = models.JSONField(default=dict, blank=True)
+    lineage_metadata = models.JSONField(default=dict, blank=True)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["action_type", "source_trigger_type", "source_trigger_ref"],
+                condition=(
+                    models.Q(status__in=["DRAFT", "QUEUED", "ASSIGNED", "ACKNOWLEDGED", "IN_PROGRESS", "BLOCKED", "ESCALATED"])
+                    & ~models.Q(source_trigger_ref="")
+                ),
+                name="risk_prepact_src_active_uniq",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["status", "due_at"], name="risk_prepact_status_idx"),
+            models.Index(fields=["priority", "due_at"], name="risk_prepact_prior_idx"),
+            models.Index(fields=["ward", "status"], name="risk_prepact_ward_idx"),
+            models.Index(fields=["facility", "status"], name="risk_prepact_fac_idx"),
+            models.Index(fields=["assigned_to", "status"], name="risk_prepact_assign_idx"),
+            models.Index(fields=["source_trigger_type", "source_trigger_ref"], name="risk_prepact_source_idx"),
+        ]
+
+    @property
+    def is_active(self) -> bool:
+        return self.status in self.ACTIVE_STATUSES
+
+    @property
+    def is_overdue(self) -> bool:
+        return bool(self.due_at and self.is_active and self.due_at < timezone.now())
+
+    def __str__(self) -> str:
+        return f"{self.ward.name} {self.action_type} [{self.status}]"
+
+
+class PreparednessActionEvent(models.Model):
+    EVENT_CREATED = "CREATED"
+    EVENT_ASSIGNED = "ASSIGNED"
+    EVENT_ACKNOWLEDGED = "ACKNOWLEDGED"
+    EVENT_IN_PROGRESS = "IN_PROGRESS"
+    EVENT_COMPLETED = "COMPLETED"
+    EVENT_BLOCKED = "BLOCKED"
+    EVENT_CANCELLED = "CANCELLED"
+    EVENT_ESCALATED = "ESCALATED"
+    EVENT_EXPIRED = "EXPIRED"
+    EVENT_STATUS_CHANGED = "STATUS_CHANGED"
+    EVENT_DUE_DATE_CHANGED = "DUE_DATE_CHANGED"
+    EVENT_COMPLETION_EVIDENCE_ADDED = "COMPLETION_EVIDENCE_ADDED"
+    EVENT_COMMENT = "COMMENT"
+    EVENT_CHOICES = [
+        (EVENT_CREATED, "Created"),
+        (EVENT_ASSIGNED, "Assigned"),
+        (EVENT_ACKNOWLEDGED, "Acknowledged"),
+        (EVENT_IN_PROGRESS, "In Progress"),
+        (EVENT_COMPLETED, "Completed"),
+        (EVENT_BLOCKED, "Blocked"),
+        (EVENT_CANCELLED, "Cancelled"),
+        (EVENT_ESCALATED, "Escalated"),
+        (EVENT_EXPIRED, "Expired"),
+        (EVENT_STATUS_CHANGED, "Status Changed"),
+        (EVENT_DUE_DATE_CHANGED, "Due Date Changed"),
+        (EVENT_COMPLETION_EVIDENCE_ADDED, "Completion Evidence Added"),
+        (EVENT_COMMENT, "Comment"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    preparedness_action = models.ForeignKey(
+        PreparednessAction,
+        on_delete=models.PROTECT,
+        related_name="events",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="preparedness_action_events",
+    )
+    event_type = models.CharField(max_length=40, choices=EVENT_CHOICES)
+    old_status = models.CharField(max_length=24, blank=True)
+    new_status = models.CharField(max_length=24, blank=True)
+    detail = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        indexes = [
+            models.Index(fields=["preparedness_action", "created_at"], name="risk_prepevt_action_idx"),
+            models.Index(fields=["event_type", "created_at"], name="risk_prepevt_type_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.preparedness_action.public_id} {self.event_type}"
+
+
+class OperationalMetricDefinition(models.Model):
+    GROUP_ALERT_DELIVERY = "alert_delivery"
+    GROUP_TRIGGER_ACTIVATION = "trigger_activation"
+    GROUP_ACTION_COMPLETION = "action_completion"
+    GROUP_CHV_ADOPTION = "chv_adoption"
+    GROUP_FACILITY_PREPAREDNESS = "facility_preparedness"
+    GROUP_USSD_COMPLETION = "ussd_completion"
+    GROUP_HOUSEHOLD_REACH = "household_reach"
+    GROUP_OUTCOME_FEEDBACK = "outcome_feedback"
+    GROUP_SOURCE_DATA_HEALTH = "source_data_health"
+    GROUP_CHOICES = [
+        (GROUP_ALERT_DELIVERY, "Alert delivery"),
+        (GROUP_TRIGGER_ACTIVATION, "Trigger activation"),
+        (GROUP_ACTION_COMPLETION, "Action completion"),
+        (GROUP_CHV_ADOPTION, "CHV adoption"),
+        (GROUP_FACILITY_PREPAREDNESS, "Facility preparedness"),
+        (GROUP_USSD_COMPLETION, "USSD completion"),
+        (GROUP_HOUSEHOLD_REACH, "Household reach"),
+        (GROUP_OUTCOME_FEEDBACK, "Outcome feedback"),
+        (GROUP_SOURCE_DATA_HEALTH, "Source data health"),
+    ]
+
+    FAMILY_OPERATIONAL = "OPERATIONAL"
+    FAMILY_MODEL = "MODEL"
+    FAMILY_CHOICES = [
+        (FAMILY_OPERATIONAL, "Operational KPI"),
+        (FAMILY_MODEL, "Model performance metric"),
+    ]
+
+    VALUE_COUNT = "count"
+    VALUE_PERCENT = "percent"
+    VALUE_RATE = "rate"
+    VALUE_DURATION_SECONDS = "duration_seconds"
+    VALUE_RATIO = "ratio"
+    VALUE_CHOICES = [
+        (VALUE_COUNT, "Count"),
+        (VALUE_PERCENT, "Percent"),
+        (VALUE_RATE, "Rate"),
+        (VALUE_DURATION_SECONDS, "Duration seconds"),
+        (VALUE_RATIO, "Ratio"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    metric_key = models.SlugField(max_length=120)
+    version = models.CharField(max_length=40, default="v1")
+    display_name = models.CharField(max_length=180)
+    description = models.TextField()
+    metric_group = models.CharField(max_length=40, choices=GROUP_CHOICES)
+    metric_family = models.CharField(max_length=20, choices=FAMILY_CHOICES, default=FAMILY_OPERATIONAL)
+    value_type = models.CharField(max_length=32, choices=VALUE_CHOICES)
+    value_unit = models.CharField(max_length=40, blank=True)
+    owner = models.CharField(max_length=120)
+    formula = models.TextField()
+    window = models.CharField(max_length=80)
+    source_model = models.CharField(max_length=160)
+    source_models = models.JSONField(default=list, blank=True)
+    allowed_dimensions = models.JSONField(default=list, blank=True)
+    interpretation = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+    effective_from = models.DateTimeField(default=timezone.now)
+    effective_to = models.DateTimeField(null=True, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["metric_group", "metric_key", "-version"]
+        constraints = [
+            models.UniqueConstraint(fields=["metric_key", "version"], name="risk_opsdef_key_ver_uniq"),
+            models.UniqueConstraint(
+                fields=["metric_key"],
+                condition=models.Q(is_active=True),
+                name="risk_opsdef_active_uniq",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["metric_group", "is_active"], name="risk_opsdef_group_idx"),
+            models.Index(fields=["metric_family", "is_active"], name="risk_opsdef_family_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.metric_key}:{self.version}"
+
+
+class OperationalMetricDimension(models.Model):
+    VALUE_DATE = "date"
+    VALUE_TEXT = "text"
+    VALUE_ENUM = "enum"
+    VALUE_FOREIGN_KEY = "foreign_key"
+    VALUE_CHOICES = [
+        (VALUE_DATE, "Date"),
+        (VALUE_TEXT, "Text"),
+        (VALUE_ENUM, "Enum"),
+        (VALUE_FOREIGN_KEY, "Foreign key"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    dimension_key = models.SlugField(max_length=80, unique=True)
+    display_name = models.CharField(max_length=120)
+    description = models.TextField()
+    value_type = models.CharField(max_length=32, choices=VALUE_CHOICES)
+    source_model = models.CharField(max_length=160, blank=True)
+    allowed_values = models.JSONField(default=list, blank=True)
+    is_active = models.BooleanField(default=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["dimension_key"]
+        indexes = [
+            models.Index(fields=["is_active", "dimension_key"], name="risk_opsdim_active_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return self.dimension_key
+
+
+class OperationalMetricSnapshot(models.Model):
+    GRAIN_DAILY = "DAILY"
+    GRAIN_WEEKLY = "WEEKLY"
+    GRAIN_MONTHLY = "MONTHLY"
+    GRAIN_ROLLING = "ROLLING"
+    GRAIN_CUSTOM = "CUSTOM"
+    GRAIN_CHOICES = [
+        (GRAIN_DAILY, "Daily"),
+        (GRAIN_WEEKLY, "Weekly"),
+        (GRAIN_MONTHLY, "Monthly"),
+        (GRAIN_ROLLING, "Rolling"),
+        (GRAIN_CUSTOM, "Custom"),
+    ]
+
+    STATUS_COMPLETE = "COMPLETE"
+    STATUS_PARTIAL = "PARTIAL"
+    STATUS_NO_SOURCE = "NO_SOURCE"
+    STATUS_STALE = "STALE"
+    STATUS_FAILED = "FAILED"
+    STATUS_CHOICES = [
+        (STATUS_COMPLETE, "Complete"),
+        (STATUS_PARTIAL, "Partial"),
+        (STATUS_NO_SOURCE, "No source records"),
+        (STATUS_STALE, "Stale"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    snapshot_key = models.CharField(max_length=255, unique=True, blank=True)
+    metric_definition = models.ForeignKey(
+        OperationalMetricDefinition,
+        on_delete=models.PROTECT,
+        related_name="snapshots",
+    )
+    date = models.DateField()
+    period_start = models.DateTimeField()
+    period_end = models.DateTimeField()
+    grain = models.CharField(max_length=20, choices=GRAIN_CHOICES, default=GRAIN_DAILY)
+    value = models.DecimalField(max_digits=18, decimal_places=6, null=True, blank=True)
+    numerator = models.DecimalField(max_digits=18, decimal_places=6, null=True, blank=True)
+    denominator = models.DecimalField(max_digits=18, decimal_places=6, null=True, blank=True)
+    value_unit = models.CharField(max_length=40, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_COMPLETE)
+    source_record_count = models.PositiveIntegerField(default=0)
+    source_coverage = models.JSONField(default=dict, blank=True)
+    dimension_values = models.JSONField(default=dict, blank=True)
+    county = models.CharField(max_length=120, blank=True)
+    sub_county = models.CharField(max_length=120, blank=True)
+    ward = models.ForeignKey(Ward, on_delete=models.SET_NULL, null=True, blank=True, related_name="operational_metric_snapshots")
+    facility = models.ForeignKey(
+        HealthFacility,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="operational_metric_snapshots",
+    )
+    chv = models.ForeignKey(CHV, on_delete=models.SET_NULL, null=True, blank=True, related_name="operational_metric_snapshots")
+    source_channel = models.CharField(max_length=40, blank=True)
+    action_type = models.CharField(max_length=64, blank=True)
+    alert_severity = models.CharField(max_length=40, blank=True)
+    model_version = models.CharField(max_length=80, blank=True)
+    calculation_run_id = models.UUIDField(null=True, blank=True)
+    calculation_metadata = models.JSONField(default=dict, blank=True)
+    generated_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-date", "metric_definition__metric_key"]
+        indexes = [
+            models.Index(fields=["metric_definition", "date"], name="risk_opssnap_def_idx"),
+            models.Index(fields=["date", "status"], name="risk_opssnap_date_idx"),
+            models.Index(fields=["ward", "date"], name="risk_opssnap_ward_idx"),
+            models.Index(fields=["facility", "date"], name="risk_opssnap_fac_idx"),
+            models.Index(fields=["chv", "date"], name="risk_opssnap_chv_idx"),
+            models.Index(fields=["source_channel", "date"], name="risk_opssnap_chan_idx"),
+            models.Index(fields=["model_version", "date"], name="risk_opssnap_model_idx"),
+        ]
+
+    def compute_snapshot_key(self) -> str:
+        definition = self.metric_definition
+        payload = {
+            "metric_key": definition.metric_key,
+            "metric_version": definition.version,
+            "date": self.date.isoformat() if self.date else "",
+            "period_start": self.period_start.isoformat() if self.period_start else "",
+            "period_end": self.period_end.isoformat() if self.period_end else "",
+            "grain": self.grain,
+            "dimensions": {
+                "county": self.county or "",
+                "sub_county": self.sub_county or "",
+                "ward_id": self.ward_id,
+                "facility_id": self.facility_id,
+                "chv_id": self.chv_id,
+                "source_channel": self.source_channel or "",
+                "action_type": self.action_type or "",
+                "alert_severity": self.alert_severity or "",
+                "model_version": self.model_version or "",
+                "dimension_values": self.dimension_values or {},
+            },
+        }
+        return f"opsmetric:{definition.metric_key}:{definition.version}:{_stable_identity_digest(payload)}"
+
+    def save(self, *args, **kwargs):
+        if not self.snapshot_key:
+            self.snapshot_key = self.compute_snapshot_key()
+        if not self.value_unit:
+            self.value_unit = self.metric_definition.value_unit
+        super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.metric_definition.metric_key} {self.date} [{self.status}]"
+
+
+class OperationalBaselinePeriod(models.Model):
+    STATUS_DRAFT = "DRAFT"
+    STATUS_ACTIVE = "ACTIVE"
+    STATUS_RETIRED = "RETIRED"
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, "Draft"),
+        (STATUS_ACTIVE, "Active"),
+        (STATUS_RETIRED, "Retired"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    baseline_key = models.CharField(max_length=255, unique=True, blank=True)
+    metric_definition = models.ForeignKey(
+        OperationalMetricDefinition,
+        on_delete=models.PROTECT,
+        related_name="baseline_periods",
+    )
+    name = models.CharField(max_length=160)
+    description = models.TextField(blank=True)
+    period_start = models.DateTimeField()
+    period_end = models.DateTimeField()
+    grain = models.CharField(max_length=20, choices=OperationalMetricSnapshot.GRAIN_CHOICES, default=OperationalMetricSnapshot.GRAIN_DAILY)
+    baseline_value = models.DecimalField(max_digits=18, decimal_places=6, null=True, blank=True)
+    numerator = models.DecimalField(max_digits=18, decimal_places=6, null=True, blank=True)
+    denominator = models.DecimalField(max_digits=18, decimal_places=6, null=True, blank=True)
+    source_snapshot_count = models.PositiveIntegerField(default=0)
+    source_snapshot_keys = models.JSONField(default=list, blank=True)
+    calculation_method = models.CharField(max_length=160, default="explicit_period_average")
+    dimensions = models.JSONField(default=dict, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
+    owner = models.CharField(max_length=120, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["metric_definition__metric_key", "-period_end", "name"]
+        indexes = [
+            models.Index(fields=["metric_definition", "status"], name="risk_opsbase_def_idx"),
+            models.Index(fields=["period_start", "period_end"], name="risk_opsbase_period_idx"),
+        ]
+
+    def compute_baseline_key(self) -> str:
+        definition = self.metric_definition
+        payload = {
+            "metric_key": definition.metric_key,
+            "metric_version": definition.version,
+            "name": self.name,
+            "period_start": self.period_start.isoformat() if self.period_start else "",
+            "period_end": self.period_end.isoformat() if self.period_end else "",
+            "grain": self.grain,
+            "dimensions": self.dimensions or {},
+        }
+        return f"opsbase:{definition.metric_key}:{definition.version}:{_stable_identity_digest(payload)}"
+
+    def save(self, *args, **kwargs):
+        if not self.baseline_key:
+            self.baseline_key = self.compute_baseline_key()
+        super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.metric_definition.metric_key} baseline {self.name}"
+
+
+class OperationalSLAThreshold(models.Model):
+    COMPARATOR_LTE = "LTE"
+    COMPARATOR_GTE = "GTE"
+    COMPARATOR_LT = "LT"
+    COMPARATOR_GT = "GT"
+    COMPARATOR_CHOICES = [
+        (COMPARATOR_LTE, "Less than or equal"),
+        (COMPARATOR_GTE, "Greater than or equal"),
+        (COMPARATOR_LT, "Less than"),
+        (COMPARATOR_GT, "Greater than"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    threshold_key = models.SlugField(max_length=120)
+    metric_definition = models.ForeignKey(
+        OperationalMetricDefinition,
+        on_delete=models.PROTECT,
+        related_name="sla_thresholds",
+    )
+    version = models.CharField(max_length=40, default="v1")
+    display_name = models.CharField(max_length=180)
+    comparator = models.CharField(max_length=8, choices=COMPARATOR_CHOICES)
+    target_value = models.DecimalField(max_digits=18, decimal_places=6)
+    warning_value = models.DecimalField(max_digits=18, decimal_places=6, null=True, blank=True)
+    critical_value = models.DecimalField(max_digits=18, decimal_places=6, null=True, blank=True)
+    value_unit = models.CharField(max_length=40, blank=True)
+    applies_to_dimensions = models.JSONField(default=dict, blank=True)
+    owner = models.CharField(max_length=120)
+    rationale = models.TextField()
+    is_active = models.BooleanField(default=True)
+    effective_from = models.DateTimeField(default=timezone.now)
+    effective_to = models.DateTimeField(null=True, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["metric_definition__metric_key", "threshold_key", "-version"]
+        constraints = [
+            models.UniqueConstraint(fields=["threshold_key", "version"], name="risk_opssla_key_ver_uniq"),
+            models.UniqueConstraint(
+                fields=["threshold_key"],
+                condition=models.Q(is_active=True),
+                name="risk_opssla_active_uniq",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["metric_definition", "is_active"], name="risk_opssla_def_idx"),
+            models.Index(fields=["effective_from", "effective_to"], name="risk_opssla_eff_idx"),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.value_unit:
+            self.value_unit = self.metric_definition.value_unit
+        super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.threshold_key}:{self.version}"
+
+
+class OperationalThresholdBreach(models.Model):
+    BREACH_THRESHOLD_WARNING = "THRESHOLD_WARNING"
+    BREACH_THRESHOLD_BREACH = "THRESHOLD_BREACH"
+    BREACH_SOURCE_WARNING = "SOURCE_WARNING"
+    BREACH_SNAPSHOT_STALE = "SNAPSHOT_STALE"
+    BREACH_MISSING_SNAPSHOT = "MISSING_SNAPSHOT"
+    BREACH_STATUS_WARNING = "STATUS_WARNING"
+    BREACH_CHOICES = [
+        (BREACH_THRESHOLD_WARNING, "Threshold warning"),
+        (BREACH_THRESHOLD_BREACH, "Threshold breach"),
+        (BREACH_SOURCE_WARNING, "Source warning"),
+        (BREACH_SNAPSHOT_STALE, "Snapshot stale"),
+        (BREACH_MISSING_SNAPSHOT, "Missing snapshot"),
+        (BREACH_STATUS_WARNING, "Status warning"),
+    ]
+
+    SEVERITY_WARNING = "WARNING"
+    SEVERITY_CRITICAL = "CRITICAL"
+    SEVERITY_CHOICES = [
+        (SEVERITY_WARNING, "Warning"),
+        (SEVERITY_CRITICAL, "Critical"),
+    ]
+
+    STATUS_ACTIVE = "ACTIVE"
+    STATUS_RESOLVED = "RESOLVED"
+    STATUS_CHOICES = [
+        (STATUS_ACTIVE, "Active"),
+        (STATUS_RESOLVED, "Resolved"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    breach_key = models.CharField(max_length=255, unique=True, blank=True)
+    metric_definition = models.ForeignKey(
+        OperationalMetricDefinition,
+        on_delete=models.PROTECT,
+        related_name="threshold_breaches",
+    )
+    threshold = models.ForeignKey(
+        OperationalSLAThreshold,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="breaches",
+    )
+    snapshot = models.ForeignKey(
+        OperationalMetricSnapshot,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="threshold_breaches",
+    )
+    ward = models.ForeignKey(
+        Ward,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="operational_threshold_breaches",
+    )
+    breach_type = models.CharField(max_length=32, choices=BREACH_CHOICES)
+    severity = models.CharField(max_length=20, choices=SEVERITY_CHOICES, default=SEVERITY_WARNING)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
+    date = models.DateField()
+    title = models.CharField(max_length=220)
+    body = models.TextField()
+    warning_code = models.CharField(max_length=120, blank=True)
+    observed_value = models.DecimalField(max_digits=18, decimal_places=6, null=True, blank=True)
+    observed_status = models.CharField(max_length=40, blank=True)
+    observed_unit = models.CharField(max_length=40, blank=True)
+    comparator = models.CharField(max_length=8, blank=True)
+    target_value = models.DecimalField(max_digits=18, decimal_places=6, null=True, blank=True)
+    warning_value = models.DecimalField(max_digits=18, decimal_places=6, null=True, blank=True)
+    critical_value = models.DecimalField(max_digits=18, decimal_places=6, null=True, blank=True)
+    threshold_key_snapshot = models.CharField(max_length=120, blank=True)
+    threshold_version_snapshot = models.CharField(max_length=40, blank=True)
+    metric_key_snapshot = models.SlugField(max_length=120)
+    metric_version_snapshot = models.CharField(max_length=40)
+    dimension_values = models.JSONField(default=dict, blank=True)
+    source_coverage = models.JSONField(default=dict, blank=True)
+    attribution = models.JSONField(default=dict, blank=True)
+    evaluation_metadata = models.JSONField(default=dict, blank=True)
+    first_seen_at = models.DateTimeField(default=timezone.now)
+    last_seen_at = models.DateTimeField(default=timezone.now)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-date", "-severity", "metric_definition__metric_key"]
+        indexes = [
+            models.Index(fields=["status", "severity", "date"], name="risk_opsbreach_state_idx"),
+            models.Index(fields=["metric_definition", "status"], name="risk_opsbreach_metric_idx"),
+            models.Index(fields=["threshold", "status"], name="risk_opsbreach_threshold_idx"),
+            models.Index(fields=["snapshot", "status"], name="risk_opsbreach_snapshot_idx"),
+            models.Index(fields=["ward", "status", "date"], name="risk_opsbreach_ward_idx"),
+        ]
+
+    def compute_breach_key(self) -> str:
+        payload = {
+            "metric_key": self.metric_key_snapshot,
+            "metric_version": self.metric_version_snapshot,
+            "threshold_key": self.threshold_key_snapshot,
+            "threshold_version": self.threshold_version_snapshot,
+            "snapshot_key": self.snapshot.snapshot_key if self.snapshot_id and self.snapshot else "",
+            "date": self.date.isoformat() if self.date else "",
+            "breach_type": self.breach_type,
+            "warning_code": self.warning_code,
+            "dimensions": self.dimension_values or {},
+        }
+        return f"opsthreshold:{self.metric_key_snapshot}:{_stable_identity_digest(payload)}"
+
+    def save(self, *args, **kwargs):
+        if not self.metric_key_snapshot and self.metric_definition_id:
+            self.metric_key_snapshot = self.metric_definition.metric_key
+        if not self.metric_version_snapshot and self.metric_definition_id:
+            self.metric_version_snapshot = self.metric_definition.version
+        if self.threshold_id and self.threshold:
+            self.threshold_key_snapshot = self.threshold_key_snapshot or self.threshold.threshold_key
+            self.threshold_version_snapshot = self.threshold_version_snapshot or self.threshold.version
+            self.comparator = self.comparator or self.threshold.comparator
+            self.target_value = self.target_value if self.target_value is not None else self.threshold.target_value
+            self.warning_value = self.warning_value if self.warning_value is not None else self.threshold.warning_value
+            self.critical_value = self.critical_value if self.critical_value is not None else self.threshold.critical_value
+        if self.snapshot_id and self.snapshot:
+            self.observed_value = self.observed_value if self.observed_value is not None else self.snapshot.value
+            self.observed_status = self.observed_status or self.snapshot.status
+            self.observed_unit = self.observed_unit or self.snapshot.value_unit
+            self.dimension_values = self.dimension_values or self.snapshot.dimension_values
+            self.source_coverage = self.source_coverage or self.snapshot.source_coverage
+            self.ward = self.ward or self.snapshot.ward
+        if not self.breach_key:
+            self.breach_key = self.compute_breach_key()
+        super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.metric_key_snapshot} {self.breach_type} [{self.status}]"
 
 
 class CHVCoverageRequest(models.Model):

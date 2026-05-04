@@ -5,7 +5,9 @@ import { useQuery } from "@tanstack/react-query";
 import {
   fetchWardMapViaBff,
   fetchWardDetailViaBff,
+  fetchPreparednessActionsViaBff,
   type AlertRecord,
+  type PreparednessActionRecord,
   type RiskScoreRecord,
   type WardIntelligenceDriverItem,
   type WardIntelligenceFreshness,
@@ -13,6 +15,7 @@ import {
   type WardMapFeature,
   type WardIntelligenceTrend,
   type WardIntelligenceRouteResponse,
+  type WardSpatialEvidence,
   type WardOperationalEvidence,
 } from "@/lib/dashboard";
 import { queryKeys } from "@/lib/query-keys";
@@ -44,10 +47,13 @@ export type WardDetailState = {
   guidanceItems: WardIntelligenceGuidanceItem[];
   riskHistory: RiskScoreRecord[];
   relatedAlerts: AlertRecord[];
+  preparednessActions: PreparednessActionRecord[];
   wardMapFeature: WardMapFeature | null;
+  spatialMapFeatures: WardMapFeature[];
   workflow: WardIntelligenceRouteResponse["workflow"];
   decisionSummary: WardIntelligenceRouteResponse["decision_summary"];
   headerContext: WardIntelligenceRouteResponse["header_context"];
+  spatialEvidence: WardSpatialEvidence | null;
   operationalEvidence: WardOperationalEvidence | null;
 };
 
@@ -60,14 +66,25 @@ export function useWardDetailQuery({ wardId, enabled = true }: UseWardDetailQuer
   return useQuery({
     queryKey: queryKeys.wards.detail(wardId),
     queryFn: async (): Promise<WardDetailState> => {
-      const [response, wardMap] = await Promise.all([
+      const [response, wardMap, preparednessActions] = await Promise.all([
         fetchWardDetailViaBff(wardId),
         fetchWardMapViaBff(),
+        fetchPreparednessActionsViaBff({ ward_id: wardId, page_size: 100, ordering: "due_at" }),
       ]);
       const riskHistory = response.risk_history;
       const relatedAlerts = response.related_alerts;
       const wardMapFeature =
         wardMap.features.find((feature) => feature.properties.backend_ward_id === wardId) ?? null;
+      const spatialEvidence = response.spatial_evidence ?? null;
+      const spatialWardIds = new Set<number>([
+        wardId,
+        ...(spatialEvidence?.neighbors.map((neighbor) => neighbor.ward_id) ?? []),
+      ]);
+      const spatialMapFeatures = wardMap.features.filter(
+        (feature) =>
+          typeof feature.properties.backend_ward_id === "number" &&
+          spatialWardIds.has(feature.properties.backend_ward_id),
+      );
       const workflow = response.workflow ?? null;
       const triggerState = workflow?.status ?? "NONE";
       const headerContext = response.header_context ?? {
@@ -134,10 +151,13 @@ export function useWardDetailQuery({ wardId, enabled = true }: UseWardDetailQuer
         guidanceItems: response.guidance_summary.items,
         riskHistory,
         relatedAlerts,
+        preparednessActions: preparednessActions.results,
         wardMapFeature,
+        spatialMapFeatures,
         workflow,
         decisionSummary,
         headerContext,
+        spatialEvidence,
         operationalEvidence: response.operational_evidence ?? null,
       };
     },

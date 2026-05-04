@@ -8,7 +8,6 @@ import type { CurrentUser, VerifyTwoFactorResponse } from "@/lib/auth";
 
 const mockClearPendingTwoFactor = vi.fn();
 const mockGetDefaultRoute = vi.fn();
-const mockIsDashboardRole = vi.fn();
 const mockReplace = vi.fn();
 const mockRouter = { replace: mockReplace };
 const mockUseAuth = vi.fn();
@@ -29,10 +28,6 @@ vi.mock("@/components/auth-provider", () => ({
 
 vi.mock("@/lib/navigation", () => ({
   getDefaultRoute: (...args: unknown[]) => mockGetDefaultRoute(...args),
-}));
-
-vi.mock("@/lib/roles", () => ({
-  isDashboardRole: (...args: unknown[]) => mockIsDashboardRole(...args),
 }));
 
 function buildUser(overrides: Partial<CurrentUser> = {}): CurrentUser {
@@ -64,6 +59,7 @@ function buildVerifyResponse(overrides: Partial<VerifyTwoFactorResponse> = {}): 
 function renderVerifyPage() {
   mockUseAuth.mockReturnValue({
     clearPendingTwoFactor: mockClearPendingTwoFactor,
+    currentUser: null,
     isAuthenticated: false,
     isHydrating: false,
     pendingTwoFactor: { tempToken: "pending-token" },
@@ -78,7 +74,6 @@ describe("VerifyTwoFactorPage", () => {
     vi.clearAllMocks();
     window.sessionStorage.clear();
     mockGetDefaultRoute.mockReturnValue("/overview");
-    mockIsDashboardRole.mockReturnValue(true);
     mockVerifyTwoFactor.mockResolvedValue(buildVerifyResponse());
   });
 

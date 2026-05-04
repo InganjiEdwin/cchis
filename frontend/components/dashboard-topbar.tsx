@@ -140,6 +140,9 @@ function getNotificationPrimaryActionLabel(item: DashboardNotification) {
   if (item.type === "FEED_STALE") {
     return "Review system state";
   }
+  if (item.type === "OPERATIONAL_KPI_THRESHOLD") {
+    return "Review KPI";
+  }
 
   return item.href ? "Review" : null;
 }

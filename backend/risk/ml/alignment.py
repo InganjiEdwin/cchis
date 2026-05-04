@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from risk.models import ModelRun, RiskScore
+from django.core.exceptions import ObjectDoesNotExist
+
+from risk.models import ModelRegistryEntry, ModelRegistryPromotionState, ModelRun, RiskScore
 
 from .model import (
     ALGORITHM_LIGHTGBM,
@@ -30,7 +32,7 @@ def algorithm_key_from_run(run: ModelRun | None) -> str | None:
     }.get(run.algorithm_name)
 
 
-def is_promoted_model_run(run: ModelRun | None) -> bool:
+def model_run_has_phase_4_promotion_metadata(run: ModelRun | None) -> bool:
     if run is None or run.status != ModelRun.STATUS_SUCCESS:
         return False
     metadata = run.metadata or {}
@@ -39,6 +41,34 @@ def is_promoted_model_run(run: ModelRun | None) -> bool:
         and metadata.get("promotion_state") == "promoted"
         and metadata.get("phase_4_promotion_gates_passed") is True
         and metadata.get("alert_eligible") is True
+    )
+
+
+def registry_entry_has_promotion_event_provenance(entry: ModelRegistryEntry | None) -> bool:
+    if entry is None or not entry.promotion_event_id:
+        return False
+    promotion_event = entry.promotion_event
+    return (
+        promotion_event.registry_entry_id == entry.id
+        and promotion_event.model_run_id == entry.model_run_id
+    )
+
+
+def is_promoted_model_run(run: ModelRun | None) -> bool:
+    if not model_run_has_phase_4_promotion_metadata(run):
+        return False
+    try:
+        registry_entry = run.registry_entry
+    except ObjectDoesNotExist:
+        registry_exists = ModelRegistryEntry.objects.exists()
+        if not registry_exists:
+            return True
+        return False
+    return (
+        registry_entry.promotion_state == ModelRegistryPromotionState.ACTIVE_PROMOTED
+        and registry_entry.active_from is not None
+        and registry_entry.active_until is None
+        and registry_entry_has_promotion_event_provenance(registry_entry)
     )
 
 
@@ -60,6 +90,13 @@ def latest_promoted_riskscore_for_ward(ward) -> RiskScore | None:
 
 
 def _latest_successful_run_for_target(promotion_target: str) -> ModelRun | None:
+    if promotion_target == PROMOTION_TARGET_LIVE_BASELINE:
+        from .registry import active_model_registry_entry
+
+        active_entry = active_model_registry_entry()
+        if active_entry is not None:
+            return active_entry.model_run
+
     queryset = ModelRun.objects.filter(status=ModelRun.STATUS_SUCCESS).order_by("-started_at")
     for run in queryset:
         if promotion_target == PROMOTION_TARGET_LIVE_BASELINE:

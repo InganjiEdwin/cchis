@@ -31,6 +31,12 @@ class Command(BaseCommand):
             help="Include seeded demo surveillance records in trend features. Off by default.",
         )
         parser.add_argument("--heavy-rain-threshold-mm", type=float, default=50.0)
+        parser.add_argument(
+            "--claimed-forecast-horizon-days",
+            type=int,
+            default=14,
+            help="Forecast lead-day coverage claim to verify on every feature row. Must be between 1 and 14.",
+        )
 
     def handle(self, *args, **options):
         prediction_dates = [_parse_date(value) for value in options["prediction_date"]]
@@ -45,6 +51,7 @@ class Command(BaseCommand):
                 step_days=options["step_days"],
                 include_seeded_surveillance=options["include_seeded_surveillance"],
                 heavy_rain_threshold_mm=options["heavy_rain_threshold_mm"],
+                claimed_forecast_horizon_days=options["claimed_forecast_horizon_days"],
             )
         except ValueError as error:
             raise CommandError(str(error)) from error
@@ -56,6 +63,8 @@ class Command(BaseCommand):
                 f"Lead-time feature dataset built. dataset_ref={dataset.dataset_ref} "
                 f"rows={dataset.row_count} prediction_dates={coverage.get('prediction_date_count', 0)} "
                 f"rainfall_rows={coverage.get('rows_with_rainfall_source_records', 0)} "
+                f"forecast_rows={coverage.get('rows_with_forecast_rainfall_records', 0)} "
+                f"climate_coverage_ok={coverage.get('rows_with_sufficient_claimed_climate_coverage', 0)} "
                 f"surveillance_rows={coverage.get('rows_with_surveillance_records', 0)} "
                 f"leakage_checked={coverage.get('rows_passing_leakage_check', 0)}"
             )

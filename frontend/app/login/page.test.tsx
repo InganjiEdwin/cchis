@@ -9,7 +9,6 @@ const mockReplace = vi.fn();
 const mockLogin = vi.fn();
 const mockReadEnrollmentToken = vi.fn();
 const mockGetDefaultRoute = vi.fn();
-const mockIsDashboardRole = vi.fn();
 const mockUseAuth = vi.fn();
 
 vi.mock("next/navigation", () => ({
@@ -39,10 +38,6 @@ vi.mock("@/lib/navigation", () => ({
   getDefaultRoute: (...args: unknown[]) => mockGetDefaultRoute(...args),
 }));
 
-vi.mock("@/lib/roles", () => ({
-  isDashboardRole: (...args: unknown[]) => mockIsDashboardRole(...args),
-}));
-
 describe("LoginPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -58,7 +53,6 @@ describe("LoginPage", () => {
 
     mockReadEnrollmentToken.mockReturnValue(null);
     mockGetDefaultRoute.mockReturnValue("/overview");
-    mockIsDashboardRole.mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -94,9 +88,36 @@ describe("LoginPage", () => {
       });
     });
 
-    expect(mockIsDashboardRole).toHaveBeenCalledWith("ANALYST");
     expect(mockGetDefaultRoute).toHaveBeenCalledWith("ANALYST");
     expect(mockReplace).toHaveBeenCalledWith("/overview");
+  });
+
+  it("routes CHV users to the offline field surface", async () => {
+    const user = userEvent.setup();
+
+    mockGetDefaultRoute.mockReturnValue("/chv");
+    mockLogin.mockResolvedValue({
+      id: 7,
+      username: "chv_demo",
+      email: "chv@example.com",
+      full_name: "Demo CHV",
+      phone_number: "+254700000007",
+      role: "CHV",
+      ward: 9,
+      ward_name: "North Kanyamkago",
+      is_active: true,
+    });
+
+    render(React.createElement(LoginPage));
+
+    await user.type(screen.getByLabelText("Username"), "chv_demo");
+    await user.type(screen.getByLabelText("Password"), "ChangeMe123!");
+    await user.click(screen.getByRole("button", { name: /access system/i }));
+
+    await waitFor(() => {
+      expect(mockGetDefaultRoute).toHaveBeenCalledWith("CHV");
+    });
+    expect(mockReplace).toHaveBeenCalledWith("/chv");
   });
 
   it("routes to 2fa verification when the backend requires a second step", async () => {

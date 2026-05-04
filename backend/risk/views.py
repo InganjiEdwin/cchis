@@ -2,11 +2,13 @@ import logging
 from datetime import datetime
 import uuid
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import generics, permissions, status
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import ParseError, PermissionDenied, ValidationError
 from rest_framework.filters import OrderingFilter
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -23,7 +25,17 @@ from .facility_forecasting import (
     build_initial_facility_forecast_preview,
 )
 from .ml.alignment import get_live_model_alignment_summary
-from .models import Alert, AlertWorkflowEvent, AlertWorkflowState, CHV, CHVMessage, DashboardNotification, FacilityReadinessEscalation, FacilityReadinessReview, FacilityReadinessUpdateRequest, HealthFacility, IngestionRun, ModelRun, RiskScore, SyncQueue, UssdSessionLog, Ward
+from .ml.model_health import build_model_operations_health_dashboard
+from .chv_offline import (
+    OFFLINE_CHV_CONTRACT_VERSION,
+    build_chv_offline_contract,
+    build_chv_offline_monitoring_snapshot,
+    build_sync_health_record,
+    device_registration_payload,
+    record_chv_offline_rejected_submission_audit,
+    register_chv_device,
+)
+from .models import Alert, AlertWorkflowEvent, AlertWorkflowState, CHV, CHVDeviceRegistration, CHVMessage, CHVOfflineRejectedSubmissionAudit, ContactPreference, DashboardNotification, FacilityReadinessEscalation, FacilityReadinessReview, FacilityReadinessUpdateRequest, HealthFacility, IngestionRun, InteroperabilityRun, MessageTemplate, ModelRun, PreparednessAction, RiskScore, SensitiveExportRequest, SyncQueue, UssdSessionLog, Ward
 from .models import CHVAssignment, CHVCoverageRequest, CHVCoverageRequestAlertLink, CHVCoverageRequestEvent
 from .map_data import build_migori_ward_map_summary
 from datetime import timedelta
@@ -31,6 +43,22 @@ from datetime import timedelta
 from rest_framework_simplejwt.tokens import AccessToken
 
 from .notifications import notification_summary_for_user, notifications_for_user, transition_notification
+from .message_management import (
+    build_message_management_dashboard,
+    build_message_template_detail,
+    transition_message_template_approval,
+)
+from .interoperability import (
+    build_interoperability_dashboard_snapshot,
+    build_interoperability_csv_template_file,
+    build_interoperability_error_file,
+    create_interoperability_retry_run,
+    create_org_unit_mapping_import_run,
+    create_risk_score_export_preview,
+)
+from .operational_metric_audit import build_operational_kpi_integrity_audit, build_operational_kpi_me_export
+from .operational_metric_dashboard import build_operational_kpi_dashboard
+from .ussd_governance import create_ussd_session_log
 from .serializers import (
     AlertIntelligenceSerializer,
     AlertWorkflowStateSerializer,
@@ -43,6 +71,7 @@ from .serializers import (
     CHVCoverageRequestDecisionSerializer,
     CHVCoverageRequestSerializer,
     CHVActivityEventSerializer,
+    CHVDeviceRegistrationCreateSerializer,
     CHVMessageCreateSerializer,
     CHVMessageSerializer,
     CHVSerializer,
@@ -50,6 +79,8 @@ from .serializers import (
     CHVSyncRequestSerializer,
     CHVTriageRequestSerializer,
     CHVTriageResponseSerializer,
+    ContactPreferenceCreateSerializer,
+    ContactPreferenceSerializer,
     FacilityIntelligenceSerializer,
     FacilityReadinessEscalationCreateSerializer,
     FacilityReadinessEscalationSerializer,
@@ -65,14 +96,25 @@ from .serializers import (
     FacilityForecastingStatusSerializer,
     HealthFacilitySerializer,
     IngestionRunSerializer,
+    InteroperabilityExportPreviewSerializer,
+    InteroperabilityOrgUnitMappingImportSerializer,
+    InteroperabilityRunSerializer,
     AlertDeliveryPauseRequestSerializer,
     DashboardNotificationSerializer,
     ManualRiskScoringRequestSerializer,
     ModelAlignmentSerializer,
+    ModelOperationsHealthSerializer,
     ModelRunSerializer,
+    PreparednessActionCreateSerializer,
+    PreparednessActionSerializer,
+    PreparednessActionSourceTriggerSerializer,
+    PreparednessActionTransitionSerializer,
     RiskScoreSerializer,
     ScenarioSimulationRequestSerializer,
     ScenarioSimulationRunSerializer,
+    SensitiveExportDecisionSerializer,
+    SensitiveExportRequestCreateSerializer,
+    SensitiveExportRequestSerializer,
     SystemControlStatusSerializer,
     SystemRetryControlsRequestSerializer,
     TriggerContextRequestSerializer,
@@ -85,6 +127,12 @@ from .serializers import (
     WardDetailSerializer,
     WardIntelligenceSerializer,
     WardSerializer,
+)
+from .sensitive_exports import (
+    approve_sensitive_export,
+    download_sensitive_export,
+    reject_sensitive_export,
+    request_sensitive_export,
 )
 from .services import (
     build_alert_intelligence_snapshot,
@@ -103,20 +151,29 @@ from .services import (
     cancel_chv_coverage_request,
     complete_chv_assignment,
     create_facility_readiness_escalation,
+    create_preparedness_action_from_alert,
+    create_preparedness_action_from_alert_workflow,
+    create_preparedness_action_from_chv_coverage_request,
+    create_preparedness_action_from_facility_escalation,
+    create_preparedness_action_from_facility_readiness_review,
     create_facility_readiness_review,
     create_facility_readiness_update_request,
     create_chv_message,
     create_chv_coverage_request,
+    get_or_create_preparedness_action,
     create_triage_session,
     approve_chv_coverage_request,
     assign_chv_to_coverage_request,
     latest_riskscore_for_ward,
     process_sync_payload,
     record_chv_coverage_request_event,
+    record_contact_preference,
     reject_chv_coverage_request,
     resolve_chv_coverage_request,
     transition_facility_readiness_escalation,
     transition_facility_readiness_review,
+    transition_preparedness_action,
+    SyncPayloadProcessingError,
     run_dashboard_scenario_simulation,
     set_alert_delivery_pause,
     sync_alert_workflow_for_ward,
@@ -149,6 +206,14 @@ def parse_datetime_query_param(value: str | None):
     if timezone.is_naive(parsed):
         return timezone.make_aware(parsed, timezone.get_current_timezone())
     return parsed
+
+
+def request_audit_metadata(request):
+    return {
+        "remote_addr": request.META.get("REMOTE_ADDR", ""),
+        "user_agent": request.META.get("HTTP_USER_AGENT", ""),
+        "path": request.path,
+    }
 
 
 def user_has_broad_dashboard_scope(user: User) -> bool:
@@ -295,8 +360,35 @@ def chv_assignment_queryset_for_user(user: User):
     return apply_ward_scope_or_none(queryset, user, field_name="coverage_request__ward_id")
 
 
+def preparedness_action_queryset_for_user(user: User):
+    queryset = (
+        PreparednessAction.objects.select_related(
+            "ward",
+            "facility",
+            "chv",
+            "alert",
+            "alert_workflow",
+            "risk_score",
+            "model_run",
+            "facility_readiness_review",
+            "facility_update_request",
+            "facility_escalation",
+            "chv_coverage_request",
+            "created_by",
+            "assigned_to",
+        )
+        .prefetch_related("events__actor")
+        .order_by("-created_at")
+    )
+    return apply_ward_scope_or_none(queryset, user, field_name="ward_id")
+
+
 def reload_chv_coverage_request_for_user(user: User, public_id):
     return get_object_or_404(chv_coverage_request_queryset_for_user(user), public_id=public_id)
+
+
+def serialize_chv_coverage_request(request_record: CHVCoverageRequest, request):
+    return CHVCoverageRequestSerializer(request_record, context={"request": request}).data
 
 
 def attach_alerts_to_existing_coverage_request(*, request_record: CHVCoverageRequest, alerts: list[Alert], actor: User):
@@ -429,6 +521,76 @@ class CHVOperationsAPIView(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
+class CHVOfflineMonitoringAPIView(APIView):
+    permission_classes = [IsAdminOrSupervisor]
+
+    def get(self, request):
+        queryset = Ward.objects.filter(is_active=True)
+        scoped_queryset = apply_ward_scope_or_none(queryset, request.user, field_name="id")
+        ward_id = request.query_params.get("ward_id")
+
+        if ward_id:
+            scoped_queryset = scoped_queryset.filter(id=ward_id)
+
+        payload = build_chv_offline_monitoring_snapshot(scoped_queryset)
+        return Response(payload, status=status.HTTP_200_OK)
+
+
+def field_operator_ward_or_response(user: User, requested_ward_id=None):
+    ward_id = requested_ward_id or user.ward_id
+    if ward_id is None:
+        return None, Response({"detail": "An assigned ward is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        ward_id = int(ward_id)
+    except (TypeError, ValueError):
+        return None, Response({"detail": "Ward not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    if user.role in [User.ROLE_CHV, User.ROLE_SUPERVISOR] and user.ward_id != ward_id:
+        return None, Response({"detail": "Ward not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        return Ward.objects.get(id=ward_id, is_active=True), None
+    except Ward.DoesNotExist:
+        return None, Response({"detail": "Ward not found."}, status=status.HTTP_404_NOT_FOUND)
+
+
+class CHVOfflineContractAPIView(APIView):
+    permission_classes = [IsFieldOperator]
+
+    def get(self, request):
+        ward, error_response = field_operator_ward_or_response(
+            request.user,
+            requested_ward_id=request.query_params.get("ward_id"),
+        )
+        if error_response is not None:
+            return error_response
+
+        return Response(build_chv_offline_contract(request.user, ward), status=status.HTTP_200_OK)
+
+
+class CHVDeviceRegistrationAPIView(APIView):
+    permission_classes = [IsFieldOperator]
+
+    def post(self, request):
+        serializer = CHVDeviceRegistrationCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        ward, error_response = field_operator_ward_or_response(request.user)
+        if error_response is not None:
+            return error_response
+
+        registration = register_chv_device(
+            user=request.user,
+            ward=ward,
+            device_id=serializer.validated_data["device_id"],
+            contract_version=serializer.validated_data.get("contract_version") or OFFLINE_CHV_CONTRACT_VERSION,
+            app_version=serializer.validated_data.get("app_version", ""),
+            platform=serializer.validated_data.get("platform", CHVDeviceRegistration.PLATFORM_UNKNOWN),
+            metadata=serializer.validated_data.get("metadata", {}),
+        )
+        return Response(device_registration_payload(registration, request.user), status=status.HTTP_201_CREATED)
+
+
 class CHVActivityAPIView(APIView):
     permission_classes = [IsAdminOrSupervisor]
 
@@ -465,11 +627,64 @@ class CHVMessageListCreateAPIView(APIView):
                 message_body=serializer.validated_data["message_body"],
                 sent_by=request.user,
                 channel=serializer.validated_data["channel"],
+                emergency_override=serializer.validated_data.get("emergency_override", False),
+                override_reason=serializer.validated_data.get("override_reason", ""),
+                template_key=serializer.validated_data.get("template_key", ""),
+                template_version=serializer.validated_data.get("template_version"),
+                template_language=serializer.validated_data.get("template_language", "en"),
+                template_context=serializer.validated_data.get("template_context", {}),
             )
         except ValueError as exc:
             raise ValidationError({"detail": str(exc)}) from exc
         response_serializer = CHVMessageSerializer(message_record)
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+
+class ContactPreferenceListCreateAPIView(generics.ListCreateAPIView):
+    serializer_class = ContactPreferenceSerializer
+    filter_backends = [OrderingFilter]
+    ordering_fields = ["recorded_at", "created_at", "expires_at"]
+    ordering = ["-recorded_at", "-created_at"]
+
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [IsAdminOnly()]
+        return [IsAdminOrSupervisor()]
+
+    def get_queryset(self):
+        queryset = ContactPreference.objects.select_related("recorded_by").order_by("-recorded_at", "-created_at")
+        filters = {
+            "audience_type": self.request.query_params.get("audience_type"),
+            "channel": self.request.query_params.get("channel"),
+            "consent_status": self.request.query_params.get("consent_status"),
+            "opt_out_status": self.request.query_params.get("opt_out_status"),
+        }
+        for field_name, value in filters.items():
+            if value:
+                queryset = queryset.filter(**{field_name: value})
+
+        phone_number = self.request.query_params.get("phone_number")
+        if phone_number:
+            queryset = queryset.filter(phone_number=ContactPreference.normalize_phone_number(phone_number))
+
+        contact_reference = self.request.query_params.get("contact_reference")
+        if contact_reference:
+            queryset = queryset.filter(contact_reference=contact_reference.strip())
+
+        return queryset
+
+    def get_serializer_class(self):
+        if getattr(self.request, "method", None) == "POST":
+            return ContactPreferenceCreateSerializer
+        return ContactPreferenceSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = ContactPreferenceCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        preference = record_contact_preference(recorded_by=request.user, **serializer.validated_data)
+        response_serializer = ContactPreferenceSerializer(preference)
+        headers = self.get_success_headers(response_serializer.data)
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
 
 class CHVCoverageRequestListCreateAPIView(generics.ListCreateAPIView):
@@ -657,7 +872,7 @@ class CHVCoverageRequestListCreateAPIView(generics.ListCreateAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         request_record = reload_chv_coverage_request_for_user(request.user, request_record.public_id)
-        return Response(CHVCoverageRequestSerializer(request_record).data, status=status.HTTP_201_CREATED)
+        return Response(serialize_chv_coverage_request(request_record, request), status=status.HTTP_201_CREATED)
 
 
 class CHVCoverageRequestFromAlertPrefillAPIView(APIView):
@@ -749,7 +964,7 @@ class CHVCoverageRequestDetailAPIView(APIView):
 
     def get(self, request, public_id):
         request_record = get_object_or_404(chv_coverage_request_queryset_for_user(request.user), public_id=public_id)
-        return Response(CHVCoverageRequestSerializer(request_record).data, status=status.HTTP_200_OK)
+        return Response(serialize_chv_coverage_request(request_record, request), status=status.HTTP_200_OK)
 
 
 class CHVCoverageRequestApproveAPIView(APIView):
@@ -768,7 +983,7 @@ class CHVCoverageRequestApproveAPIView(APIView):
         except ValueError as error:
             return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
         request_record = reload_chv_coverage_request_for_user(request.user, request_record.public_id)
-        return Response(CHVCoverageRequestSerializer(request_record).data, status=status.HTTP_200_OK)
+        return Response(serialize_chv_coverage_request(request_record, request), status=status.HTTP_200_OK)
 
 
 class CHVCoverageRequestRejectAPIView(APIView):
@@ -787,7 +1002,7 @@ class CHVCoverageRequestRejectAPIView(APIView):
         except ValueError as error:
             return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
         request_record = reload_chv_coverage_request_for_user(request.user, request_record.public_id)
-        return Response(CHVCoverageRequestSerializer(request_record).data, status=status.HTTP_200_OK)
+        return Response(serialize_chv_coverage_request(request_record, request), status=status.HTTP_200_OK)
 
 
 class CHVCoverageRequestCancelAPIView(APIView):
@@ -806,7 +1021,7 @@ class CHVCoverageRequestCancelAPIView(APIView):
         except ValueError as error:
             return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
         request_record = reload_chv_coverage_request_for_user(request.user, request_record.public_id)
-        return Response(CHVCoverageRequestSerializer(request_record).data, status=status.HTTP_200_OK)
+        return Response(serialize_chv_coverage_request(request_record, request), status=status.HTTP_200_OK)
 
 
 class CHVCoverageRequestResolveAPIView(APIView):
@@ -825,7 +1040,7 @@ class CHVCoverageRequestResolveAPIView(APIView):
         except ValueError as error:
             return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
         request_record = reload_chv_coverage_request_for_user(request.user, request_record.public_id)
-        return Response(CHVCoverageRequestSerializer(request_record).data, status=status.HTTP_200_OK)
+        return Response(serialize_chv_coverage_request(request_record, request), status=status.HTTP_200_OK)
 
 
 class CHVCoverageRequestAssignAPIView(APIView):
@@ -854,7 +1069,7 @@ class CHVCoverageRequestAssignAPIView(APIView):
         except ValueError as error:
             return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
         request_record = reload_chv_coverage_request_for_user(request.user, request_record.public_id)
-        return Response(CHVCoverageRequestSerializer(request_record).data, status=status.HTTP_200_OK)
+        return Response(serialize_chv_coverage_request(request_record, request), status=status.HTTP_200_OK)
 
 
 class CHVAssignmentCompleteAPIView(APIView):
@@ -873,7 +1088,7 @@ class CHVAssignmentCompleteAPIView(APIView):
         except ValueError as error:
             return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
         request_record = reload_chv_coverage_request_for_user(request.user, assignment.coverage_request.public_id)
-        return Response(CHVCoverageRequestSerializer(request_record).data, status=status.HTTP_200_OK)
+        return Response(serialize_chv_coverage_request(request_record, request), status=status.HTTP_200_OK)
 
 
 class CHVAssignmentCancelAPIView(APIView):
@@ -892,7 +1107,7 @@ class CHVAssignmentCancelAPIView(APIView):
         except ValueError as error:
             return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
         request_record = reload_chv_coverage_request_for_user(request.user, assignment.coverage_request.public_id)
-        return Response(CHVCoverageRequestSerializer(request_record).data, status=status.HTTP_200_OK)
+        return Response(serialize_chv_coverage_request(request_record, request), status=status.HTTP_200_OK)
 
 
 class IngestionRunListAPIView(generics.ListAPIView):
@@ -1001,7 +1216,7 @@ class HealthFacilityIntelligenceAPIView(APIView):
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
 
         payload = build_facility_intelligence_snapshot(facility, user=request.user)
-        serializer = FacilityIntelligenceSerializer(payload)
+        serializer = FacilityIntelligenceSerializer(payload, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
@@ -1107,6 +1322,12 @@ class FacilityReadinessUpdateRequestCreateAPIView(APIView):
                 actor=request.user,
                 message_body=serializer.validated_data.get("message_body", ""),
                 channel=serializer.validated_data.get("channel"),
+                emergency_override=serializer.validated_data.get("emergency_override", False),
+                override_reason=serializer.validated_data.get("override_reason", ""),
+                template_key=serializer.validated_data.get("template_key", ""),
+                template_version=serializer.validated_data.get("template_version"),
+                template_language=serializer.validated_data.get("template_language", "en"),
+                template_context=serializer.validated_data.get("template_context", {}),
             )
         except ValueError as exc:
             raise ValidationError({"detail": str(exc)})
@@ -1358,9 +1579,80 @@ class AlertIntelligenceAPIView(APIView):
         ward_queryset = Ward.objects.filter(is_active=True).prefetch_related("risk_scores")
         ward_detail = apply_ward_scope_or_none(ward_queryset, request.user, field_name="id").filter(pk=alert.ward_id).first()
 
-        payload = build_alert_intelligence_snapshot(alert, ward_detail=ward_detail)
-        serializer = AlertIntelligenceSerializer(payload)
+        payload = build_alert_intelligence_snapshot(alert, ward_detail=ward_detail, user=request.user)
+        serializer = AlertIntelligenceSerializer(payload, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class SensitiveExportRequestListCreateAPIView(generics.ListCreateAPIView):
+    permission_classes = [IsAdminOrSupervisor]
+
+    def get_serializer_class(self):
+        if getattr(self.request, "method", None) == "POST":
+            return SensitiveExportRequestCreateSerializer
+        return SensitiveExportRequestSerializer
+
+    def get_queryset(self):
+        queryset = SensitiveExportRequest.objects.select_related("requester", "approved_by", "rejected_by").all()
+        user = self.request.user
+        if user.role == User.ROLE_ADMIN or user.is_superuser:
+            return queryset
+        return queryset.filter(requester=user)
+
+    def create(self, request, *args, **kwargs):
+        serializer = SensitiveExportRequestCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        export_request = request_sensitive_export(
+            requester=request.user,
+            export_type=serializer.validated_data["export_type"],
+            purpose=serializer.validated_data["purpose"],
+            filters=serializer.validated_data.get("filters") or {},
+        )
+        output = SensitiveExportRequestSerializer(export_request)
+        return Response(
+            output.data,
+            status=status.HTTP_201_CREATED if export_request.approval_state == SensitiveExportRequest.APPROVAL_APPROVED else status.HTTP_202_ACCEPTED,
+        )
+
+
+class SensitiveExportApproveAPIView(APIView):
+    permission_classes = [IsAdminOnly]
+
+    def post(self, request, public_id):
+        export_request = get_object_or_404(SensitiveExportRequest, public_id=public_id)
+        export_request = approve_sensitive_export(export_request, actor=request.user)
+        return Response(SensitiveExportRequestSerializer(export_request).data, status=status.HTTP_200_OK)
+
+
+class SensitiveExportRejectAPIView(APIView):
+    permission_classes = [IsAdminOnly]
+
+    def post(self, request, public_id):
+        export_request = get_object_or_404(SensitiveExportRequest, public_id=public_id)
+        serializer = SensitiveExportDecisionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        export_request = reject_sensitive_export(
+            export_request,
+            actor=request.user,
+            reason=serializer.validated_data.get("reason") or "Rejected by administrator.",
+        )
+        return Response(SensitiveExportRequestSerializer(export_request).data, status=status.HTTP_200_OK)
+
+
+class SensitiveExportDownloadAPIView(APIView):
+    permission_classes = [IsAdminOrSupervisor]
+
+    def get(self, request, public_id):
+        export_request = get_object_or_404(
+            SensitiveExportRequest.objects.select_related("requester", "approved_by", "rejected_by"),
+            public_id=public_id,
+        )
+        payload = download_sensitive_export(
+            export_request,
+            downloader=request.user,
+            request_metadata=request_audit_metadata(request),
+        )
+        return Response(payload, status=status.HTTP_200_OK)
 
 
 class AlertWorkflowListAPIView(APIView):
@@ -1378,6 +1670,331 @@ class AlertWorkflowListAPIView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+def _resolve_preparedness_action_assignee(user_id):
+    if user_id is None:
+        return None
+    return get_object_or_404(User.objects.filter(is_active=True), id=user_id)
+
+
+def _resolve_optional_by_id(queryset, object_id):
+    if object_id is None:
+        return None
+    return queryset.filter(id=object_id).first()
+
+
+def _resolve_optional_by_public_id(queryset, public_id):
+    if public_id is None:
+        return None
+    return queryset.filter(public_id=public_id).first()
+
+
+class PreparednessActionSourceTriggerCreateMixin:
+    permission_classes = [IsAdminOrSupervisor]
+
+    def create_preparedness_action_response(self, request, source_record, creator):
+        serializer = PreparednessActionSourceTriggerSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        assigned_to = _resolve_preparedness_action_assignee(data.get("assigned_to_id"))
+
+        try:
+            action, created = creator(
+                source_record,
+                actor=request.user,
+                action_type=data["action_type"],
+                priority=data.get("priority"),
+                status=data.get("status", PreparednessAction.STATUS_QUEUED),
+                assigned_to=assigned_to,
+                assigned_to_team=data.get("assigned_to_team", ""),
+                due_at=data.get("due_at"),
+                sla_target_at=data.get("sla_target_at"),
+                notes=data.get("notes", ""),
+                lineage_metadata=data.get("lineage_metadata", {}),
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        action = get_object_or_404(preparedness_action_queryset_for_user(request.user), public_id=action.public_id)
+        return Response(
+            PreparednessActionSerializer(action).data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+
+class AlertPreparednessActionCreateAPIView(PreparednessActionSourceTriggerCreateMixin, APIView):
+    def post(self, request, pk: int):
+        alert_queryset = apply_ward_scope_or_none(
+            Alert.objects.select_related("ward", "risk_score", "risk_score__model_run").all(),
+            request.user,
+        )
+        alert = get_object_or_404(alert_queryset, pk=pk)
+        return self.create_preparedness_action_response(request, alert, create_preparedness_action_from_alert)
+
+
+class AlertWorkflowPreparednessActionCreateAPIView(PreparednessActionSourceTriggerCreateMixin, APIView):
+    def post(self, request, public_id):
+        workflow_queryset = apply_ward_scope_or_none(
+            AlertWorkflowState.objects.select_related(
+                "ward",
+                "alert",
+                "alert__risk_score",
+                "latest_risk_score",
+                "latest_risk_score__model_run",
+            ),
+            request.user,
+        )
+        workflow = get_object_or_404(workflow_queryset, public_id=public_id)
+        return self.create_preparedness_action_response(
+            request,
+            workflow,
+            create_preparedness_action_from_alert_workflow,
+        )
+
+
+class CHVCoverageRequestPreparednessActionCreateAPIView(PreparednessActionSourceTriggerCreateMixin, APIView):
+    def post(self, request, public_id):
+        request_record = get_object_or_404(chv_coverage_request_queryset_for_user(request.user), public_id=public_id)
+        return self.create_preparedness_action_response(
+            request,
+            request_record,
+            create_preparedness_action_from_chv_coverage_request,
+        )
+
+
+class FacilityReadinessReviewPreparednessActionCreateAPIView(PreparednessActionSourceTriggerCreateMixin, APIView):
+    def post(self, request, public_id):
+        review = get_object_or_404(facility_readiness_review_queryset_for_user(request.user), public_id=public_id)
+        return self.create_preparedness_action_response(
+            request,
+            review,
+            create_preparedness_action_from_facility_readiness_review,
+        )
+
+
+class FacilityReadinessEscalationPreparednessActionCreateAPIView(PreparednessActionSourceTriggerCreateMixin, APIView):
+    def post(self, request, public_id):
+        escalation = get_object_or_404(facility_readiness_escalation_queryset_for_user(request.user), public_id=public_id)
+        return self.create_preparedness_action_response(
+            request,
+            escalation,
+            create_preparedness_action_from_facility_escalation,
+        )
+
+
+class PreparednessActionListCreateAPIView(generics.ListCreateAPIView):
+    serializer_class = PreparednessActionSerializer
+    filter_backends = [OrderingFilter]
+    ordering_fields = ["created_at", "updated_at", "due_at", "priority", "status"]
+    ordering = ["-created_at"]
+
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsAdminOrSupervisor()]
+        return [IsAdminSupervisorOrAnalyst()]
+
+    def get_queryset(self):
+        queryset = preparedness_action_queryset_for_user(self.request.user)
+        ward_id = self.request.query_params.get("ward_id")
+        facility_id = self.request.query_params.get("facility_id")
+        chv_id = self.request.query_params.get("chv_id")
+        action_type = self.request.query_params.get("action_type")
+        priority = self.request.query_params.get("priority")
+        source_trigger_type = self.request.query_params.get("source_trigger_type")
+        assigned = self.request.query_params.get("assigned")
+        overdue = parse_bool_query_param(self.request.query_params.get("overdue"))
+
+        if ward_id:
+            queryset = queryset.filter(ward_id=ward_id)
+        if facility_id:
+            queryset = queryset.filter(facility_id=facility_id)
+        if chv_id:
+            queryset = queryset.filter(chv_id=chv_id)
+        raw_status_values = self.request.query_params.getlist("status")
+        status_values = [
+            status_part.strip().upper()
+            for raw_status_value in raw_status_values
+            for status_part in raw_status_value.split(",")
+            if status_part.strip()
+        ]
+        if status_values:
+            queryset = queryset.filter(status__in=status_values)
+        if action_type:
+            queryset = queryset.filter(action_type=action_type)
+        if priority:
+            queryset = queryset.filter(priority=priority.upper())
+        if source_trigger_type:
+            queryset = queryset.filter(source_trigger_type=source_trigger_type)
+        if assigned == "mine":
+            queryset = queryset.filter(assigned_to=self.request.user)
+        elif assigned == "unassigned":
+            queryset = queryset.filter(assigned_to__isnull=True, assigned_to_team="")
+        if overdue is True:
+            queryset = queryset.filter(status__in=PreparednessAction.ACTIVE_STATUSES, due_at__lt=timezone.now())
+        if overdue is False:
+            queryset = queryset.exclude(status__in=PreparednessAction.ACTIVE_STATUSES, due_at__lt=timezone.now())
+        return queryset
+
+    def create(self, request, *args, **kwargs):
+        serializer = PreparednessActionCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        ward = (
+            apply_ward_scope_or_none(Ward.objects.filter(is_active=True), request.user, field_name="id")
+            .filter(id=data["ward_id"])
+            .first()
+        )
+        if ward is None:
+            return Response({"detail": "Ward not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        facility = _resolve_optional_by_id(
+            apply_ward_scope_or_none(HealthFacility.objects.filter(is_active=True), request.user),
+            data.get("facility_id"),
+        )
+        chv = _resolve_optional_by_id(
+            apply_ward_scope_or_none(CHV.objects.filter(is_active=True), request.user),
+            data.get("chv_id"),
+        )
+        alert = _resolve_optional_by_public_id(
+            apply_ward_scope_or_none(Alert.objects.select_related("risk_score", "ward"), request.user),
+            data.get("alert_public_id"),
+        )
+        alert_workflow = _resolve_optional_by_public_id(
+            apply_ward_scope_or_none(AlertWorkflowState.objects.select_related("ward"), request.user),
+            data.get("alert_workflow_public_id"),
+        )
+        risk_score = _resolve_optional_by_id(
+            apply_ward_scope_or_none(RiskScore.objects.select_related("ward", "model_run"), request.user),
+            data.get("risk_score_id"),
+        )
+        model_run = _resolve_optional_by_id(ModelRun.objects.all(), data.get("model_run_id"))
+        facility_readiness_review = _resolve_optional_by_public_id(
+            facility_readiness_review_queryset_for_user(request.user),
+            data.get("facility_readiness_review_public_id"),
+        )
+        facility_update_request = _resolve_optional_by_public_id(
+            apply_ward_scope_or_none(
+                FacilityReadinessUpdateRequest.objects.select_related("facility", "review", "contact"),
+                request.user,
+                field_name="facility__ward_id",
+            ),
+            data.get("facility_update_request_public_id"),
+        )
+        facility_escalation = _resolve_optional_by_public_id(
+            facility_readiness_escalation_queryset_for_user(request.user),
+            data.get("facility_escalation_public_id"),
+        )
+        chv_coverage_request = _resolve_optional_by_public_id(
+            chv_coverage_request_queryset_for_user(request.user),
+            data.get("chv_coverage_request_public_id"),
+        )
+        assigned_to = _resolve_preparedness_action_assignee(data.get("assigned_to_id"))
+
+        required_optional_refs = {
+            "facility_id": facility,
+            "chv_id": chv,
+            "alert_public_id": alert,
+            "alert_workflow_public_id": alert_workflow,
+            "risk_score_id": risk_score,
+            "model_run_id": model_run,
+            "facility_readiness_review_public_id": facility_readiness_review,
+            "facility_update_request_public_id": facility_update_request,
+            "facility_escalation_public_id": facility_escalation,
+            "chv_coverage_request_public_id": chv_coverage_request,
+        }
+        missing_refs = [field for field, value in required_optional_refs.items() if data.get(field) is not None and value is None]
+        if missing_refs:
+            return Response(
+                {"detail": f"One or more preparedness action references were not found: {', '.join(missing_refs)}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            action, created = get_or_create_preparedness_action(
+                ward=ward,
+                action_type=data["action_type"],
+                source_trigger_type=data.get("source_trigger_type", PreparednessAction.SOURCE_MANUAL),
+                actor=request.user,
+                facility=facility,
+                chv=chv,
+                alert=alert,
+                alert_workflow=alert_workflow,
+                risk_score=risk_score,
+                model_run=model_run,
+                facility_readiness_review=facility_readiness_review,
+                facility_update_request=facility_update_request,
+                facility_escalation=facility_escalation,
+                chv_coverage_request=chv_coverage_request,
+                priority=data.get("priority", PreparednessAction.PRIORITY_MEDIUM),
+                status=data.get("status", PreparednessAction.STATUS_QUEUED),
+                assigned_to=assigned_to,
+                assigned_to_team=data.get("assigned_to_team", ""),
+                decision_policy_version=data.get("decision_policy_version", ""),
+                due_at=data.get("due_at"),
+                sla_target_at=data.get("sla_target_at"),
+                source_trigger_ref=data.get("source_trigger_ref", ""),
+                notes=data.get("notes", ""),
+                lineage_metadata=data.get("lineage_metadata", {}),
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        action = get_object_or_404(preparedness_action_queryset_for_user(request.user), public_id=action.public_id)
+        return Response(
+            PreparednessActionSerializer(action).data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+
+class PreparednessActionDetailAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get_action(self, request, public_id):
+        return get_object_or_404(preparedness_action_queryset_for_user(request.user), public_id=public_id)
+
+    def get(self, request, public_id):
+        action = self.get_action(request, public_id)
+        return Response(PreparednessActionSerializer(action).data, status=status.HTTP_200_OK)
+
+    def patch(self, request, public_id):
+        if request.user.role not in [User.ROLE_ADMIN, User.ROLE_SUPERVISOR]:
+            return Response({"detail": "You do not have permission to update preparedness actions."}, status=status.HTTP_403_FORBIDDEN)
+
+        action = self.get_action(request, public_id)
+        serializer = PreparednessActionTransitionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        assigned_to_provided = "assigned_to_id" in serializer.validated_data
+        assigned_to = (
+            _resolve_preparedness_action_assignee(serializer.validated_data.get("assigned_to_id"))
+            if assigned_to_provided
+            else None
+        )
+        due_at_provided = "due_at" in serializer.validated_data
+        sla_target_at_provided = "sla_target_at" in serializer.validated_data
+        try:
+            action = transition_preparedness_action(
+                action,
+                actor=request.user,
+                status=serializer.validated_data["status"],
+                detail=serializer.validated_data.get("detail", ""),
+                assigned_to=assigned_to,
+                assigned_to_provided=assigned_to_provided,
+                assigned_to_team=serializer.validated_data.get("assigned_to_team"),
+                due_at=serializer.validated_data.get("due_at"),
+                due_at_provided=due_at_provided,
+                sla_target_at=serializer.validated_data.get("sla_target_at"),
+                sla_target_at_provided=sla_target_at_provided,
+                completion_evidence=serializer.validated_data.get("completion_evidence"),
+                cancellation_reason=serializer.validated_data.get("cancellation_reason", ""),
+                escalation_metadata=serializer.validated_data.get("escalation_metadata"),
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        action = self.get_action(request, action.public_id)
+        return Response(PreparednessActionSerializer(action).data, status=status.HTTP_200_OK)
 
 
 class DashboardNotificationListAPIView(APIView):
@@ -1507,6 +2124,228 @@ class ModelAlignmentAPIView(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
+class ModelOperationsHealthAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request):
+        payload = build_model_operations_health_dashboard()
+        serializer = ModelOperationsHealthSerializer(payload)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class OperationalKPIDashboardAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request):
+        try:
+            payload = build_operational_kpi_dashboard(request.query_params)
+        except ValueError as error:
+            return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(payload, status=status.HTTP_200_OK)
+
+
+class OperationalKPIAuditAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request):
+        try:
+            payload = build_operational_kpi_integrity_audit(
+                date_from=request.query_params.get("date_from"),
+                date_to=request.query_params.get("date_to"),
+                ward_id=request.query_params.get("ward_id"),
+                sub_county=request.query_params.get("sub_county", ""),
+                source_channel=request.query_params.get("source_channel", ""),
+            )
+        except ValueError as error:
+            return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(payload, status=status.HTTP_200_OK)
+
+
+class OperationalKPIMEExportAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request):
+        try:
+            payload = build_operational_kpi_me_export(
+                date_from=request.query_params.get("date_from"),
+                date_to=request.query_params.get("date_to"),
+                ward_id=request.query_params.get("ward_id"),
+                sub_county=request.query_params.get("sub_county", ""),
+                source_channel=request.query_params.get("source_channel", ""),
+                output_format=request.query_params.get("export_format", request.query_params.get("output_format", "json")),
+            )
+        except ValueError as error:
+            return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(payload, status=status.HTTP_200_OK)
+
+
+class InteroperabilityDashboardAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request):
+        return Response(build_interoperability_dashboard_snapshot(), status=status.HTTP_200_OK)
+
+
+class InteroperabilityRunDetailAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request, public_id):
+        run = get_object_or_404(
+            InteroperabilityRun.objects.select_related("system", "mapping_version", "operator", "retry_of")
+            .prefetch_related("items", "errors"),
+            public_id=public_id,
+        )
+        return Response(InteroperabilityRunSerializer(run).data, status=status.HTTP_200_OK)
+
+
+class InteroperabilityOrgUnitMappingImportAPIView(APIView):
+    permission_classes = [IsAdminOrSupervisor]
+
+    def post(self, request):
+        serializer = InteroperabilityOrgUnitMappingImportSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        retry_of = None
+        retry_public_id = serializer.validated_data.get("retry_of_public_id")
+        if retry_public_id:
+            retry_of = get_object_or_404(InteroperabilityRun, public_id=retry_public_id)
+        run = create_org_unit_mapping_import_run(
+            system_key=serializer.validated_data["system_key"],
+            csv_text=serializer.validated_data["csv_text"],
+            source_file_name=serializer.validated_data["source_file_name"],
+            mapping_version_label=serializer.validated_data["mapping_version_label"],
+            operator=request.user,
+            confirm=serializer.validated_data["confirm"],
+            retry_of=retry_of,
+        )
+        return Response(InteroperabilityRunSerializer(run).data, status=status.HTTP_201_CREATED)
+
+
+class InteroperabilityExportPreviewAPIView(APIView):
+    permission_classes = [IsAdminOrSupervisor]
+
+    def post(self, request):
+        serializer = InteroperabilityExportPreviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        run = create_risk_score_export_preview(
+            system_key=serializer.validated_data["system_key"],
+            mapping_version_label=serializer.validated_data["mapping_version_label"],
+            operator=request.user,
+        )
+        return Response(InteroperabilityRunSerializer(run).data, status=status.HTTP_201_CREATED)
+
+
+class InteroperabilityRunRetryAPIView(APIView):
+    permission_classes = [IsAdminOrSupervisor]
+
+    def post(self, request, public_id):
+        run = get_object_or_404(InteroperabilityRun, public_id=public_id)
+        retry = create_interoperability_retry_run(run=run, operator=request.user)
+        return Response(InteroperabilityRunSerializer(retry).data, status=status.HTTP_201_CREATED)
+
+
+class InteroperabilityRunErrorFileAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request, public_id):
+        run = get_object_or_404(InteroperabilityRun, public_id=public_id)
+        return Response(build_interoperability_error_file(run), status=status.HTTP_200_OK)
+
+
+class InteroperabilityCSVTemplateFileAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request, exchange_type):
+        try:
+            template_file = build_interoperability_csv_template_file(exchange_type)
+        except ValueError as error:
+            return Response({"detail": str(error)}, status=status.HTTP_404_NOT_FOUND)
+        return Response(template_file, status=status.HTTP_200_OK)
+
+
+class MessageGovernanceDashboardAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request):
+        queryset = MessageTemplate.objects.all().order_by("template_key", "language", "-version")
+        q = request.query_params.get("q")
+        audience_type = request.query_params.get("audience_type")
+        channel = request.query_params.get("channel")
+        language = request.query_params.get("language")
+        approval_status = request.query_params.get("approval_status")
+        date_from = parse_datetime_query_param(request.query_params.get("date_from"))
+        date_to = parse_datetime_query_param(request.query_params.get("date_to"))
+
+        if q:
+            normalized_q = q.strip()
+            queryset = queryset.filter(
+                Q(template_key__icontains=normalized_q)
+                | Q(title__icontains=normalized_q)
+                | Q(owner__icontains=normalized_q)
+                | Q(body__icontains=normalized_q)
+            )
+        if audience_type:
+            queryset = queryset.filter(audience_type=audience_type.strip())
+        if channel:
+            queryset = queryset.filter(channel=channel.strip())
+        if language:
+            queryset = queryset.filter(language=language.strip().lower())
+        if approval_status:
+            queryset = queryset.filter(approval_status=approval_status.strip())
+
+        payload = build_message_management_dashboard(
+            queryset,
+            date_from=date_from,
+            date_to=date_to,
+            filters={
+                "q": q or "",
+                "audience_type": audience_type or "",
+                "channel": channel or "",
+                "language": language or "",
+                "approval_status": approval_status or "",
+                "date_from": request.query_params.get("date_from") or "",
+                "date_to": request.query_params.get("date_to") or "",
+            },
+        )
+        return Response(payload, status=status.HTTP_200_OK)
+
+
+class MessageTemplateGovernanceDetailAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request, public_id):
+        template = get_object_or_404(
+            MessageTemplate.objects.select_related("approved_by", "created_by"),
+            public_id=public_id,
+        )
+        payload = build_message_template_detail(
+            template,
+            date_from=parse_datetime_query_param(request.query_params.get("date_from")),
+            date_to=parse_datetime_query_param(request.query_params.get("date_to")),
+        )
+        return Response(payload, status=status.HTTP_200_OK)
+
+
+class MessageTemplateApprovalAPIView(APIView):
+    permission_classes = [IsAdminOnly]
+
+    def post(self, request, public_id):
+        template = get_object_or_404(MessageTemplate.objects.select_related("approved_by", "created_by"), public_id=public_id)
+        action = (request.data.get("action") or "approve").strip()
+        reason = (request.data.get("reason") or "").strip()
+        try:
+            updated_template = transition_message_template_approval(
+                template,
+                action=action,
+                actor=request.user,
+                reason=reason,
+            )
+        except DjangoValidationError as error:
+            return Response({"errors": error.message_dict if hasattr(error, "message_dict") else error.messages}, status=status.HTTP_400_BAD_REQUEST)
+
+        payload = build_message_template_detail(updated_template)
+        return Response(payload, status=status.HTTP_200_OK)
+
+
 class TriggerAlertContextAPIView(APIView):
     permission_classes = [IsAdminOrSupervisor]
 
@@ -1549,11 +2388,18 @@ class TriggerAlertPreviewAPIView(APIView):
         if ward is None:
             return Response({"detail": "No matching ward context found."}, status=status.HTTP_404_NOT_FOUND)
 
-        payload = build_guided_trigger_preview(
-            ward,
-            serializer.validated_data["trigger_type"],
-            serializer.validated_data.get("message_override"),
-        )
+        try:
+            payload = build_guided_trigger_preview(
+                ward,
+                serializer.validated_data["trigger_type"],
+                serializer.validated_data.get("message_override"),
+                template_key=serializer.validated_data.get("template_key", ""),
+                template_version=serializer.validated_data.get("template_version"),
+                template_language=serializer.validated_data.get("template_language", "en"),
+                template_context=serializer.validated_data.get("template_context", {}),
+            )
+        except ValueError as exc:
+            raise ValidationError({"detail": str(exc)}) from exc
         return Response(TriggerPreviewResponseSerializer(payload).data, status=status.HTTP_200_OK)
 
 
@@ -1568,6 +2414,10 @@ class TriggerAlertsAPIView(APIView):
         send_sms = serializer.validated_data.get("send_sms", False)
         trigger_type = serializer.validated_data.get("trigger_type")
         message_override = serializer.validated_data.get("message_override")
+        template_key = serializer.validated_data.get("template_key", "")
+        template_version = serializer.validated_data.get("template_version")
+        template_language = serializer.validated_data.get("template_language", "en")
+        template_context = serializer.validated_data.get("template_context", {})
 
         queryset = RiskScore.objects.select_related("ward", "model_run").all()
         user = request.user
@@ -1599,7 +2449,18 @@ class TriggerAlertsAPIView(APIView):
         queued_at = timezone.now()
         request_id = str(uuid.uuid4())
         trigger_context = build_guided_trigger_context(risk_score.ward)
-        preview_payload = build_guided_trigger_preview(risk_score.ward, trigger_type, message_override)
+        try:
+            preview_payload = build_guided_trigger_preview(
+                risk_score.ward,
+                trigger_type,
+                message_override,
+                template_key=template_key,
+                template_version=template_version,
+                template_language=template_language,
+                template_context=template_context,
+            )
+        except ValueError as exc:
+            raise ValidationError({"detail": str(exc)}) from exc
         guided_request_metadata = {
             "request_id": request_id,
             "selected_trigger_type": trigger_type,
@@ -1608,6 +2469,7 @@ class TriggerAlertsAPIView(APIView):
             "message_mode": preview_payload["message_mode"],
             "message_override_applied": bool(message_override),
             "message_preview_used": preview_payload["message_preview"],
+            "message_template": preview_payload.get("message_template") or {},
             "confirmed_by_user_id": user.id,
             "confirmed_at": queued_at.isoformat(),
             "decision_policy": risk_score.decision_policy or {},
@@ -1624,6 +2486,10 @@ class TriggerAlertsAPIView(APIView):
             trigger_type=trigger_type,
             message_override=message_override,
             guided_request_metadata=guided_request_metadata,
+            template_key=template_key,
+            template_version=template_version,
+            template_language=template_language,
+            template_context=template_context,
         )
         alerts_logger.info(
             "alert_trigger_request_queued",
@@ -1872,7 +2738,7 @@ class CHVTriageAPIView(APIView):
         )
 
         return Response(
-            CHVTriageResponseSerializer(session).data,
+            CHVTriageResponseSerializer(session, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
         )
 
@@ -1881,16 +2747,60 @@ class CHVSyncAPIView(APIView):
     permission_classes = [IsFieldOperator]
 
     def post(self, request):
-        serializer = CHVSyncRequestSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        try:
+            raw_payload = request.data
+        except ParseError:
+            record_chv_offline_rejected_submission_audit(
+                request=request,
+                raw_payload={},
+                rejection_stage=CHVOfflineRejectedSubmissionAudit.STAGE_ENVELOPE_VALIDATION,
+                error_code="chv_offline_request_parse_failed",
+                safe_error_summary="Rejected before sync persistence because the request body could not be parsed.",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+            raise
+
+        serializer = CHVSyncRequestSerializer(data=raw_payload)
+        if not serializer.is_valid():
+            record_chv_offline_rejected_submission_audit(
+                request=request,
+                raw_payload=raw_payload,
+                serializer_errors=serializer.errors,
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+            raise ValidationError(serializer.errors)
 
         ward_id = serializer.validated_data["ward_id"]
         user = request.user
         phone_number = serializer.validated_data.get("phone_number", "")
         source_device_id = serializer.validated_data.get("source_device_id", "")
         payloads = serializer.validated_data["payloads"]
+        contract_version = serializer.validated_data.get("contract_version") or OFFLINE_CHV_CONTRACT_VERSION
+        download_bundle_version = serializer.validated_data.get("download_bundle_version", "")
+
+        if contract_version != OFFLINE_CHV_CONTRACT_VERSION:
+            record_chv_offline_rejected_submission_audit(
+                request=request,
+                raw_payload=raw_payload,
+                rejection_stage=CHVOfflineRejectedSubmissionAudit.STAGE_CONTRACT_VERSION,
+                error_code="chv_offline_contract_version_rejected",
+                safe_error_summary="Rejected before sync persistence because the CHV offline contract version is unsupported.",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+            return Response(
+                {"detail": f"Unsupported CHV offline contract version: {contract_version}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if user.role in [User.ROLE_CHV, User.ROLE_SUPERVISOR] and user.ward_id != ward_id:
+            record_chv_offline_rejected_submission_audit(
+                request=request,
+                raw_payload=raw_payload,
+                rejection_stage=CHVOfflineRejectedSubmissionAudit.STAGE_WARD_SCOPE,
+                error_code="chv_offline_ward_scope_rejected",
+                safe_error_summary="Rejected before sync persistence because the requested ward is outside the authenticated user's scope.",
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
             return Response(
                 {"detail": "Ward not found."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -1899,33 +2809,122 @@ class CHVSyncAPIView(APIView):
         try:
             ward = Ward.objects.get(id=ward_id, is_active=True)
         except Ward.DoesNotExist:
+            record_chv_offline_rejected_submission_audit(
+                request=request,
+                raw_payload=raw_payload,
+                rejection_stage=CHVOfflineRejectedSubmissionAudit.STAGE_WARD_SCOPE,
+                error_code="chv_offline_ward_scope_rejected",
+                safe_error_summary="Rejected before sync persistence because the requested ward is unavailable.",
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
             return Response(
                 {"detail": "Ward not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        device_registration = None
+        device_registration_id = serializer.validated_data.get("device_registration_id")
+        if device_registration_id:
+            device_registration = (
+                CHVDeviceRegistration.objects.filter(
+                    public_id=device_registration_id,
+                    user=user,
+                    is_active=True,
+                )
+                .select_related("ward", "chv")
+                .first()
+            )
+            if device_registration is None or device_registration.ward_id != ward.id:
+                record_chv_offline_rejected_submission_audit(
+                    request=request,
+                    raw_payload=raw_payload,
+                    rejection_stage=CHVOfflineRejectedSubmissionAudit.STAGE_DEVICE_REGISTRATION,
+                    error_code="chv_offline_device_registration_rejected",
+                    safe_error_summary="Rejected before sync persistence because the device registration is unavailable for this user and ward.",
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    ward=ward,
+                )
+                return Response({"detail": "Device registration not found."}, status=status.HTTP_404_NOT_FOUND)
+            source_device_id = source_device_id or device_registration.device_id
+
+        phone_number = phone_number or (getattr(user, "phone_number", "") or "")
+
         processed = []
         for payload in payloads:
-            sync_item, triage_session, replayed = process_sync_payload(
-                ward=ward,
-                phone_number=phone_number,
-                source_device_id=source_device_id,
-                payload=payload,
-            )
-            processed.append(
-                {
-                    "sync_queue_id": sync_item.id,
-                    "client_submission_id": sync_item.client_submission_id,
-                    "sync_status": sync_item.status,
+            try:
+                sync_item, domain_record, replayed = process_sync_payload(
+                    ward=ward,
+                    phone_number=phone_number,
+                    source_device_id=source_device_id,
+                    payload=payload,
+                    contract_version=contract_version,
+                    device_registration=device_registration,
+                    download_bundle_version=download_bundle_version,
+                    user=user,
+                )
+            except SyncPayloadProcessingError as exc:
+                client_submission_id = (payload.get("client_submission_id") or "").strip()
+                idempotency_key = (payload.get("idempotency_key") or client_submission_id).strip()
+                failed_sync_item = None
+                if source_device_id and (idempotency_key or client_submission_id):
+                    failed_sync_item = (
+                        SyncQueue.objects.filter(
+                            ward=ward,
+                            source_device_id=source_device_id,
+                            status=SyncQueue.STATUS_FAILED,
+                        )
+                        .filter(Q(idempotency_key=idempotency_key) | Q(client_submission_id=client_submission_id))
+                        .order_by("-created_at")
+                        .first()
+                    )
+
+                error_payload = {"detail": str(exc), "conflict_state": exc.conflict_state}
+                if failed_sync_item is not None:
+                    error_payload["sync_queue_id"] = failed_sync_item.id
+                    error_payload["server_receipt"] = failed_sync_item.server_receipt
+                return Response(error_payload, status=exc.status_code)
+            server_receipt = dict(sync_item.server_receipt or {})
+            if not server_receipt:
+                server_receipt = {
+                    "receipt_id": f"sync-{sync_item.id}",
+                    "accepted_at": sync_item.processed_at.isoformat() if sync_item.processed_at else None,
+                    "status": "ACCEPTED" if sync_item.status == SyncQueue.STATUS_PROCESSED else sync_item.status,
                     "replayed": replayed,
-                    "triage_session": CHVTriageResponseSerializer(triage_session).data,
+                    "contract_version": sync_item.contract_version,
+                    "upload_type": sync_item.upload_type,
+                    "domain_record": domain_record,
                 }
-            )
+            else:
+                server_receipt["replayed"] = replayed
+            result = {
+                "sync_queue_id": sync_item.id,
+                "client_submission_id": sync_item.client_submission_id,
+                "idempotency_key": sync_item.idempotency_key,
+                "upload_type": sync_item.upload_type,
+                "sync_status": sync_item.status,
+                "conflict_state": SyncQueue.CONFLICT_REPLAYED if replayed else sync_item.conflict_state,
+                "replayed": replayed,
+                "server_receipt": server_receipt,
+                "domain_record": server_receipt.get("domain_record") or domain_record,
+            }
+            if sync_item.triage_session_id:
+                result["triage_session"] = CHVTriageResponseSerializer(
+                    sync_item.triage_session,
+                    context={"request": request},
+                ).data
+            processed.append(result)
 
         return Response(
             {
                 "message": "Offline payloads synced successfully.",
+                "contract_version": contract_version,
                 "processed_count": len(processed),
+                "sync_health_record": build_sync_health_record(
+                    ward=ward,
+                    device_registration=device_registration,
+                    source_device_id=source_device_id,
+                    phone_number=phone_number,
+                ),
                 "results": processed,
             },
             status=status.HTTP_201_CREATED,
@@ -1941,65 +2940,18 @@ class USSDMenuAPIView(APIView):
         service_code = (request.data.get("serviceCode") or request.data.get("service_code") or "").strip()
         phone_number = (request.data.get("phoneNumber") or request.data.get("phone_number") or "").strip()
         text = (request.data.get("text") or "").strip()
+        language = (request.data.get("language") or request.data.get("lang") or "").strip()
 
-        response_text = "END Invalid option. Please try again."
-        menu_level = "invalid"
-        ward = None
-
-        if text == "":
-            response_text = (
-                "CON Welcome to CCHIS Health Menu\n"
-                "1. Flood safety advice\n"
-                "2. Child diarrhea support\n"
-                "3. Heat health advice"
-            )
-            menu_level = "root"
-        elif text == "1":
-            response_text = (
-                "END Flood safety:\n"
-                "Use treated water, avoid flood water, wash hands often, "
-                "and seek care if child has diarrhea or vomiting."
-            )
-            menu_level = "flood_safety"
-        elif text == "2":
-            response_text = (
-                "CON Child diarrhea support\n"
-                "1. Diarrhea with vomiting or dehydration\n"
-                "2. Mild diarrhea only"
-            )
-            menu_level = "diarrhea_menu"
-        elif text == "2*1":
-            response_text = (
-                "END Give ORS immediately and go to nearest health facility now. "
-                "Use safe water and report to CHV if available."
-            )
-            menu_level = "diarrhea_urgent"
-        elif text == "2*2":
-            response_text = (
-                "END Give ORS, continue fluids, monitor closely, "
-                "and seek care if child worsens."
-            )
-            menu_level = "diarrhea_mild"
-        elif text == "3":
-            response_text = (
-                "END Heat advice:\n"
-                "Give water often, keep child in shade, avoid midday sun, "
-                "and seek care for weakness or confusion."
-            )
-            menu_level = "heat_advice"
-
-        UssdSessionLog.objects.create(
+        log = create_ussd_session_log(
             session_id=session_id or "unknown-session",
             phone_number=phone_number,
             service_code=service_code,
             text=text,
-            response_text=response_text,
-            ward=ward,
-            menu_level=menu_level,
+            language=language,
         )
 
         return Response(
-            {"response": response_text},
+            {"response": log.response_text},
             status=status.HTTP_200_OK,
         )
 
@@ -2008,21 +2960,44 @@ class UssdSessionLogListAPIView(generics.ListAPIView):
     serializer_class = UssdSessionLogSerializer
     permission_classes = [IsAdminOrSupervisor]
     filter_backends = [OrderingFilter]
-    ordering_fields = ["created_at", "session_id", "phone_number"]
+    ordering_fields = ["created_at", "session_id", "language", "session_outcome", "menu_version_label"]
     ordering = ["-created_at"]
 
+    def _can_filter_direct_identifier(self) -> bool:
+        user = self.request.user
+        return bool(
+            user
+            and getattr(user, "is_authenticated", False)
+            and (getattr(user, "is_superuser", False) or getattr(user, "role", None) == User.ROLE_ADMIN)
+        )
+
     def get_queryset(self):
-        queryset = UssdSessionLog.objects.select_related("ward").all().order_by("-created_at")
+        queryset = UssdSessionLog.objects.select_related("ward", "menu_version").all().order_by("-created_at")
         user = self.request.user
         ward_id = self.request.query_params.get("ward_id")
         session_id = self.request.query_params.get("session_id")
         phone_number = self.request.query_params.get("phone_number")
+        language = self.request.query_params.get("language")
+        session_outcome = self.request.query_params.get("session_outcome")
+        invalid_option = self.request.query_params.get("invalid_option")
+        menu_version_label = self.request.query_params.get("menu_version_label")
         queryset = apply_ward_scope_or_none(queryset, user)
 
         if ward_id:
             queryset = queryset.filter(ward_id=ward_id)
         if session_id:
             queryset = queryset.filter(session_id=session_id)
+        if language:
+            queryset = queryset.filter(language=language.strip().lower())
+        if session_outcome:
+            queryset = queryset.filter(session_outcome=session_outcome.strip().upper())
+        normalized_invalid_option = invalid_option.strip().lower() if invalid_option else ""
+        if normalized_invalid_option in {"true", "false"}:
+            queryset = queryset.filter(invalid_option=normalized_invalid_option == "true")
+        if menu_version_label:
+            queryset = queryset.filter(menu_version_label=menu_version_label.strip())
         if phone_number:
+            if not self._can_filter_direct_identifier():
+                raise PermissionDenied("Filtering USSD logs by direct phone number requires admin permissions.")
             queryset = queryset.filter(phone_number=phone_number)
         return queryset

@@ -1,20 +1,23 @@
+type QueryFilterValue = string | number | boolean | null | undefined | readonly (string | number | boolean)[];
+type QueryFilters = Record<string, QueryFilterValue>;
+
 export const queryKeys = {
   auth: {
     me: () => ["auth", "me"] as const,
-    activity: (filters?: Record<string, string | number | boolean | null | undefined>) =>
+    activity: (filters?: QueryFilters) =>
       ["auth", "activity", filters ?? {}] as const,
     recoveryCodes: () => ["auth", "recovery-codes"] as const,
   },
   wards: {
     all: () => ["wards"] as const,
-    list: (filters: Record<string, string | number | boolean | null | undefined>) => ["wards", filters] as const,
+    list: (filters: QueryFilters) => ["wards", filters] as const,
     detail: (wardId: string | number) => ["ward", wardId] as const,
     riskHistory: (wardId: string | number) => ["ward-risk-history", wardId] as const,
     alerts: (wardId: string | number) => ["ward-alerts", wardId] as const,
   },
   alerts: {
     all: () => ["alerts"] as const,
-    list: (filters: Record<string, string | number | boolean | null | undefined>) => ["alerts", filters] as const,
+    list: (filters: QueryFilters) => ["alerts", filters] as const,
     detail: (alertId: string | number) => ["alert", alertId] as const,
     trigger: {
       context: (wardId: string | number) => ["alerts", "trigger", "context", wardId] as const,
@@ -35,7 +38,7 @@ export const queryKeys = {
     messages: (publicId: string) => ["chvs", "messages", publicId] as const,
     coverageRequests: {
       all: () => ["chvs", "coverage-requests"] as const,
-      list: (filters: Record<string, string | number | boolean | null | undefined>) =>
+      list: (filters: QueryFilters) =>
         ["chvs", "coverage-requests", filters] as const,
       detail: (publicId: string) => ["chvs", "coverage-requests", publicId] as const,
     },
@@ -47,7 +50,29 @@ export const queryKeys = {
     root: () => ["facility-readiness"] as const,
     detail: (facilityId: string | number) => ["facility-readiness", facilityId] as const,
   },
+  preparednessActions: {
+    root: () => ["preparedness-actions"] as const,
+    list: (filters: QueryFilters) =>
+      ["preparedness-actions", filters] as const,
+    detail: (publicId: string) => ["preparedness-actions", publicId] as const,
+  },
   system: {
     root: () => ["system"] as const,
+  },
+  operationalMetrics: {
+    root: () => ["operational-metrics"] as const,
+    dashboard: (filters: QueryFilters) => ["operational-metrics", filters] as const,
+  },
+  modelHealth: {
+    root: () => ["model-health"] as const,
+  },
+  interoperability: {
+    root: () => ["interoperability"] as const,
+    dashboard: () => ["interoperability", "dashboard"] as const,
+  },
+  messageGovernance: {
+    root: () => ["message-governance"] as const,
+    dashboard: (filters: QueryFilters) => ["message-governance", filters] as const,
+    template: (publicId: string) => ["message-governance", "template", publicId] as const,
   },
 } as const;

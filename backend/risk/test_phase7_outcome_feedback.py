@@ -14,6 +14,7 @@ from risk.models import (
     FacilityReadinessReview,
     HealthFacility,
     ModelRun,
+    PreparednessAction,
     RiskScore,
     SurveillanceLabelWindow,
     SurveillanceOutbreakLabel,
@@ -169,6 +170,164 @@ class WardOutcomeFeedbackPhaseSevenTestCase(TestCase):
         )
         self.assertEqual(feedback["review_items"][0]["category"], "model_vs_response_quality")
 
+    def test_outcome_feedback_links_completed_preparedness_action_to_outcome_history(self):
+        anchor = timezone.now()
+        ward = self._create_ward("Phase Seven Ledger Ward", "P7-LEDGER")
+        risk_score = self._create_high_risk_prediction(ward, anchor=anchor)
+        label = self._create_label(risk_score, outbreak_label=SurveillanceOutbreakLabel.NONE)
+        alert = Alert.objects.create(
+            ward=ward,
+            risk_score=risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="ops",
+            message="Ledger-backed response alert",
+            status=Alert.STATUS_DELIVERED,
+            sent_at=anchor,
+        )
+        action = PreparednessAction.objects.create(
+            ward=ward,
+            alert=alert,
+            risk_score=risk_score,
+            model_run=self.model_run,
+            action_type=PreparednessAction.ACTION_FIELD_VERIFICATION,
+            source_trigger_type=PreparednessAction.SOURCE_ALERT,
+            source_trigger_ref=f"alert:{alert.public_id}",
+            status=PreparednessAction.STATUS_COMPLETED,
+            priority=PreparednessAction.PRIORITY_HIGH,
+            due_at=anchor + timedelta(hours=4),
+            completed_at=anchor + timedelta(hours=2),
+            completion_evidence={
+                "summary": "Field team verified household conditions and reported no active cluster.",
+                "reference": "field-report-77",
+            },
+        )
+        PreparednessAction.objects.filter(pk=action.pk).update(
+            created_at=anchor + timedelta(minutes=30),
+            completed_at=anchor + timedelta(hours=2),
+            updated_at=anchor + timedelta(hours=2),
+        )
+
+        feedback = build_ward_intelligence_snapshot(ward)["operational_evidence"]["outcome_feedback"]
+        action_evidence = feedback["preparedness_action_evidence"]
+        ledger_step = next(step for step in feedback["steps"] if step["key"] == "preparedness_action_ledger")
+
+        self.assertEqual(feedback["response_quality_state"], "response_complete")
+        self.assertEqual(ledger_step["status"], "recorded")
+        self.assertEqual(action_evidence["summary"]["completed_count"], 1)
+        self.assertEqual(action_evidence["summary"]["completed_with_evidence_count"], 1)
+        self.assertEqual(action_evidence["response_time_measurements"]["hours_to_first_action"], 0.5)
+        self.assertEqual(action_evidence["response_time_measurements"]["hours_to_first_completion"], 2.0)
+        self.assertIn("completion_reference_present", action_evidence["completion_quality_flags"])
+        self.assertEqual(action_evidence["action_history"][0]["outcome_links"]["label_window_ref"], f"surveillance_label_window:{label.id}")
+        self.assertEqual(action_evidence["action_history"][0]["outcome_links"]["prediction_risk_score_ids"], [risk_score.id])
+        self.assertTrue(action_evidence["false_alert_review_context"]["review_required"])
+
+    def test_outcome_feedback_does_not_treat_boilerplate_completion_evidence_as_response(self):
+        anchor = timezone.now()
+        ward = self._create_ward("Phase Seven Boilerplate Ledger Ward", "P7-BOILER")
+        risk_score = self._create_high_risk_prediction(ward, anchor=anchor)
+        self._create_label(risk_score, outbreak_label=SurveillanceOutbreakLabel.NONE)
+        alert = Alert.objects.create(
+            ward=ward,
+            risk_score=risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="ops",
+            message="Ledger-backed response alert",
+            status=Alert.STATUS_DELIVERED,
+            sent_at=anchor,
+        )
+        action = PreparednessAction.objects.create(
+            ward=ward,
+            alert=alert,
+            risk_score=risk_score,
+            model_run=self.model_run,
+            action_type=PreparednessAction.ACTION_FIELD_VERIFICATION,
+            source_trigger_type=PreparednessAction.SOURCE_ALERT,
+            source_trigger_ref=f"alert:{alert.public_id}",
+            status=PreparednessAction.STATUS_COMPLETED,
+            priority=PreparednessAction.PRIORITY_HIGH,
+            due_at=anchor + timedelta(hours=4),
+            completed_at=anchor + timedelta(hours=2),
+            completion_evidence={
+                "captured_via": "api",
+                "captured_at": timezone.now().isoformat(),
+            },
+        )
+        PreparednessAction.objects.filter(pk=action.pk).update(
+            created_at=anchor + timedelta(minutes=30),
+            completed_at=anchor + timedelta(hours=2),
+            updated_at=anchor + timedelta(hours=2),
+        )
+
+        feedback = build_ward_intelligence_snapshot(ward)["operational_evidence"]["outcome_feedback"]
+        action_evidence = feedback["preparedness_action_evidence"]
+        ledger_step = next(step for step in feedback["steps"] if step["key"] == "preparedness_action_ledger")
+
+        self.assertEqual(ledger_step["status"], "failed")
+        self.assertEqual(action_evidence["summary"]["completed_count"], 0)
+        self.assertEqual(action_evidence["summary"]["completed_with_evidence_count"], 0)
+        self.assertEqual(action_evidence["summary"]["completed_without_substantive_evidence_count"], 1)
+        self.assertFalse(action_evidence["action_history"][0]["completion_evidence_present"])
+        self.assertIn("completion_evidence_boilerplate_only", action_evidence["completion_quality_flags"])
+        self.assertFalse(action_evidence["false_alert_review_context"]["review_required"])
+
+    def test_outcome_feedback_keeps_alert_failure_separate_from_completed_action(self):
+        anchor = timezone.now()
+        ward = self._create_ward("Phase Seven Alert Failure Ward", "P7-ALERT-FAIL")
+        risk_score = self._create_high_risk_prediction(ward, anchor=anchor)
+        self._create_label(
+            risk_score,
+            outbreak_label=SurveillanceOutbreakLabel.ACTIVE,
+            suspected=5,
+            confirmed=1,
+        )
+        alert = Alert.objects.create(
+            ward=ward,
+            risk_score=risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="ops",
+            message="Failed delivery alert",
+            status=Alert.STATUS_FAILED,
+            error_message="recipient route unavailable",
+        )
+        action = PreparednessAction.objects.create(
+            ward=ward,
+            alert=alert,
+            risk_score=risk_score,
+            model_run=self.model_run,
+            action_type=PreparednessAction.ACTION_FIELD_VERIFICATION,
+            source_trigger_type=PreparednessAction.SOURCE_ALERT,
+            source_trigger_ref=f"alert:{alert.public_id}",
+            status=PreparednessAction.STATUS_COMPLETED,
+            priority=PreparednessAction.PRIORITY_HIGH,
+            due_at=anchor + timedelta(hours=4),
+            completed_at=anchor + timedelta(hours=2),
+            completion_evidence={
+                "summary": "Supervisor completed manual follow-up after the failed alert delivery.",
+                "reference": "manual-follow-up-41",
+            },
+        )
+        PreparednessAction.objects.filter(pk=action.pk).update(
+            created_at=anchor + timedelta(minutes=30),
+            completed_at=anchor + timedelta(hours=2),
+            updated_at=anchor + timedelta(hours=2),
+        )
+
+        feedback = build_ward_intelligence_snapshot(ward)["operational_evidence"]["outcome_feedback"]
+        alert_step = next(step for step in feedback["steps"] if step["key"] == "alert_issued")
+        ledger_step = next(step for step in feedback["steps"] if step["key"] == "preparedness_action_ledger")
+
+        self.assertEqual(alert_step["status"], "failed")
+        self.assertEqual(ledger_step["status"], "recorded")
+        self.assertEqual(feedback["response_quality_state"], "alert_delivery_failure")
+        self.assertEqual(feedback["attribution"], "alert_delivery_review")
+        self.assertEqual(feedback["summary"]["alert_failure_count"], 1)
+        self.assertEqual(feedback["summary"]["response_execution_failure_count"], 0)
+        self.assertIn(
+            "alert_delivery",
+            {item["category"] for item in feedback["review_items"]},
+        )
+
     def test_outcome_feedback_flags_response_gap_when_outbreak_active_after_alert(self):
         anchor = timezone.now()
         ward = self._create_ward("Phase Seven Gap Ward", "P7-GAP")
@@ -199,3 +358,8 @@ class WardOutcomeFeedbackPhaseSevenTestCase(TestCase):
         self.assertEqual(feedback["observed_outcome"]["confirmed_case_count"], 3)
         self.assertEqual(feedback["review_items"][0]["category"], "response_quality")
         self.assertIn("chv_notified", feedback["review_items"][0]["step_keys"])
+        self.assertTrue(feedback["preparedness_action_evidence"]["missed_action_review"]["review_required"])
+        self.assertIn(
+            "missed_action_review",
+            {item["category"] for item in feedback["review_items"]},
+        )

@@ -84,6 +84,58 @@ class WardRiskDecisionPolicyPhaseFiveTestCase(TestCase):
         self.assertEqual(decision["inputs"]["source_confidence"]["confidence"], "high")
         self.assertEqual(decision["trace"]["risk_score_to_policy_link"], "RiskScore.decision_policy")
 
+    def test_insufficient_forecast_horizon_adds_readiness_caveat_and_blocks_automatic_alert(self):
+        decision = evaluate_ward_risk_decision_policy(
+            ward=self.ward,
+            prediction=self._fresh_prediction(
+                rainfall_source_lineage={
+                    "source_kind": "LIVE",
+                    "freshness_state": "FRESH",
+                    "record_type": "forecast",
+                    "source_provider": "open-meteo-forecast",
+                    "forecast_horizon_days": 3,
+                    "lead_day": 3,
+                },
+            ),
+            model_score=0.76,
+            expected_case_burden=10,
+        )
+
+        climate_coverage = decision["inputs"]["climate_coverage"]
+        self.assertFalse(climate_coverage["claimed_lead_time_climate_coverage_sufficient"])
+        self.assertEqual(climate_coverage["forecast_covered_lead_days"], [1, 2, 3])
+        self.assertIn(14, climate_coverage["forecast_missing_lead_days"])
+        self.assertIn(
+            "climate_forecast_horizon_insufficient",
+            decision["inputs"]["source_confidence"]["moderate_reasons"],
+        )
+        self.assertFalse(decision["automatic_alert_allowed"])
+        self.assertIn(
+            "climate_forecast_horizon_blocks_automatic_alert",
+            decision["automatic_alert_blockers"],
+        )
+
+    def test_fallback_static_climate_source_lowers_source_confidence(self):
+        decision = evaluate_ward_risk_decision_policy(
+            ward=self.ward,
+            prediction=self._fresh_prediction(
+                rainfall_source_lineage={
+                    "source_kind": "SEEDED",
+                    "freshness_state": "FRESH",
+                    "record_type": "fallback_static",
+                    "source_provider": "static-default",
+                    "fallback_flag": True,
+                },
+            ),
+            model_score=0.76,
+            expected_case_burden=10,
+        )
+
+        source_confidence = decision["inputs"]["source_confidence"]
+        self.assertEqual(source_confidence["confidence"], "low")
+        self.assertIn("fallback_static_climate_source_used", source_confidence["weak_reasons"])
+        self.assertTrue(decision["inputs"]["climate_coverage"]["fallback_static_rainfall_used"])
+
     def test_recent_alert_fatigue_blocks_non_urgent_automatic_alerts_but_keeps_trace(self):
         for index in range(4):
             Alert.objects.create(
@@ -128,7 +180,16 @@ class WardRiskDecisionPolicyPhaseFiveTestCase(TestCase):
     def test_risk_score_serialization_and_alert_metadata_keep_policy_trace(self):
         decision = evaluate_ward_risk_decision_policy(
             ward=self.ward,
-            prediction=self._fresh_prediction(),
+            prediction=self._fresh_prediction(
+                rainfall_source_lineage={
+                    "source_kind": "LIVE",
+                    "freshness_state": "FRESH",
+                    "record_type": "forecast",
+                    "source_provider": "open-meteo-forecast",
+                    "forecast_horizon_days": 14,
+                    "lead_day": 14,
+                },
+            ),
             model_score=0.76,
             expected_case_burden=10,
         )
@@ -153,6 +214,9 @@ class WardRiskDecisionPolicyPhaseFiveTestCase(TestCase):
             dashboard_alert.guided_request_metadata["decision_policy"]["trace"]["model_score"],
             0.76,
         )
+        climate_evidence = dashboard_alert.guided_request_metadata["climate_evidence"]
+        self.assertEqual(climate_evidence["observed_vs_forecast_source_label"], "Forecast rainfall")
+        self.assertTrue(climate_evidence["claimed_lead_time_climate_coverage_sufficient"])
 
     def test_policy_traced_risk_materializes_decision_policy_workflow(self):
         decision = evaluate_ward_risk_decision_policy(

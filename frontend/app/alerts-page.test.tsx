@@ -11,6 +11,9 @@ const mockUseSearchParams = vi.fn();
 const mockUseCreateChvCoverageRequestFromAlertMutation = vi.fn();
 const mockUseCreateChvCoverageRequestMutation = vi.fn();
 const mockUseLiveChvCoverageRequestForWardQuery = vi.fn();
+const mockCreateSensitiveExportViaBff = vi.fn();
+const mockDownloadSensitiveExportViaBff = vi.fn();
+const mockDownloadSensitiveExportFile = vi.fn();
 
 function buildAlert(overrides: Record<string, unknown> = {}) {
   const id = typeof overrides.id === "number" ? overrides.id : 1;
@@ -88,6 +91,12 @@ vi.mock("@/queries/use-live-chv-coverage-request-for-ward-query", () => ({
     mockUseLiveChvCoverageRequestForWardQuery(...args),
 }));
 
+vi.mock("@/lib/dashboard", () => ({
+  createSensitiveExportViaBff: (...args: unknown[]) => mockCreateSensitiveExportViaBff(...args),
+  downloadSensitiveExportViaBff: (...args: unknown[]) => mockDownloadSensitiveExportViaBff(...args),
+  downloadSensitiveExportFile: (...args: unknown[]) => mockDownloadSensitiveExportFile(...args),
+}));
+
 describe("AlertsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -159,6 +168,18 @@ describe("AlertsPage", () => {
       data: null,
       isPending: false,
     });
+    mockCreateSensitiveExportViaBff.mockResolvedValue({
+      public_id: "export-alerts-1",
+      approval_state: "APPROVED",
+    });
+    mockDownloadSensitiveExportViaBff.mockResolvedValue({
+      public_id: "export-alerts-1",
+      filename: "alerts-monitoring.csv",
+      content_type: "text/csv",
+      payload: "csv-payload",
+      payload_sha256: "sha256",
+      expires_at: "2026-05-30T00:00:00Z",
+    });
   });
 
   it("centers the page on alerts that require attention before the inventory table", async () => {
@@ -193,6 +214,47 @@ describe("AlertsPage", () => {
     expect(within(rows[2]).getByText("AL-0002")).toBeInTheDocument();
     expect(within(rows[2]).getByText("Retry")).toBeInTheDocument();
     expect(within(rows[2]).getByText("Needs review")).toBeInTheDocument();
+  });
+
+  it("hides sensitive CSV export from analyst alert views", async () => {
+    mockUseAuth.mockReturnValue({
+      currentUser: {
+        id: 2,
+        username: "analyst",
+        email: "analyst@example.com",
+        full_name: "Analyst User",
+        phone_number: null,
+        role: "ANALYST",
+        theme_preference: "LIGHT",
+        ward: null,
+        ward_name: null,
+        is_active: true,
+      },
+    });
+
+    render(React.createElement(AlertsPage));
+
+    expect(await screen.findByRole("heading", { name: "Requires attention" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Export CSV/i })).not.toBeInTheDocument();
+  });
+
+  it("requests and downloads alert CSV through the sensitive export ledger", async () => {
+    render(React.createElement(AlertsPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Export CSV/i }));
+
+    await waitFor(() => {
+      expect(mockCreateSensitiveExportViaBff).toHaveBeenCalledWith({
+        export_type: "ALERT_LIST_CSV",
+        purpose: "Operator requested alert monitoring CSV for delivery review.",
+        filters: { alert_ids: [3, 2, 1] },
+      });
+    });
+    expect(mockDownloadSensitiveExportViaBff).toHaveBeenCalledWith("export-alerts-1");
+    expect(mockDownloadSensitiveExportFile).toHaveBeenCalledWith(
+      expect.objectContaining({ filename: "alerts-monitoring.csv" }),
+    );
+    expect(await screen.findByText("Sensitive export downloaded and audited.")).toBeInTheDocument();
   });
 
   it("uses review language and exposes the selected alert as operational work", async () => {

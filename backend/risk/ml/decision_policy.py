@@ -5,6 +5,7 @@ from datetime import timedelta
 
 from django.utils import timezone
 
+from risk.climate_coverage import climate_coverage_from_prediction
 from risk.models import (
     Alert,
     FacilityForecast,
@@ -238,10 +239,18 @@ def _source_freshness_from_prediction(prediction: dict) -> dict:
 
 def _source_confidence_from_prediction(prediction: dict, source_freshness: dict) -> dict:
     rainfall_lineage = prediction.get("rainfall_source_lineage") or {}
+    climate_coverage = climate_coverage_from_prediction(prediction)
     weak_reasons = []
     moderate_reasons = []
     if rainfall_lineage.get("source_kind") in {"SEEDED", "UNKNOWN"} or rainfall_lineage.get("fallback_reason"):
         weak_reasons.append("rainfall_source_not_live_or_fallback_used")
+    if climate_coverage["fallback_static_rainfall_used"]:
+        weak_reasons.append("fallback_static_climate_source_used")
+    if (
+        climate_coverage["evidence_available"]
+        and climate_coverage["claimed_lead_time_climate_coverage_sufficient"] is not True
+    ):
+        moderate_reasons.append("climate_forecast_horizon_insufficient")
     if prediction.get("population_exposure_feature_mode") != "source_fed_population_exposure_context":
         moderate_reasons.append("population_exposure_context_not_source_fed")
     truth_state = prediction.get("surveillance_label_truth_state") or "no_surveillance_label_window"
@@ -262,8 +271,11 @@ def _source_confidence_from_prediction(prediction: dict, source_freshness: dict)
         confidence = SOURCE_CONFIDENCE_HIGH
     return {
         "confidence": confidence,
+        "source_kind": rainfall_lineage.get("source_kind") or "",
         "weak_reasons": weak_reasons,
         "moderate_reasons": moderate_reasons,
+        "readiness_caveats": climate_coverage["climate_coverage_caveats"],
+        "climate_coverage": climate_coverage,
     }
 
 
@@ -372,6 +384,7 @@ def evaluate_ward_risk_decision_policy(
     facility_pressure = _facility_readiness_pressure_for_ward(ward)
     source_freshness = _source_freshness_from_prediction(prediction)
     source_confidence = _source_confidence_from_prediction(prediction, source_freshness)
+    climate_coverage = source_confidence["climate_coverage"]
     fatigue = _recent_alert_fatigue_for_ward(ward, policy=policy, now=now)
     alert_thresholds = policy["thresholds"]["alerting"]
     confidence_thresholds = policy["thresholds"]["confidence"]
@@ -425,6 +438,11 @@ def evaluate_ward_risk_decision_policy(
         blocked_reasons.append("source_freshness_blocks_automatic_alert")
     if source_confidence["confidence"] in confidence_thresholds["block_automatic_alert_confidence_states"]:
         blocked_reasons.append("source_confidence_blocks_automatic_alert")
+    if (
+        climate_coverage["evidence_available"]
+        and climate_coverage["claimed_lead_time_climate_coverage_sufficient"] is not True
+    ):
+        blocked_reasons.append("climate_forecast_horizon_blocks_automatic_alert")
     if fatigue["fatigued"] and alert_decision != DECISION_URGENT_ALERT:
         blocked_reasons.append("recent_alert_fatigue_blocks_automatic_alert")
     automatic_alert_allowed = alert_decision in {DECISION_ALERT_CANDIDATE, DECISION_URGENT_ALERT} and not blocked_reasons
@@ -449,6 +467,7 @@ def evaluate_ward_risk_decision_policy(
             "facility_readiness_pressure": facility_pressure,
             "source_freshness": source_freshness,
             "source_confidence": source_confidence,
+            "climate_coverage": climate_coverage,
             "recent_alert_fatigue": fatigue,
         },
         "thresholds": policy["thresholds"],

@@ -22,6 +22,7 @@ export async function GET(
       classification: unknown;
       risk_context: unknown;
       delivery: unknown;
+      climate_evidence?: unknown;
       current_state: unknown;
       freshness: unknown;
       timeline: unknown;

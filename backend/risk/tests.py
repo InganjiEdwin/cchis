@@ -139,6 +139,7 @@ from .models import (
     FacilityForecastRun,
     HealthFacility,
     IngestionRun,
+    MessageTemplate,
     ModelRun,
     RiskScore,
     SyncQueue,
@@ -6246,6 +6247,46 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.data["message_mode"], "operator_edited")
         self.assertEqual(response.data["message_preview"], "Custom field review message for Alpha team.")
 
+    def test_trigger_alert_preview_can_render_template_key_and_version(self):
+        template = MessageTemplate.objects.create(
+            template_key="cholera.alert.chv.guided_template_sms",
+            audience_type=MessageTemplate.AUDIENCE_CHV,
+            channel=MessageTemplate.CHANNEL_SMS,
+            language="en",
+            version=1,
+            title="Guided alert template",
+            body="CHVs: {ward_name} has {predicted_cases} predicted cases. Confirm field conditions.",
+            placeholders=["ward_name", "predicted_cases"],
+            approval_status=MessageTemplate.APPROVAL_APPROVED,
+            approved_by=self.admin_user,
+            approved_at=timezone.now(),
+            owner="county_public_health_operations",
+            risk_level=MessageTemplate.RISK_HIGH,
+            public_health_caveats="Use only for governed cholera alert workflows.",
+        )
+        self.authenticate(self.supervisor_user.username)
+
+        response = self.client.post(
+            reverse("trigger-alert-preview"),
+            {
+                "ward_id": self.other_ward.id,
+                "trigger_type": "FOLLOW_UP_REVIEW",
+                "template_key": template.template_key,
+                "template_version": template.version,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["message_mode"], "template_rendered")
+        self.assertFalse(response.data["supports_editing"])
+        self.assertEqual(
+            response.data["message_preview"],
+            "CHVs: North Kadem has 7 predicted cases. Confirm field conditions.",
+        )
+        self.assertEqual(response.data["message_template"]["template_key"], template.template_key)
+        self.assertEqual(response.data["message_template"]["template_version"], template.version)
+
     @patch("risk.views.trigger_alerts_task.delay", return_value=SimpleNamespace(id="task-123"))
     def test_supervisor_can_queue_alert_trigger(self, mock_delay):
         self.authenticate(self.supervisor_user.username)
@@ -6294,6 +6335,54 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(kwargs["message_override"], "Please visit households in Alpha Ward today.")
         self.assertEqual(kwargs["guided_request_metadata"]["message_mode"], "operator_edited")
         self.assertEqual(kwargs["guided_request_metadata"]["request_id"], response.data["request_id"])
+
+    @patch("risk.views.trigger_alerts_task.delay", return_value=SimpleNamespace(id="task-template-123"))
+    def test_supervisor_can_queue_template_alert_trigger(self, mock_delay):
+        template = MessageTemplate.objects.create(
+            template_key="cholera.alert.chv.guided_queue_sms",
+            audience_type=MessageTemplate.AUDIENCE_CHV,
+            channel=MessageTemplate.CHANNEL_SMS,
+            language="en",
+            version=1,
+            title="Guided queued alert template",
+            body="CHVs: {ward_name} needs review for {predicted_cases} predicted cases.",
+            placeholders=["ward_name", "predicted_cases"],
+            approval_status=MessageTemplate.APPROVAL_APPROVED,
+            approved_by=self.admin_user,
+            approved_at=timezone.now(),
+            owner="county_public_health_operations",
+            risk_level=MessageTemplate.RISK_HIGH,
+            public_health_caveats="Use only for governed cholera alert workflows.",
+        )
+        self.authenticate(self.supervisor_user.username)
+
+        response = self.client.post(
+            reverse("trigger-alerts"),
+            {
+                "ward_id": self.other_ward.id,
+                "send_sms": True,
+                "trigger_type": "FOLLOW_UP_REVIEW",
+                "template_key": template.template_key,
+                "template_version": template.version,
+                "template_language": "en",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        self.assertEqual(response.data["task_id"], "task-template-123")
+        self.assertEqual(response.data["message_mode"], "template_rendered")
+        workflow = AlertWorkflowState.objects.get(ward=self.other_ward)
+        event = workflow.events.first()
+        self.assertEqual(event.metadata["message_mode"], "template_rendered")
+        self.assertEqual(event.metadata["message_template"]["template_key"], template.template_key)
+        mock_delay.assert_called_once()
+        _, kwargs = mock_delay.call_args
+        self.assertEqual(kwargs["template_key"], template.template_key)
+        self.assertEqual(kwargs["template_version"], template.version)
+        self.assertEqual(kwargs["template_language"], "en")
+        self.assertEqual(kwargs["template_context"], {})
+        self.assertEqual(kwargs["guided_request_metadata"]["message_template"]["template_key"], template.template_key)
 
     def test_trigger_alert_requires_explicit_ward_context(self):
         self.authenticate(self.supervisor_user.username)
@@ -8231,8 +8320,10 @@ class SeedAndModelCommandTestCase(APITestCase):
         self.assertIn("lead_time_evidence_missing", payload["decision"]["promotion_blockers"])
         self.assertIn("out_of_time_validation_missing", payload["decision"]["promotion_blockers"])
         self.assertIn("training_truth_gate_missing", payload["decision"]["promotion_blockers"])
+        self.assertIn("climate_coverage_evidence_missing", payload["decision"]["promotion_blockers"])
         self.assertFalse(payload["decision"]["evidence_assessment"]["calibration_score"]["logistic_regression"])
         self.assertFalse(payload["decision"]["evidence_assessment"]["phase_4_training_truth_gate_passed"]["logistic_regression"])
+        self.assertFalse(payload["decision"]["evidence_assessment"]["climate_coverage_gate_passed"]["logistic_regression"])
         self.assertEqual(payload["decision"]["retraining_task"], None)
 
     def test_build_model_comparison_summary_marks_input_mismatch_as_promotion_blocker(self):

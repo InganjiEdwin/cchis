@@ -27,8 +27,14 @@ import { PageSectionHeader } from "@/components/ui/page-section-header";
 import { StatusBanner } from "@/components/ui/status-banner";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { cn } from "@/lib/cn";
-import { type AlertRecord } from "@/lib/dashboard";
+import {
+  createSensitiveExportViaBff,
+  downloadSensitiveExportFile,
+  downloadSensitiveExportViaBff,
+  type AlertRecord,
+} from "@/lib/dashboard";
 import { describeFreshness, formatRelativeTimestamp, getLatestTimestamp } from "@/lib/freshness";
+import { canExportSensitiveReports } from "@/lib/roles";
 import { useAlertsQuery } from "@/queries/use-alerts-query";
 import { useCreateChvCoverageRequestFromAlertMutation } from "@/queries/use-create-chv-coverage-request-from-alert-mutation";
 import { useCreateChvCoverageRequestMutation } from "@/queries/use-create-chv-coverage-request-mutation";
@@ -217,38 +223,6 @@ function buildPaginationItems(currentPage: number, totalPages: number): Array<nu
   return [1, "...", currentPage, "...", totalPages];
 }
 
-function downloadAlertsCsv(alerts: DecoratedAlert[]) {
-  const rows = [
-    ["Alert ID", "Ward", "Channel", "Status", "Created At", "Sent At", "Recipient", "Message"],
-    ...alerts.map((alert) => [
-      formatAlertPublicId(alert.id),
-      alert.ward_name,
-      alert.channelLabel,
-      alert.statusLabel,
-      alert.created_at,
-      alert.sent_at ?? "",
-      alert.recipient,
-      alert.message,
-    ]),
-  ];
-
-  const csv = rows
-    .map((row) =>
-      row
-        .map((value) => `"${String(value).replaceAll('"', '""')}"`)
-        .join(","),
-    )
-    .join("\n");
-
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "alerts-monitoring.csv";
-  link.click();
-  URL.revokeObjectURL(url);
-}
-
 export default function AlertsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -258,6 +232,9 @@ export default function AlertsPage() {
   const [page, setPage] = useState(1);
   const [selectedAlertId, setSelectedAlertId] = useState<number | null>(null);
   const [coverageRequestFeedback, setCoverageRequestFeedback] = useState<string | null>(null);
+  const [exportFeedback, setExportFeedback] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
   const alertsQuery = useAlertsQuery({ enabled: Boolean(currentUser) });
   const createFromAlertMutation = useCreateChvCoverageRequestFromAlertMutation();
   const createCoverageRequestMutation = useCreateChvCoverageRequestMutation();
@@ -373,6 +350,7 @@ export default function AlertsPage() {
     [decoratedAlerts, selectedAlertId],
   );
   const canRequestCoverage = currentUser?.role === "ADMIN" || currentUser?.role === "SUPERVISOR";
+  const canExportCsv = canExportSensitiveReports(currentUser?.role);
   const isCoverageRequestPending = createFromAlertMutation.isPending || createCoverageRequestMutation.isPending;
   const liveCoverageRequestQuery = useLiveChvCoverageRequestForWardQuery({
     wardId: selectedAlert?.ward ?? null,
@@ -385,6 +363,33 @@ export default function AlertsPage() {
   const coverageRequestPendingLabel = liveCoverageRequest
     ? "Opening CHV coverage request..."
     : "Preparing CHV coverage request...";
+
+  async function handleAlertsCsvExport() {
+    setExportFeedback(null);
+    setExportError(null);
+    setIsExporting(true);
+
+    try {
+      const exportRequest = await createSensitiveExportViaBff({
+        export_type: "ALERT_LIST_CSV",
+        purpose: "Operator requested alert monitoring CSV for delivery review.",
+        filters: { alert_ids: filteredAlerts.map((alert) => alert.id) },
+      });
+
+      if (exportRequest.approval_state !== "APPROVED") {
+        setExportFeedback("Sensitive export request is pending admin approval.");
+        return;
+      }
+
+      const download = await downloadSensitiveExportViaBff(exportRequest.public_id);
+      downloadSensitiveExportFile(download);
+      setExportFeedback("Sensitive export downloaded and audited.");
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : "Unable to request sensitive export.");
+    } finally {
+      setIsExporting(false);
+    }
+  }
 
   const freshnessAgeMinutes = latestAlertTimestamp
     ? Math.max(0, Math.round((Date.now() - new Date(latestAlertTimestamp).getTime()) / 60000))
@@ -422,7 +427,13 @@ export default function AlertsPage() {
           {createCoverageRequestMutation.error.message}
         </StatusBanner>
       ) : null}
+      {exportError ? (
+        <StatusBanner tone="danger" icon={<AlertTriangle aria-hidden="true" />}>
+          {exportError}
+        </StatusBanner>
+      ) : null}
       {coverageRequestFeedback ? <StatusBanner tone="success">{coverageRequestFeedback}</StatusBanner> : null}
+      {exportFeedback ? <StatusBanner tone="info">{exportFeedback}</StatusBanner> : null}
 
       {!isLoading && !error && decoratedAlerts.length === 0 ? (
         <StatusBanner tone="warning" icon={<AlertTriangle aria-hidden="true" />}>
@@ -594,15 +605,19 @@ export default function AlertsPage() {
                 </div>
               </div>
 
-              <Button
-                variant="secondary"
-                className="h-11 self-start bg-[var(--dashboard-icon-button-surface)] px-4 xl:self-end"
-                onClick={() => downloadAlertsCsv(filteredAlerts)}
-                disabled={!filteredAlerts.length}
-              >
-                <Download className="size-4" aria-hidden="true" />
-                <span>Export CSV</span>
-              </Button>
+              {canExportCsv ? (
+                <Button
+                  variant="secondary"
+                  className="h-11 self-start bg-[var(--dashboard-icon-button-surface)] px-4 xl:self-end"
+                  onClick={() => {
+                    void handleAlertsCsvExport();
+                  }}
+                  disabled={!filteredAlerts.length || isExporting}
+                >
+                  <Download className="size-4" aria-hidden="true" />
+                  <span>{isExporting ? "Requesting Export" : "Export CSV"}</span>
+                </Button>
+              ) : null}
             </div>
 
             <div className="mt-4 overflow-hidden rounded-[1.5rem] border border-panel-table-wrap">

@@ -21,6 +21,8 @@ ETL_SCHEMA_VERSION = "cchis.etl.v1"
 class CanonicalClimateRecord:
     entity_type: str
     schema_version: str
+    record_ref: str | None
+    record_type: str
     ward_public_id: str
     ward_name: str
     county: str
@@ -28,12 +30,21 @@ class CanonicalClimateRecord:
     source_kind: str
     source_mode: str
     source_timestamp: str | None
+    issue_time: str | None
+    valid_date: str | None
+    lead_day: int | None
+    observed_timestamp: str | None
+    forecast_horizon_days: int | None
     freshness_state: str
     rainfall_mm: float
+    quality_flag: str
+    fallback_flag: bool
     latitude: float | None
     longitude: float | None
     coordinate_source: str | None
     fallback_reason: str | None
+    source_run: str | None
+    lineage_metadata: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -172,10 +183,23 @@ def climate_record_from_rainfall_observation(
     longitude: float | None,
     coordinate_source: str | None,
     fallback_reason: str | None,
+    record_ref: str | None = None,
+    record_type: str = "forecast",
+    issue_time: str | None = None,
+    valid_date: str | None = None,
+    lead_day: int | None = None,
+    observed_timestamp: str | None = None,
+    forecast_horizon_days: int | None = None,
+    quality_flag: str = "unknown",
+    fallback_flag: bool = False,
+    source_run: str | None = None,
+    lineage_metadata: dict[str, Any] | None = None,
 ) -> CanonicalClimateRecord:
     return CanonicalClimateRecord(
         entity_type="climate_record",
         schema_version=ETL_SCHEMA_VERSION,
+        record_ref=record_ref,
+        record_type=record_type,
         ward_public_id=str(ward.public_id) if ward and ward.public_id else "",
         ward_name=ward.name if ward else ward_name,
         county=ward.county if ward else county,
@@ -183,12 +207,21 @@ def climate_record_from_rainfall_observation(
         source_kind=source_kind,
         source_mode=source_mode,
         source_timestamp=source_timestamp,
+        issue_time=issue_time,
+        valid_date=valid_date,
+        lead_day=lead_day,
+        observed_timestamp=observed_timestamp,
+        forecast_horizon_days=forecast_horizon_days,
         freshness_state=freshness_state,
         rainfall_mm=rainfall_mm,
+        quality_flag=quality_flag,
+        fallback_flag=fallback_flag,
         latitude=latitude,
         longitude=longitude,
         coordinate_source=coordinate_source,
         fallback_reason=fallback_reason,
+        source_run=source_run,
+        lineage_metadata=lineage_metadata or {},
     )
 
 

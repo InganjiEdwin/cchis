@@ -5,13 +5,14 @@ import json
 import logging
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from decouple import config
 from django.utils import timezone
 
+from risk.climate_records import enrich_rainfall_result_with_climate_contract, persist_climate_records_for_ingestion_run
 from risk.etl_records import canonical_record_envelope, climate_record_from_rainfall_observation
 from risk.models import IngestionRun, Ward
 
@@ -28,6 +29,15 @@ class RainfallObservation:
     longitude: float | None = None
     coordinate_source: str | None = None
     fallback_reason: str | None = None
+    record_type: str = "observed"
+    issue_time: datetime | None = None
+    valid_date: date | None = None
+    lead_day: int | None = None
+    observed_timestamp: datetime | None = None
+    forecast_horizon_days: int | None = None
+    quality_flag: str = "unknown"
+    fallback_flag: bool = False
+    lineage_metadata: dict = field(default_factory=dict)
 
 
 # Approximate ward centroids for initial prototype use.
@@ -87,6 +97,11 @@ def load_static_rainfall_from_env_or_defaults() -> dict[str, RainfallObservation
             latitude=lat,
             longitude=lon,
             coordinate_source=coordinate_source,
+            record_type="fallback_static",
+            forecast_horizon_days=0,
+            quality_flag="degraded_fallback",
+            fallback_flag=True,
+            lineage_metadata={"source_classification": "static_default_seed"},
         )
 
     return rows
@@ -126,6 +141,11 @@ def load_static_rainfall_from_csv() -> dict[str, RainfallObservation]:
                 latitude=latitude,
                 longitude=longitude,
                 coordinate_source="static-csv",
+                record_type="fallback_static",
+                forecast_horizon_days=0,
+                quality_flag="degraded_fallback",
+                fallback_flag=True,
+                lineage_metadata={"source_classification": "static_csv_seed"},
             )
 
     logger.info("Loaded %s rainfall rows from static CSV.", len(rows))
@@ -174,21 +194,46 @@ def fetch_open_meteo_daily_precipitation(
     with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
         payload = json.loads(response.read().decode("utf-8"))
 
+    issue_time = timezone.now()
     daily = payload.get("daily", {})
     precipitation_values = daily.get("precipitation_sum", []) or []
+    valid_dates = []
+    for raw_date in daily.get("time", []) or []:
+        try:
+            valid_dates.append(date.fromisoformat(str(raw_date)))
+        except ValueError:
+            continue
 
     if not precipitation_values:
         raise ValueError(f"No precipitation_sum returned for ward '{ward_name}'")
 
     rainfall_mm = float(sum(float(value or 0) for value in precipitation_values))
+    lead_day = len(precipitation_values)
+    valid_date = max(valid_dates) if valid_dates else issue_time.date() + timedelta(days=max(lead_day - 1, 0))
 
     return RainfallObservation(
         ward_name=_normalize_ward_name(ward_name),
         rainfall_mm=round(rainfall_mm, 2),
         source="open-meteo-forecast",
-        source_timestamp=timezone.now(),
+        source_timestamp=issue_time,
         latitude=latitude,
         longitude=longitude,
+        record_type="forecast",
+        issue_time=issue_time,
+        valid_date=valid_date,
+        lead_day=lead_day,
+        forecast_horizon_days=lead_day,
+        quality_flag="accepted",
+        fallback_flag=False,
+        lineage_metadata={
+            "provider": "open-meteo",
+            "endpoint": base_url,
+            "timezone": open_meteo_timezone,
+            "requested_forecast_days": forecast_days,
+            "returned_precipitation_day_count": len(precipitation_values),
+            "valid_dates": [item.isoformat() for item in valid_dates],
+            "rainfall_aggregation": "sum_daily_precipitation_sum",
+        },
     )
 
 
@@ -230,7 +275,50 @@ def _build_static_fallback_observation(
         longitude=observation.longitude if observation.longitude is not None else longitude,
         coordinate_source=observation.coordinate_source or coordinate_source,
         fallback_reason=fallback_reason,
+        record_type="fallback_static",
+        issue_time=None,
+        valid_date=None,
+        lead_day=None,
+        observed_timestamp=None,
+        forecast_horizon_days=0,
+        quality_flag="degraded_fallback",
+        fallback_flag=True,
+        lineage_metadata={
+            **(observation.lineage_metadata or {}),
+            "fallback_reason": fallback_reason,
+            "fallback_source": observation.source,
+        },
     )
+
+
+def _datetime_observation_attr(observation, attr_name: str) -> datetime | None:
+    value = getattr(observation, attr_name, None)
+    return value if isinstance(value, datetime) else None
+
+
+def _date_observation_attr(observation, attr_name: str) -> date | None:
+    value = getattr(observation, attr_name, None)
+    return value if isinstance(value, date) and not isinstance(value, datetime) else None
+
+
+def _int_observation_attr(observation, attr_name: str) -> int | None:
+    value = getattr(observation, attr_name, None)
+    return value if isinstance(value, int) else None
+
+
+def _dict_observation_attr(observation, attr_name: str) -> dict:
+    value = getattr(observation, attr_name, None)
+    return value if isinstance(value, dict) else {}
+
+
+def _str_observation_attr(observation, attr_name: str, default: str = "") -> str:
+    value = getattr(observation, attr_name, None)
+    return value if isinstance(value, str) else default
+
+
+def _bool_observation_attr(observation, attr_name: str, default: bool = False) -> bool:
+    value = getattr(observation, attr_name, None)
+    return value if isinstance(value, bool) else default
 
 
 def _serialize_observation(ward: Ward | None, observation: RainfallObservation) -> dict:
@@ -245,6 +333,23 @@ def _serialize_observation(ward: Ward | None, observation: RainfallObservation) 
         IngestionRun.SOURCE_KIND_LIVE if observation.source == "open-meteo-forecast" else IngestionRun.SOURCE_KIND_SEEDED
     )
     freshness_state = IngestionRun.FRESHNESS_FRESH if source_timestamp else IngestionRun.FRESHNESS_UNKNOWN
+    issue_time = _datetime_observation_attr(observation, "issue_time")
+    valid_date = _date_observation_attr(observation, "valid_date")
+    observed_timestamp = _datetime_observation_attr(observation, "observed_timestamp")
+    lead_day = _int_observation_attr(observation, "lead_day")
+    forecast_horizon_days = _int_observation_attr(observation, "forecast_horizon_days")
+    fallback_flag = _bool_observation_attr(observation, "fallback_flag", bool(observation.fallback_reason))
+    record_type = _str_observation_attr(
+        observation,
+        "record_type",
+        "fallback_static" if fallback_flag else ("forecast" if observation.source == "open-meteo-forecast" else "observed"),
+    )
+    quality_flag = _str_observation_attr(
+        observation,
+        "quality_flag",
+        "degraded_fallback" if fallback_flag else "accepted",
+    )
+    lineage_metadata = _dict_observation_attr(observation, "lineage_metadata")
     return {
         "ward_id": ward.id if ward else None,
         "ward_public_id": str(ward.public_id) if ward and ward.public_id else "",
@@ -252,6 +357,15 @@ def _serialize_observation(ward: Ward | None, observation: RainfallObservation) 
         "rainfall_mm": observation.rainfall_mm,
         "source": observation.source,
         "source_timestamp": source_timestamp,
+        "record_type": record_type,
+        "issue_time": issue_time.isoformat() if issue_time else None,
+        "valid_date": valid_date.isoformat() if valid_date else None,
+        "lead_day": lead_day,
+        "observed_timestamp": observed_timestamp.isoformat() if observed_timestamp else None,
+        "forecast_horizon_days": forecast_horizon_days,
+        "quality_flag": quality_flag,
+        "fallback_flag": fallback_flag,
+        "lineage_metadata": lineage_metadata,
         "latitude": observation.latitude,
         "longitude": observation.longitude,
         "coordinate_source": observation.coordinate_source or "",
@@ -271,6 +385,15 @@ def _serialize_observation(ward: Ward | None, observation: RainfallObservation) 
                 longitude=observation.longitude,
                 coordinate_source=observation.coordinate_source,
                 fallback_reason=observation.fallback_reason,
+                record_type=record_type,
+                issue_time=issue_time.isoformat() if issue_time else None,
+                valid_date=valid_date.isoformat() if valid_date else None,
+                lead_day=lead_day,
+                observed_timestamp=observed_timestamp.isoformat() if observed_timestamp else None,
+                forecast_horizon_days=forecast_horizon_days,
+                quality_flag=quality_flag,
+                fallback_flag=fallback_flag,
+                lineage_metadata=lineage_metadata,
             )
         ),
     }
@@ -297,10 +420,16 @@ def _freshness_state_for_results(results: list[dict]) -> str:
         source_timestamp = item.get("source_timestamp")
         if not source_timestamp:
             continue
-        try:
-            timestamps.append(datetime.fromisoformat(source_timestamp))
-        except ValueError:
+        if isinstance(source_timestamp, datetime):
+            parsed = source_timestamp
+        elif isinstance(source_timestamp, str):
+            try:
+                parsed = datetime.fromisoformat(source_timestamp.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+        else:
             continue
+        timestamps.append(parsed)
     if not timestamps:
         return IngestionRun.FRESHNESS_UNKNOWN
     latest = max(timestamps)
@@ -333,7 +462,7 @@ def _latest_source_timestamp(results: list[dict]):
             parsed = source_timestamp
         elif isinstance(source_timestamp, str):
             try:
-                parsed = datetime.fromisoformat(source_timestamp)
+                parsed = datetime.fromisoformat(source_timestamp.replace("Z", "+00:00"))
             except ValueError:
                 continue
         else:
@@ -356,6 +485,14 @@ def _finalize_ingestion_run(ingestion_run: IngestionRun, results: list[dict], er
     ingestion_run.source_name = _primary_source_name(results)
     ingestion_run.source_timestamp = _latest_source_timestamp(results)
     ingestion_run.freshness_state = _freshness_state_for_results(results)
+    results = [
+        enrich_rainfall_result_with_climate_contract(
+            ingestion_run=ingestion_run,
+            result=result,
+            row_index=index,
+        )
+        for index, result in enumerate(results)
+    ]
     ingestion_run.fallback_used = any(item.get("fallback_reason") for item in results)
     ingestion_run.records_seen = len(ingestion_run.requested_wards or [])
     ingestion_run.records_loaded = len(results)
@@ -379,6 +516,8 @@ def _finalize_ingestion_run(ingestion_run: IngestionRun, results: list[dict], er
             "completed_at",
         ]
     )
+    if not error_message:
+        persist_climate_records_for_ingestion_run(ingestion_run)
 
 
 def _fetch_rainfall_observation(ward_name: str, ward: Ward | None = None) -> RainfallObservation:
@@ -416,6 +555,9 @@ def _fetch_rainfall_observation(ward_name: str, ward: Ward | None = None) -> Rai
             longitude=longitude,
             forecast_days=config("OPEN_METEO_FORECAST_DAYS", cast=int, default=3),
         )
+        forecast_horizon_days = _int_observation_attr(observation, "forecast_horizon_days")
+        if forecast_horizon_days is None:
+            forecast_horizon_days = config("OPEN_METEO_FORECAST_DAYS", cast=int, default=3)
         return RainfallObservation(
             ward_name=observation.ward_name,
             rainfall_mm=observation.rainfall_mm,
@@ -425,6 +567,15 @@ def _fetch_rainfall_observation(ward_name: str, ward: Ward | None = None) -> Rai
             longitude=observation.longitude,
             coordinate_source=coordinate_source,
             fallback_reason=None,
+            record_type=_str_observation_attr(observation, "record_type", "forecast"),
+            issue_time=_datetime_observation_attr(observation, "issue_time") or observation.source_timestamp,
+            valid_date=_date_observation_attr(observation, "valid_date"),
+            lead_day=_int_observation_attr(observation, "lead_day"),
+            observed_timestamp=_datetime_observation_attr(observation, "observed_timestamp"),
+            forecast_horizon_days=forecast_horizon_days,
+            quality_flag=_str_observation_attr(observation, "quality_flag", "accepted"),
+            fallback_flag=False,
+            lineage_metadata=_dict_observation_attr(observation, "lineage_metadata"),
         )
     except Exception as exc:
         logger.exception(
@@ -444,6 +595,7 @@ def _fetch_rainfall_observation(ward_name: str, ward: Ward | None = None) -> Rai
 def fetch_rainfall_for_ward(ward_name: str, ward: Ward | None = None) -> RainfallObservation:
     mode = config("RAINFALL_SOURCE_MODE", default="hybrid").strip().lower()
     normalized = _normalize_ward_name(ward_name)
+    ward_obj = ward or Ward.objects.filter(name=normalized).order_by("id").first()
     ingestion_run = IngestionRun.objects.create(
         run_type=IngestionRun.RUN_TYPE_RAINFALL,
         status=IngestionRun.STATUS_SUCCESS,
@@ -452,10 +604,10 @@ def fetch_rainfall_for_ward(ward_name: str, ward: Ward | None = None) -> Rainfal
         requested_wards=[normalized],
     )
     try:
-        observation = _fetch_rainfall_observation(normalized, ward=ward)
+        observation = _fetch_rainfall_observation(normalized, ward=ward_obj)
         _finalize_ingestion_run(
             ingestion_run,
-            [_serialize_observation(ward, observation)],
+            [_serialize_observation(ward_obj, observation)],
         )
         return observation
     except Exception as exc:
@@ -476,7 +628,8 @@ def fetch_rainfall_for_wards(
         if isinstance(item, Ward):
             ward_entries.append((_normalize_ward_name(item.name), item))
         else:
-            ward_entries.append((_normalize_ward_name(str(item)), None))
+            normalized = _normalize_ward_name(str(item))
+            ward_entries.append((normalized, Ward.objects.filter(name=normalized).order_by("id").first()))
 
     ingestion_run = IngestionRun.objects.create(
         run_type=IngestionRun.RUN_TYPE_RAINFALL,

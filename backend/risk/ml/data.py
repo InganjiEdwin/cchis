@@ -5,6 +5,11 @@ from dataclasses import dataclass
 from uuid import uuid4
 from typing import Iterable
 
+from risk.climate_coverage import (
+    DEFAULT_CLAIMED_FORECAST_HORIZON_DAYS,
+    climate_coverage_from_prediction,
+    climate_source_label_for_record_type,
+)
 from risk.models import FeatureDataset, FeatureDatasetRow, IngestionRun, SurveillanceTruthLevel, Ward
 from risk.population_exposure_features import (
     POPULATION_EXPOSURE_FEATURE_KEYS,
@@ -384,17 +389,56 @@ def _rainfall_source_lineage_by_ward_id(ingestion_run: IngestionRun | None) -> d
         if not ward_id:
             continue
         canonical = result.get("canonical_record") or {}
-        lineage_by_ward_id[int(ward_id)] = {
+        record_type = result.get("record_type") or canonical.get("record_type") or ""
+        fallback_flag = bool(result.get("fallback_flag") or canonical.get("fallback_flag"))
+        fallback_reason = result.get("fallback_reason") or canonical.get("fallback_reason") or ""
+        forecast_horizon_days = (
+            result.get("forecast_horizon_days")
+            if result.get("forecast_horizon_days") is not None
+            else canonical.get("forecast_horizon_days")
+        )
+        lead_day = result.get("lead_day") if result.get("lead_day") is not None else canonical.get("lead_day")
+        forecast_coverage_days = forecast_horizon_days or lead_day or 0
+        lineage = {
             "ingestion_run_id": ingestion_run.id,
             "source": result.get("source"),
+            "source_provider": result.get("source") or canonical.get("source_name") or ingestion_run.source_name,
             "source_kind": ingestion_run.source_kind,
             "source_mode": ingestion_run.source_mode,
             "source_timestamp": result.get("source_timestamp"),
             "freshness_state": ingestion_run.freshness_state,
-            "fallback_reason": result.get("fallback_reason") or "",
+            "record_type": record_type,
+            "observed_vs_forecast_source_label": climate_source_label_for_record_type(record_type),
+            "issue_time": result.get("issue_time") or canonical.get("issue_time"),
+            "valid_date": result.get("valid_date") or canonical.get("valid_date"),
+            "lead_day": lead_day,
+            "observed_timestamp": result.get("observed_timestamp") or canonical.get("observed_timestamp"),
+            "forecast_horizon_days": forecast_horizon_days,
+            "quality_flag": result.get("quality_flag") or canonical.get("quality_flag"),
+            "fallback_flag": fallback_flag,
+            "fallback_reason": fallback_reason,
             "coordinate_source": result.get("coordinate_source") or "",
             "canonical_record_ref": canonical.get("record_ref"),
+            "claimed_forecast_horizon_days": DEFAULT_CLAIMED_FORECAST_HORIZON_DAYS,
+            "forecast_coverage_days": forecast_coverage_days if record_type == "forecast" else 0,
+            "fallback_static_rainfall_used": fallback_flag or record_type == "fallback_static",
         }
+        climate_coverage = climate_coverage_from_prediction({"rainfall_source_lineage": lineage})
+        lineage.update(
+            {
+                "forecast_covered_lead_days": climate_coverage["forecast_covered_lead_days"],
+                "forecast_missing_lead_days": climate_coverage["forecast_missing_lead_days"],
+                "claimed_lead_time_climate_coverage_sufficient": climate_coverage[
+                    "claimed_lead_time_climate_coverage_sufficient"
+                ],
+                "climate_coverage_status": climate_coverage["climate_coverage_status"],
+                "climate_coverage_caveats": climate_coverage["climate_coverage_caveats"],
+                "climate_source_confidence": climate_coverage["climate_source_confidence"],
+                "climate_source_confidence_label": climate_coverage["climate_source_confidence_label"],
+                "climate_coverage": climate_coverage,
+            }
+        )
+        lineage_by_ward_id[int(ward_id)] = lineage
     return lineage_by_ward_id
 
 

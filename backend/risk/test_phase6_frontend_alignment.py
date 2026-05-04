@@ -71,6 +71,15 @@ class WardFrontendAlignmentPhaseSixTestCase(TestCase):
                 "inputs": {
                     "source_freshness": {"combined_state": "FRESH"},
                     "source_confidence": {"confidence": "high", "source_kind": "LIVE"},
+                    "climate_coverage": {
+                        "observed_vs_forecast_source_label": "Forecast rainfall",
+                        "claimed_forecast_horizon_days": 14,
+                        "forecast_coverage_days": 3,
+                        "forecast_missing_lead_days": list(range(4, 15)),
+                        "claimed_lead_time_climate_coverage_sufficient": False,
+                        "climate_coverage_status": "insufficient_forecast_horizon",
+                        "climate_coverage_caveats": ["forecast_missing_claimed_lead_days"],
+                    },
                 },
             },
             generated_at=anchor - timedelta(days=14),
@@ -134,8 +143,15 @@ class WardFrontendAlignmentPhaseSixTestCase(TestCase):
         evidence = payload["operational_evidence"]
 
         self.assertEqual(evidence["forecast_horizon"]["display_value"], "7 to 14 days")
+        self.assertEqual(evidence["forecast_horizon"]["source_label"], "Forecast rainfall")
+        self.assertEqual(evidence["forecast_horizon"]["forecast_missing_lead_days"], list(range(4, 15)))
+        self.assertEqual(evidence["climate_source"]["observed_vs_forecast_source_label"], "Forecast rainfall")
         self.assertEqual(evidence["model_readiness"]["state"], "promoted")
+        self.assertIn("forecast_missing_claimed_lead_days", evidence["model_readiness"]["readiness_caveats"])
         self.assertEqual(evidence["source_badges"][0]["id"], "source_freshness")
+        climate_badges = [badge for badge in evidence["source_badges"] if badge["id"] == "climate_coverage"]
+        self.assertEqual(climate_badges[0]["value"], "Insufficient Forecast Horizon")
+        self.assertIn("Forecast rainfall", climate_badges[0]["detail"])
         self.assertEqual(evidence["alert_candidate_review"]["alert_decision"], "alert_candidate")
         self.assertEqual(evidence["outcome_evaluation"]["hit_count"], 1)
         self.assertEqual(evidence["outcome_evaluation"]["false_alert_count"], 1)
@@ -143,3 +159,6 @@ class WardFrontendAlignmentPhaseSixTestCase(TestCase):
         self.assertEqual(evidence["prediction_label_history"][0]["classification"], "hit")
         self.assertEqual(evidence["chv_action_status"]["summary"]["active_request_count"], 1)
         self.assertIn(str(alert.public_id), evidence["chv_action_status"]["requests"][0]["linked_alert_public_ids"])
+        self.assertTrue(
+            any("Forecast rainfall" in item["text"] for item in payload["driver_summary"]["items"])
+        )

@@ -674,7 +674,9 @@ def sync_dashboard_notifications() -> None:
                 },
             )
 
-    auto_resolve_queryset = DashboardNotification.objects.filter(auto_resolve=True).exclude(state__in=[
+    auto_resolve_queryset = DashboardNotification.objects.filter(auto_resolve=True).exclude(
+        type=DashboardNotification.TYPE_OPERATIONAL_KPI_THRESHOLD
+    ).exclude(state__in=[
         DashboardNotification.STATE_RESOLVED,
         DashboardNotification.STATE_EXPIRED,
     ])

@@ -5,11 +5,13 @@ import { useQuery } from "@tanstack/react-query";
 import {
   fetchAlertsDataViaBff,
   fetchChvCoverageRequestsViaBff,
+  fetchChvOfflineMonitoringViaBff,
   fetchChvOperationsDataViaBff,
   fetchWardMapViaBff,
   fetchWardRiskDataViaBff,
   type AlertRecord,
   type ChvCoverageRequestRecord,
+  type ChvOfflineMonitoringSnapshot,
   type ChvOperationsRecord,
   type LatestWardRisk,
   type WardMapResponse,
@@ -31,6 +33,7 @@ export type ChvOperationsSnapshot = {
   wardMap: WardMapResponse;
   coverageRequests: ChvCoverageRequestRecord[];
   coverageByWard: Record<number, ChvCoverageWardSummary>;
+  offlineMonitoring: ChvOfflineMonitoringSnapshot;
 };
 
 const LIVE_CHV_COVERAGE_REQUEST_STATUSES = new Set(["OPEN", "APPROVED", "IN_PROGRESS"]);
@@ -55,12 +58,13 @@ export function useChvOperationsQuery({ enabled = true }: { enabled?: boolean } 
   return useQuery({
     queryKey: queryKeys.chvs.root(),
     queryFn: async (): Promise<ChvOperationsSnapshot> => {
-      const [chvResponse, wardResponse, alertResponse, wardMap, coverageRequests] = await Promise.all([
+      const [chvResponse, wardResponse, alertResponse, wardMap, coverageRequests, offlineMonitoring] = await Promise.all([
         fetchChvOperationsDataViaBff(),
         fetchWardRiskDataViaBff({ county: "Migori", ordering: "-current_risk_score" }),
         fetchAlertsDataViaBff(),
         fetchWardMapViaBff(),
         fetchAllCoverageRequests(),
+        fetchChvOfflineMonitoringViaBff(),
       ]);
 
       const coverageByWard = coverageRequests.reduce<Record<number, ChvCoverageWardSummary>>(
@@ -104,6 +108,7 @@ export function useChvOperationsQuery({ enabled = true }: { enabled?: boolean } 
         wardMap,
         coverageRequests,
         coverageByWard,
+        offlineMonitoring,
       };
     },
     enabled,

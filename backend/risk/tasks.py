@@ -185,6 +185,10 @@ def trigger_alerts_task(
     trigger_type: str | None = None,
     message_override: str | None = None,
     guided_request_metadata: dict | None = None,
+    template_key: str = "",
+    template_version: int | None = None,
+    template_language: str = "en",
+    template_context: dict | None = None,
 ) -> int:
     risk_score = RiskScore.objects.select_related("ward", "model_run").get(id=risk_score_id)
     alerts = trigger_alerts_for_riskscore(
@@ -193,6 +197,10 @@ def trigger_alerts_task(
         trigger_type=trigger_type,
         message_override=message_override,
         guided_request_metadata=guided_request_metadata,
+        template_key=template_key,
+        template_version=template_version,
+        template_language=template_language,
+        template_context=template_context,
     )
     for alert in alerts:
         if alert.status == Alert.STATUS_QUEUED:

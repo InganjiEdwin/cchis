@@ -8,6 +8,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score
 
+from risk.climate_coverage import climate_coverage_summary_from_feature_values
 from risk.lead_time_features import LEAD_TIME_FEATURE_SCHEMA_VERSION
 from risk.models import FeatureDataset, FeatureDatasetRow, ModelRun
 from risk.surveillance_labels import SURVEILLANCE_LEAD_TIME_LABEL_GENERATION_MODE
@@ -415,6 +416,7 @@ def _promotion_gates(
     split: dict,
     model_metrics: dict,
     baseline_metrics: dict,
+    climate_coverage_summary: dict,
 ) -> dict:
     blockers = []
     train_label_counts = Counter(example["label"] for example in train_examples)
@@ -439,6 +441,7 @@ def _promotion_gates(
     leakage_checks_pass = bool(validation_examples) and all(
         example["leakage_check_passed"] for example in validation_examples
     )
+    climate_coverage_ready = climate_coverage_summary.get("ready_for_claimed_forecast_horizon") is True
     if split.get("status") != "ready":
         blockers.append("out_of_time_validation_missing")
     if len(train_label_counts) < 2:
@@ -459,6 +462,8 @@ def _promotion_gates(
         blockers.append("lead_time_label_dataset_missing")
     if feature_dataset.schema_version != LEAD_TIME_FEATURE_SCHEMA_VERSION:
         blockers.append("lead_time_feature_dataset_missing")
+    if not climate_coverage_ready:
+        blockers.append("climate_coverage_readiness_caveat")
     if baseline_metrics.get("status") != "evaluated":
         blockers.append("rainfall_threshold_baseline_missing")
     if any(
@@ -484,6 +489,8 @@ def _promotion_gates(
             "accepted_surveillance_truth_available": accepted_truth_validation_row_count > 0,
             "lead_time_label_dataset": lead_time_label_dataset,
             "lead_time_feature_dataset": feature_dataset.schema_version == LEAD_TIME_FEATURE_SCHEMA_VERSION,
+            "climate_coverage_ready": climate_coverage_ready,
+            "climate_coverage_summary": climate_coverage_summary,
             "rainfall_threshold_baseline_compared": baseline_metrics.get("status") == "evaluated",
             "promotion_metric_thresholds": {
                 "minimum_accuracy": MIN_PROMOTION_ACCURACY,
@@ -537,6 +544,12 @@ def build_temporal_backtest_report(
         validation_examples=validation_examples,
         threshold_mm=rainfall_threshold_mm,
     )
+    climate_coverage_summary = climate_coverage_summary_from_feature_values(
+        example["feature_values"] for example in examples
+    )
+    validation_climate_coverage_summary = climate_coverage_summary_from_feature_values(
+        example["feature_values"] for example in validation_examples
+    )
     promotion_gates = _promotion_gates(
         feature_dataset=feature_dataset,
         label_dataset=label_dataset,
@@ -545,6 +558,7 @@ def build_temporal_backtest_report(
         split=split,
         model_metrics=model_metrics,
         baseline_metrics=baseline_metrics,
+        climate_coverage_summary=validation_climate_coverage_summary,
     )
     validation_dates = sorted({example["prediction_date"] for example in validation_examples})
     lead_time_days_supported = [
@@ -613,6 +627,8 @@ def build_temporal_backtest_report(
             "leakage_failures": leakage_failures[:50],
         },
         "lead_time_days_supported": lead_time_days_supported,
+        "climate_coverage_summary": climate_coverage_summary,
+        "validation_climate_coverage_summary": validation_climate_coverage_summary,
         "promotion_gates": promotion_gates,
         "facility_burden_forecast_separation": {
             "negative_binomial_facility_burden_forecasting_separate": True,
@@ -745,6 +761,9 @@ def persist_temporal_backtest_report(
     selected_algorithm_gate = _selected_algorithm_promotion_gate(report, algorithm)
     binding_gate = _promotion_evidence_binding_gate(model_run=model_run, report=report)
     training_truth_gate = _training_truth_promotion_gate(model_run)
+    climate_coverage_summary = report.get("climate_coverage_summary") or {}
+    validation_climate_coverage_summary = report.get("validation_climate_coverage_summary") or {}
+    climate_coverage_ready = ((gates.get("checks") or {}).get("climate_coverage_ready") is True)
     if promote and not gates.get("passed"):
         blockers = ", ".join(gates.get("blockers") or ["unknown"])
         raise ValueError(f"Cannot promote model_run={model_run.id}; Phase 4 gates failed: {blockers}")
@@ -783,6 +802,13 @@ def persist_temporal_backtest_report(
             "rainfall_threshold_baseline_accuracy": (
                 ((report.get("metrics") or {}).get(RAINFALL_THRESHOLD_BASELINE_KEY) or {}).get("metrics") or {}
             ).get("accuracy"),
+            "climate_coverage_summary": climate_coverage_summary,
+            "validation_climate_coverage_summary": validation_climate_coverage_summary,
+            "climate_coverage_gate_passed": climate_coverage_ready,
+            "climate_coverage_readiness_caveats": validation_climate_coverage_summary.get(
+                "readiness_caveats",
+                [],
+            ),
             "promotion_truth_and_leakage_checks_passed": gates.get("passed", False),
             "phase_4_selected_model_promotion_metric_gate_passed": selected_algorithm_gate["passed"],
             "phase_4_promotion_evidence_binding_passed": binding_gate["passed"],
@@ -805,6 +831,11 @@ def persist_temporal_backtest_report(
             "promotion_evidence_report_ref": f"model_run:{model_run.id}:temporal_backtest_report",
             "ward_risk_classification_backtest_dataset_ref": report.get("feature_dataset_ref"),
             "ward_risk_classification_label_dataset_ref": report.get("label_dataset_ref"),
+            "climate_coverage_summary": climate_coverage_summary,
+            "climate_coverage_gate": {
+                "passed": climate_coverage_ready,
+                "validation_summary": validation_climate_coverage_summary,
+            },
             "facility_burden_forecast_model_family_separate": True,
             "risk_score_model_run_linkage": {
                 "risk_score_count": model_run.risk_scores.count(),
@@ -827,4 +858,17 @@ def persist_temporal_backtest_report(
     model_run.evaluation_metrics = evaluation_metrics
     model_run.metadata = metadata
     model_run.save(update_fields=["evaluation_metrics", "metadata"])
+    if promote:
+        from .registry import ensure_registry_entry_for_promoted_run
+
+        ensure_registry_entry_for_promoted_run(
+            model_run=model_run,
+            promoted_by="phase_4_temporal_backtest",
+            owner=metadata.get("model_owner", "model_operations"),
+            source="phase_4_temporal_backtest",
+            metadata={
+                "promotion_decision_source": metadata.get("promotion_decision_source"),
+                "materialized_ward_count": materialized_ward_count,
+            },
+        )
     return model_run

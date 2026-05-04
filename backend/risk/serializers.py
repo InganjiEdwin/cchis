@@ -1,8 +1,194 @@
+from collections.abc import Mapping
+
 from rest_framework import serializers
+from rest_framework.fields import empty
 from django.utils import timezone
 
 from .ml.alignment import latest_promoted_riskscore_for_ward
-from .models import Alert, AlertWorkflowEvent, AlertWorkflowState, CHV, CHVAssignment, CHVCoverageRequest, CHVCoverageRequestEvent, CHVMessage, DashboardNotification, DashboardNotificationEvent, ETLHeartbeat, FacilityContact, FacilityReadinessEscalation, FacilityReadinessReview, FacilityReadinessReviewEvent, FacilityReadinessUpdateRequest, FeatureDataset, FeatureDatasetRow, HealthFacility, IngestionRun, ModelRun, RiskScore, ScenarioSimulationRun, SyncQueue, TriageSession, UssdSessionLog, Ward
+from .chv_offline import (
+    OFFLINE_CHV_CONTRACT_VERSION,
+    OFFLINE_CHV_UPLOAD_PAYLOAD_VERSION,
+    SUPPORTED_PHASE_4_UPLOAD_TYPES,
+)
+from .models import Alert, AlertWorkflowEvent, AlertWorkflowState, CHV, CHVAssignment, CHVCoverageRequest, CHVCoverageRequestEvent, CHVDeviceRegistration, CHVMessage, ContactPreference, DashboardNotification, DashboardNotificationEvent, ETLHeartbeat, ExternalDataElementMapping, ExternalOrgUnitMapping, ExternalSystem, ExternalValueSetMapping, FacilityContact, FacilityReadinessEscalation, FacilityReadinessReview, FacilityReadinessReviewEvent, FacilityReadinessUpdateRequest, FeatureDataset, FeatureDatasetRow, HealthFacility, IngestionRun, InteroperabilityMappingVersion, InteroperabilityRun, InteroperabilityRunError, InteroperabilityRunItem, MessageTemplate, ModelRun, PreparednessAction, PreparednessActionEvent, RiskScore, ScenarioSimulationRun, SensitiveExportDownloadAudit, SensitiveExportRequest, SyncQueue, TriageSession, UssdMenuVersion, UssdSessionLog, Ward
+from .privacy_minimization import (
+    PrivacyMinimizationViolation,
+    ensure_pii_safe_mapping,
+    ensure_pii_safe_text,
+)
+from .privacy_access import (
+    mask_contact_value,
+    privacy_context,
+    redact_direct_identifiers_in_text,
+    redact_field_health_text,
+    redact_provider_identifier,
+    serializer_user,
+    user_can_view_direct_identifiers,
+)
+
+
+class PiiSafeInputSerializerMixin:
+    pii_safe_text_fields: tuple[str, ...] = ()
+    pii_safe_mapping_fields: tuple[str, ...] = ()
+
+    def to_internal_value(self, data):
+        if isinstance(data, Mapping):
+            unsupported_fields = sorted(set(data) - set(self.fields))
+            if unsupported_fields:
+                raise serializers.ValidationError(
+                    {
+                        field: [
+                            "Unsupported field. This endpoint only accepts the documented minimum data fields."
+                        ]
+                        for field in unsupported_fields
+                    }
+                )
+        return super().to_internal_value(data)
+
+    def run_validation(self, data=empty):
+        value = super().run_validation(data)
+        if isinstance(value, dict):
+            self._validate_pii_safe_fields(value)
+        return value
+
+    def _validate_pii_safe_fields(self, attrs: dict) -> None:
+        errors: dict[str, list[str]] = {}
+        for field_name in self.pii_safe_text_fields:
+            if field_name not in attrs:
+                continue
+            try:
+                ensure_pii_safe_text(attrs.get(field_name, ""), location=field_name)
+            except PrivacyMinimizationViolation as exc:
+                errors[field_name] = [str(exc)]
+
+        for field_name in self.pii_safe_mapping_fields:
+            if field_name not in attrs:
+                continue
+            try:
+                ensure_pii_safe_mapping(attrs.get(field_name) or {}, location=field_name)
+            except PrivacyMinimizationViolation as exc:
+                errors[field_name] = [str(exc)]
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
+
+def validate_pii_safe_serializer_text(value: str, *, field_name: str) -> str:
+    try:
+        ensure_pii_safe_text(value, location=field_name)
+    except PrivacyMinimizationViolation as exc:
+        raise serializers.ValidationError(str(exc)) from exc
+    return value
+
+
+class ContactPreferenceSerializer(serializers.ModelSerializer):
+    recorded_by_username = serializers.CharField(source="recorded_by.username", allow_null=True, read_only=True)
+
+    class Meta:
+        model = ContactPreference
+        fields = [
+            "public_id",
+            "audience_type",
+            "channel",
+            "phone_number",
+            "contact_reference",
+            "consent_status",
+            "opt_out_status",
+            "source",
+            "source_reference",
+            "recorded_by",
+            "recorded_by_username",
+            "recorded_at",
+            "expires_at",
+            "metadata",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["public_id", "recorded_by", "recorded_by_username", "created_at", "updated_at"]
+
+
+class ContactPreferenceCreateSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = ("contact_reference", "source", "source_reference")
+    pii_safe_mapping_fields = ("metadata",)
+
+    audience_type = serializers.ChoiceField(choices=ContactPreference.AUDIENCE_CHOICES)
+    channel = serializers.ChoiceField(choices=ContactPreference.CHANNEL_CHOICES, default=ContactPreference.CHANNEL_SMS)
+    phone_number = serializers.CharField(required=False, allow_blank=True, max_length=20)
+    contact_reference = serializers.CharField(required=False, allow_blank=True, max_length=180)
+    consent_status = serializers.ChoiceField(
+        choices=ContactPreference.CONSENT_CHOICES,
+        default=ContactPreference.CONSENT_UNKNOWN,
+    )
+    opt_out_status = serializers.ChoiceField(
+        choices=ContactPreference.OPT_OUT_CHOICES,
+        default=ContactPreference.OPT_OUT_NOT_OPTED_OUT,
+    )
+    source = serializers.CharField(max_length=120)
+    source_reference = serializers.CharField(required=False, allow_blank=True, max_length=180)
+    recorded_at = serializers.DateTimeField(required=False)
+    expires_at = serializers.DateTimeField(required=False, allow_null=True)
+    metadata = serializers.JSONField(required=False, default=dict)
+
+    def validate(self, attrs):
+        phone_number = ContactPreference.normalize_phone_number(attrs.get("phone_number", ""))
+        contact_reference = attrs.get("contact_reference", "").strip()
+        if phone_number and not ContactPreference.is_valid_phone_number(phone_number):
+            raise serializers.ValidationError(
+                {"phone_number": "Enter a valid Kenyan mobile phone number for SMS contact preferences."}
+            )
+        if not phone_number and not contact_reference:
+            raise serializers.ValidationError(
+                {"detail": "A phone number or contact reference is required for a contact preference."}
+            )
+        recorded_at = attrs.get("recorded_at") or timezone.now()
+        expires_at = attrs.get("expires_at")
+        if expires_at is not None and expires_at <= recorded_at:
+            raise serializers.ValidationError({"expires_at": "Preference expiry must be after the recorded time."})
+        attrs["phone_number"] = phone_number
+        attrs["contact_reference"] = contact_reference
+        attrs["source"] = attrs["source"].strip()
+        attrs["source_reference"] = attrs.get("source_reference", "").strip()
+        attrs["recorded_at"] = recorded_at
+        return attrs
+
+
+class MessageTemplateSerializer(serializers.ModelSerializer):
+    approved_by_username = serializers.CharField(source="approved_by.username", allow_null=True, read_only=True)
+    created_by_username = serializers.CharField(source="created_by.username", allow_null=True, read_only=True)
+
+    class Meta:
+        model = MessageTemplate
+        fields = [
+            "public_id",
+            "template_key",
+            "audience_type",
+            "channel",
+            "language",
+            "version",
+            "title",
+            "body",
+            "placeholders",
+            "approval_status",
+            "approved_by",
+            "approved_by_username",
+            "approved_at",
+            "retired_at",
+            "owner",
+            "risk_level",
+            "public_health_caveats",
+            "lineage_metadata",
+            "created_by",
+            "created_by_username",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "public_id",
+            "approved_by_username",
+            "created_by_username",
+            "created_at",
+            "updated_at",
+        ]
 
 
 class WardSerializer(serializers.ModelSerializer):
@@ -200,6 +386,26 @@ class CHVOperationsSerializer(serializers.Serializer):
     can_view_activity = serializers.BooleanField()
 
 
+class CHVDeviceRegistrationCreateSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_mapping_fields = ("metadata",)
+
+    device_id = serializers.CharField(max_length=120)
+    contract_version = serializers.CharField(required=False, allow_blank=True, default=OFFLINE_CHV_CONTRACT_VERSION)
+    app_version = serializers.CharField(required=False, allow_blank=True, max_length=64)
+    platform = serializers.ChoiceField(
+        choices=[choice[0] for choice in CHVDeviceRegistration.PLATFORM_CHOICES],
+        required=False,
+        default=CHVDeviceRegistration.PLATFORM_UNKNOWN,
+    )
+    metadata = serializers.DictField(required=False, default=dict)
+
+    def validate_device_id(self, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise serializers.ValidationError("A device_id is required.")
+        return normalized
+
+
 class CHVActivityEventSerializer(serializers.Serializer):
     public_id = serializers.CharField()
     event_type = serializers.CharField()
@@ -221,7 +427,11 @@ class CHVMessageSerializer(serializers.ModelSerializer):
         fields = [
             "public_id",
             "channel",
+            "template",
+            "template_key",
+            "template_version",
             "message_body",
+            "governance_metadata",
             "status",
             "delivery_kind",
             "delivery_backend",
@@ -234,9 +444,30 @@ class CHVMessageSerializer(serializers.ModelSerializer):
         ]
 
 
-class CHVMessageCreateSerializer(serializers.Serializer):
-    message_body = serializers.CharField(max_length=1000)
+class CHVMessageCreateSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = ("message_body", "override_reason")
+    pii_safe_mapping_fields = ("template_context",)
+
+    message_body = serializers.CharField(required=False, allow_blank=True, max_length=1000)
     channel = serializers.ChoiceField(choices=[CHVMessage.CHANNEL_SMS], default=CHVMessage.CHANNEL_SMS)
+    template_key = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    template_version = serializers.IntegerField(required=False, min_value=1, allow_null=True)
+    template_language = serializers.CharField(required=False, allow_blank=True, max_length=20)
+    template_context = serializers.JSONField(required=False, default=dict)
+    emergency_override = serializers.BooleanField(required=False, default=False)
+    override_reason = serializers.CharField(required=False, allow_blank=True, max_length=500)
+
+    def validate(self, attrs):
+        message_body = attrs.get("message_body", "").strip()
+        template_key = attrs.get("template_key", "").strip()
+        if not message_body and not template_key:
+            raise serializers.ValidationError({"message_body": "A message body or template key is required."})
+        attrs["message_body"] = message_body
+        attrs["template_key"] = template_key
+        attrs["template_language"] = attrs.get("template_language", "").strip().lower() or "en"
+        if attrs.get("emergency_override") and not attrs.get("override_reason", "").strip():
+            raise serializers.ValidationError({"override_reason": "Emergency override requires a reason."})
+        return attrs
 
 
 class CHVCoverageRequestEventSerializer(serializers.ModelSerializer):
@@ -264,7 +495,7 @@ class CHVAssignmentSerializer(serializers.ModelSerializer):
     ward_name = serializers.CharField(source="ward.name", read_only=True)
     ward_public_id = serializers.UUIDField(source="ward.public_id", read_only=True)
     chv_name = serializers.CharField(source="chv.name", read_only=True)
-    chv_phone_number = serializers.CharField(source="chv.phone_number", read_only=True)
+    chv_phone_number = serializers.SerializerMethodField()
     assigned_by_username = serializers.CharField(source="assigned_by.username", allow_null=True, read_only=True)
 
     class Meta:
@@ -287,6 +518,12 @@ class CHVAssignmentSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+    def get_chv_phone_number(self, obj: CHVAssignment) -> str:
+        user = serializer_user(self)
+        if user_can_view_direct_identifiers(user):
+            return obj.chv.phone_number
+        return mask_contact_value(obj.chv.phone_number)
 
 
 class CHVCoverageLinkedAlertSerializer(serializers.ModelSerializer):
@@ -316,7 +553,7 @@ class CHVCoverageRequestSerializer(serializers.ModelSerializer):
     requested_by_username = serializers.CharField(source="requested_by.username", allow_null=True, read_only=True)
     assigned_to_username = serializers.CharField(source="assigned_to_user.username", allow_null=True, read_only=True)
     reviewed_by_username = serializers.CharField(source="reviewed_by.username", allow_null=True, read_only=True)
-    assignments = CHVAssignmentSerializer(many=True, read_only=True)
+    assignments = serializers.SerializerMethodField()
     events = CHVCoverageRequestEventSerializer(many=True, read_only=True)
     linked_alert_public_ids = serializers.SerializerMethodField()
     linked_alerts_summary = serializers.SerializerMethodField()
@@ -362,6 +599,9 @@ class CHVCoverageRequestSerializer(serializers.ModelSerializer):
     def get_linked_alert_public_ids(self, obj: CHVCoverageRequest):
         return [str(link.alert.public_id) for link in obj.linked_alert_links.all() if link.alert_id]
 
+    def get_assignments(self, obj: CHVCoverageRequest):
+        return CHVAssignmentSerializer(obj.assignments.all(), many=True, context=self.context).data
+
     def get_linked_alerts_summary(self, obj: CHVCoverageRequest):
         alerts = [link.alert for link in obj.linked_alert_links.all() if link.alert_id]
         return CHVCoverageLinkedAlertSerializer(alerts, many=True).data
@@ -390,7 +630,9 @@ class CHVCoverageRequestSerializer(serializers.ModelSerializer):
         return "OVERDUE" if self.get_is_overdue(obj) else "ON_TRACK"
 
 
-class CHVCoverageRequestCreateSerializer(serializers.Serializer):
+class CHVCoverageRequestCreateSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = ("reason", "notes")
+
     ward_id = serializers.IntegerField()
     priority = serializers.ChoiceField(
         choices=[
@@ -478,17 +720,23 @@ class CHVCoverageRequestFromAlertPrefillResponseSerializer(serializers.Serialize
     existing_request = CHVCoverageRequestSerializer(allow_null=True)
 
 
-class CHVCoverageRequestDecisionSerializer(serializers.Serializer):
+class CHVCoverageRequestDecisionSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = ("reason",)
+
     reason = serializers.CharField(required=False, allow_blank=True)
 
 
-class CHVCoverageRequestAssignSerializer(serializers.Serializer):
+class CHVCoverageRequestAssignSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = ("notes",)
+
     chv_id = serializers.IntegerField()
     start_at = serializers.DateTimeField(required=False, allow_null=True)
     notes = serializers.CharField(required=False, allow_blank=True)
 
 
-class CHVAssignmentDecisionSerializer(serializers.Serializer):
+class CHVAssignmentDecisionSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = ("notes",)
+
     notes = serializers.CharField(required=False, allow_blank=True)
 
 
@@ -498,6 +746,7 @@ class HealthFacilitySerializer(serializers.ModelSerializer):
     ward_risk_level = serializers.CharField(source="ward.current_risk_level", read_only=True)
     ward_risk_score = serializers.FloatField(source="ward.current_risk_score", read_only=True)
     point = serializers.SerializerMethodField()
+    contact_phone = serializers.SerializerMethodField()
 
     class Meta:
         model = HealthFacility
@@ -524,6 +773,12 @@ class HealthFacilitySerializer(serializers.ModelSerializer):
         if not obj.point:
             return None
         return [obj.point.x, obj.point.y]
+
+    def get_contact_phone(self, obj: HealthFacility) -> str:
+        user = serializer_user(self)
+        if user_can_view_direct_identifiers(user):
+            return obj.contact_phone
+        return mask_contact_value(obj.contact_phone)
 
 
 class FacilityContactAvailabilitySerializer(serializers.ModelSerializer):
@@ -759,9 +1014,26 @@ class ModelAlignmentSerializer(serializers.Serializer):
     dashboard_policy = serializers.DictField()
 
 
+class ModelOperationsHealthSerializer(serializers.Serializer):
+    schema_version = serializers.CharField()
+    generated_at = serializers.DateTimeField()
+    summary = serializers.DictField()
+    active_model = serializers.DictField(allow_null=True)
+    monitoring = serializers.DictField()
+    challenger_comparison = serializers.DictField()
+    rollback_history = serializers.ListField(child=serializers.DictField())
+    model_states = serializers.ListField(child=serializers.DictField())
+    dashboard_policy = serializers.DictField()
+
+
 class AlertSerializer(serializers.ModelSerializer):
     ward_name = serializers.CharField(source="ward.name", read_only=True)
     risk_score = serializers.FloatField(source="risk_score.score", allow_null=True, read_only=True)
+    recipient = serializers.SerializerMethodField()
+    message = serializers.SerializerMethodField()
+    external_id = serializers.SerializerMethodField()
+    error_message = serializers.SerializerMethodField()
+    privacy_context = serializers.SerializerMethodField()
 
     class Meta:
         model = Alert
@@ -773,7 +1045,11 @@ class AlertSerializer(serializers.ModelSerializer):
             "risk_score",
             "channel",
             "recipient",
+            "template",
+            "template_key",
+            "template_version",
             "message",
+            "governance_metadata",
             "status",
             "delivery_backend",
             "attempt_count",
@@ -784,7 +1060,403 @@ class AlertSerializer(serializers.ModelSerializer):
             "sent_at",
             "created_at",
             "error_message",
+            "privacy_context",
         ]
+
+    def _can_view_direct_identifiers(self) -> bool:
+        user = serializer_user(self)
+        return user_can_view_direct_identifiers(user)
+
+    def get_recipient(self, obj: Alert) -> str:
+        if self._can_view_direct_identifiers():
+            return obj.recipient
+        return mask_contact_value(obj.recipient)
+
+    def get_message(self, obj: Alert) -> str:
+        return redact_direct_identifiers_in_text(
+            obj.message,
+            can_view=self._can_view_direct_identifiers(),
+        )
+
+    def get_external_id(self, obj: Alert) -> str:
+        return redact_provider_identifier(
+            obj.external_id,
+            can_view=self._can_view_direct_identifiers(),
+        )
+
+    def get_error_message(self, obj: Alert) -> str:
+        return redact_direct_identifiers_in_text(
+            obj.error_message,
+            can_view=self._can_view_direct_identifiers(),
+        )
+
+    def get_privacy_context(self, obj: Alert) -> dict:
+        redacted = not self._can_view_direct_identifiers()
+        return privacy_context(
+            classification="sensitive_contact_data",
+            redacted=redacted,
+            reason="Alert delivery recipients, provider identifiers, and embedded contact values are masked for analyst views.",
+        )
+
+
+class SensitiveExportRequestCreateSerializer(serializers.Serializer):
+    export_type = serializers.ChoiceField(choices=SensitiveExportRequest.EXPORT_TYPE_CHOICES)
+    purpose = serializers.CharField(min_length=12, max_length=1000)
+    filters = serializers.DictField(required=False)
+
+    def validate_purpose(self, value: str) -> str:
+        return validate_pii_safe_serializer_text(value.strip(), field_name="purpose")
+
+
+class SensitiveExportDecisionSerializer(serializers.Serializer):
+    reason = serializers.CharField(required=False, allow_blank=True, max_length=1000)
+
+    def validate_reason(self, value: str) -> str:
+        if not value:
+            return value
+        return validate_pii_safe_serializer_text(value.strip(), field_name="reason")
+
+
+class SensitiveExportRequestSerializer(serializers.ModelSerializer):
+    requester_username = serializers.CharField(source="requester.username", read_only=True)
+    approved_by_username = serializers.CharField(source="approved_by.username", read_only=True, allow_null=True)
+    rejected_by_username = serializers.CharField(source="rejected_by.username", read_only=True, allow_null=True)
+    download_audit_count = serializers.SerializerMethodField()
+    has_payload = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SensitiveExportRequest
+        fields = [
+            "public_id",
+            "export_type",
+            "requester",
+            "requester_username",
+            "purpose",
+            "filters",
+            "sensitive_fields_included",
+            "approval_state",
+            "requires_approval",
+            "generated_at",
+            "expires_at",
+            "approved_by",
+            "approved_by_username",
+            "approved_at",
+            "rejected_by",
+            "rejected_by_username",
+            "rejected_at",
+            "rejection_reason",
+            "generated_filename",
+            "generated_content_type",
+            "payload_sha256",
+            "row_count",
+            "download_count",
+            "download_audit_count",
+            "last_downloaded_at",
+            "has_payload",
+            "metadata",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_has_payload(self, obj: SensitiveExportRequest) -> bool:
+        return bool(obj.generated_payload)
+
+    def get_download_audit_count(self, obj: SensitiveExportRequest) -> int:
+        return obj.download_audits.count()
+
+
+class SensitiveExportDownloadAuditSerializer(serializers.ModelSerializer):
+    downloader_username = serializers.CharField(source="downloader.username", read_only=True, allow_null=True)
+
+    class Meta:
+        model = SensitiveExportDownloadAudit
+        fields = [
+            "public_id",
+            "export_request",
+            "downloader",
+            "downloader_username",
+            "outcome",
+            "reason",
+            "request_metadata",
+            "downloaded_at",
+        ]
+        read_only_fields = fields
+
+
+class ExternalSystemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ExternalSystem
+        fields = [
+            "public_id",
+            "system_key",
+            "display_name",
+            "system_type",
+            "owner",
+            "default_exchange_format",
+            "auth_config_reference",
+            "api_base_url",
+            "status",
+            "lineage_metadata",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class InteroperabilityMappingVersionSerializer(serializers.ModelSerializer):
+    system_key = serializers.CharField(source="system.system_key", read_only=True)
+    reviewed_by_username = serializers.CharField(source="reviewed_by.username", read_only=True, allow_null=True)
+
+    class Meta:
+        model = InteroperabilityMappingVersion
+        fields = [
+            "public_id",
+            "system",
+            "system_key",
+            "version_label",
+            "status",
+            "effective_date",
+            "retired_at",
+            "reviewed_by",
+            "reviewed_by_username",
+            "lineage_metadata",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class ExternalOrgUnitMappingSerializer(serializers.ModelSerializer):
+    system_key = serializers.CharField(source="system.system_key", read_only=True)
+    mapping_version_label = serializers.CharField(source="mapping_version.version_label", read_only=True)
+    ward_name = serializers.CharField(source="ward.name", read_only=True, allow_null=True)
+    facility_name = serializers.CharField(source="facility.name", read_only=True, allow_null=True)
+    reviewed_by_username = serializers.CharField(source="reviewed_by.username", read_only=True, allow_null=True)
+
+    class Meta:
+        model = ExternalOrgUnitMapping
+        fields = [
+            "public_id",
+            "system",
+            "system_key",
+            "mapping_version",
+            "mapping_version_label",
+            "external_identifier",
+            "external_display_name",
+            "internal_object_type",
+            "internal_object_public_id",
+            "internal_object_code",
+            "ward",
+            "ward_name",
+            "facility",
+            "facility_name",
+            "mapping_confidence",
+            "status",
+            "effective_date",
+            "retired_date",
+            "reviewed_by",
+            "reviewed_by_username",
+            "lineage_metadata",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class ExternalDataElementMappingSerializer(serializers.ModelSerializer):
+    system_key = serializers.CharField(source="system.system_key", read_only=True)
+    mapping_version_label = serializers.CharField(source="mapping_version.version_label", read_only=True)
+    reviewed_by_username = serializers.CharField(source="reviewed_by.username", read_only=True, allow_null=True)
+
+    class Meta:
+        model = ExternalDataElementMapping
+        fields = [
+            "public_id",
+            "system",
+            "system_key",
+            "mapping_version",
+            "mapping_version_label",
+            "exchange_type",
+            "external_identifier",
+            "external_display_name",
+            "internal_field",
+            "value_type",
+            "required_for_exchange",
+            "mapping_confidence",
+            "status",
+            "effective_date",
+            "retired_date",
+            "reviewed_by",
+            "reviewed_by_username",
+            "lineage_metadata",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class ExternalValueSetMappingSerializer(serializers.ModelSerializer):
+    system_key = serializers.CharField(source="system.system_key", read_only=True)
+    mapping_version_label = serializers.CharField(source="mapping_version.version_label", read_only=True)
+    reviewed_by_username = serializers.CharField(source="reviewed_by.username", read_only=True, allow_null=True)
+
+    class Meta:
+        model = ExternalValueSetMapping
+        fields = [
+            "public_id",
+            "system",
+            "system_key",
+            "mapping_version",
+            "mapping_version_label",
+            "value_set_key",
+            "external_value",
+            "external_label",
+            "internal_value",
+            "internal_label",
+            "mapping_confidence",
+            "status",
+            "effective_date",
+            "retired_date",
+            "reviewed_by",
+            "reviewed_by_username",
+            "lineage_metadata",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class InteroperabilityRunItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = InteroperabilityRunItem
+        fields = [
+            "id",
+            "row_number",
+            "external_identifier",
+            "internal_object_type",
+            "internal_object_public_id",
+            "internal_object_code",
+            "status",
+            "action",
+            "safe_context",
+            "source_record_ref",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class InteroperabilityRunErrorSerializer(serializers.ModelSerializer):
+    item_id = serializers.IntegerField(read_only=True, allow_null=True)
+    item_row_number = serializers.IntegerField(source="item.row_number", read_only=True, allow_null=True)
+    item_external_identifier = serializers.CharField(source="item.external_identifier", read_only=True, allow_null=True)
+
+    class Meta:
+        model = InteroperabilityRunError
+        fields = [
+            "public_id",
+            "item",
+            "item_id",
+            "item_row_number",
+            "item_external_identifier",
+            "severity",
+            "error_code",
+            "field_path",
+            "safe_message",
+            "remediation_hint",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class InteroperabilityRunSerializer(serializers.ModelSerializer):
+    system_key = serializers.CharField(source="system.system_key", read_only=True)
+    system_name = serializers.CharField(source="system.display_name", read_only=True)
+    mapping_version = serializers.CharField(source="mapping_version.version_label", read_only=True, allow_null=True)
+    mapping_version_label = serializers.CharField(source="mapping_version.version_label", read_only=True, allow_null=True)
+    retry_of = serializers.UUIDField(source="retry_of.public_id", read_only=True, allow_null=True)
+    retry_of_public_id = serializers.UUIDField(source="retry_of.public_id", read_only=True, allow_null=True)
+    operator_username = serializers.CharField(source="operator.username", read_only=True, allow_null=True)
+    source_reference = serializers.SerializerMethodField()
+    contract_errors = serializers.SerializerMethodField()
+    items = InteroperabilityRunItemSerializer(many=True, read_only=True)
+    errors = InteroperabilityRunErrorSerializer(many=True, read_only=True)
+
+    def get_source_reference(self, obj):
+        from .interoperability import interoperability_run_source_reference
+
+        return interoperability_run_source_reference(obj)
+
+    def get_contract_errors(self, obj):
+        from .interoperability import validate_interoperability_run_record_contract
+
+        return validate_interoperability_run_record_contract(obj)
+
+    class Meta:
+        model = InteroperabilityRun
+        fields = [
+            "public_id",
+            "direction",
+            "exchange_type",
+            "system",
+            "system_key",
+            "system_name",
+            "mapping_version",
+            "mapping_version_label",
+            "retry_of",
+            "retry_of_public_id",
+            "status",
+            "dry_run",
+            "source_file_name",
+            "endpoint_url",
+            "source_reference",
+            "records_seen",
+            "records_accepted",
+            "records_rejected",
+            "mapping_coverage",
+            "operator",
+            "operator_username",
+            "error_summary",
+            "dry_run_preview",
+            "export_payload",
+            "connector_config",
+            "lineage_metadata",
+            "started_at",
+            "completed_at",
+            "created_at",
+            "updated_at",
+            "contract_errors",
+            "items",
+            "errors",
+        ]
+        read_only_fields = fields
+
+
+class InteroperabilityOrgUnitMappingImportSerializer(serializers.Serializer):
+    system_key = serializers.CharField(required=False, allow_blank=True, default="dhis2", max_length=80)
+    mapping_version_label = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    source_file_name = serializers.CharField(required=False, allow_blank=True, max_length=200)
+    csv_text = serializers.CharField()
+    confirm = serializers.BooleanField(required=False, default=False)
+    retry_of_public_id = serializers.UUIDField(required=False, allow_null=True)
+
+    def validate(self, attrs):
+        if not attrs.get("csv_text", "").strip():
+            raise serializers.ValidationError({"csv_text": "CSV content is required for an interoperability dry-run."})
+        attrs["system_key"] = attrs.get("system_key", "").strip() or "dhis2"
+        attrs["mapping_version_label"] = attrs.get("mapping_version_label", "").strip()
+        attrs["source_file_name"] = attrs.get("source_file_name", "").strip() or "org-unit-mapping.csv"
+        return attrs
+
+
+class InteroperabilityExportPreviewSerializer(serializers.Serializer):
+    system_key = serializers.CharField(required=False, allow_blank=True, default="dhis2", max_length=80)
+    mapping_version_label = serializers.CharField(required=False, allow_blank=True, max_length=120)
+
+    def validate(self, attrs):
+        attrs["system_key"] = attrs.get("system_key", "").strip() or "dhis2"
+        attrs["mapping_version_label"] = attrs.get("mapping_version_label", "").strip()
+        return attrs
 
 
 class DashboardNotificationSerializer(serializers.ModelSerializer):
@@ -801,6 +1473,8 @@ class DashboardNotificationSerializer(serializers.ModelSerializer):
             return "trigger_review"
         if obj.type == DashboardNotification.TYPE_CHV_COVERAGE_REQUEST_STATUS:
             return "chv_coverage_workflow"
+        if obj.type == DashboardNotification.TYPE_OPERATIONAL_KPI_THRESHOLD:
+            return "operational_kpi_threshold"
         return "general"
 
     def get_group_key(self, obj):
@@ -812,6 +1486,8 @@ class DashboardNotificationSerializer(serializers.ModelSerializer):
             return "alert_delivery_retries"
         if obj.type == DashboardNotification.TYPE_CHV_COVERAGE_REQUEST_STATUS:
             return "chv_coverage_requests"
+        if obj.type == DashboardNotification.TYPE_OPERATIONAL_KPI_THRESHOLD:
+            return "operational_kpi_thresholds"
         return None
 
     class Meta:
@@ -981,6 +1657,7 @@ class AlertIntelligenceSerializer(serializers.Serializer):
     delivery = AlertIntelligenceDeliverySerializer()
     delivery_summary = AlertIntelligenceDeliverySerializer()
     message_source = AlertIntelligenceMessageSourceSerializer()
+    climate_evidence = serializers.DictField(required=False)
     chv_response_summary = AlertIntelligenceResponseSummarySerializer()
     facility_response_summary = AlertIntelligenceResponseSummarySerializer()
     recommended_next_action = AlertIntelligenceRecommendedActionSerializer()
@@ -1128,7 +1805,11 @@ class FacilityReadinessUpdateRequestSummarySerializer(serializers.ModelSerialize
             "requested_by",
             "requested_by_username",
             "channel",
+            "template",
+            "template_key",
+            "template_version",
             "status",
+            "governance_metadata",
             "requested_at",
             "sent_at",
             "acknowledged_at",
@@ -1213,11 +1894,15 @@ class FacilityReadinessReviewSerializer(FacilityReadinessReviewSummarySerializer
         read_only_fields = fields
 
 
-class FacilityReadinessReviewCreateSerializer(serializers.Serializer):
+class FacilityReadinessReviewCreateSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = ("notes",)
+
     notes = serializers.CharField(required=False, allow_blank=True, max_length=2000)
 
 
-class FacilityReadinessReviewStatusSerializer(serializers.Serializer):
+class FacilityReadinessReviewStatusSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = ("notes",)
+
     status = serializers.ChoiceField(
         choices=[
             FacilityReadinessReview.STATUS_ACKNOWLEDGED,
@@ -1228,11 +1913,16 @@ class FacilityReadinessReviewStatusSerializer(serializers.Serializer):
     notes = serializers.CharField(required=False, allow_blank=True, max_length=2000)
 
 
-class FacilityReadinessReviewAcknowledgeSerializer(serializers.Serializer):
+class FacilityReadinessReviewAcknowledgeSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = ("notes",)
+
     notes = serializers.CharField(required=False, allow_blank=True, max_length=2000)
 
 
-class FacilityReadinessUpdateRequestCreateSerializer(serializers.Serializer):
+class FacilityReadinessUpdateRequestCreateSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = ("message_body", "override_reason")
+    pii_safe_mapping_fields = ("template_context",)
+
     message_body = serializers.CharField(required=False, allow_blank=True, max_length=1000)
     channel = serializers.ChoiceField(
         choices=[
@@ -1242,9 +1932,25 @@ class FacilityReadinessUpdateRequestCreateSerializer(serializers.Serializer):
         ],
         required=False,
     )
+    template_key = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    template_version = serializers.IntegerField(required=False, min_value=1, allow_null=True)
+    template_language = serializers.CharField(required=False, allow_blank=True, max_length=20)
+    template_context = serializers.JSONField(required=False, default=dict)
+    emergency_override = serializers.BooleanField(required=False, default=False)
+    override_reason = serializers.CharField(required=False, allow_blank=True, max_length=500)
+
+    def validate(self, attrs):
+        attrs["message_body"] = attrs.get("message_body", "").strip()
+        attrs["template_key"] = attrs.get("template_key", "").strip()
+        attrs["template_language"] = attrs.get("template_language", "").strip().lower() or "en"
+        if attrs.get("emergency_override") and not attrs.get("override_reason", "").strip():
+            raise serializers.ValidationError({"override_reason": "Emergency override requires a reason."})
+        return attrs
 
 
-class FacilityReadinessEscalationCreateSerializer(serializers.Serializer):
+class FacilityReadinessEscalationCreateSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = ("reason",)
+
     reason = serializers.CharField(required=False, allow_blank=True, max_length=2000)
     severity = serializers.ChoiceField(
         choices=[
@@ -1257,7 +1963,9 @@ class FacilityReadinessEscalationCreateSerializer(serializers.Serializer):
     assigned_to = serializers.IntegerField(required=False, allow_null=True)
 
 
-class FacilityReadinessEscalationStatusSerializer(serializers.Serializer):
+class FacilityReadinessEscalationStatusSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = ("notes",)
+
     status = serializers.ChoiceField(
         choices=[
             FacilityReadinessEscalation.STATUS_ACKNOWLEDGED,
@@ -1419,6 +2127,209 @@ class AlertWorkflowEventSerializer(serializers.ModelSerializer):
         ]
 
 
+class PreparednessActionEventSerializer(serializers.ModelSerializer):
+    actor_username = serializers.CharField(source="actor.username", allow_null=True, read_only=True)
+
+    class Meta:
+        model = PreparednessActionEvent
+        fields = [
+            "public_id",
+            "event_type",
+            "actor",
+            "actor_username",
+            "old_status",
+            "new_status",
+            "detail",
+            "metadata",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class PreparednessActionSerializer(serializers.ModelSerializer):
+    ward_name = serializers.CharField(source="ward.name", read_only=True)
+    ward_public_id = serializers.UUIDField(source="ward.public_id", read_only=True)
+    facility_name = serializers.CharField(source="facility.name", allow_null=True, read_only=True)
+    chv_name = serializers.CharField(source="chv.name", allow_null=True, read_only=True)
+    alert_public_id = serializers.UUIDField(source="alert.public_id", allow_null=True, read_only=True)
+    alert_workflow_public_id = serializers.UUIDField(source="alert_workflow.public_id", allow_null=True, read_only=True)
+    model_run_version = serializers.CharField(source="model_run.model_version", allow_null=True, read_only=True)
+    facility_readiness_review_public_id = serializers.UUIDField(
+        source="facility_readiness_review.public_id",
+        allow_null=True,
+        read_only=True,
+    )
+    facility_update_request_public_id = serializers.UUIDField(
+        source="facility_update_request.public_id",
+        allow_null=True,
+        read_only=True,
+    )
+    facility_escalation_public_id = serializers.UUIDField(
+        source="facility_escalation.public_id",
+        allow_null=True,
+        read_only=True,
+    )
+    chv_coverage_request_public_id = serializers.UUIDField(
+        source="chv_coverage_request.public_id",
+        allow_null=True,
+        read_only=True,
+    )
+    created_by_username = serializers.CharField(source="created_by.username", allow_null=True, read_only=True)
+    assigned_to_username = serializers.CharField(source="assigned_to.username", allow_null=True, read_only=True)
+    is_overdue = serializers.BooleanField(read_only=True)
+    sla_status = serializers.SerializerMethodField()
+    events = PreparednessActionEventSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = PreparednessAction
+        fields = [
+            "id",
+            "public_id",
+            "action_type",
+            "source_trigger_type",
+            "source_trigger_ref",
+            "ward",
+            "ward_name",
+            "ward_public_id",
+            "facility",
+            "facility_name",
+            "chv",
+            "chv_name",
+            "alert",
+            "alert_public_id",
+            "alert_workflow",
+            "alert_workflow_public_id",
+            "risk_score",
+            "model_run",
+            "model_run_version",
+            "facility_readiness_review",
+            "facility_readiness_review_public_id",
+            "facility_update_request",
+            "facility_update_request_public_id",
+            "facility_escalation",
+            "facility_escalation_public_id",
+            "chv_coverage_request",
+            "chv_coverage_request_public_id",
+            "status",
+            "priority",
+            "created_by",
+            "created_by_username",
+            "assigned_to",
+            "assigned_to_username",
+            "assigned_to_team",
+            "decision_policy_version",
+            "due_at",
+            "sla_target_at",
+            "acknowledged_at",
+            "completed_at",
+            "cancelled_at",
+            "escalated_at",
+            "completion_evidence",
+            "cancellation_reason",
+            "escalation_metadata",
+            "lineage_metadata",
+            "notes",
+            "is_overdue",
+            "sla_status",
+            "created_at",
+            "updated_at",
+            "events",
+        ]
+        read_only_fields = fields
+
+    def get_sla_status(self, obj: PreparednessAction) -> str:
+        if not obj.is_active:
+            return "NOT_APPLICABLE"
+        return "OVERDUE" if obj.is_overdue else "ON_TRACK"
+
+
+class PreparednessActionCreateSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = ("notes",)
+    pii_safe_mapping_fields = ("lineage_metadata",)
+
+    ward_id = serializers.IntegerField()
+    action_type = serializers.ChoiceField(choices=[choice[0] for choice in PreparednessAction.ACTION_TYPE_CHOICES])
+    source_trigger_type = serializers.ChoiceField(
+        choices=[choice[0] for choice in PreparednessAction.SOURCE_TRIGGER_CHOICES],
+        required=False,
+        default=PreparednessAction.SOURCE_MANUAL,
+    )
+    priority = serializers.ChoiceField(
+        choices=[choice[0] for choice in PreparednessAction.PRIORITY_CHOICES],
+        required=False,
+        default=PreparednessAction.PRIORITY_MEDIUM,
+    )
+    status = serializers.ChoiceField(
+        choices=[
+            PreparednessAction.STATUS_DRAFT,
+            PreparednessAction.STATUS_QUEUED,
+            PreparednessAction.STATUS_ASSIGNED,
+        ],
+        required=False,
+        default=PreparednessAction.STATUS_QUEUED,
+    )
+    facility_id = serializers.IntegerField(required=False, allow_null=True)
+    chv_id = serializers.IntegerField(required=False, allow_null=True)
+    alert_public_id = serializers.UUIDField(required=False, allow_null=True)
+    alert_workflow_public_id = serializers.UUIDField(required=False, allow_null=True)
+    risk_score_id = serializers.IntegerField(required=False, allow_null=True)
+    model_run_id = serializers.IntegerField(required=False, allow_null=True)
+    facility_readiness_review_public_id = serializers.UUIDField(required=False, allow_null=True)
+    facility_update_request_public_id = serializers.UUIDField(required=False, allow_null=True)
+    facility_escalation_public_id = serializers.UUIDField(required=False, allow_null=True)
+    chv_coverage_request_public_id = serializers.UUIDField(required=False, allow_null=True)
+    assigned_to_id = serializers.IntegerField(required=False, allow_null=True)
+    assigned_to_team = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    decision_policy_version = serializers.CharField(required=False, allow_blank=True, max_length=80)
+    due_at = serializers.DateTimeField(required=False, allow_null=True)
+    sla_target_at = serializers.DateTimeField(required=False, allow_null=True)
+    source_trigger_ref = serializers.CharField(required=False, allow_blank=True, max_length=160)
+    notes = serializers.CharField(required=False, allow_blank=True, max_length=2000)
+    lineage_metadata = serializers.DictField(required=False)
+
+
+class PreparednessActionTransitionSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = ("detail", "cancellation_reason")
+    pii_safe_mapping_fields = ("completion_evidence", "escalation_metadata")
+
+    status = serializers.ChoiceField(choices=[choice[0] for choice in PreparednessAction.STATUS_CHOICES])
+    detail = serializers.CharField(required=False, allow_blank=True, max_length=2000)
+    assigned_to_id = serializers.IntegerField(required=False, allow_null=True)
+    assigned_to_team = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    due_at = serializers.DateTimeField(required=False, allow_null=True)
+    sla_target_at = serializers.DateTimeField(required=False, allow_null=True)
+    completion_evidence = serializers.DictField(required=False)
+    cancellation_reason = serializers.CharField(required=False, allow_blank=True, max_length=2000)
+    escalation_metadata = serializers.DictField(required=False)
+
+
+class PreparednessActionSourceTriggerSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = ("notes",)
+    pii_safe_mapping_fields = ("lineage_metadata",)
+
+    action_type = serializers.ChoiceField(choices=[choice[0] for choice in PreparednessAction.ACTION_TYPE_CHOICES])
+    priority = serializers.ChoiceField(
+        choices=[choice[0] for choice in PreparednessAction.PRIORITY_CHOICES],
+        required=False,
+        allow_null=True,
+    )
+    status = serializers.ChoiceField(
+        choices=[
+            PreparednessAction.STATUS_DRAFT,
+            PreparednessAction.STATUS_QUEUED,
+            PreparednessAction.STATUS_ASSIGNED,
+        ],
+        required=False,
+        default=PreparednessAction.STATUS_QUEUED,
+    )
+    assigned_to_id = serializers.IntegerField(required=False, allow_null=True)
+    assigned_to_team = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    due_at = serializers.DateTimeField(required=False, allow_null=True)
+    sla_target_at = serializers.DateTimeField(required=False, allow_null=True)
+    notes = serializers.CharField(required=False, allow_blank=True, max_length=2000)
+    lineage_metadata = serializers.DictField(required=False)
+
+
 class ScenarioSimulationRunSerializer(serializers.ModelSerializer):
     created_by_username = serializers.CharField(source="created_by.username", allow_null=True, read_only=True)
 
@@ -1504,6 +2415,7 @@ class WardIntelligenceSerializer(serializers.Serializer):
     header_context = WardIntelligenceHeaderContextSerializer()
     population_exposure = serializers.DictField(required=False)
     surveillance = serializers.DictField(required=False)
+    spatial_evidence = serializers.DictField(required=False)
     operational_evidence = serializers.DictField(required=False)
     risk_history = RiskScoreSerializer(many=True)
     related_alerts = AlertSerializer(many=True)
@@ -1568,7 +2480,10 @@ class TriggerContextResponseSerializer(serializers.Serializer):
     supported_trigger_types = serializers.ListField(child=serializers.CharField())
 
 
-class TriggerPreviewRequestSerializer(serializers.Serializer):
+class TriggerPreviewRequestSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = ("message_override",)
+    pii_safe_mapping_fields = ("template_context",)
+
     ward_id = serializers.IntegerField()
     trigger_type = serializers.ChoiceField(
         choices=[
@@ -1583,6 +2498,18 @@ class TriggerPreviewRequestSerializer(serializers.Serializer):
         required=False,
     )
     message_override = serializers.CharField(required=False, allow_blank=True, max_length=320)
+    template_key = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    template_version = serializers.IntegerField(required=False, min_value=1, allow_null=True)
+    template_language = serializers.CharField(required=False, allow_blank=True, max_length=20)
+    template_context = serializers.JSONField(required=False, default=dict)
+
+    def validate_message_override(self, value):
+        return validate_pii_safe_serializer_text(value, field_name="message_override")
+
+    def validate(self, attrs):
+        attrs["template_key"] = attrs.get("template_key", "").strip()
+        attrs["template_language"] = attrs.get("template_language", "").strip().lower() or "en"
+        return attrs
 
 
 class TriggerPreviewResponseSerializer(serializers.Serializer):
@@ -1592,9 +2519,13 @@ class TriggerPreviewResponseSerializer(serializers.Serializer):
     channel_defaults = serializers.ListField(child=serializers.CharField())
     recipient_preview = TriggerRecipientPreviewSerializer()
     recommended_action = serializers.CharField()
+    message_template = serializers.JSONField(required=False)
 
 
-class TriggerAlertRequestSerializer(serializers.Serializer):
+class TriggerAlertRequestSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = ("message_override",)
+    pii_safe_mapping_fields = ("template_context",)
+
     ward_id = serializers.IntegerField()
     send_sms = serializers.BooleanField(default=False)
     trigger_type = serializers.ChoiceField(
@@ -1607,8 +2538,20 @@ class TriggerAlertRequestSerializer(serializers.Serializer):
         required=False,
     )
     message_override = serializers.CharField(required=False, allow_blank=True, max_length=320)
+    template_key = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    template_version = serializers.IntegerField(required=False, min_value=1, allow_null=True)
+    template_language = serializers.CharField(required=False, allow_blank=True, max_length=20)
+    template_context = serializers.JSONField(required=False, default=dict)
 
- 
+    def validate_message_override(self, value):
+        return validate_pii_safe_serializer_text(value, field_name="message_override")
+
+    def validate(self, attrs):
+        attrs["template_key"] = attrs.get("template_key", "").strip()
+        attrs["template_language"] = attrs.get("template_language", "").strip().lower() or "en"
+        return attrs
+
+
 class SystemControlStatusSerializer(serializers.Serializer):
     mode = serializers.CharField()
     can_retry_background_jobs = serializers.BooleanField()
@@ -1646,6 +2589,9 @@ class AlertDeliveryPauseRequestSerializer(serializers.Serializer):
     duration_minutes = serializers.IntegerField(required=False, default=60, min_value=1, max_value=1440)
     reason = serializers.CharField(required=False, allow_blank=True, max_length=500)
 
+    def validate_reason(self, value):
+        return validate_pii_safe_serializer_text(value, field_name="reason")
+
 
 class TriggerAlertRequestStatusResponseSerializer(serializers.Serializer):
     request_id = serializers.CharField()
@@ -1659,7 +2605,9 @@ class TriggerAlertRequestStatusResponseSerializer(serializers.Serializer):
     last_materialized_at = serializers.DateTimeField(allow_null=True)
 
 
-class CHVTriageRequestSerializer(serializers.Serializer):
+class CHVTriageRequestSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = ("text_input",)
+
     ward_id = serializers.IntegerField()
     phone_number = serializers.CharField(required=False, allow_blank=True)
     text_input = serializers.CharField(required=False, allow_blank=True, default="")
@@ -1673,6 +2621,9 @@ class CHVTriageRequestSerializer(serializers.Serializer):
 class CHVTriageResponseSerializer(serializers.ModelSerializer):
     ward_name = serializers.CharField(source="ward.name", read_only=True)
     referral_facility_name = serializers.CharField(source="referral_facility.name", read_only=True)
+    phone_number = serializers.SerializerMethodField()
+    text_input = serializers.SerializerMethodField()
+    privacy_context = serializers.SerializerMethodField()
 
     class Meta:
         model = TriageSession
@@ -1692,11 +2643,38 @@ class CHVTriageResponseSerializer(serializers.ModelSerializer):
             "recommendation",
             "referral_needed",
             "created_at",
+            "privacy_context",
         ]
+
+    def _can_view_sensitive_field_health_echo(self) -> bool:
+        user = serializer_user(self)
+        return user_can_view_direct_identifiers(user)
+
+    def get_phone_number(self, obj: TriageSession) -> str:
+        if self._can_view_sensitive_field_health_echo():
+            return obj.phone_number
+        return mask_contact_value(obj.phone_number)
+
+    def get_text_input(self, obj: TriageSession) -> str:
+        return redact_field_health_text(
+            obj.text_input,
+            can_view=self._can_view_sensitive_field_health_echo(),
+        )
+
+    def get_privacy_context(self, obj: TriageSession) -> dict:
+        return privacy_context(
+            classification="sensitive_field_health_data",
+            redacted=not self._can_view_sensitive_field_health_echo(),
+            reason="Field triage response echoes are masked for CHV field sessions and labelled as sensitive health data.",
+        )
 
 
 class UssdSessionLogSerializer(serializers.ModelSerializer):
     ward_name = serializers.CharField(source="ward.name", read_only=True)
+    menu_version_public_id = serializers.SerializerMethodField()
+    phone_number = serializers.SerializerMethodField()
+    text = serializers.SerializerMethodField()
+    response_text = serializers.SerializerMethodField()
 
     class Meta:
         model = UssdSessionLog
@@ -1709,34 +2687,263 @@ class UssdSessionLogSerializer(serializers.ModelSerializer):
             "response_text",
             "ward",
             "ward_name",
+            "menu_version",
+            "menu_version_public_id",
+            "menu_key",
+            "menu_version_label",
+            "language",
             "menu_level",
+            "session_outcome",
+            "invalid_option",
+            "abandonment_reason",
+            "is_terminal",
+            "governance_metadata",
             "created_at",
         ]
 
+    def _can_view_raw_ussd_log(self) -> bool:
+        user = serializer_user(self)
+        return bool(
+            user
+            and getattr(user, "is_authenticated", False)
+            and (getattr(user, "is_superuser", False) or getattr(user, "role", None) == "ADMIN")
+        )
 
-class SyncPayloadSerializer(serializers.Serializer):
-    client_submission_id = serializers.CharField()
-    diarrhea = serializers.BooleanField(default=False)
-    vomiting = serializers.BooleanField(default=False)
-    dehydration = serializers.BooleanField(default=False)
-    fever = serializers.BooleanField(default=False)
+    def get_phone_number(self, obj: UssdSessionLog) -> str:
+        if self._can_view_raw_ussd_log():
+            return obj.phone_number
+        return mask_contact_value(obj.phone_number)
+
+    def get_text(self, obj: UssdSessionLog) -> str:
+        return redact_direct_identifiers_in_text(
+            obj.text,
+            can_view=self._can_view_raw_ussd_log(),
+        )
+
+    def get_response_text(self, obj: UssdSessionLog) -> str:
+        return redact_direct_identifiers_in_text(
+            obj.response_text,
+            can_view=self._can_view_raw_ussd_log(),
+        )
+
+    def get_menu_version_public_id(self, obj: UssdSessionLog) -> str:
+        return str(obj.menu_version.public_id) if obj.menu_version else ""
+
+
+class UssdMenuVersionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UssdMenuVersion
+        fields = [
+            "id",
+            "public_id",
+            "menu_key",
+            "version_label",
+            "language",
+            "title",
+            "menu_tree",
+            "safe_fallback_copy",
+            "session_outcome_taxonomy",
+            "approval_status",
+            "approved_by",
+            "approved_at",
+            "retired_at",
+            "is_active",
+            "lineage_metadata",
+            "created_by",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "public_id", "created_at", "updated_at"]
+
+
+class SyncPayloadSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = ("text_input",)
+    pii_safe_mapping_fields = ("payload",)
+
+    SUPPORTED_PAYLOAD_KEYS = {
+        SyncQueue.UPLOAD_SYMPTOM_TRIAGE: {
+            "ward_id",
+            "task_public_id",
+            "action_public_id",
+            "diarrhea",
+            "vomiting",
+            "dehydration",
+            "fever",
+            "text_input",
+        },
+        SyncQueue.UPLOAD_SUSPECTED_CASE_SIGNAL: {
+            "ward_id",
+            "task_public_id",
+            "action_public_id",
+            "diarrhea",
+            "vomiting",
+            "dehydration",
+            "fever",
+            "text_input",
+        },
+        SyncQueue.UPLOAD_PREVENTION_VISIT: {
+            "ward_id",
+            "task_public_id",
+            "action_public_id",
+            "visit_completed",
+            "households_reached_count",
+            "messages_delivered_count",
+            "water_treatment_demo",
+            "soap_or_handwashing_discussed",
+        },
+        SyncQueue.UPLOAD_TASK_ACK: {
+            "ward_id",
+            "task_public_id",
+            "action_public_id",
+            "assignment_public_id",
+            "acknowledgment_status",
+            "coded_reason",
+        },
+        SyncQueue.UPLOAD_ALERT_ACK: {
+            "ward_id",
+            "alert_public_id",
+            "task_public_id",
+            "action_public_id",
+            "acknowledgment_status",
+            "coded_reason",
+        },
+    }
+
+    client_submission_id = serializers.CharField(max_length=120)
+    idempotency_key = serializers.CharField(required=False, allow_blank=True, max_length=160)
+    payload_version = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default=OFFLINE_CHV_UPLOAD_PAYLOAD_VERSION,
+        max_length=64,
+    )
+    upload_type = serializers.ChoiceField(
+        choices=[choice[0] for choice in SyncQueue.UPLOAD_CHOICES],
+        required=False,
+        default=SyncQueue.UPLOAD_SYMPTOM_TRIAGE,
+    )
+    download_bundle_version = serializers.CharField(required=False, allow_blank=True, max_length=96)
+    recorded_at = serializers.DateTimeField(required=False, allow_null=True)
+    payload = serializers.DictField(required=False)
+    diarrhea = serializers.BooleanField(required=False, default=False)
+    vomiting = serializers.BooleanField(required=False, default=False)
+    dehydration = serializers.BooleanField(required=False, default=False)
+    fever = serializers.BooleanField(required=False, default=False)
     text_input = serializers.CharField(required=False, allow_blank=True, default="")
 
+    def validate(self, attrs):
+        upload_type = attrs.get("upload_type") or SyncQueue.UPLOAD_SYMPTOM_TRIAGE
+        if upload_type not in SUPPORTED_PHASE_4_UPLOAD_TYPES:
+            raise serializers.ValidationError(
+                {
+                    "upload_type": "This upload type is not accepted by CHV offline sync processing."
+                }
+            )
+        payload_version = (attrs.get("payload_version") or OFFLINE_CHV_UPLOAD_PAYLOAD_VERSION).strip()
+        if payload_version != OFFLINE_CHV_UPLOAD_PAYLOAD_VERSION:
+            raise serializers.ValidationError(
+                {
+                    "payload_version": f"Unsupported CHV offline payload version: {payload_version}."
+                }
+            )
 
-class CHVSyncRequestSerializer(serializers.Serializer):
-    ward_id = serializers.IntegerField()
+        nested_payload = dict(attrs.get("payload") or {})
+        legacy_keys = {"diarrhea", "vomiting", "dehydration", "fever", "text_input"}
+        legacy_payload = (
+            {key: attrs.get(key) for key in legacy_keys if key in attrs}
+            if upload_type in {SyncQueue.UPLOAD_SYMPTOM_TRIAGE, SyncQueue.UPLOAD_SUSPECTED_CASE_SIGNAL}
+            else {}
+        )
+        payload = {**legacy_payload, **nested_payload}
+        supported_keys = self.SUPPORTED_PAYLOAD_KEYS.get(upload_type, set())
+        unsupported_keys = sorted(set(payload) - supported_keys)
+        if unsupported_keys:
+            raise serializers.ValidationError(
+                {
+                    "payload": [
+                        "Unsupported field. This endpoint only accepts the documented minimum data fields.",
+                        *unsupported_keys,
+                    ]
+                }
+            )
+
+        attrs["client_submission_id"] = attrs["client_submission_id"].strip()
+        attrs["idempotency_key"] = (attrs.get("idempotency_key") or attrs["client_submission_id"]).strip()
+        attrs["payload_version"] = payload_version
+        attrs["upload_type"] = upload_type
+        attrs["payload"] = payload
+        return attrs
+
+
+class CHVSyncRequestSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    contract_version = serializers.CharField(required=False, allow_blank=True, default=OFFLINE_CHV_CONTRACT_VERSION)
+    device_registration_id = serializers.UUIDField(required=False, allow_null=True)
+    session_scope = serializers.DictField(required=False, default=dict)
+    download_bundle_version = serializers.CharField(required=False, allow_blank=True, max_length=96)
+    ward_id = serializers.IntegerField(required=False)
     phone_number = serializers.CharField(required=False, allow_blank=True, default="")
     source_device_id = serializers.CharField(required=False, allow_blank=True, default="")
-    payloads = SyncPayloadSerializer(many=True)
+    payloads = SyncPayloadSerializer(many=True, required=False)
+    uploads = SyncPayloadSerializer(many=True, required=False)
 
-    def validate_payloads(self, value):
-        if not value:
-            raise serializers.ValidationError("At least one payload is required.")
-        submission_ids = [item["client_submission_id"].strip() for item in value if item.get("client_submission_id", "").strip()]
+    def _validate_payload_identities(self, value):
+        submission_ids = [
+            item["client_submission_id"].strip()
+            for item in value
+            if item.get("client_submission_id", "").strip()
+        ]
         if len(submission_ids) != len(value):
             raise serializers.ValidationError("Each payload must include client_submission_id.")
         if len(set(submission_ids)) != len(submission_ids):
             raise serializers.ValidationError("client_submission_id values must be unique within a request.")
+        idempotency_keys = [
+            (item.get("idempotency_key") or item["client_submission_id"]).strip()
+            for item in value
+            if (item.get("idempotency_key") or item.get("client_submission_id", "")).strip()
+        ]
+        if len(set(idempotency_keys)) != len(idempotency_keys):
+            raise serializers.ValidationError("idempotency_key values must be unique within a request.")
+
+    def validate(self, attrs):
+        payloads = attrs.get("payloads")
+        uploads = attrs.get("uploads")
+        if payloads is not None and uploads is not None:
+            raise serializers.ValidationError({"uploads": "Use either uploads or payloads, not both."})
+        normalized_payloads = payloads if payloads is not None else uploads
+        if not normalized_payloads:
+            raise serializers.ValidationError({"payloads": "At least one payload is required."})
+        self._validate_payload_identities(normalized_payloads)
+
+        source_device_id = (attrs.get("source_device_id") or "").strip()
+        if not source_device_id and not attrs.get("device_registration_id"):
+            raise serializers.ValidationError(
+                {
+                    "source_device_id": (
+                        "A source_device_id or device_registration_id is required "
+                        "for idempotent offline sync."
+                    )
+                }
+            )
+
+        ward_id = attrs.get("ward_id")
+        session_scope = attrs.get("session_scope") or {}
+        if ward_id is None and session_scope.get("ward_id") is not None:
+            ward_id = session_scope["ward_id"]
+        if ward_id is None:
+            raise serializers.ValidationError({"ward_id": "A ward_id or session_scope.ward_id is required."})
+        try:
+            ward_id = int(ward_id)
+        except (TypeError, ValueError) as exc:
+            raise serializers.ValidationError({"ward_id": "A valid ward_id is required."}) from exc
+
+        attrs["ward_id"] = ward_id
+        attrs["source_device_id"] = source_device_id
+        attrs["payloads"] = normalized_payloads
+        attrs["contract_version"] = (attrs.get("contract_version") or OFFLINE_CHV_CONTRACT_VERSION).strip()
+        return attrs
+
+    def validate_payloads(self, value):
+        self._validate_payload_identities(value)
         return value
 
 
@@ -1748,13 +2955,21 @@ class SyncQueueSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "source_device_id",
+            "device_registration",
+            "contract_version",
+            "upload_type",
             "client_submission_id",
+            "idempotency_key",
+            "download_bundle_version",
+            "recorded_at",
             "phone_number",
             "ward",
             "ward_name",
             "triage_session",
             "payload",
             "status",
+            "conflict_state",
+            "server_receipt",
             "processed_at",
             "error_message",
             "created_at",

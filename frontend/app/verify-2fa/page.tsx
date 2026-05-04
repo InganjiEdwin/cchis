@@ -10,7 +10,6 @@ import { Button } from "@/components/ui/button";
 import { PublicAlert, PublicFooter, PublicGlow, PublicScreen, PublicShell } from "@/components/ui/public-shell";
 import { persistRecoveryCodeLoginNotice } from "@/lib/auth";
 import { getDefaultRoute } from "@/lib/navigation";
-import { isDashboardRole } from "@/lib/roles";
 
 type VerificationMode = "totp" | "recovery";
 const RECOVERY_CODE_NORMALIZED_LENGTH = 17;
@@ -25,7 +24,7 @@ function getRecoveryCodeLength(value: string) {
 
 export default function VerifyTwoFactorPage() {
   const router = useRouter();
-  const { clearPendingTwoFactor, isAuthenticated, isHydrating, pendingTwoFactor, verifyTwoFactor } =
+  const { clearPendingTwoFactor, currentUser, isAuthenticated, isHydrating, pendingTwoFactor, verifyTwoFactor } =
     useAuth();
   const [code, setCode] = useState("");
   const [verificationMode, setVerificationMode] = useState<VerificationMode>("totp");
@@ -40,14 +39,14 @@ export default function VerifyTwoFactorPage() {
     }
 
     if (isAuthenticated) {
-      router.replace("/overview");
+      router.replace(currentUser ? getDefaultRoute(currentUser.role) : "/overview");
       return;
     }
 
     if (!pendingTwoFactor) {
       router.replace("/login");
     }
-  }, [isAuthenticated, isHydrating, pendingTwoFactor, router]);
+  }, [currentUser, isAuthenticated, isHydrating, pendingTwoFactor, router]);
 
   useEffect(() => {
     if (!pendingTwoFactor || isHydrating) {
@@ -78,7 +77,8 @@ export default function VerifyTwoFactorPage() {
       const verification = await verifyTwoFactor(codeToVerify);
       const user = verification.user;
 
-      if (!isDashboardRole(user.role)) {
+      const nextRoute = getDefaultRoute(user.role);
+      if (nextRoute === "/unauthorized") {
         router.replace("/unauthorized");
         return;
       }
@@ -91,7 +91,7 @@ export default function VerifyTwoFactorPage() {
         persistRecoveryCodeLoginNotice(verification.recovery_codes_remaining);
       }
 
-      router.replace(getDefaultRoute(user.role));
+      router.replace(nextRoute);
     } catch (submissionError) {
       const message =
         submissionError instanceof Error ? submissionError.message : "Invalid or expired code. Please try again.";

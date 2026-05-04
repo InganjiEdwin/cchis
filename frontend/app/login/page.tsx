@@ -20,7 +20,6 @@ import {
 } from "@/components/ui/public-shell";
 import { readEnrollmentToken } from "@/lib/auth";
 import { getDefaultRoute } from "@/lib/navigation";
-import { isDashboardRole } from "@/lib/roles";
 
 const LOGIN_FAILURE_THRESHOLD = 3;
 const LOGIN_LOCAL_COOLDOWN_MS = 10_000;
@@ -132,12 +131,13 @@ export default function LoginPage() {
         return;
       }
 
-      if (!isDashboardRole(user.role)) {
+      const nextRoute = getDefaultRoute(user.role);
+      if (nextRoute === "/unauthorized") {
         router.replace("/unauthorized");
         return;
       }
 
-      router.replace(getDefaultRoute(user.role));
+      router.replace(nextRoute);
     } catch (submissionError) {
       const nextFailedAttempts = failedAttempts + 1;
       setFailedAttempts(nextFailedAttempts);

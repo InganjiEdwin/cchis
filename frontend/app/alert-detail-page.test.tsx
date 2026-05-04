@@ -11,6 +11,9 @@ const mockUseRouter = vi.fn();
 const mockUseCreateChvCoverageRequestFromAlertMutation = vi.fn();
 const mockUseCreateChvCoverageRequestMutation = vi.fn();
 const mockUseLiveChvCoverageRequestForWardQuery = vi.fn();
+const mockCreateSensitiveExportViaBff = vi.fn();
+const mockDownloadSensitiveExportViaBff = vi.fn();
+const mockDownloadSensitiveExportFile = vi.fn();
 
 function buildAlertDetailData(overrides: Record<string, unknown> = {}) {
   return {
@@ -74,6 +77,25 @@ function buildAlertDetailData(overrides: Record<string, unknown> = {}) {
       summary: "Message-source detail is not available for this alert yet.",
       preview_text: "",
       trigger_type: "",
+    },
+    climate_evidence: {
+      schema_version: "climate-alert-evidence-v1",
+      record_type: "fallback_static",
+      source_provider: "static-default",
+      observed_vs_forecast_source_label: "Fallback static rainfall",
+      issue_time: null,
+      valid_date: null,
+      lead_day: null,
+      forecast_horizon_days: 0,
+      claimed_forecast_horizon_days: 14,
+      forecast_coverage_days: 0,
+      forecast_missing_lead_days: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+      claimed_lead_time_climate_coverage_sufficient: false,
+      fallback_static_rainfall_used: true,
+      climate_source_confidence: 0.2,
+      climate_source_confidence_label: "low",
+      climate_coverage_status: "insufficient_forecast_horizon",
+      climate_coverage_caveats: ["forecast_missing_claimed_lead_days", "fallback_static_rainfall_present_not_live_forecast"],
     },
     chv_response_summary: {
       coverage_label: "No field response recorded",
@@ -173,6 +195,12 @@ vi.mock("@/queries/use-live-chv-coverage-request-for-ward-query", () => ({
     mockUseLiveChvCoverageRequestForWardQuery(...args),
 }));
 
+vi.mock("@/lib/dashboard", () => ({
+  createSensitiveExportViaBff: (...args: unknown[]) => mockCreateSensitiveExportViaBff(...args),
+  downloadSensitiveExportViaBff: (...args: unknown[]) => mockDownloadSensitiveExportViaBff(...args),
+  downloadSensitiveExportFile: (...args: unknown[]) => mockDownloadSensitiveExportFile(...args),
+}));
+
 describe("AlertDetailPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -217,6 +245,18 @@ describe("AlertDetailPage", () => {
       data: null,
       isPending: false,
     });
+    mockCreateSensitiveExportViaBff.mockResolvedValue({
+      public_id: "export-alert-detail-1",
+      approval_state: "APPROVED",
+    });
+    mockDownloadSensitiveExportViaBff.mockResolvedValue({
+      public_id: "export-alert-detail-1",
+      filename: "al-0002-report.csv",
+      content_type: "text/csv",
+      payload: "csv-payload",
+      payload_sha256: "sha256",
+      expires_at: "2026-05-30T00:00:00Z",
+    });
   });
 
   it("promotes one top next action and routes execution through the ward workflow", async () => {
@@ -245,8 +285,81 @@ describe("AlertDetailPage", () => {
     expect(screen.queryByRole("heading", { name: "Operational Status" })).not.toBeInTheDocument();
     expect(screen.getByText("Awaiting retry")).toBeInTheDocument();
     expect(screen.getByText("Needs attention")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Climate Source Evidence" })).toBeInTheDocument();
+    expect(screen.getAllByText("Fallback static rainfall").length).toBeGreaterThan(0);
+    expect(screen.getByText("0/14 days")).toBeInTheDocument();
+    expect(screen.getByText(/Fallback source warning: static rainfall is present/i)).toBeInTheDocument();
+    expect(screen.getByText(/Missing forecast lead days: 1, 2, 3, 4, 5, 6, 7, 8 \+6 more/i)).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Message Source" })).not.toBeInTheDocument();
     expect(screen.queryByText("Message source unavailable")).not.toBeInTheDocument();
+  });
+
+  it("hides sensitive alert export controls from analyst views", async () => {
+    mockUseAuth.mockReturnValue({
+      currentUser: {
+        id: 2,
+        username: "analyst",
+        email: "analyst@example.com",
+        full_name: "Analyst User",
+        phone_number: null,
+        role: "ANALYST",
+        theme_preference: "LIGHT",
+        ward: null,
+        ward_name: null,
+        is_active: true,
+      },
+    });
+
+    render(React.createElement(AlertDetailPage));
+
+    expect(await screen.findByRole("heading", { name: "Decision Context" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Export Report/i })).not.toBeInTheDocument();
+  });
+
+  it("shows sensitive alert privacy context on detail views", async () => {
+    const alertDetailData = buildAlertDetailData();
+    mockUseAlertDetailQuery.mockReturnValue({
+      data: {
+        ...alertDetailData,
+        alert: {
+          ...alertDetailData.alert,
+          recipient: "+254******1001",
+          privacy_context: {
+            classification: "sensitive_contact_data",
+            redacted: true,
+            reason: "Direct contact identifiers are masked for this role.",
+          },
+        },
+      },
+      isPending: false,
+      isFetching: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(React.createElement(AlertDetailPage));
+
+    expect(await screen.findByText(/Sensitive contact details are redacted for this view/i)).toBeInTheDocument();
+    expect(screen.getByText(/Direct contact identifiers are masked for this role/i)).toBeInTheDocument();
+  });
+
+  it("requests and downloads alert detail report through the sensitive export ledger", async () => {
+    render(React.createElement(AlertDetailPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Export Report/i }));
+
+    await waitFor(() => {
+      expect(mockCreateSensitiveExportViaBff).toHaveBeenCalledWith({
+        export_type: "ALERT_DETAIL_REPORT",
+        purpose: "Operator requested alert detail report for delivery review.",
+        filters: { alert_id: 2 },
+      });
+    });
+    expect(mockDownloadSensitiveExportViaBff).toHaveBeenCalledWith("export-alert-detail-1");
+    expect(mockDownloadSensitiveExportFile).toHaveBeenCalledWith(
+      expect.objectContaining({ filename: "al-0002-report.csv" }),
+    );
+    expect(await screen.findByText("Sensitive export downloaded and audited.")).toBeInTheDocument();
   });
 
   it("switches the CHV handoff CTA to view mode when a live request already exists", async () => {

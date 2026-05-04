@@ -1,5 +1,6 @@
 from django.contrib import admin
 from django.core.exceptions import ValidationError
+from django.utils import timezone
 
 from .services import (
     approve_chv_coverage_request,
@@ -11,7 +12,85 @@ from .services import (
     reject_chv_coverage_request,
     resolve_chv_coverage_request,
 )
-from .models import Alert, AlertWorkflowEvent, AlertWorkflowState, CatchmentPopulationRecord, CHV, CHVAssignment, CHVCoverageRequest, CHVCoverageRequestAlertLink, CHVCoverageRequestEmailDelivery, CHVCoverageRequestEvent, DashboardNotification, DashboardNotificationEvent, ETLHeartbeat, ExposureFeatureRecord, FacilityContact, FacilityReadinessEscalation, FacilityReadinessReview, FacilityReadinessReviewEvent, FacilityReadinessUpdateRequest, FacilityForecast, FacilityForecastRun, FeatureDataset, FeatureDatasetRow, HealthFacility, IngestionRun, ModelRun, PopulationBaselineRecord, PopulationExposureIngestionRun, PopulationExposureSource, RiskScore, SurveillanceIngestionRun, SurveillanceLabelWindow, SurveillanceRecord, SurveillanceSource, SyncQueue, SystemControlState, TriageSession, UssdSessionLog, Ward
+from .models import (
+    Alert,
+    AlertWorkflowEvent,
+    AlertWorkflowState,
+    CatchmentPopulationRecord,
+    CHV,
+    CHVAssignment,
+    CHVCoverageRequest,
+    CHVCoverageRequestAlertLink,
+    CHVCoverageRequestEmailDelivery,
+    CHVCoverageRequestEvent,
+    CHVDeviceRegistration,
+    CHVOfflineRejectedSubmissionAudit,
+    ContactPreference,
+    ContactPreferenceAuditEvent,
+    ClimateRecord,
+    DashboardNotification,
+    DashboardNotificationEvent,
+    ETLHeartbeat,
+    ExposureFeatureRecord,
+    ExternalDataElementMapping,
+    ExternalOrgUnitMapping,
+    ExternalSystem,
+    ExternalValueSetMapping,
+    FacilityCatchment,
+    FacilityContact,
+    FacilityForecast,
+    FacilityForecastRun,
+    FacilityReadinessEscalation,
+    FacilityReadinessReview,
+    FacilityReadinessReviewEvent,
+    FacilityReadinessUpdateRequest,
+    FeatureDataset,
+    FeatureDatasetRow,
+    FeedbackAdjudication,
+    FeedbackLabelCandidate,
+    HealthFacility,
+    IngestionRun,
+    InteroperabilityMappingVersion,
+    InteroperabilityRun,
+    InteroperabilityRunError,
+    InteroperabilityRunItem,
+    MessageTemplate,
+    ModelChampionChallengerComparison,
+    ModelMonitoringSnapshot,
+    ModelMonitoringThreshold,
+    ModelPromotionEvent,
+    ModelRegistryEntry,
+    ModelRollbackEvent,
+    ModelRetrainingRecommendation,
+    ModelRun,
+    OperationalBaselinePeriod,
+    OperationalMetricDefinition,
+    OperationalMetricDimension,
+    OperationalMetricSnapshot,
+    OperationalSLAThreshold,
+    OperationalThresholdBreach,
+    PopulationBaselineRecord,
+    PopulationExposureIngestionRun,
+    PopulationExposureSource,
+    PredictionFeedback,
+    PredictionFeedbackEvent,
+    PrivacyRetentionAuditEvent,
+    PrivacyRetentionHold,
+    RiskScore,
+    SensitiveExportDownloadAudit,
+    SensitiveExportRequest,
+    SurveillanceIngestionRun,
+    SurveillanceLabelWindow,
+    SurveillanceRecord,
+    SurveillanceSource,
+    SyncQueue,
+    SystemControlState,
+    TriageSession,
+    UssdMenuVersion,
+    UssdSessionLog,
+    Ward,
+    WardSpatialRelationship,
+)
 
 
 class CHVCoverageRequestAlertLinkInline(admin.TabularInline):
@@ -73,6 +152,331 @@ class FacilityContactAdmin(admin.ModelAdmin):
     list_filter = ("preferred_channel", "is_verified", "is_active", "source")
     autocomplete_fields = ("facility",)
     readonly_fields = ("public_id", "created_at", "updated_at")
+
+
+@admin.register(ContactPreference)
+class ContactPreferenceAdmin(admin.ModelAdmin):
+    list_display = (
+        "audience_type",
+        "channel",
+        "contact_reference",
+        "phone_number",
+        "consent_status",
+        "opt_out_status",
+        "source",
+        "recorded_by",
+        "recorded_at",
+        "expires_at",
+    )
+    search_fields = ("phone_number", "contact_reference", "source", "source_reference", "public_id")
+    list_filter = ("audience_type", "channel", "consent_status", "opt_out_status", "source")
+    autocomplete_fields = ("recorded_by",)
+    readonly_fields = ("public_id", "created_at", "updated_at")
+
+
+@admin.register(ContactPreferenceAuditEvent)
+class ContactPreferenceAuditEventAdmin(admin.ModelAdmin):
+    list_display = ("action", "audience_type", "channel", "contact_reference", "phone_number", "actor", "created_at")
+    search_fields = ("phone_number", "contact_reference", "reason", "public_id", "preference__public_id")
+    list_filter = ("action", "audience_type", "channel", "created_at")
+    autocomplete_fields = ("preference", "actor")
+    readonly_fields = ("public_id", "created_at")
+
+
+@admin.register(MessageTemplate)
+class MessageTemplateAdmin(admin.ModelAdmin):
+    list_display = (
+        "template_key",
+        "version",
+        "language",
+        "audience_type",
+        "channel",
+        "approval_status",
+        "owner",
+        "risk_level",
+        "approved_at",
+        "retired_at",
+    )
+    search_fields = ("template_key", "title", "body", "owner", "public_id")
+    list_filter = ("audience_type", "channel", "language", "approval_status", "risk_level", "owner")
+    autocomplete_fields = ("approved_by", "created_by")
+    readonly_fields = ("public_id", "created_at", "updated_at")
+
+
+@admin.register(PrivacyRetentionHold)
+class PrivacyRetentionHoldAdmin(admin.ModelAdmin):
+    list_display = ("content_type", "object_id", "case_reference", "is_active", "expires_at", "created_by", "created_at")
+    search_fields = ("object_id", "reason", "case_reference", "public_id")
+    list_filter = ("is_active", "content_type", "created_at", "expires_at")
+    raw_id_fields = ("content_type", "created_by")
+    readonly_fields = ("public_id", "created_at", "updated_at")
+
+
+@admin.register(PrivacyRetentionAuditEvent)
+class PrivacyRetentionAuditEventAdmin(admin.ModelAdmin):
+    list_display = ("record_family", "action", "model_label", "object_id", "dry_run", "created_at")
+    search_fields = ("run_id", "record_family", "model_label", "object_id", "decision_reason", "public_id")
+    list_filter = ("action", "record_family", "dry_run", "created_at")
+    raw_id_fields = ("hold", "actor")
+    readonly_fields = (
+        "public_id",
+        "run_id",
+        "action",
+        "record_family",
+        "model_label",
+        "object_id",
+        "cutoff_at",
+        "window_days",
+        "dry_run",
+        "decision_reason",
+        "before_state",
+        "after_state",
+        "aggregate_metrics",
+        "created_at",
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+class SensitiveExportDownloadAuditInline(admin.TabularInline):
+    model = SensitiveExportDownloadAudit
+    extra = 0
+    raw_id_fields = ("downloader",)
+    readonly_fields = ("public_id", "downloader", "outcome", "reason", "request_metadata", "downloaded_at")
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(SensitiveExportRequest)
+class SensitiveExportRequestAdmin(admin.ModelAdmin):
+    list_display = ("export_type", "requester", "approval_state", "requires_approval", "generated_at", "expires_at", "download_count")
+    search_fields = ("public_id", "purpose", "requester__username", "generated_filename", "payload_sha256")
+    list_filter = ("export_type", "approval_state", "requires_approval", "created_at", "expires_at")
+    raw_id_fields = ("requester", "approved_by", "rejected_by")
+    readonly_fields = (
+        "public_id",
+        "export_type",
+        "requester",
+        "purpose",
+        "filters",
+        "sensitive_fields_included",
+        "approval_state",
+        "requires_approval",
+        "generated_at",
+        "expires_at",
+        "approved_by",
+        "approved_at",
+        "rejected_by",
+        "rejected_at",
+        "rejection_reason",
+        "generated_filename",
+        "generated_content_type",
+        "payload_sha256",
+        "row_count",
+        "download_count",
+        "last_downloaded_at",
+        "metadata",
+        "created_at",
+        "updated_at",
+    )
+    exclude = ("generated_payload",)
+    inlines = (SensitiveExportDownloadAuditInline,)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(SensitiveExportDownloadAudit)
+class SensitiveExportDownloadAuditAdmin(admin.ModelAdmin):
+    list_display = ("export_request", "downloader", "outcome", "downloaded_at")
+    search_fields = ("export_request__public_id", "downloader__username", "reason", "public_id")
+    list_filter = ("outcome", "downloaded_at")
+    raw_id_fields = ("export_request", "downloader")
+    readonly_fields = ("public_id", "export_request", "downloader", "outcome", "reason", "request_metadata", "downloaded_at")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+class InteroperabilityRunItemInline(admin.TabularInline):
+    model = InteroperabilityRunItem
+    extra = 0
+    readonly_fields = (
+        "row_number",
+        "external_identifier",
+        "internal_object_type",
+        "internal_object_public_id",
+        "internal_object_code",
+        "status",
+        "action",
+        "safe_context",
+        "source_record_ref",
+        "created_at",
+    )
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+class InteroperabilityRunErrorInline(admin.TabularInline):
+    model = InteroperabilityRunError
+    extra = 0
+    readonly_fields = (
+        "public_id",
+        "item",
+        "severity",
+        "error_code",
+        "field_path",
+        "safe_message",
+        "remediation_hint",
+        "raw_value_digest",
+        "created_at",
+    )
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(ExternalSystem)
+class ExternalSystemAdmin(admin.ModelAdmin):
+    list_display = ("system_key", "display_name", "system_type", "owner", "status", "updated_at")
+    search_fields = ("system_key", "display_name", "owner")
+    list_filter = ("system_type", "status", "created_at")
+    readonly_fields = ("public_id", "created_at", "updated_at")
+
+
+@admin.register(InteroperabilityMappingVersion)
+class InteroperabilityMappingVersionAdmin(admin.ModelAdmin):
+    list_display = ("system", "version_label", "status", "effective_date", "retired_at", "reviewed_by")
+    search_fields = ("system__system_key", "version_label", "reviewed_by__username")
+    list_filter = ("status", "effective_date", "created_at")
+    readonly_fields = ("public_id", "created_at", "updated_at")
+    autocomplete_fields = ("system", "reviewed_by")
+
+
+@admin.register(ExternalOrgUnitMapping)
+class ExternalOrgUnitMappingAdmin(admin.ModelAdmin):
+    list_display = (
+        "system",
+        "mapping_version",
+        "external_identifier",
+        "internal_object_type",
+        "internal_object_code",
+        "mapping_confidence",
+        "status",
+    )
+    search_fields = (
+        "external_identifier",
+        "external_display_name",
+        "internal_object_public_id",
+        "internal_object_code",
+        "ward__name",
+        "facility__name",
+    )
+    list_filter = ("internal_object_type", "status", "system", "effective_date")
+    readonly_fields = ("public_id", "created_at", "updated_at")
+    autocomplete_fields = ("system", "mapping_version", "ward", "facility", "reviewed_by")
+
+
+@admin.register(ExternalDataElementMapping)
+class ExternalDataElementMappingAdmin(admin.ModelAdmin):
+    list_display = (
+        "system",
+        "mapping_version",
+        "exchange_type",
+        "internal_field",
+        "external_identifier",
+        "required_for_exchange",
+        "status",
+    )
+    search_fields = ("exchange_type", "internal_field", "external_identifier", "external_display_name")
+    list_filter = ("exchange_type", "required_for_exchange", "status", "system")
+    readonly_fields = ("public_id", "created_at", "updated_at")
+    autocomplete_fields = ("system", "mapping_version", "reviewed_by")
+
+
+@admin.register(ExternalValueSetMapping)
+class ExternalValueSetMappingAdmin(admin.ModelAdmin):
+    list_display = ("system", "mapping_version", "value_set_key", "internal_value", "external_value", "status")
+    search_fields = ("value_set_key", "internal_value", "external_value", "external_label")
+    list_filter = ("value_set_key", "status", "system")
+    readonly_fields = ("public_id", "created_at", "updated_at")
+    autocomplete_fields = ("system", "mapping_version", "reviewed_by")
+
+
+@admin.register(InteroperabilityRun)
+class InteroperabilityRunAdmin(admin.ModelAdmin):
+    list_display = (
+        "public_id",
+        "direction",
+        "exchange_type",
+        "system",
+        "status",
+        "dry_run",
+        "records_seen",
+        "records_accepted",
+        "records_rejected",
+        "mapping_coverage",
+        "started_at",
+    )
+    search_fields = ("public_id", "source_file_name", "endpoint_url", "operator__username", "error_summary")
+    list_filter = ("direction", "exchange_type", "status", "dry_run", "system", "started_at")
+    readonly_fields = (
+        "public_id",
+        "records_seen",
+        "records_accepted",
+        "records_rejected",
+        "mapping_coverage",
+        "error_summary",
+        "dry_run_preview",
+        "export_payload",
+        "connector_config",
+        "lineage_metadata",
+        "started_at",
+        "completed_at",
+        "created_at",
+        "updated_at",
+    )
+    autocomplete_fields = ("system", "mapping_version", "retry_of", "operator")
+    inlines = (InteroperabilityRunItemInline, InteroperabilityRunErrorInline)
+
+
+@admin.register(InteroperabilityRunItem)
+class InteroperabilityRunItemAdmin(admin.ModelAdmin):
+    list_display = ("run", "row_number", "external_identifier", "status", "action", "source_record_ref")
+    search_fields = ("run__public_id", "external_identifier", "internal_object_public_id", "source_record_ref")
+    list_filter = ("status", "action", "created_at")
+    readonly_fields = ("created_at",)
+    autocomplete_fields = ("run",)
+
+
+@admin.register(InteroperabilityRunError)
+class InteroperabilityRunErrorAdmin(admin.ModelAdmin):
+    list_display = ("run", "item", "severity", "error_code", "field_path", "created_at")
+    search_fields = ("run__public_id", "error_code", "field_path", "safe_message")
+    list_filter = ("severity", "error_code", "created_at")
+    readonly_fields = ("public_id", "created_at")
+    autocomplete_fields = ("run", "item")
 
 
 class FacilityReadinessReviewEventInline(admin.TabularInline):
@@ -190,6 +594,27 @@ class IngestionRunAdmin(admin.ModelAdmin):
     )
     search_fields = ("run_type", "status", "source_mode", "source_name", "operator_note", "error_message")
     list_filter = ("run_type", "status", "source_mode", "source_kind", "freshness_state", "started_at")
+
+
+@admin.register(ClimateRecord)
+class ClimateRecordAdmin(admin.ModelAdmin):
+    list_display = (
+        "ward",
+        "record_type",
+        "source_provider",
+        "lead_day",
+        "forecast_horizon_days",
+        "valid_date",
+        "issue_time",
+        "observed_timestamp",
+        "rainfall_mm",
+        "quality_flag",
+        "fallback_flag",
+    )
+    search_fields = ("ward__name", "source_provider", "source_ref", "source_run")
+    list_filter = ("record_type", "source_provider", "quality_flag", "fallback_flag", "valid_date")
+    autocomplete_fields = ("ward", "ingestion_run")
+    readonly_fields = ("lineage_metadata", "raw_payload", "created_at")
 
 
 @admin.register(ETLHeartbeat)
@@ -402,6 +827,55 @@ class CatchmentPopulationRecordAdmin(admin.ModelAdmin):
     readonly_fields = ("assigned_ward_ids", "raw_payload", "created_at")
 
 
+@admin.register(WardSpatialRelationship)
+class WardSpatialRelationshipAdmin(admin.ModelAdmin):
+    list_display = (
+        "source_ward",
+        "target_ward",
+        "relationship_type",
+        "generation_method",
+        "confidence",
+        "geometry_dataset_version",
+        "generated_at",
+    )
+    search_fields = (
+        "source_ward__name",
+        "target_ward__name",
+        "geometry_dataset_version__version_label",
+        "geometry_dataset_version__dataset__slug",
+    )
+    list_filter = ("relationship_type", "generation_method", "generated_at")
+    autocomplete_fields = ("source_ward", "target_ward")
+    raw_id_fields = ("geometry_dataset_version",)
+    readonly_fields = ("lineage_metadata", "created_at", "updated_at")
+
+
+@admin.register(FacilityCatchment)
+class FacilityCatchmentAdmin(admin.ModelAdmin):
+    list_display = (
+        "facility",
+        "primary_ward",
+        "catchment_method",
+        "source_kind",
+        "population_estimate",
+        "confidence",
+        "is_approximate",
+        "generated_at",
+    )
+    search_fields = (
+        "facility__name",
+        "facility__facility_code",
+        "primary_ward__name",
+        "geometry_dataset_version__version_label",
+        "geometry_dataset_version__dataset__slug",
+    )
+    list_filter = ("catchment_method", "source_kind", "is_approximate", "generated_at")
+    autocomplete_fields = ("facility", "primary_ward")
+    raw_id_fields = ("geometry_dataset_version",)
+    filter_horizontal = ("covered_wards",)
+    readonly_fields = ("lineage_metadata", "created_at", "updated_at")
+
+
 @admin.register(ModelRun)
 class ModelRunAdmin(admin.ModelAdmin):
     list_display = (
@@ -433,6 +907,118 @@ class ModelRunAdmin(admin.ModelAdmin):
         return obj.metadata.get("promotion_target", "unknown")
 
 
+@admin.register(ModelRegistryEntry)
+class ModelRegistryEntryAdmin(admin.ModelAdmin):
+    list_display = (
+        "model_version",
+        "algorithm",
+        "promotion_state",
+        "monitoring_state",
+        "active_from",
+        "active_until",
+        "review_due_date",
+        "owner",
+    )
+    search_fields = ("model_version", "algorithm", "owner", "model_run__model_version")
+    list_filter = ("promotion_state", "monitoring_state", "algorithm", "review_due_date")
+    raw_id_fields = ("model_run", "promotion_event", "rollback_target")
+    readonly_fields = ("public_id", "created_at", "updated_at")
+
+
+@admin.register(ModelPromotionEvent)
+class ModelPromotionEventAdmin(admin.ModelAdmin):
+    list_display = ("model_run", "source", "promoted_by", "active_from", "review_due_date", "occurred_at")
+    search_fields = ("model_run__model_version", "registry_entry__model_version", "source", "promoted_by")
+    list_filter = ("source", "occurred_at", "review_due_date")
+    raw_id_fields = ("registry_entry", "model_run", "previous_registry_entry")
+    readonly_fields = ("public_id", "occurred_at")
+
+
+@admin.register(ModelRollbackEvent)
+class ModelRollbackEventAdmin(admin.ModelAdmin):
+    list_display = ("rolled_back_from", "rollback_target", "rolled_back_by", "occurred_at")
+    search_fields = (
+        "rolled_back_from__model_version",
+        "rollback_target__model_version",
+        "rolled_back_by",
+        "reason",
+    )
+    list_filter = ("occurred_at",)
+    raw_id_fields = ("rolled_back_from", "rollback_target")
+    readonly_fields = ("public_id", "occurred_at")
+
+
+@admin.register(ModelMonitoringThreshold)
+class ModelMonitoringThresholdAdmin(admin.ModelAdmin):
+    list_display = (
+        "metric_name",
+        "version",
+        "warning_threshold",
+        "breach_threshold",
+        "direction",
+        "is_active",
+    )
+    search_fields = ("metric_name", "version", "baseline_window")
+    list_filter = ("is_active", "direction", "version")
+    readonly_fields = ("public_id", "created_at", "updated_at")
+
+
+@admin.register(ModelMonitoringSnapshot)
+class ModelMonitoringSnapshotAdmin(admin.ModelAdmin):
+    list_display = (
+        "model_run",
+        "metric_name",
+        "value",
+        "baseline_value",
+        "threshold_value",
+        "state",
+        "threshold_version",
+        "generated_at",
+    )
+    search_fields = ("model_run__model_version", "registry_entry__model_version", "metric_name", "threshold_version")
+    list_filter = ("metric_name", "metric_family", "state", "threshold_version", "generated_at")
+    raw_id_fields = ("registry_entry", "model_run", "threshold")
+    readonly_fields = ("public_id", "monitoring_run_id", "created_at")
+
+
+@admin.register(ModelRetrainingRecommendation)
+class ModelRetrainingRecommendationAdmin(admin.ModelAdmin):
+    list_display = (
+        "model_run",
+        "recommendation_state",
+        "recommended_action",
+        "new_label_count",
+        "false_alert_count",
+        "miss_count",
+        "generated_at",
+    )
+    search_fields = ("model_run__model_version", "registry_entry__model_version", "recommended_action")
+    list_filter = ("recommendation_state", "recommended_action", "generated_at")
+    raw_id_fields = ("registry_entry", "model_run")
+    readonly_fields = ("public_id", "created_at")
+
+
+@admin.register(ModelChampionChallengerComparison)
+class ModelChampionChallengerComparisonAdmin(admin.ModelAdmin):
+    list_display = (
+        "champion_model_run",
+        "challenger_model_run",
+        "benchmark_status",
+        "comparison_validity",
+        "recommended_action",
+        "generated_at",
+    )
+    search_fields = (
+        "champion_model_run__model_version",
+        "challenger_model_run__model_version",
+        "challenger_algorithm",
+        "challenger_model_version",
+    )
+    list_filter = ("benchmark_status", "comparison_validity", "recommended_action", "generated_at")
+    raw_id_fields = ("champion_registry_entry", "champion_model_run", "challenger_model_run")
+    readonly_fields = ("public_id", "created_at")
+
+
 @admin.register(FeatureDataset)
 class FeatureDatasetAdmin(admin.ModelAdmin):
     list_display = ("dataset_ref", "dataset_kind", "schema_version", "source_kind", "month", "row_count", "created_at")
@@ -445,6 +1031,67 @@ class FeatureDatasetRowAdmin(admin.ModelAdmin):
     list_display = ("dataset", "ward_name_snapshot", "month", "label", "created_at")
     search_fields = ("dataset__dataset_ref", "ward_name_snapshot")
     list_filter = ("dataset__dataset_kind", "month", "created_at")
+
+
+@admin.register(OperationalMetricDefinition)
+class OperationalMetricDefinitionAdmin(admin.ModelAdmin):
+    list_display = ("metric_key", "version", "metric_group", "metric_family", "value_type", "owner", "is_active")
+    search_fields = ("metric_key", "display_name", "owner", "source_model")
+    list_filter = ("metric_group", "metric_family", "value_type", "is_active")
+    readonly_fields = ("public_id", "created_at", "updated_at")
+
+
+@admin.register(OperationalMetricDimension)
+class OperationalMetricDimensionAdmin(admin.ModelAdmin):
+    list_display = ("dimension_key", "display_name", "value_type", "source_model", "is_active")
+    search_fields = ("dimension_key", "display_name", "source_model")
+    list_filter = ("value_type", "is_active")
+    readonly_fields = ("public_id", "created_at", "updated_at")
+
+
+@admin.register(OperationalMetricSnapshot)
+class OperationalMetricSnapshotAdmin(admin.ModelAdmin):
+    list_display = ("metric_definition", "date", "grain", "value", "status", "ward", "facility", "source_channel")
+    search_fields = ("snapshot_key", "metric_definition__metric_key", "county", "sub_county", "model_version")
+    list_filter = ("grain", "status", "date", "source_channel", "action_type", "alert_severity")
+    raw_id_fields = ("metric_definition", "ward", "facility", "chv")
+    readonly_fields = ("public_id", "snapshot_key", "created_at", "updated_at")
+
+
+@admin.register(OperationalBaselinePeriod)
+class OperationalBaselinePeriodAdmin(admin.ModelAdmin):
+    list_display = ("metric_definition", "name", "status", "period_start", "period_end", "baseline_value")
+    search_fields = ("baseline_key", "name", "metric_definition__metric_key", "owner")
+    list_filter = ("status", "grain", "period_start", "period_end")
+    raw_id_fields = ("metric_definition",)
+    readonly_fields = ("public_id", "baseline_key", "created_at", "updated_at")
+
+
+@admin.register(OperationalSLAThreshold)
+class OperationalSLAThresholdAdmin(admin.ModelAdmin):
+    list_display = ("threshold_key", "version", "metric_definition", "comparator", "target_value", "is_active")
+    search_fields = ("threshold_key", "display_name", "metric_definition__metric_key", "owner", "rationale")
+    list_filter = ("comparator", "is_active", "effective_from")
+    raw_id_fields = ("metric_definition",)
+    readonly_fields = ("public_id", "created_at", "updated_at")
+
+
+@admin.register(OperationalThresholdBreach)
+class OperationalThresholdBreachAdmin(admin.ModelAdmin):
+    list_display = ("metric_definition", "breach_type", "severity", "status", "date", "threshold", "ward")
+    search_fields = ("breach_key", "metric_key_snapshot", "threshold_key_snapshot", "warning_code", "title")
+    list_filter = ("breach_type", "severity", "status", "date")
+    raw_id_fields = ("metric_definition", "threshold", "snapshot", "ward")
+    readonly_fields = (
+        "public_id",
+        "breach_key",
+        "metric_key_snapshot",
+        "metric_version_snapshot",
+        "threshold_key_snapshot",
+        "threshold_version_snapshot",
+        "created_at",
+        "updated_at",
+    )
 
 
 @admin.register(FacilityForecastRun)
@@ -801,11 +1448,44 @@ class UssdSessionLogAdmin(admin.ModelAdmin):
         "session_id",
         "phone_number",
         "service_code",
+        "menu_version_label",
+        "language",
         "menu_level",
+        "session_outcome",
+        "invalid_option",
+        "is_terminal",
         "created_at",
     )
-    search_fields = ("session_id", "phone_number", "service_code")
-    list_filter = ("menu_level", "created_at")
+    search_fields = ("session_id", "phone_number", "service_code", "menu_version_label")
+    list_filter = ("language", "session_outcome", "invalid_option", "is_terminal", "menu_level", "created_at")
+    readonly_fields = ("created_at",)
+
+
+@admin.register(UssdMenuVersion)
+class UssdMenuVersionAdmin(admin.ModelAdmin):
+    list_display = (
+        "menu_key",
+        "version_label",
+        "language",
+        "approval_status",
+        "is_active",
+        "approved_at",
+        "retired_at",
+        "updated_at",
+    )
+    search_fields = ("menu_key", "version_label", "language", "title")
+    list_filter = ("language", "approval_status", "is_active", "created_at", "updated_at")
+    readonly_fields = ("public_id", "created_at", "updated_at")
+    autocomplete_fields = ("approved_by", "created_by")
+
+    def save_model(self, request, obj, form, change):
+        if obj.created_by_id is None:
+            obj.created_by = request.user
+        if obj.approval_status == UssdMenuVersion.STATUS_APPROVED and obj.approved_at is None:
+            obj.approved_at = timezone.now()
+        if obj.approval_status == UssdMenuVersion.STATUS_APPROVED and obj.approved_by_id is None:
+            obj.approved_by = request.user
+        super().save_model(request, obj, form, change)
 
 
 @admin.register(SyncQueue)
@@ -813,15 +1493,86 @@ class SyncQueueAdmin(admin.ModelAdmin):
     list_display = (
         "id",
         "source_device_id",
+        "device_registration",
+        "contract_version",
+        "upload_type",
         "client_submission_id",
+        "idempotency_key",
         "phone_number",
         "ward",
         "status",
+        "conflict_state",
         "processed_at",
         "created_at",
     )
-    search_fields = ("source_device_id", "client_submission_id", "phone_number", "ward__name")
-    list_filter = ("status", "created_at")
+    search_fields = ("source_device_id", "client_submission_id", "idempotency_key", "phone_number", "ward__name")
+    list_filter = ("status", "upload_type", "conflict_state", "contract_version", "created_at")
+
+
+@admin.register(CHVDeviceRegistration)
+class CHVDeviceRegistrationAdmin(admin.ModelAdmin):
+    list_display = (
+        "device_id",
+        "user",
+        "chv",
+        "ward",
+        "contract_version",
+        "platform",
+        "is_active",
+        "last_seen_at",
+        "last_sync_at",
+    )
+    search_fields = ("device_id", "user__username", "chv__name", "ward__name")
+    list_filter = ("contract_version", "platform", "is_active", "registered_at", "last_seen_at")
+    readonly_fields = ("public_id", "registered_at", "updated_at")
+    autocomplete_fields = ("user", "chv", "ward")
+
+
+@admin.register(CHVOfflineRejectedSubmissionAudit)
+class CHVOfflineRejectedSubmissionAuditAdmin(admin.ModelAdmin):
+    list_display = (
+        "public_id",
+        "ward",
+        "source_device_id",
+        "upload_type",
+        "rejection_stage",
+        "error_code",
+        "status_code",
+        "created_at",
+    )
+    search_fields = (
+        "public_id",
+        "source_device_id",
+        "client_submission_id",
+        "idempotency_key",
+        "error_code",
+        "ward__name",
+        "user__username",
+    )
+    list_filter = ("rejection_stage", "status_code", "created_at")
+    readonly_fields = (
+        "public_id",
+        "user",
+        "ward",
+        "device_registration",
+        "source_device_id",
+        "client_submission_id",
+        "idempotency_key",
+        "upload_type",
+        "contract_version",
+        "rejection_stage",
+        "error_code",
+        "safe_error_summary",
+        "field_paths",
+        "status_code",
+        "request_body_hmac",
+        "request_metadata",
+        "created_at",
+    )
+    autocomplete_fields = ("user", "ward", "device_registration")
+
+    def has_add_permission(self, request):
+        return False
 
 
 @admin.register(SystemControlState)
@@ -836,3 +1587,53 @@ class SystemControlStateAdmin(admin.ModelAdmin):
     search_fields = ("control_key", "reason", "updated_by__username")
     list_filter = ("control_key", "is_active", "updated_at")
     readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(PredictionFeedback)
+class PredictionFeedbackAdmin(admin.ModelAdmin):
+    list_display = (
+        "public_id",
+        "ward",
+        "feedback_type",
+        "source_confidence",
+        "training_usage_state",
+        "submitted_at",
+    )
+    search_fields = ("public_id", "ward__name", "note", "risk_score__id", "model_run__model_version")
+    list_filter = ("feedback_type", "source_confidence", "training_usage_state", "privacy_classification", "submitted_at")
+    readonly_fields = ("public_id", "created_at", "updated_at")
+    autocomplete_fields = ("ward", "risk_score", "model_run", "label_window", "submitted_by")
+
+
+@admin.register(PredictionFeedbackEvent)
+class PredictionFeedbackEventAdmin(admin.ModelAdmin):
+    list_display = ("feedback", "event_type", "old_training_usage_state", "new_training_usage_state", "created_at")
+    search_fields = ("feedback__public_id", "detail", "actor__username")
+    list_filter = ("event_type", "created_at")
+    readonly_fields = ("public_id", "created_at")
+    autocomplete_fields = ("feedback", "actor")
+
+
+@admin.register(FeedbackAdjudication)
+class FeedbackAdjudicationAdmin(admin.ModelAdmin):
+    list_display = ("public_id", "feedback", "adjudication_state", "reviewer", "reviewed_at")
+    search_fields = ("public_id", "feedback__public_id", "reason", "reviewer__username")
+    list_filter = ("adjudication_state", "reviewed_at")
+    readonly_fields = ("public_id", "created_at", "updated_at")
+    autocomplete_fields = ("feedback", "reviewer", "superseded_by_surveillance_label")
+
+
+@admin.register(FeedbackLabelCandidate)
+class FeedbackLabelCandidateAdmin(admin.ModelAdmin):
+    list_display = (
+        "candidate_ref",
+        "ward",
+        "outbreak_label",
+        "label_truth_level",
+        "training_usage_state",
+        "created_at",
+    )
+    search_fields = ("candidate_ref", "feedback__public_id", "ward__name")
+    list_filter = ("outbreak_label", "label_truth_level", "training_usage_state", "created_at")
+    readonly_fields = ("public_id", "candidate_ref", "created_at", "updated_at")
+    autocomplete_fields = ("feedback", "adjudication", "ward", "risk_score", "model_run", "superseded_by_surveillance_label")

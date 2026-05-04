@@ -10,6 +10,7 @@ const mockFetchWardRiskDataViaBff = vi.fn();
 const mockFetchAlertsDataViaBff = vi.fn();
 const mockFetchWardMapViaBff = vi.fn();
 const mockFetchChvCoverageRequestsViaBff = vi.fn();
+const mockFetchChvOfflineMonitoringViaBff = vi.fn();
 
 vi.mock("@/lib/dashboard", async () => {
   const actual = await vi.importActual<typeof import("@/lib/dashboard")>("@/lib/dashboard");
@@ -20,6 +21,7 @@ vi.mock("@/lib/dashboard", async () => {
     fetchAlertsDataViaBff: (...args: unknown[]) => mockFetchAlertsDataViaBff(...args),
     fetchWardMapViaBff: (...args: unknown[]) => mockFetchWardMapViaBff(...args),
     fetchChvCoverageRequestsViaBff: (...args: unknown[]) => mockFetchChvCoverageRequestsViaBff(...args),
+    fetchChvOfflineMonitoringViaBff: (...args: unknown[]) => mockFetchChvOfflineMonitoringViaBff(...args),
   };
 });
 
@@ -34,6 +36,34 @@ function createWrapper() {
 
   return function Wrapper({ children }: { children: React.ReactNode }) {
     return React.createElement(QueryClientProvider, { client: queryClient }, children);
+  };
+}
+
+function buildOfflineMonitoring() {
+  return {
+    schema_version: "chv-offline-monitoring-v1",
+    generated_at: "2026-04-28T09:15:00Z",
+    scope: {
+      ward_ids: [],
+      ward_count: 0,
+      window_hours: 24,
+      audit_window_days: 7,
+    },
+    metrics: {
+      registered_chv_devices: 0,
+      active_chv_devices: 0,
+      successful_syncs_24h: 0,
+      failed_syncs_24h: 0,
+      pre_validation_rejections_24h: 0,
+      pending_uploads: 0,
+      stale_guidance_bundles: 0,
+      conflict_count_7d: 0,
+      offline_task_completion_latency_minutes: null,
+    },
+    audit_checks: [],
+    sync_health_by_ward: [],
+    recent_sync_decisions: [],
+    recent_rejected_submission_audits: [],
   };
 }
 
@@ -193,6 +223,7 @@ describe("useChvOperationsQuery", () => {
         },
       ],
     });
+    mockFetchChvOfflineMonitoringViaBff.mockResolvedValueOnce(buildOfflineMonitoring());
 
     const { result } = renderHook(() => useChvOperationsQuery(), {
       wrapper: createWrapper(),
@@ -323,6 +354,7 @@ describe("useChvOperationsQuery", () => {
           },
         ],
       });
+    mockFetchChvOfflineMonitoringViaBff.mockResolvedValueOnce(buildOfflineMonitoring());
 
     const { result } = renderHook(() => useChvOperationsQuery(), {
       wrapper: createWrapper(),

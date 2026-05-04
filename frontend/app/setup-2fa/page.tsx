@@ -15,7 +15,6 @@ import {
   PublicShell,
 } from "@/components/ui/public-shell";
 import { getDefaultRoute } from "@/lib/navigation";
-import { isDashboardRole } from "@/lib/roles";
 import type { CurrentUser } from "@/lib/auth";
 
 type SetupState = {
@@ -103,7 +102,8 @@ export default function SetupTwoFactorPage() {
       const response = await confirmTwoFactorEnrollment(code);
       const user = response.user;
 
-      if (!isDashboardRole(user.role)) {
+      const nextRoute = getDefaultRoute(user.role);
+      if (nextRoute === "/unauthorized") {
         router.replace("/unauthorized");
         return;
       }
@@ -115,7 +115,7 @@ export default function SetupTwoFactorPage() {
       setCopyMessage(null);
 
       if (codes.length === 0) {
-        router.replace(getDefaultRoute(user.role));
+        router.replace(nextRoute);
       }
     } catch (submissionError) {
       const message =

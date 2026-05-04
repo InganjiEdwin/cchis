@@ -96,6 +96,61 @@ export type AlertRecord = {
   sent_at: string | null;
   created_at: string;
   error_message: string;
+  privacy_context?: {
+    classification: string;
+    redacted: boolean;
+    reason: string;
+  };
+};
+
+export type SensitiveExportType = "ALERT_LIST_CSV" | "ALERT_DETAIL_REPORT";
+export type SensitiveExportApprovalState = "PENDING" | "APPROVED" | "REJECTED" | "EXPIRED";
+
+export type SensitiveExportRecord = {
+  public_id: string;
+  export_type: SensitiveExportType;
+  requester: number;
+  requester_username: string;
+  purpose: string;
+  filters: Record<string, unknown>;
+  sensitive_fields_included: string[];
+  approval_state: SensitiveExportApprovalState;
+  requires_approval: boolean;
+  generated_at: string | null;
+  expires_at: string | null;
+  approved_by: number | null;
+  approved_by_username: string | null;
+  approved_at: string | null;
+  rejected_by: number | null;
+  rejected_by_username: string | null;
+  rejected_at: string | null;
+  rejection_reason: string;
+  generated_filename: string;
+  generated_content_type: string;
+  payload_sha256: string;
+  row_count: number;
+  download_count: number;
+  download_audit_count: number;
+  last_downloaded_at: string | null;
+  has_payload: boolean;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SensitiveExportCreatePayload = {
+  export_type: SensitiveExportType;
+  purpose: string;
+  filters?: Record<string, unknown>;
+};
+
+export type SensitiveExportDownloadResponse = {
+  public_id: string;
+  filename: string;
+  content_type: string;
+  payload: string;
+  payload_sha256: string;
+  expires_at: string;
 };
 
 export type ChvRecord = {
@@ -133,6 +188,91 @@ export type ChvOperationsRecord = {
   message_mode: "SEND" | "QUEUE_ONLY" | "UNAVAILABLE";
   message_delivery_kind: "LIVE" | "SIMULATED" | "QUEUE_ONLY" | "UNAVAILABLE";
   can_view_activity: boolean;
+};
+
+export type ChvOfflineAuditStatus = "PASS" | "WARN" | "FAIL";
+
+export type ChvOfflineAuditCheck = {
+  key: string;
+  title: string;
+  status: ChvOfflineAuditStatus;
+  count: number;
+  summary: string;
+  sample_records: Array<Record<string, unknown>>;
+};
+
+export type ChvOfflineWardSyncHealth = {
+  ward_id: number;
+  ward_name: string;
+  registered_device_count: number;
+  active_device_count: number;
+  successful_syncs_24h: number;
+  pending_upload_count: number;
+  failed_upload_count_24h: number;
+  pre_validation_rejection_count_24h: number;
+  conflict_count_7d: number;
+  last_successful_sync_at: string | null;
+  sync_health: "ONLINE" | "DELAYED" | "OFFLINE";
+};
+
+export type ChvOfflineSyncDecision = {
+  id: number;
+  created_at: string | null;
+  processed_at: string | null;
+  ward_id: number | null;
+  ward_name: string;
+  upload_type: string;
+  status: "PENDING" | "PROCESSED" | "FAILED";
+  decision: "ACCEPTED" | "REJECTED" | "PENDING";
+  conflict_state: string;
+  client_submission_id: string;
+  idempotency_key: string;
+  download_bundle_version: string;
+  domain_record: Record<string, unknown>;
+  explanation: string;
+};
+
+export type ChvOfflineRejectedSubmissionAudit = {
+  public_id: string;
+  created_at: string | null;
+  ward_id: number | null;
+  ward_name: string;
+  source_device_id: string;
+  client_submission_id: string;
+  idempotency_key: string;
+  upload_type: string;
+  contract_version: string;
+  rejection_stage: string;
+  error_code: string;
+  safe_error_summary: string;
+  field_paths: string[];
+  status_code: number;
+};
+
+export type ChvOfflineMonitoringSnapshot = {
+  schema_version: string;
+  generated_at: string | null;
+  scope: {
+    ward_ids: number[];
+    ward_count: number;
+    window_hours: number;
+    audit_window_days: number;
+  };
+  metrics: {
+    registered_chv_devices: number;
+    active_chv_devices: number;
+    successful_syncs_24h: number;
+    failed_syncs_24h: number;
+    pre_validation_rejections_24h: number;
+    pending_uploads: number;
+    stale_guidance_bundles: number;
+    conflict_count_7d: number;
+    offline_task_completion_latency_minutes: number | null;
+  };
+  audit_checks: ChvOfflineAuditCheck[];
+  sync_health_by_ward: ChvOfflineWardSyncHealth[];
+  recent_sync_decisions: ChvOfflineSyncDecision[];
+  recent_rejected_submission_audits: ChvOfflineRejectedSubmissionAudit[];
 };
 
 export type ChvActivityRecord = {
@@ -323,6 +463,136 @@ export type FetchChvCoverageRequestsParams = {
   has_linked_alerts?: boolean;
 };
 
+export type PreparednessActionType =
+  | "chv_follow_up"
+  | "household_prevention_message"
+  | "facility_ors_review"
+  | "facility_staffing_review"
+  | "county_escalation"
+  | "water_treatment_distribution"
+  | "surveillance_follow_up"
+  | "field_verification";
+
+export type PreparednessActionSourceTrigger =
+  | "manual"
+  | "alert"
+  | "alert_workflow"
+  | "risk_score"
+  | "chv_coverage_request"
+  | "facility_readiness_review"
+  | "facility_update_request"
+  | "facility_escalation"
+  | "outcome_feedback"
+  | "system";
+
+export type PreparednessActionStatus =
+  | "DRAFT"
+  | "QUEUED"
+  | "ASSIGNED"
+  | "ACKNOWLEDGED"
+  | "IN_PROGRESS"
+  | "COMPLETED"
+  | "BLOCKED"
+  | "CANCELLED"
+  | "ESCALATED"
+  | "EXPIRED";
+
+export type PreparednessActionPriority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
+
+export type PreparednessActionEventRecord = {
+  public_id: string;
+  event_type: string;
+  actor: number | null;
+  actor_username: string | null;
+  old_status: string;
+  new_status: string;
+  detail: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+export type PreparednessActionRecord = {
+  id: number;
+  public_id: string;
+  action_type: PreparednessActionType;
+  source_trigger_type: PreparednessActionSourceTrigger;
+  source_trigger_ref: string;
+  ward: number;
+  ward_name: string;
+  ward_public_id: string;
+  facility: number | null;
+  facility_name: string | null;
+  chv: number | null;
+  chv_name: string | null;
+  alert: number | null;
+  alert_public_id: string | null;
+  alert_workflow: number | null;
+  alert_workflow_public_id: string | null;
+  risk_score: number | null;
+  model_run: number | null;
+  model_run_version: string | null;
+  facility_readiness_review: number | null;
+  facility_readiness_review_public_id: string | null;
+  facility_update_request: number | null;
+  facility_update_request_public_id: string | null;
+  facility_escalation: number | null;
+  facility_escalation_public_id: string | null;
+  chv_coverage_request: number | null;
+  chv_coverage_request_public_id: string | null;
+  status: PreparednessActionStatus;
+  priority: PreparednessActionPriority;
+  created_by: number | null;
+  created_by_username: string | null;
+  assigned_to: number | null;
+  assigned_to_username: string | null;
+  assigned_to_team: string;
+  decision_policy_version: string;
+  due_at: string | null;
+  sla_target_at: string | null;
+  acknowledged_at: string | null;
+  completed_at: string | null;
+  cancelled_at: string | null;
+  escalated_at: string | null;
+  completion_evidence: Record<string, unknown>;
+  cancellation_reason: string;
+  escalation_metadata: Record<string, unknown>;
+  lineage_metadata: Record<string, unknown>;
+  notes: string;
+  is_overdue: boolean;
+  sla_status: "ON_TRACK" | "OVERDUE" | "NOT_APPLICABLE";
+  created_at: string;
+  updated_at: string;
+  events: PreparednessActionEventRecord[];
+};
+
+export type FetchPreparednessActionsParams = {
+  page?: number;
+  page_size?: number;
+  ward_id?: number;
+  facility_id?: number;
+  chv_id?: number;
+  status?: PreparednessActionStatus;
+  statuses?: PreparednessActionStatus[];
+  action_type?: PreparednessActionType;
+  priority?: PreparednessActionPriority;
+  source_trigger_type?: PreparednessActionSourceTrigger;
+  assigned?: "mine" | "unassigned";
+  overdue?: boolean;
+  ordering?: string;
+};
+
+export type PreparednessActionTransitionPayload = {
+  status: PreparednessActionStatus;
+  detail?: string;
+  assigned_to_id?: number | null;
+  assigned_to_team?: string;
+  due_at?: string | null;
+  sla_target_at?: string | null;
+  completion_evidence?: Record<string, unknown>;
+  cancellation_reason?: string;
+  escalation_metadata?: Record<string, unknown>;
+};
+
 export type FacilityRecord = {
   id: number;
   public_id: string;
@@ -384,9 +654,27 @@ export type DashboardNotification = {
   id: number;
   public_id: string;
   external_key: string;
-  type: "WARD_RISK_HIGH" | "ALERT_FAILED" | "ALERT_RETRY_PENDING" | "FEED_STALE" | "CHV_COVERAGE_REQUEST_STATUS";
-  category: "system_health" | "alert_delivery" | "trigger_review" | "chv_coverage_workflow" | "general";
-  group_key: "data_freshness" | "alert_delivery_failures" | "alert_delivery_retries" | "chv_coverage_requests" | null;
+  type:
+    | "WARD_RISK_HIGH"
+    | "ALERT_FAILED"
+    | "ALERT_RETRY_PENDING"
+    | "FEED_STALE"
+    | "CHV_COVERAGE_REQUEST_STATUS"
+    | "OPERATIONAL_KPI_THRESHOLD";
+  category:
+    | "system_health"
+    | "alert_delivery"
+    | "trigger_review"
+    | "chv_coverage_workflow"
+    | "operational_kpi_threshold"
+    | "general";
+  group_key:
+    | "data_freshness"
+    | "alert_delivery_failures"
+    | "alert_delivery_retries"
+    | "chv_coverage_requests"
+    | "operational_kpi_thresholds"
+    | null;
   severity: "INFO" | "WARNING" | "CRITICAL";
   title: string;
   body: string;
@@ -557,6 +845,26 @@ export type WardOperationalEvidenceBadge = {
   detail: string;
 };
 
+export type ClimateEvidence = {
+  schema_version?: string;
+  record_type: string;
+  source_provider: string;
+  observed_vs_forecast_source_label: string;
+  issue_time: string | null;
+  valid_date: string | null;
+  lead_day: number | null;
+  forecast_horizon_days: number | null;
+  claimed_forecast_horizon_days: number;
+  forecast_coverage_days: number;
+  forecast_missing_lead_days: number[];
+  claimed_lead_time_climate_coverage_sufficient: boolean;
+  fallback_static_rainfall_used: boolean;
+  climate_source_confidence: number;
+  climate_source_confidence_label: string;
+  climate_coverage_status: string;
+  climate_coverage_caveats: string[];
+};
+
 export type WardPredictionOutcomeClassification =
   | "hit"
   | "false_alert"
@@ -606,6 +914,8 @@ export type WardOutcomeFeedback = {
     step_count: number;
     recorded_step_count: number;
     downstream_failure_count: number;
+    alert_failure_count?: number;
+    response_execution_failure_count?: number;
     in_progress_step_count: number;
     review_item_count: number;
   };
@@ -631,6 +941,85 @@ export type WardOutcomeFeedback = {
     update_requests: Array<Record<string, unknown>>;
     escalations: Array<Record<string, unknown>>;
   };
+  preparedness_action_evidence?: {
+    mode: string;
+    outcome_ref: string;
+    reference_at: string | null;
+    window_start: string | null;
+    related_alert_public_ids: string[];
+    prediction_risk_score_ids: number[];
+    summary: {
+      total_count: number;
+      completed_count: number;
+      completed_without_substantive_evidence_count: number;
+      in_progress_count: number;
+      failed_count: number;
+      blocked_count: number;
+      overdue_count: number;
+      completed_with_evidence_count: number;
+      first_action_at: string | null;
+      first_acknowledged_at: string | null;
+      first_completed_at: string | null;
+    };
+    response_time_measurements: {
+      hours_to_first_action: number | null;
+      hours_to_first_acknowledgement: number | null;
+      hours_to_first_completion: number | null;
+    };
+    completion_quality_flags: string[];
+    action_history: Array<{
+      public_id: string;
+      action_type: PreparednessActionType;
+      action_type_label: string;
+      status: PreparednessActionStatus;
+      outcome_status: "recorded" | "in_progress" | "failed" | "missing";
+      priority: PreparednessActionPriority;
+      ward_id: number;
+      ward_name: string;
+      facility_id: number | null;
+      facility_name: string;
+      chv_id: number | null;
+      chv_name: string;
+      assigned_to: number | null;
+      assigned_to_username: string;
+      assigned_to_team: string;
+      source_trigger_type: PreparednessActionSourceTrigger;
+      source_trigger_ref: string;
+      risk_score_id: number | null;
+      model_run_id: number | null;
+      model_run_version: string;
+      alert_public_id: string;
+      linked_alert_public_ids: string[];
+      related_alert_public_ids: string[];
+      created_at: string;
+      acknowledged_at: string | null;
+      completed_at: string | null;
+      due_at: string | null;
+      is_overdue: boolean;
+      completion_evidence_present: boolean;
+      completion_quality_flags: string[];
+      response_step_keys: string[];
+      outcome_links: {
+        outcome_ref: string;
+        label_window_ref: string;
+        prediction_risk_score_ids: number[];
+        alert_public_ids: string[];
+      };
+    }>;
+    missed_action_review: {
+      review_required: boolean;
+      missing_required_action_keys: string[];
+      overdue_action_public_ids: string[];
+      blocked_action_public_ids: string[];
+      cancelled_action_public_ids: string[];
+      detail: string;
+    };
+    false_alert_review_context: {
+      review_required: boolean;
+      completed_action_public_ids: string[];
+      detail: string;
+    };
+  };
 };
 
 export type WardOperationalEvidence = {
@@ -645,13 +1034,25 @@ export type WardOperationalEvidence = {
     lead_time_supported_days: number[];
     validation_status: string | null;
     mode: string;
+    source_label?: string;
+    claimed_forecast_horizon_days?: number | null;
+    forecast_coverage_days?: number | null;
+    forecast_missing_lead_days?: number[];
+    climate_coverage_status?: string;
+    claimed_lead_time_climate_coverage_sufficient?: boolean | null;
+    issue_time?: string | null;
+    valid_date?: string | null;
+    lead_day?: number | null;
+    fallback_static_rainfall_used?: boolean;
   };
+  climate_source?: ClimateEvidence;
   model_readiness: {
     state: "seeded_demo" | "proxy_backed" | "evaluated" | "promoted";
     label: string;
     tone: WardOperationalEvidenceTone;
     detail: string;
     evidence: string[];
+    readiness_caveats?: string[];
   };
   source_badges: WardOperationalEvidenceBadge[];
   alert_candidate_review: {
@@ -724,6 +1125,102 @@ export type WardOperationalEvidence = {
       };
     }>;
   };
+};
+
+export type WardSpatialEvidenceNeighbor = {
+  ward_id: number;
+  ward_name: string;
+  county: string;
+  ward_code: string;
+  relationship_types: string[];
+  relationship_labels: string[];
+  relationship_refs: string[];
+  generation_methods: string[];
+  is_approximate_relationship: boolean;
+  approximation_notice: string | null;
+  confidence: number;
+  distance: number | null;
+  distance_unit: string;
+  geometry_dataset_ref: string;
+  relationship_generated_at: string | null;
+  risk_level: "LOW" | "MEDIUM" | "HIGH" | null;
+  risk_score: number | null;
+  predicted_cases: number;
+  risk_generated_at: string | null;
+  risk_score_ref: string | null;
+  active_outbreak_label: boolean;
+  suspected_cases_28d: number;
+  suspected_case_trend_14d_delta: number;
+  surveillance_record_count_28d: number;
+  latest_surveillance_reporting_period_end: string | null;
+};
+
+export type WardSpatialEvidenceCatchment = {
+  catchment_id: number;
+  facility_id: number;
+  facility_name: string;
+  facility_code: string;
+  primary_ward_id: number;
+  primary_ward_name: string;
+  covered_ward_ids: number[];
+  covered_ward_names: string[];
+  catchment_method: string;
+  catchment_method_label: string;
+  source_kind: string;
+  source_kind_label: string;
+  is_approximate: boolean;
+  confidence: number;
+  population_estimate: number | null;
+  generated_at: string;
+  projected_pressure_score: number | null;
+  projected_readiness_state: string | null;
+  projected_readiness_label: string;
+  forecast_generated_at: string | null;
+  forecast_ref: string | null;
+  source_ref: string;
+};
+
+export type WardSpatialEvidence = {
+  schema_version: string;
+  ward_id: number;
+  ward_name: string;
+  as_of: string;
+  summary: {
+    neighbor_count: number;
+    high_risk_neighbor_count: number;
+    active_outbreak_neighbor_count: number;
+    neighbor_suspected_case_trend_14d_delta: number;
+    nearest_high_risk_distance: number | null;
+    nearest_facility_distance: number | null;
+    nearest_facility_distance_unit: string;
+    catchment_facility_count: number;
+    approximate_catchment_count: number;
+    max_catchment_pressure_score: number | null;
+    water_proximity_available: boolean;
+    water_proximity_value: number | null;
+  };
+  neighbors: WardSpatialEvidenceNeighbor[];
+  high_risk_neighbor_ward_ids: number[];
+  active_outbreak_neighbor_ward_ids: number[];
+  facility_catchments: WardSpatialEvidenceCatchment[];
+  nearest_facility: {
+    facility_id: number;
+    facility_name: string;
+    facility_code: string;
+    ward_id: number;
+    ward_name: string;
+    distance: number;
+    distance_unit: string;
+    source_ref: string;
+    source_created_at: string | null;
+  } | null;
+  water_proximity: {
+    source_available: boolean;
+    value: number | null;
+    display_caveat: string;
+  };
+  lineage: Record<string, unknown>;
+  caveats: string[];
 };
 
 export type WardIntelligenceTrend = {
@@ -1037,6 +1534,10 @@ export type TriggerAlertRequest = {
   send_sms: boolean;
   trigger_type?: "HIGH_RISK_ESCALATION" | "FOLLOW_UP_REVIEW" | "DELIVERY_RETRY" | "CUSTOM";
   message_override?: string;
+  template_key?: string;
+  template_version?: number | null;
+  template_language?: string;
+  template_context?: Record<string, string | number | boolean | null>;
 };
 
 export type TriggerAlertResponse = {
@@ -1052,7 +1553,7 @@ export type TriggerAlertResponse = {
   task_id: string;
   send_sms: boolean;
   trigger_type?: "HIGH_RISK_ESCALATION" | "FOLLOW_UP_REVIEW" | "DELIVERY_RETRY" | "CUSTOM" | null;
-  message_mode?: "backend_generated" | "operator_edited" | null;
+  message_mode?: "backend_generated" | "operator_edited" | "template_rendered" | null;
   queued_at: string;
   last_risk_update_at: string | null;
   estimated_chv_recipient_count: number | null;
@@ -1111,13 +1612,14 @@ export type TriggerContextResponse = {
 
 export type TriggerPreviewResponse = {
   message_preview: string;
-  message_mode: "backend_generated" | "operator_edited";
+  message_mode: "backend_generated" | "operator_edited" | "template_rendered";
   supports_editing: boolean;
   channel_defaults: string[];
   recipient_preview: {
     chv_count: number;
   };
   recommended_action: string;
+  message_template?: Record<string, unknown>;
 };
 
 export type OverviewSystemState = "stable" | "watch" | "action_required";
@@ -1562,6 +2064,7 @@ export type WardIntelligenceRouteResponse = {
     risk_score: number | null;
   };
   surveillance?: Record<string, unknown>;
+  spatial_evidence?: WardSpatialEvidence;
   operational_evidence?: WardOperationalEvidence;
 };
 
@@ -1574,6 +2077,7 @@ type AlertDetailRouteResponse = {
   delivery: AlertIntelligenceDelivery;
   delivery_summary: AlertIntelligenceDelivery;
   message_source: AlertIntelligenceMessageSource;
+  climate_evidence?: ClimateEvidence;
   chv_response_summary: AlertIntelligenceResponseSummary;
   facility_response_summary: AlertIntelligenceResponseSummary;
   recommended_next_action: AlertIntelligenceRecommendedAction;
@@ -1695,6 +2199,785 @@ export type SystemRouteResponse = {
   controlStatus: SystemControlStatus;
 };
 
+export type OperationalMetricSnapshotStatus = "COMPLETE" | "PARTIAL" | "NO_SOURCE" | "STALE" | "FAILED" | "MISSING";
+export type OperationalMetricStatusTone = "default" | "success" | "warning" | "danger" | "info";
+
+export type OperationalMetricBaselineComparison = {
+  status: "compared" | "not_configured" | "not_evaluable";
+  baseline: {
+    baseline_key: string;
+    name: string;
+    baseline_value: number;
+    delta: number;
+    percent_delta: number | null;
+    period_start: string;
+    period_end: string;
+  } | null;
+};
+
+export type OperationalMetricSlaStatus = {
+  status: "pass" | "breach" | "not_configured" | "not_evaluable";
+  label: string;
+  threshold: {
+    threshold_key: string;
+    display_name: string;
+    comparator: "LTE" | "GTE" | "LT" | "GT";
+    target_value: number;
+    warning_value: number | null;
+    critical_value: number | null;
+    value_unit: string;
+  } | null;
+};
+
+export type OperationalMetricCard = {
+  metric_key: string;
+  display_name: string;
+  description: string;
+  metric_group: string;
+  metric_family: "OPERATIONAL" | "MODEL";
+  owner: string;
+  formula: string;
+  window: string;
+  source_model: string;
+  source_models: string[];
+  interpretation: string;
+  value_type: "count" | "percent" | "rate" | "duration_seconds" | "ratio";
+  value_unit: string;
+  value: number | null;
+  display_value: string;
+  status: OperationalMetricSnapshotStatus;
+  status_tone: OperationalMetricStatusTone;
+  snapshot_key: string | null;
+  snapshot_date: string | null;
+  period_start: string | null;
+  period_end: string | null;
+  source_record_count: number;
+  source_coverage_warnings: string[];
+  dimension_values: Record<string, unknown>;
+  source_channel: string;
+  baseline: OperationalMetricBaselineComparison;
+  sla: OperationalMetricSlaStatus;
+};
+
+export type OperationalMetricTrendPoint = {
+  date: string;
+  value: number | null;
+  display_value: string;
+  status: OperationalMetricSnapshotStatus;
+  source_record_count: number;
+};
+
+export type OperationalMetricTrendSeries = {
+  metric_key: string;
+  display_name: string;
+  value_type: OperationalMetricCard["value_type"];
+  value_unit: string;
+  points: OperationalMetricTrendPoint[];
+};
+
+export type OperationalMetricSourceWarning = {
+  metric_key: string;
+  warning: string;
+  snapshot_key: string | null;
+  snapshot_date: string | null;
+  status: string;
+};
+
+export type OperationalMetricThresholdAlert = {
+  public_id: string | null;
+  breach_key: string | null;
+  metric_key: string;
+  metric_version: string;
+  display_name: string;
+  breach_type:
+    | "THRESHOLD_WARNING"
+    | "THRESHOLD_BREACH"
+    | "SOURCE_WARNING"
+    | "SNAPSHOT_STALE"
+    | "MISSING_SNAPSHOT"
+    | "STATUS_WARNING";
+  severity: "WARNING" | "CRITICAL";
+  status: "ACTIVE" | "RESOLVED";
+  title: string;
+  body: string;
+  date: string;
+  warning_code: string;
+  observed_value: number | null;
+  observed_display_value: string;
+  observed_status: string;
+  observed_unit: string;
+  snapshot_key: string | null;
+  threshold: {
+    threshold_key: string;
+    version: string;
+    display_name: string;
+    comparator: "LTE" | "GTE" | "LT" | "GT";
+    target_value: number;
+    warning_value: number | null;
+    critical_value: number | null;
+    value_unit: string;
+  } | null;
+  attribution: {
+    metric_key: string;
+    metric_version: string;
+    metric_group: string;
+    metric_owner: string;
+    threshold_key: string;
+    threshold_version: string;
+    threshold_owner: string;
+    snapshot_key: string;
+    snapshot_date: string;
+    source_record_count: number;
+    warning_code: string;
+    ward_id: number | null;
+    ward_name: string;
+    county: string;
+    sub_county: string;
+    source_channel: string;
+    dimension_values: Record<string, unknown>;
+  };
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  resolved_at: string | null;
+};
+
+export type OperationalInteroperabilityContractsPanel = {
+  schema_version: "interoperability-operational-kpi-feed-v1";
+  generated_at: string;
+  audit_status: "pass" | "fail";
+  latest_mapping_coverage: number | null;
+  latest_run: InteroperabilityRunRecord | null;
+  active_mapping_version_count: number;
+  active_org_unit_mapping_count: number;
+  failed_run_count: number;
+  audit_failures: InteroperabilityAuditCheck[];
+  source_coverage_warnings: OperationalMetricSourceWarning[];
+};
+
+export type OperationalKpiDashboardResponse = {
+  schema_version: "operational-kpi-dashboard-v1";
+  generated_at: string;
+  filters: {
+    date_from: string;
+    date_to: string;
+    ward_id: number | null;
+    ward_name: string;
+    sub_county: string;
+    source_channel: string;
+  };
+  available_filters: {
+    wards: Array<{ id: number; name: string; county: string; sub_county: string }>;
+    sub_counties: string[];
+    source_channels: string[];
+  };
+  summary: {
+    metric_count: number;
+    snapshot_count: number;
+    latest_snapshot_date: string | null;
+    complete_metric_count: number;
+    evaluable_metric_count: number;
+    warning_count: number;
+    threshold_alert_count: number;
+    critical_threshold_alert_count: number;
+    warning_threshold_alert_count: number;
+    status_counts: Record<string, number>;
+    operational_health: "pass" | "warning" | "critical";
+    model_metric_count: number;
+  };
+  panels: {
+    operational_overview: OperationalMetricCard[];
+    sla: OperationalMetricCard[];
+    adoption_coverage: OperationalMetricCard[];
+    response_time_trends: OperationalMetricTrendSeries[];
+    facility_preparedness_trends: OperationalMetricTrendSeries[];
+    ussd_completion_trends: OperationalMetricTrendSeries[];
+    model_vs_operations: {
+      separation_statement: string;
+      operational_metric_family: "OPERATIONAL";
+      model_metric_family: "MODEL";
+      latest_model_run: {
+        model_version: string | null;
+        status: string | null;
+        started_at: string | null;
+        completed_at: string | null;
+        evaluation_metrics: Record<string, unknown>;
+      };
+      operational_metric_groups: string[];
+    };
+    source_coverage_warnings: OperationalMetricSourceWarning[];
+    threshold_alerts: OperationalMetricThresholdAlert[];
+    interoperability_contracts: OperationalInteroperabilityContractsPanel;
+  };
+  metrics: OperationalMetricCard[];
+};
+
+export type ModelOperationsHealthTone = "default" | "success" | "warning" | "danger" | "info";
+
+export type ModelOperationsActiveModel = {
+  registry_entry_id: number;
+  registry_entry_public_id: string;
+  model_run_id: number;
+  algorithm: string;
+  algorithm_name: string;
+  model_version: string;
+  promotion_state: string;
+  promotion_state_label: string;
+  promotion_date: string | null;
+  active_from: string | null;
+  active_until: string | null;
+  monitoring_state: string;
+  monitoring_state_label: string;
+  review_due_date: string | null;
+  owner: string;
+  phase_4_promotion_gates_passed: boolean | null;
+  alert_eligible: boolean;
+  promotion_evidence_report_ref: string | null;
+};
+
+export type ModelMonitoringSnapshotPanel = {
+  snapshot_id: number;
+  snapshot_public_id: string;
+  monitoring_run_id: string;
+  metric_name: string;
+  metric_family: string;
+  value: number | null;
+  baseline_value: number | null;
+  threshold_value: number | null;
+  threshold_version: string;
+  state: string;
+  state_label: string;
+  generated_at: string;
+  source_dataset_refs: string[];
+  metadata: Record<string, unknown>;
+};
+
+export type ModelRollbackHistoryItem = {
+  rollback_event_id: number;
+  rollback_event_public_id: string;
+  rolled_back_from: {
+    registry_entry_id: number;
+    model_run_id: number;
+    model_version: string;
+    algorithm: string;
+  };
+  rollback_target: {
+    registry_entry_id: number;
+    model_run_id: number;
+    model_version: string;
+    algorithm: string;
+  };
+  rolled_back_by: string;
+  authorized_role: string | null;
+  reason: string;
+  occurred_at: string;
+  current_risk_materialization: Record<string, unknown>;
+};
+
+export type ModelOperationsModelState = {
+  model_run_id: number;
+  algorithm: string | null;
+  algorithm_name: string;
+  model_version: string;
+  status: string;
+  visual_state: string;
+  visual_state_label: string;
+  promotion_target: string | null;
+  promotion_state: string | null;
+  registry_promotion_state: string | null;
+  alert_eligible: boolean;
+  run_purpose: string | null;
+  started_at: string;
+  completed_at: string | null;
+};
+
+export type ModelOperationsHealthResponse = {
+  schema_version: "ward-risk-model-operations-health-v1";
+  generated_at: string;
+  summary: {
+    health_state: string;
+    health_state_label: string;
+    health_tone: ModelOperationsHealthTone;
+    active_model_healthy: boolean;
+    active_model_present: boolean;
+    monitoring_state: string;
+    drift_warning_count: number;
+    calibration_warning_count: number;
+    rollback_event_count: number;
+    challenger_benchmark_status: string;
+  };
+  active_model: ModelOperationsActiveModel | null;
+  monitoring: {
+    state: string;
+    state_label: string;
+    latest_monitoring_run_id: string | null;
+    latest_generated_at: string | null;
+    snapshots: ModelMonitoringSnapshotPanel[];
+    drift_warnings: ModelMonitoringSnapshotPanel[];
+    calibration_warnings: ModelMonitoringSnapshotPanel[];
+  };
+  challenger_comparison: {
+    configured: boolean;
+    comparison_id?: number;
+    comparison_public_id?: string;
+    generated_at?: string;
+    benchmark_status: string;
+    benchmark_status_label?: string;
+    comparison_validity: string | null;
+    recommended_action?: string;
+    promotion_blockers?: string[];
+    dashboard_summary: Record<string, unknown>;
+    comparison: Record<string, unknown> | null;
+  };
+  rollback_history: ModelRollbackHistoryItem[];
+  model_states: ModelOperationsModelState[];
+  dashboard_policy: Record<string, unknown>;
+};
+
+export type InteroperabilityAuditCheck = {
+  key: string;
+  title: string;
+  status: "PASS" | "FAIL";
+  count: number;
+  summary: string;
+};
+
+export type InteroperabilityRunRecord = {
+  public_id: string;
+  direction: "IMPORT" | "EXPORT";
+  exchange_type: string;
+  system_key: string;
+  system_name: string;
+  mapping_version: string | null;
+  retry_of: string | null;
+  status: "DRAFT" | "READY_FOR_CONFIRMATION" | "COMPLETED" | "PARTIAL" | "FAILED" | "RETRY_CREATED";
+  dry_run: boolean;
+  source_file_name: string;
+  endpoint_url: string;
+  source_reference: string;
+  records_seen: number;
+  records_accepted: number;
+  records_rejected: number;
+  mapping_coverage: number;
+  operator_username: string;
+  error_summary: string;
+  dry_run_preview: Record<string, unknown>;
+  export_payload: Record<string, unknown>;
+  started_at: string;
+  completed_at: string | null;
+  created_at: string;
+  contract_errors: string[];
+  items: Array<{
+    id: number;
+    row_number: number;
+    external_identifier: string;
+    internal_object_type: string;
+    internal_object_public_id: string;
+    internal_object_code: string;
+    status: string;
+    action: string;
+    safe_context: Record<string, unknown>;
+    source_record_ref: string;
+    created_at: string;
+  }>;
+  errors: Array<{
+    public_id: string;
+    item_id: number | null;
+    severity: "INFO" | "WARNING" | "ERROR";
+    error_code: string;
+    field_path: string;
+    safe_message: string;
+    remediation_hint: string;
+    created_at: string;
+  }>;
+};
+
+export type InteroperabilityDashboardResponse = {
+  schema_version: "interoperability-contracts-v1";
+  generated_at: string;
+  exchange_inventory: Array<{
+    exchange_type: string;
+    label: string;
+    direction: "IMPORT" | "EXPORT";
+    source_owner: string;
+    format: string;
+    cadence: string;
+    quality_risk: string;
+    csv_first: boolean;
+  }>;
+  exchange_inventory_contract_errors?: string[];
+  csv_templates: Record<string, { filename: string; columns: string[]; example_row: Record<string, string> }>;
+  csv_template_contract_errors?: string[];
+  connector_boundary: {
+    schema_version: string;
+    connector_interface: string[];
+    auth_config_reference: string;
+    paging_strategy: string;
+    retry_policy: Record<string, unknown>;
+    rate_limit_handling: string;
+    failure_taxonomy: string[];
+    failure_taxonomy_detail?: Record<string, Record<string, unknown>>;
+    dry_run_mode: string;
+    canonical_data_safety?: string;
+  };
+  connector_boundary_contract_errors?: string[];
+  summary: {
+    system_count: number;
+    active_system_count: number;
+    mapping_version_count: number;
+    active_mapping_version_count: number;
+    org_unit_mapping_count: number;
+    active_org_unit_mapping_count: number;
+    run_count: number;
+    failed_run_count: number;
+    latest_run_at: string | null;
+    run_status_counts: Record<string, number>;
+    audit_status: "pass" | "fail";
+  };
+  systems: Array<Record<string, unknown>>;
+  mapping_versions: Array<Record<string, unknown>>;
+  org_unit_mappings: Array<{
+    public_id: string;
+    system_key: string;
+    mapping_version: string;
+    external_identifier: string;
+    external_display_name: string;
+    internal_object_type: string;
+    internal_object_public_id: string;
+    internal_object_code: string;
+    ward_name: string;
+    facility_name: string;
+    mapping_confidence: number;
+    status: string;
+    effective_date: string;
+    retired_date: string | null;
+  }>;
+  runs: InteroperabilityRunRecord[];
+  audit_checks: InteroperabilityAuditCheck[];
+};
+
+export type InteroperabilityOrgUnitMappingImportPayload = {
+  system_key?: string;
+  mapping_version_label?: string;
+  source_file_name?: string;
+  csv_text: string;
+  confirm?: boolean;
+  retry_of_public_id?: string | null;
+};
+
+export type InteroperabilityErrorFileResponse = {
+  filename: string;
+  content_type: string;
+  row_count: number;
+  payload: string;
+  payload_sha256: string;
+};
+
+export type InteroperabilityCsvTemplateFileResponse = InteroperabilityErrorFileResponse & {
+  exchange_type: string;
+};
+
+export type MessageTemplateApprovalStatus = "draft" | "pending_review" | "approved" | "rejected" | "retired";
+export type MessageTemplateAudienceType = "chv" | "household" | "facility_contact" | "county_operator" | "system_operator";
+export type MessageTemplateChannel = "sms" | "ussd" | "dashboard" | "offline_chv_bundle";
+
+export type MessageTemplateRecord = {
+  public_id: string;
+  template_key: string;
+  audience_type: MessageTemplateAudienceType;
+  channel: MessageTemplateChannel;
+  language: string;
+  version: number;
+  title: string;
+  body: string;
+  placeholders: string[];
+  approval_status: MessageTemplateApprovalStatus;
+  approved_by: number | null;
+  approved_by_username: string;
+  approved_at: string | null;
+  retired_at: string | null;
+  owner: string;
+  risk_level: "low" | "medium" | "high" | "critical";
+  public_health_caveats: string;
+  lineage_metadata: Record<string, unknown>;
+  created_by: number | null;
+  created_by_username: string;
+  created_at: string;
+  updated_at: string;
+  preview: {
+    context: Record<string, string>;
+    rendered_body: string;
+    declared_placeholders: string[];
+    discovered_placeholders: string[];
+    render_error: string;
+  };
+  audience_preview: {
+    audience_type: MessageTemplateAudienceType;
+    channel: MessageTemplateChannel;
+    risk_level: string;
+    scope: string;
+    consent_requirement: string;
+    emergency_override_allowed: boolean;
+    public_health_caveats: string;
+  };
+  usage_summary: {
+    alert_count: number;
+    chv_message_count: number;
+    facility_update_request_count: number;
+    total_delivery_count: number;
+  };
+};
+
+export type MessageDeliveryOutcomeRow = {
+  audience_type: string;
+  channel: string;
+  status: string;
+  count: number;
+  latest_at: string | null;
+};
+
+export type MessageDeliveryTemplateRow = {
+  template_key: string;
+  template_version: number | null;
+  count: number;
+  statuses: Record<string, number>;
+  latest_at: string | null;
+};
+
+export type MessageDeliveryReachRow = {
+  audience_type: string;
+  channel: string;
+  message_count: number;
+  unique_recipient_count: number;
+  successful_count: number;
+  failed_count: number;
+  success_rate_pct: number;
+  latest_at: string | null;
+};
+
+export type MessageOptOutMonitoringRow = {
+  audience_type: string;
+  channel: string;
+  current_opt_out_count: number;
+  blocked_opt_out_event_count: number;
+  latest_opt_out_at: string | null;
+  latest_blocked_at: string | null;
+};
+
+export type MessageOptOutSummary = {
+  total_current_opt_out_count: number;
+  total_blocked_opt_out_event_count: number;
+  by_audience_channel: MessageOptOutMonitoringRow[];
+};
+
+export type MessageDeliveryRecord = {
+  model: string;
+  public_id: string;
+  audience_type: string;
+  channel: string;
+  template_key: string;
+  template_version: number | null;
+  status: string;
+  created_at: string;
+};
+
+export type MessageDeliverySummary = {
+  total_count: number;
+  successful_count: number;
+  failed_count: number;
+  success_rate_pct: number;
+  by_audience_channel_status: MessageDeliveryOutcomeRow[];
+  by_template: MessageDeliveryTemplateRow[];
+  template_usage_by_version: MessageDeliveryTemplateRow[];
+  reach_by_audience_channel: MessageDeliveryReachRow[];
+  opt_out_summary: MessageOptOutSummary;
+  recent_records: MessageDeliveryRecord[];
+};
+
+export type UssdGovernanceAnalytics = {
+  schema_version: "ussd-menu-governance-phase-3-v1";
+  total_logs: number;
+  total_sessions: number;
+  completed_sessions: number;
+  invalid_input_sessions: number;
+  abandoned_sessions: number;
+  safe_fallback_sessions: number;
+  completion_rate_pct: number;
+  invalid_input_rate_pct: number;
+  abandonment_rate_pct: number;
+  by_outcome: Array<{
+    session_outcome: string;
+    log_count: number;
+    session_count: number;
+    latest_at: string | null;
+  }>;
+  by_language: Array<{
+    language: string;
+    log_count: number;
+    session_count: number;
+    invalid_input_count: number;
+    abandoned_count: number;
+  }>;
+  by_menu_version: Array<{
+    menu_key: string;
+    menu_version_label: string;
+    language: string;
+    log_count: number;
+    session_count: number;
+    completed_count: number;
+    invalid_input_count: number;
+    abandoned_count: number;
+    latest_at: string | null;
+  }>;
+  recent_logs: Array<{
+    id: number;
+    session_id: string;
+    menu_key: string;
+    menu_version_label: string;
+    language: string;
+    menu_level: string;
+    session_outcome: string;
+    invalid_option: boolean;
+    abandonment_reason: string;
+    is_terminal: boolean;
+    created_at: string;
+  }>;
+};
+
+export type UssdMenuVersionRecord = {
+  public_id: string;
+  menu_key: string;
+  version_label: string;
+  language: string;
+  title: string;
+  approval_status: "DRAFT" | "APPROVED" | "RETIRED";
+  approved_by: number | null;
+  approved_by_username: string;
+  approved_at: string | null;
+  retired_at: string | null;
+  is_active: boolean;
+  safe_fallback_copy: string;
+  lineage_metadata: Record<string, unknown>;
+  created_by: number | null;
+  created_by_username: string;
+  created_at: string;
+  updated_at: string;
+  route_count: number;
+  node_count: number;
+  validation_status: "pass" | "fail";
+  validation_messages: string[];
+};
+
+export type MessageGovernanceDashboardResponse = {
+  schema_version: "message-management-phase-5-v1";
+  generated_at: string;
+  filters: Record<string, string>;
+  available_filters: {
+    audience_types: MessageTemplateAudienceType[];
+    channels: MessageTemplateChannel[];
+    languages: string[];
+    approval_statuses: MessageTemplateApprovalStatus[];
+  };
+  summary: {
+    template_count: number;
+    approved_template_count: number;
+    pending_review_template_count: number;
+    draft_template_count: number;
+    retired_template_count: number;
+    language_count: number;
+    languages: string[];
+    audience_counts: Record<string, number>;
+    channel_counts: Record<string, number>;
+    approval_status_counts: Record<string, number>;
+    unapproved_high_risk_template_count: number;
+    delivery_record_count: number;
+    communication_reach_count: number;
+    delivery_failure_count: number;
+    delivery_success_rate_pct: number;
+    opt_out_count: number;
+    opt_out_blocked_count: number;
+    template_usage_version_count: number;
+    ussd_total_sessions: number;
+    ussd_completion_rate_pct: number;
+    ussd_invalid_input_rate_pct: number;
+    ussd_abandonment_rate_pct: number;
+    ussd_menu_version_count: number;
+    active_ussd_menu_version_count: number;
+    audit_status: "pass" | "fail";
+  };
+  templates: MessageTemplateRecord[];
+  ussd_menu_versions: UssdMenuVersionRecord[];
+  delivery_summary: MessageDeliverySummary;
+  ussd_analytics: UssdGovernanceAnalytics;
+  audit: {
+    schema_version: string;
+    overall_status: "pass" | "fail";
+    checks: Array<{
+      id: string;
+      status: "pass" | "fail";
+      answer: string;
+      evidence: Record<string, unknown>;
+      gaps: string[];
+    }>;
+  };
+};
+
+export type MessageTemplateDetailResponse = {
+  schema_version: "message-management-phase-5-v1";
+  generated_at: string;
+  template: MessageTemplateRecord;
+  version_history: MessageTemplateRecord[];
+  language_variants: MessageTemplateRecord[];
+  delivery_summary: MessageDeliverySummary;
+};
+
+export type FetchMessageGovernanceParams = {
+  q?: string;
+  audience_type?: string;
+  channel?: string;
+  language?: string;
+  approval_status?: string;
+  date_from?: string;
+  date_to?: string;
+};
+
+export type MessageTemplateApprovalPayload = {
+  action: "approve" | "request_review" | "reject" | "retire";
+  reason?: string;
+};
+
+export type FetchOperationalKpiDashboardParams = {
+  date_from?: string;
+  date_to?: string;
+  ward_id?: number | string;
+  sub_county?: string;
+  source_channel?: string;
+};
+
+export type OperationalKpiMeExportResponse = {
+  schema_version: "operational-kpi-me-export-v1";
+  generated_at: string;
+  filters: {
+    date_from: string;
+    date_to: string;
+    ward_id: number | null;
+    sub_county: string;
+    source_channel: string;
+  };
+  format: "json" | "csv";
+  filename: string;
+  content_type: string;
+  row_count: number;
+  data_sha256: string;
+  payload_sha256: string;
+  payload: string;
+  audit_status: "pass" | "warning" | "fail";
+  audit_issue_count: number;
+};
+
+export type FetchOperationalKpiMeExportParams = FetchOperationalKpiDashboardParams & {
+  export_format?: "json" | "csv";
+};
+
 async function requestDashboardRoute<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -1760,6 +3043,29 @@ export async function fetchAlertByIdViaBff(alertId: number) {
   return requestDashboardRoute<AlertDetailRouteResponse>(`/api/dashboard/alerts/${alertId}`);
 }
 
+export async function createSensitiveExportViaBff(payload: SensitiveExportCreatePayload) {
+  return requestDashboardRoute<SensitiveExportRecord>("/api/dashboard/sensitive-exports", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function downloadSensitiveExportViaBff(publicId: string) {
+  return requestDashboardRoute<SensitiveExportDownloadResponse>(
+    `/api/dashboard/sensitive-exports/${encodeURIComponent(publicId)}/download`,
+  );
+}
+
+export function downloadSensitiveExportFile(download: SensitiveExportDownloadResponse) {
+  const blob = new Blob([download.payload], { type: `${download.content_type};charset=utf-8;` });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = download.filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 export async function triggerAlertViaBff(payload: TriggerAlertRequest) {
   return requestDashboardRoute<TriggerAlertResponse>("/api/dashboard/alerts/trigger", {
     method: "POST",
@@ -1783,6 +3089,10 @@ export async function fetchTriggerAlertPreviewViaBff(payload: {
   ward_id: number;
   trigger_type: TriggerActionType;
   message_override?: string;
+  template_key?: string;
+  template_version?: number | null;
+  template_language?: string;
+  template_context?: Record<string, string | number | boolean | null>;
 }) {
   return requestDashboardRoute<TriggerPreviewResponse>("/api/dashboard/alerts/trigger/preview", {
     method: "POST",
@@ -1807,6 +3117,10 @@ export async function fetchChvDataViaBff() {
 
 export async function fetchChvOperationsDataViaBff() {
   return requestDashboardRoute<ChvOperationsRecord[]>("/api/dashboard/chvs/operations");
+}
+
+export async function fetchChvOfflineMonitoringViaBff() {
+  return requestDashboardRoute<ChvOfflineMonitoringSnapshot>("/api/dashboard/chvs/offline-monitoring");
 }
 
 export async function fetchChvActivityViaBff(publicId: string) {
@@ -1885,6 +3199,71 @@ export async function assignChvCoverageRequestViaBff(publicId: string, payload: 
     `/api/dashboard/chvs/coverage-requests/${encodeURIComponent(publicId)}/assign`,
     {
       method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function fetchPreparednessActionsViaBff(params: FetchPreparednessActionsParams = {}) {
+  const searchParams = new URLSearchParams();
+
+  searchParams.set("page_size", String(params.page_size ?? 200));
+
+  if (params.page) {
+    searchParams.set("page", String(params.page));
+  }
+  if (params.ward_id) {
+    searchParams.set("ward_id", String(params.ward_id));
+  }
+  if (params.facility_id) {
+    searchParams.set("facility_id", String(params.facility_id));
+  }
+  if (params.chv_id) {
+    searchParams.set("chv_id", String(params.chv_id));
+  }
+  if (params.status) {
+    searchParams.set("status", params.status);
+  } else if (params.statuses?.length) {
+    searchParams.set("status", params.statuses.join(","));
+  }
+  if (params.action_type) {
+    searchParams.set("action_type", params.action_type);
+  }
+  if (params.priority) {
+    searchParams.set("priority", params.priority);
+  }
+  if (params.source_trigger_type) {
+    searchParams.set("source_trigger_type", params.source_trigger_type);
+  }
+  if (params.assigned) {
+    searchParams.set("assigned", params.assigned);
+  }
+  if (params.overdue !== undefined) {
+    searchParams.set("overdue", String(params.overdue));
+  }
+  if (params.ordering) {
+    searchParams.set("ordering", params.ordering);
+  }
+
+  return requestDashboardRoute<PaginatedResponse<PreparednessActionRecord>>(
+    `/api/dashboard/preparedness-actions?${searchParams.toString()}`,
+  );
+}
+
+export async function fetchPreparednessActionViaBff(publicId: string) {
+  return requestDashboardRoute<PreparednessActionRecord>(
+    `/api/dashboard/preparedness-actions/${encodeURIComponent(publicId)}`,
+  );
+}
+
+export async function updatePreparednessActionViaBff(
+  publicId: string,
+  payload: PreparednessActionTransitionPayload,
+) {
+  return requestDashboardRoute<PreparednessActionRecord>(
+    `/api/dashboard/preparedness-actions/${encodeURIComponent(publicId)}`,
+    {
+      method: "PATCH",
       body: JSON.stringify(payload),
     },
   );
@@ -2010,6 +3389,152 @@ export async function markAllNotificationsSeenViaBff() {
 
 export async function fetchSystemDataViaBff() {
   return requestDashboardRoute<SystemRouteResponse>("/api/dashboard/system");
+}
+
+export async function fetchMessageGovernanceDashboardViaBff(params: FetchMessageGovernanceParams = {}) {
+  const searchParams = new URLSearchParams();
+
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") {
+      searchParams.set(key, String(value));
+    }
+  }
+
+  const query = searchParams.toString();
+  return requestDashboardRoute<MessageGovernanceDashboardResponse>(
+    `/api/dashboard/message-governance${query ? `?${query}` : ""}`,
+  );
+}
+
+export async function fetchMessageTemplateDetailViaBff(publicId: string) {
+  return requestDashboardRoute<MessageTemplateDetailResponse>(
+    `/api/dashboard/message-governance/templates/${encodeURIComponent(publicId)}`,
+  );
+}
+
+export async function approveMessageTemplateViaBff(
+  publicId: string,
+  payload: MessageTemplateApprovalPayload,
+) {
+  return requestDashboardRoute<MessageTemplateDetailResponse>(
+    `/api/dashboard/message-governance/templates/${encodeURIComponent(publicId)}/approval`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function fetchOperationalKpiDashboardViaBff(params: FetchOperationalKpiDashboardParams = {}) {
+  const searchParams = new URLSearchParams();
+
+  if (params.date_from) {
+    searchParams.set("date_from", params.date_from);
+  }
+  if (params.date_to) {
+    searchParams.set("date_to", params.date_to);
+  }
+  if (params.ward_id) {
+    searchParams.set("ward_id", String(params.ward_id));
+  }
+  if (params.sub_county) {
+    searchParams.set("sub_county", params.sub_county);
+  }
+  if (params.source_channel) {
+    searchParams.set("source_channel", params.source_channel);
+  }
+
+  const query = searchParams.toString();
+  return requestDashboardRoute<OperationalKpiDashboardResponse>(
+    `/api/dashboard/operational-metrics${query ? `?${query}` : ""}`,
+  );
+}
+
+export async function fetchModelOperationsHealthViaBff() {
+  return requestDashboardRoute<ModelOperationsHealthResponse>("/api/dashboard/model-health");
+}
+
+export async function fetchInteroperabilityDashboardViaBff() {
+  return requestDashboardRoute<InteroperabilityDashboardResponse>("/api/dashboard/interoperability");
+}
+
+export async function fetchInteroperabilityRunViaBff(publicId: string) {
+  return requestDashboardRoute<InteroperabilityRunRecord>(
+    `/api/dashboard/interoperability/runs/${encodeURIComponent(publicId)}`,
+  );
+}
+
+export async function createInteroperabilityOrgUnitMappingImportViaBff(
+  payload: InteroperabilityOrgUnitMappingImportPayload,
+) {
+  return requestDashboardRoute<InteroperabilityRunRecord>(
+    "/api/dashboard/interoperability/org-unit-mapping-imports",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function createInteroperabilityRiskScoreExportPreviewViaBff(payload: {
+  system_key?: string;
+  mapping_version_label?: string;
+}) {
+  return requestDashboardRoute<InteroperabilityRunRecord>(
+    "/api/dashboard/interoperability/export-previews/risk-scores",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function retryInteroperabilityRunViaBff(publicId: string) {
+  return requestDashboardRoute<InteroperabilityRunRecord>(
+    `/api/dashboard/interoperability/runs/${encodeURIComponent(publicId)}/retry`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
+}
+
+export async function fetchOperationalKpiMeExportViaBff(params: FetchOperationalKpiMeExportParams = {}) {
+  const searchParams = new URLSearchParams();
+
+  if (params.date_from) {
+    searchParams.set("date_from", params.date_from);
+  }
+  if (params.date_to) {
+    searchParams.set("date_to", params.date_to);
+  }
+  if (params.ward_id) {
+    searchParams.set("ward_id", String(params.ward_id));
+  }
+  if (params.sub_county) {
+    searchParams.set("sub_county", params.sub_county);
+  }
+  if (params.source_channel) {
+    searchParams.set("source_channel", params.source_channel);
+  }
+  if (params.export_format) {
+    searchParams.set("export_format", params.export_format);
+  }
+
+  const query = searchParams.toString();
+  return requestDashboardRoute<OperationalKpiMeExportResponse>(
+    `/api/dashboard/operational-metrics/me-export${query ? `?${query}` : ""}`,
+  );
+}
+
+export function downloadOperationalKpiExportFile(exportPayload: OperationalKpiMeExportResponse) {
+  const blob = new Blob([exportPayload.payload], { type: `${exportPayload.content_type};charset=utf-8;` });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = exportPayload.filename;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 export async function retrySystemBackgroundJobsViaBff(payload: { limit?: number } = {}) {

@@ -12,7 +12,7 @@ class RainfallIngestionRegressionTestCase(SimpleTestCase):
     def test_open_meteo_timezone_config_does_not_shadow_django_timezone(self, mock_urlopen):
         response = MagicMock()
         response.read.return_value = json.dumps(
-            {"daily": {"precipitation_sum": [12.5, 7.5, 0]}}
+            {"daily": {"time": ["2026-05-04", "2026-05-05", "2026-05-06"], "precipitation_sum": [12.5, 7.5, 0]}}
         ).encode("utf-8")
         mock_urlopen.return_value.__enter__.return_value = response
 
@@ -26,3 +26,8 @@ class RainfallIngestionRegressionTestCase(SimpleTestCase):
         self.assertEqual(observation.source, "open-meteo-forecast")
         self.assertIsNotNone(observation.source_timestamp)
         self.assertTrue(timezone.is_aware(observation.source_timestamp))
+        self.assertEqual(observation.record_type, "forecast")
+        self.assertEqual(observation.valid_date.isoformat(), "2026-05-06")
+        self.assertEqual(observation.lead_day, 3)
+        self.assertEqual(observation.forecast_horizon_days, 3)
+        self.assertFalse(observation.fallback_flag)

@@ -1,12 +1,13 @@
 import React from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useWardDetailQuery } from "@/queries/use-ward-detail-query";
 
 const mockFetchWardDetailViaBff = vi.fn();
 const mockFetchWardMapViaBff = vi.fn();
+const mockFetchPreparednessActionsViaBff = vi.fn();
 
 vi.mock("@/lib/dashboard", async () => {
   const actual = await vi.importActual<typeof import("@/lib/dashboard")>("@/lib/dashboard");
@@ -14,6 +15,7 @@ vi.mock("@/lib/dashboard", async () => {
     ...actual,
     fetchWardDetailViaBff: (...args: unknown[]) => mockFetchWardDetailViaBff(...args),
     fetchWardMapViaBff: (...args: unknown[]) => mockFetchWardMapViaBff(...args),
+    fetchPreparednessActionsViaBff: (...args: unknown[]) => mockFetchPreparednessActionsViaBff(...args),
   };
 });
 
@@ -32,6 +34,15 @@ function createWrapper() {
 }
 
 describe("useWardDetailQuery", () => {
+  beforeEach(() => {
+    mockFetchPreparednessActionsViaBff.mockResolvedValue({
+      count: 0,
+      next: null,
+      previous: null,
+      results: [],
+    });
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
   });

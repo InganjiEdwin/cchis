@@ -11,7 +11,6 @@ const mockClearPendingEnrollment = vi.fn();
 const mockConfirmTwoFactorEnrollment = vi.fn();
 const mockClipboardWriteText = vi.fn();
 const mockGetDefaultRoute = vi.fn();
-const mockIsDashboardRole = vi.fn();
 const mockReplace = vi.fn();
 const mockRouter = { replace: mockReplace };
 const mockUseAuth = vi.fn();
@@ -38,10 +37,6 @@ vi.mock("@/components/auth-provider", () => ({
 
 vi.mock("@/lib/navigation", () => ({
   getDefaultRoute: (...args: unknown[]) => mockGetDefaultRoute(...args),
-}));
-
-vi.mock("@/lib/roles", () => ({
-  isDashboardRole: (...args: unknown[]) => mockIsDashboardRole(...args),
 }));
 
 function buildUser(overrides: Partial<CurrentUser> = {}): CurrentUser {
@@ -113,7 +108,6 @@ describe("SetupTwoFactorPage", () => {
       recovery_codes_generated: true,
     });
     mockGetDefaultRoute.mockReturnValue("/overview");
-    mockIsDashboardRole.mockReturnValue(true);
     mockClipboardWriteText.mockResolvedValue(undefined);
     Object.defineProperty(window.URL, "createObjectURL", {
       value: vi.fn(() => "blob:recovery-codes"),

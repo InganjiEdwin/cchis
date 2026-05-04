@@ -33,7 +33,7 @@ import { TriggerAlertPanel } from "@/components/trigger-alert-panel";
 import { Card } from "@/components/ui/card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { cn } from "@/lib/cn";
-import type { AlertRecord, RiskScoreRecord, WardIntelligenceDriverItem, WardOperationalEvidenceTone, WardPredictionOutcomeClassification } from "@/lib/dashboard";
+import type { AlertRecord, ClimateEvidence, PreparednessActionRecord, RiskScoreRecord, WardIntelligenceDriverItem, WardOperationalEvidenceTone, WardPredictionOutcomeClassification, WardSpatialEvidence } from "@/lib/dashboard";
 import { canTriggerAlerts } from "@/lib/roles";
 import { type WardDetailState, useWardDetailQuery } from "@/queries/use-ward-detail-query";
 
@@ -112,6 +112,13 @@ function getAlertHeadline(alert: AlertRecord) {
 }
 
 function getRiskDriverIcon(driver: WardIntelligenceDriverItem) {
+  if (driver.source_field?.startsWith("climate.")) {
+    return <Droplets className="size-4" aria-hidden="true" />;
+  }
+  if (driver.source_field?.startsWith("spatial.")) {
+    return <MapPinned className="size-4" aria-hidden="true" />;
+  }
+
   switch (driver.source_field) {
     case "rainfall_mm":
       return <Droplets className="size-4" aria-hidden="true" />;
@@ -185,6 +192,46 @@ function formatShortDateRange(start: string | null, end: string | null) {
     return "Window unavailable";
   }
   return `${startDate.toLocaleDateString([], { month: "short", day: "numeric" })} - ${endDate.toLocaleDateString([], { month: "short", day: "numeric" })}`;
+}
+
+function formatDateOnly(value: string | null | undefined) {
+  if (!value) return "Unavailable";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Invalid date";
+  return date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+}
+
+function formatClimateValidRange(climate: ClimateEvidence | null) {
+  if (!climate?.valid_date) return "Unavailable";
+  const endDate = new Date(climate.valid_date);
+  if (Number.isNaN(endDate.getTime())) return "Invalid date";
+  const leadDay = climate.lead_day ?? climate.forecast_horizon_days;
+  if (typeof leadDay === "number" && leadDay > 1) {
+    const startDate = new Date(endDate);
+    startDate.setDate(endDate.getDate() - leadDay + 1);
+    return `${startDate.toLocaleDateString([], { month: "short", day: "numeric" })} - ${endDate.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}`;
+  }
+  return formatDateOnly(climate.valid_date);
+}
+
+function formatLeadDays(days: number[] | undefined) {
+  if (!days?.length) return "None";
+  if (days.length <= 8) return days.join(", ");
+  return `${days.slice(0, 8).join(", ")} +${days.length - 8} more`;
+}
+
+function getClimateCoverageTone(climate: ClimateEvidence | null | undefined, missingLeadDays: number[] = []) {
+  if (!climate) return "default" as const;
+  if (climate.fallback_static_rainfall_used || missingLeadDays.length > 0) return "warning" as const;
+  return climate.claimed_lead_time_climate_coverage_sufficient ? ("success" as const) : ("warning" as const);
+}
+
+function getClimateHorizonBadgeLabel(climate: ClimateEvidence | null | undefined, fallbackDays = 14) {
+  const claimedDays = climate?.claimed_forecast_horizon_days ?? fallbackDays;
+  if (!climate) return `${claimedDays}-day climate horizon unavailable`;
+  if (climate.fallback_static_rainfall_used) return "Fallback climate source";
+  if (climate.claimed_lead_time_climate_coverage_sufficient) return `${claimedDays}-day climate horizon covered`;
+  return `${claimedDays}-day climate horizon caveated`;
 }
 
 function formatReviewState(value: string | undefined) {
@@ -266,6 +313,88 @@ function getAlertTone(alert: AlertRecord) {
   return "warning" as const;
 }
 
+const PREPAREDNESS_ACTIVE_STATUSES = new Set<PreparednessActionRecord["status"]>([
+  "DRAFT",
+  "QUEUED",
+  "ASSIGNED",
+  "ACKNOWLEDGED",
+  "IN_PROGRESS",
+  "BLOCKED",
+  "ESCALATED",
+]);
+
+const PREPAREDNESS_ACTION_TYPE_LABELS: Record<PreparednessActionRecord["action_type"], string> = {
+  chv_follow_up: "CHV follow-up",
+  household_prevention_message: "Household prevention message",
+  facility_ors_review: "Facility ORS review",
+  facility_staffing_review: "Facility staffing review",
+  county_escalation: "County escalation",
+  water_treatment_distribution: "Water treatment distribution",
+  surveillance_follow_up: "Surveillance follow-up",
+  field_verification: "Field verification",
+};
+
+function getPreparednessActionTone(action: PreparednessActionRecord) {
+  if (action.is_overdue || action.status === "BLOCKED" || action.status === "ESCALATED") return "danger" as const;
+  if (action.status === "COMPLETED") return "success" as const;
+  if (action.status === "ACKNOWLEDGED" || action.status === "IN_PROGRESS" || action.status === "ASSIGNED") return "warning" as const;
+  return "default" as const;
+}
+
+function getPreparednessActionSummary(actions: PreparednessActionRecord[]) {
+  return actions.reduce(
+    (summary, action) => {
+      if (PREPAREDNESS_ACTIVE_STATUSES.has(action.status)) summary.active += 1;
+      if (action.is_overdue) summary.overdue += 1;
+      if (action.status === "BLOCKED") summary.blocked += 1;
+      if (action.status === "COMPLETED") summary.completed += 1;
+      return summary;
+    },
+    { active: 0, overdue: 0, blocked: 0, completed: 0 },
+  );
+}
+
+function getOutcomeActionTone(status: string) {
+  if (status === "recorded") return "success" as const;
+  if (status === "in_progress") return "warning" as const;
+  if (status === "failed" || status === "missing") return "danger" as const;
+  return "default" as const;
+}
+
+function formatHours(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "Not measured";
+  return `${value}h`;
+}
+
+function formatSpatialDistance(value: number | null | undefined, unit?: string | null) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "Unavailable";
+  const rounded = value >= 10 ? value.toFixed(1) : value.toFixed(2);
+  return `${rounded} ${unit === "source_crs_degrees" || !unit ? "source units" : unit}`;
+}
+
+function formatSpatialPercent(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "Unavailable";
+  return `${Math.round(value * 100)}%`;
+}
+
+function getSpatialReadinessTone(score: number | null | undefined) {
+  if (typeof score !== "number" || !Number.isFinite(score)) return "default" as const;
+  if (score >= 80) return "danger" as const;
+  if (score >= 60) return "warning" as const;
+  return "success" as const;
+}
+
+function getSpatialEvidenceHeadline(spatial: WardSpatialEvidence | null) {
+  if (!spatial) return "Spatial context unavailable";
+  if (spatial.summary.high_risk_neighbor_count > 0) {
+    return `${spatial.summary.high_risk_neighbor_count} high-risk neighbor${spatial.summary.high_risk_neighbor_count === 1 ? "" : "s"}`;
+  }
+  if (spatial.summary.active_outbreak_neighbor_count > 0) {
+    return `${spatial.summary.active_outbreak_neighbor_count} neighboring outbreak signal${spatial.summary.active_outbreak_neighbor_count === 1 ? "" : "s"}`;
+  }
+  return `${spatial.summary.neighbor_count} mapped neighbor${spatial.summary.neighbor_count === 1 ? "" : "s"}`;
+}
+
 function getAlertSummary(alert: AlertRecord) {
   const parts = [
     `Via ${toTitleCase(alert.channel)}`,
@@ -316,6 +445,13 @@ export default function WardDetailPage() {
   const drivers = detail?.driverItems ?? [];
   const recommendations = detail?.guidanceItems ?? [];
   const wardMapFeatures = detail?.wardMapFeature ? [detail.wardMapFeature] : [];
+  const spatialEvidence = detail?.spatialEvidence ?? null;
+  const spatialSummary = spatialEvidence?.summary ?? null;
+  const spatialMapFeatures =
+    detail?.spatialMapFeatures && detail.spatialMapFeatures.length > 0
+      ? detail.spatialMapFeatures
+      : wardMapFeatures;
+  const highRiskSpatialNeighbors = spatialEvidence?.neighbors.filter((neighbor) => neighbor.risk_level === "HIGH") ?? [];
   const canTriggerFromPage = currentUser ? canTriggerAlerts(currentUser.role) : false;
   const hasLowSignalState = Boolean(
     detail &&
@@ -339,6 +475,10 @@ export default function WardDetailPage() {
   const decisionCheckpointCopy = getDecisionCheckpointCopy(detail);
   const operationalEvidence = detail?.operationalEvidence ?? null;
   const forecastHorizon = operationalEvidence?.forecast_horizon ?? null;
+  const climateSource = operationalEvidence?.climate_source ?? null;
+  const climateMissingLeadDays = climateSource?.forecast_missing_lead_days ?? forecastHorizon?.forecast_missing_lead_days ?? [];
+  const climateSourceLabel =
+    climateSource?.observed_vs_forecast_source_label || forecastHorizon?.source_label || "Climate source unavailable";
   const modelReadiness = operationalEvidence?.model_readiness ?? null;
   const alertCandidateReview = operationalEvidence?.alert_candidate_review ?? null;
   const outcomeEvaluation = operationalEvidence?.outcome_evaluation ?? null;
@@ -346,6 +486,11 @@ export default function WardDetailPage() {
   const falseMissedReview = operationalEvidence?.false_missed_review ?? null;
   const chvActionStatus = operationalEvidence?.chv_action_status ?? null;
   const outcomeFeedback = operationalEvidence?.outcome_feedback ?? null;
+  const preparednessActions = detail?.preparednessActions ?? [];
+  const preparednessActionSummary = useMemo(
+    () => getPreparednessActionSummary(preparednessActions),
+    [preparednessActions],
+  );
 
   if (!currentUser) {
     return null;
@@ -414,12 +559,28 @@ export default function WardDetailPage() {
                         {modelReadiness.label}
                       </StatusBadge>
                     ) : null}
+                    {forecastHorizon ? (
+                      <StatusBadge
+                        tone={getClimateCoverageTone(climateSource, climateMissingLeadDays)}
+                        className="rounded-full px-3 py-1.5 tracking-[0.14em]"
+                      >
+                        {getClimateHorizonBadgeLabel(climateSource, forecastHorizon.max_days)}
+                      </StatusBadge>
+                    ) : null}
                     {operationalEvidence?.source_badges?.[1] ? (
                       <StatusBadge
                         tone={getEvidenceTone(operationalEvidence.source_badges[1].tone)}
                         className="rounded-full px-3 py-1.5 tracking-[0.14em]"
                       >
                         {operationalEvidence.source_badges[1].value} confidence
+                      </StatusBadge>
+                    ) : null}
+                    {preparednessActionSummary.active > 0 ? (
+                      <StatusBadge
+                        tone={preparednessActionSummary.overdue || preparednessActionSummary.blocked ? "danger" : "warning"}
+                        className="rounded-full px-3 py-1.5 tracking-[0.14em]"
+                      >
+                        {preparednessActionSummary.active} active actions
                       </StatusBadge>
                     ) : null}
                   </>
@@ -593,6 +754,56 @@ export default function WardDetailPage() {
                   <p className="mt-3 text-sm leading-6 text-panel-copy">{badge.detail}</p>
                 </div>
               ))}
+            </div>
+
+            <div className="rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_14%,transparent)] px-4 py-4 lg:col-span-2">
+              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Climate source truth</p>
+                  <p className="mt-2 text-lg font-semibold text-panel-strong">{climateSourceLabel}</p>
+                  <p className="mt-1 text-sm leading-6 text-panel-muted">
+                    {climateSource?.source_provider || "Source provider unavailable"}
+                  </p>
+                </div>
+                <StatusBadge
+                  tone={getClimateCoverageTone(climateSource, climateMissingLeadDays)}
+                  className="w-max rounded-full px-3 py-1 tracking-[0.14em]"
+                >
+                  {climateSource?.climate_coverage_status ? toTitleCase(climateSource.climate_coverage_status) : "Coverage unavailable"}
+                </StatusBadge>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                {[
+                  ["Issue time", formatOperationalTime(climateSource?.issue_time ?? null)],
+                  ["Valid dates", formatClimateValidRange(climateSource)],
+                  ["Coverage", `${climateSource?.forecast_coverage_days ?? 0}/${climateSource?.claimed_forecast_horizon_days ?? forecastHorizon?.max_days ?? 14} days`],
+                  ["Missing lead days", formatLeadDays(climateMissingLeadDays)],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-[1.15rem] border border-[var(--dashboard-table-line)] px-3 py-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">{label}</p>
+                    <p className="mt-2 text-sm font-semibold text-panel-strong">{value}</p>
+                  </div>
+                ))}
+              </div>
+
+              {climateSource?.fallback_static_rainfall_used ? (
+                <div className="mt-4 flex items-start gap-2 rounded-[1.15rem] border border-[color-mix(in_srgb,var(--warning)_20%,var(--dashboard-table-line))] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] px-3 py-3">
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[color:var(--warning)]" aria-hidden="true" />
+                  <p className="text-sm leading-6 text-panel-copy">
+                    Fallback static rainfall is present and must not be treated as live forecast evidence.
+                  </p>
+                </div>
+              ) : null}
+
+              {climateMissingLeadDays.length > 0 ? (
+                <div className="mt-4 flex items-start gap-2 rounded-[1.15rem] border border-[color-mix(in_srgb,var(--warning)_20%,var(--dashboard-table-line))] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] px-3 py-3">
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[color:var(--warning)]" aria-hidden="true" />
+                  <p className="text-sm leading-6 text-panel-copy">
+                    Missing forecast lead days: {formatLeadDays(climateMissingLeadDays)}.
+                  </p>
+                </div>
+              ) : null}
             </div>
 
             <div className="rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_14%,transparent)] px-4 py-4 lg:col-span-2">
@@ -966,6 +1177,74 @@ export default function WardDetailPage() {
                   <p className="mt-2 text-sm leading-6 text-panel-muted">{outcomeFeedback.observed_outcome.detail}</p>
                 </div>
 
+                {outcomeFeedback.preparedness_action_evidence ? (
+                  <div className="space-y-4 rounded-[1.25rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_12%,transparent)] px-4 py-4">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-panel-strong">Preparedness action outcome history</p>
+                        <p className="mt-1 text-sm text-panel-muted">
+                          Ledger actions linked to this ward outcome window.
+                        </p>
+                      </div>
+                      {outcomeFeedback.preparedness_action_evidence.missed_action_review.review_required ? (
+                        <StatusBadge tone="danger" className="w-max rounded-full px-3 py-1 tracking-[0.14em]">
+                          Missed action review
+                        </StatusBadge>
+                      ) : null}
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                      {[
+                        ["Actions", String(outcomeFeedback.preparedness_action_evidence.summary.total_count)],
+                        ["Completed", String(outcomeFeedback.preparedness_action_evidence.summary.completed_count)],
+                        ["Overdue", String(outcomeFeedback.preparedness_action_evidence.summary.overdue_count)],
+                        ["First completion", formatHours(outcomeFeedback.preparedness_action_evidence.response_time_measurements.hours_to_first_completion)],
+                      ].map(([label, value]) => (
+                        <div key={label} className="rounded-[1rem] border border-[var(--dashboard-table-line)] px-3 py-3">
+                          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">{label}</p>
+                          <p className="mt-2 text-sm font-semibold text-panel-strong">{value}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    {outcomeFeedback.preparedness_action_evidence.action_history.length ? (
+                      <div className="space-y-3">
+                        {outcomeFeedback.preparedness_action_evidence.action_history.slice(0, 4).map((action) => (
+                          <div
+                            key={action.public_id}
+                            className="rounded-[1rem] border border-[var(--dashboard-table-line)] px-3 py-3"
+                          >
+                            <div className="flex flex-wrap items-center gap-2">
+                              <StatusBadge
+                                tone={getOutcomeActionTone(action.outcome_status)}
+                                className="rounded-full px-3 py-1 tracking-[0.14em]"
+                              >
+                                {formatFeedbackState(action.outcome_status)}
+                              </StatusBadge>
+                              <span className="text-sm font-semibold text-panel-strong">{action.action_type_label}</span>
+                            </div>
+                            <p className="mt-2 text-sm text-panel-muted">
+                              Completed: {formatOperationalTime(action.completed_at)} · Owner:{" "}
+                              {action.assigned_to_username || action.assigned_to_team || "Unassigned"}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-panel-muted">{outcomeFeedback.preparedness_action_evidence.missed_action_review.detail}</p>
+                    )}
+
+                    {outcomeFeedback.preparedness_action_evidence.false_alert_review_context.review_required ? (
+                      <div className="rounded-[1rem] border border-[color-mix(in_srgb,var(--warning)_20%,var(--dashboard-table-line))] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] px-3 py-3">
+                        <p className="text-sm font-semibold text-panel-strong">False-alert context</p>
+                        <p className="mt-1 text-sm text-panel-copy">
+                          {outcomeFeedback.preparedness_action_evidence.false_alert_review_context.detail}
+                        </p>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
                 <div className="grid gap-3 lg:grid-cols-3">
                   {outcomeFeedback.steps.map((step) => (
                     <div
@@ -1051,48 +1330,191 @@ export default function WardDetailPage() {
               )}
             </Card>
 
-            <Card className="space-y-4 p-5">
+            <Card className="space-y-5 p-5">
               <div className="flex items-start gap-3">
                 <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
                   <MapPinned className="size-5" aria-hidden="true" />
                 </span>
                 <div className="space-y-1">
-                  <h3 className="pt-1 text-xl font-semibold tracking-[-0.03em] text-panel-strong">Ward geography</h3>
-                  <p className="text-sm text-panel-muted">Boundary preview only.</p>
+                  <h3 className="pt-1 text-xl font-semibold text-panel-strong">Spatial context</h3>
+                  <p className="text-sm text-panel-muted">{getSpatialEvidenceHeadline(spatialEvidence)}</p>
                 </div>
               </div>
 
-              <p className="text-sm leading-6 text-panel-muted">
-                This panel uses the shared Migori ward map contract. Neighboring ward analysis is not available yet.
-              </p>
-
-              <div className="overflow-hidden rounded-[1.5rem] border border-panel-table-wrap bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--brand)_10%,transparent),transparent_35%),radial-gradient(circle_at_bottom_right,color-mix(in_srgb,var(--warning)_10%,transparent),transparent_32%),linear-gradient(135deg,color-mix(in_srgb,var(--panel)_92%,white),var(--panel))] p-3">
-                <div className="flex h-full min-h-[15rem] flex-col gap-3 rounded-[1.1rem] border border-panel-table-wrap bg-panel/80 p-3">
-                  <div className="flex items-center justify-between text-xs uppercase tracking-[0.18em] text-panel-subtle">
-                    <span>Map context</span>
-                    <span>{detail?.wardMapFeature ? "Backend geometry" : "No ward geometry"}</span>
-                  </div>
-                  <div className="min-h-[13.75rem] rounded-[1rem] border border-panel-table-wrap bg-white/60 p-2 dark:bg-panel/70">
-                    {wardMapFeatures.length ? (
-                      <MigoriWardMap
-                        features={wardMapFeatures}
-                        selectedWardCode={detail?.wardMapFeature?.properties.ward_code ?? null}
-                        onSelectWard={() => undefined}
-                      />
-                    ) : (
-                      <div className="flex h-full items-center justify-center text-center text-sm text-panel-muted">
-                        Neighboring ward analysis not available yet.
+              {isLoading ? (
+                <LoadingBlocks count={3} className="h-12 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
+              ) : spatialEvidence ? (
+                <div className="space-y-4">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {[
+                      ["Neighboring high-risk wards", String(spatialSummary?.high_risk_neighbor_count ?? 0)],
+                      ["Neighboring outbreak labels", String(spatialSummary?.active_outbreak_neighbor_count ?? 0)],
+                      ["Facility pressure", spatialSummary?.max_catchment_pressure_score == null ? "Unavailable" : `${spatialSummary.max_catchment_pressure_score}/100`],
+                      ["Water proximity", spatialSummary?.water_proximity_available ? formatSpatialPercent(spatialSummary.water_proximity_value) : "Unavailable"],
+                    ].map(([label, value]) => (
+                      <div
+                        key={label}
+                        className="rounded-[1.15rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-3 py-3"
+                      >
+                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">{label}</p>
+                        <p className="mt-2 text-sm font-semibold text-panel-strong">{value}</p>
                       </div>
+                    ))}
+                  </div>
+
+                  <div className="overflow-hidden rounded-[1.5rem] border border-panel-table-wrap bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--brand)_10%,transparent),transparent_35%),radial-gradient(circle_at_bottom_right,color-mix(in_srgb,var(--warning)_10%,transparent),transparent_32%),linear-gradient(135deg,color-mix(in_srgb,var(--panel)_92%,white),var(--panel))] p-3">
+                    <div className="flex h-full min-h-[15rem] flex-col gap-3 rounded-[1.1rem] border border-panel-table-wrap bg-panel/80 p-3">
+                      <div className="flex items-center justify-between gap-3 text-xs uppercase tracking-[0.18em] text-panel-subtle">
+                        <span>Spatial graph</span>
+                        <span>{spatialMapFeatures.length ? `${spatialMapFeatures.length} mapped wards` : "No geometry"}</span>
+                      </div>
+                      <div className="min-h-[13.75rem] rounded-[1rem] border border-panel-table-wrap bg-white/60 p-2 dark:bg-panel/70">
+                        {spatialMapFeatures.length ? (
+                          <MigoriWardMap
+                            features={spatialMapFeatures}
+                            selectedWardCode={detail?.wardMapFeature?.properties.ward_code ?? null}
+                            focusHighRisk={highRiskSpatialNeighbors.length > 0}
+                            onSelectWard={() => undefined}
+                          />
+                        ) : (
+                          <div className="flex h-full items-center justify-center text-center text-sm text-panel-muted">
+                            Spatial graph exists for the ward, but matching map geometry is not available.
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {detail?.wardMapFeature ? (
+                          <span className="inline-flex w-max items-center gap-2 rounded-full bg-[color-mix(in_srgb,var(--brand)_10%,white)] px-3 py-1.5 text-xs font-semibold text-panel-strong dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]">
+                            <span className="size-2 rounded-full bg-brand" />
+                            {detail.wardName}
+                          </span>
+                        ) : null}
+                        {highRiskSpatialNeighbors.length ? (
+                          <span className="inline-flex w-max items-center gap-2 rounded-full bg-[color-mix(in_srgb,var(--danger)_10%,white)] px-3 py-1.5 text-xs font-semibold text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]">
+                            <span className="size-2 rounded-full bg-[color:var(--danger)]" />
+                            High-risk neighbors
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Spillover signals</p>
+                    {spatialEvidence.neighbors.length ? (
+                      spatialEvidence.neighbors.slice(0, 4).map((neighbor) => (
+                        <div
+                          key={neighbor.ward_id}
+                          className="rounded-[1.15rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_14%,transparent)] px-3 py-3"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="text-sm font-semibold text-panel-strong">{neighbor.ward_name}</span>
+                            <div className="flex flex-wrap items-center gap-2">
+                              {neighbor.is_approximate_relationship ? (
+                                <StatusBadge tone="warning" className="rounded-full px-3 py-1 tracking-[0.14em]">
+                                  Approximate link
+                                </StatusBadge>
+                              ) : null}
+                              <StatusBadge tone={getRiskBadgeTone(neighbor.risk_level ?? "UNKNOWN")} className="rounded-full px-3 py-1 tracking-[0.14em]">
+                                {neighbor.risk_level ?? "UNKNOWN"}
+                              </StatusBadge>
+                            </div>
+                          </div>
+                          <p className="mt-2 text-sm leading-6 text-panel-muted">
+                            {neighbor.relationship_labels.join(", ") || "Relationship"} · Risk {formatRiskScore(neighbor.risk_score)} · Distance {formatSpatialDistance(neighbor.distance, neighbor.distance_unit)}
+                          </p>
+                          {neighbor.approximation_notice ? (
+                            <p className="mt-1 text-sm leading-6 text-panel-muted">{neighbor.approximation_notice}</p>
+                          ) : null}
+                          {neighbor.active_outbreak_label || neighbor.surveillance_record_count_28d > 0 ? (
+                            <p className="mt-1 text-sm leading-6 text-panel-copy">
+                              {neighbor.active_outbreak_label ? "Active outbreak label" : "Surveillance signal"} · {neighbor.suspected_cases_28d} suspected in 28 days · trend {neighbor.suspected_case_trend_14d_delta >= 0 ? "+" : ""}{neighbor.suspected_case_trend_14d_delta}
+                            </p>
+                          ) : null}
+                        </div>
+                      ))
+                    ) : (
+                      <p className="rounded-[1.15rem] border border-dashed border-[var(--dashboard-table-line)] px-3 py-3 text-sm text-panel-muted">
+                        No generated neighbor relationships are available for this ward.
+                      </p>
                     )}
                   </div>
-                  {detail?.wardMapFeature ? (
-                    <div className="inline-flex w-max items-center gap-2 rounded-full bg-[color-mix(in_srgb,var(--brand)_10%,white)] px-3 py-1.5 text-xs font-semibold text-panel-strong dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]">
-                      <span className="size-2 rounded-full bg-brand" />
-                      {detail.wardName} boundary
+
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Catchment pressure</p>
+                      {spatialSummary?.approximate_catchment_count ? (
+                        <StatusBadge tone="warning" className="rounded-full px-3 py-1 tracking-[0.14em]">
+                          Approximate
+                        </StatusBadge>
+                      ) : null}
+                    </div>
+                    {spatialEvidence.facility_catchments.length ? (
+                      spatialEvidence.facility_catchments.slice(0, 3).map((catchment) => (
+                        <div
+                          key={catchment.catchment_id}
+                          className="rounded-[1.15rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_14%,transparent)] px-3 py-3"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="text-sm font-semibold text-panel-strong">{catchment.facility_name}</span>
+                            <StatusBadge
+                              tone={getSpatialReadinessTone(catchment.projected_pressure_score)}
+                              className="rounded-full px-3 py-1 tracking-[0.14em]"
+                            >
+                              {catchment.projected_pressure_score == null ? "No forecast" : `${catchment.projected_pressure_score}/100`}
+                            </StatusBadge>
+                          </div>
+                          <p className="mt-2 text-sm leading-6 text-panel-muted">
+                            {catchment.catchment_method_label} · {catchment.covered_ward_names.length} covered ward{catchment.covered_ward_names.length === 1 ? "" : "s"} · {catchment.projected_readiness_label}
+                          </p>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="rounded-[1.15rem] border border-dashed border-[var(--dashboard-table-line)] px-3 py-3 text-sm text-panel-muted">
+                        No facility catchment records cover this ward yet.
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-[1.15rem] border border-[var(--dashboard-table-line)] px-3 py-3">
+                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Nearest facility</p>
+                      <p className="mt-2 text-sm font-semibold text-panel-strong">
+                        {spatialEvidence.nearest_facility?.facility_name ?? "Unavailable"}
+                      </p>
+                      <p className="mt-1 text-sm text-panel-muted">
+                        {formatSpatialDistance(spatialEvidence.nearest_facility?.distance, spatialEvidence.nearest_facility?.distance_unit)}
+                      </p>
+                    </div>
+                    <div className="rounded-[1.15rem] border border-[var(--dashboard-table-line)] px-3 py-3">
+                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Water proximity</p>
+                      <p className="mt-2 text-sm font-semibold text-panel-strong">
+                        {spatialEvidence.water_proximity.source_available ? formatSpatialPercent(spatialEvidence.water_proximity.value) : "Unavailable"}
+                      </p>
+                      <p className="mt-1 text-sm text-panel-muted">{spatialEvidence.water_proximity.display_caveat}</p>
+                    </div>
+                  </div>
+
+                  {spatialEvidence.caveats.length ? (
+                    <div className="space-y-2">
+                      {spatialEvidence.caveats.map((caveat) => (
+                        <div
+                          key={caveat}
+                          className="flex items-start gap-2 rounded-[1.15rem] border border-[color-mix(in_srgb,var(--warning)_20%,var(--dashboard-table-line))] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] px-3 py-3"
+                        >
+                          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[color:var(--warning)]" aria-hidden="true" />
+                          <p className="text-sm leading-6 text-panel-copy">{caveat}</p>
+                        </div>
+                      ))}
                     </div>
                   ) : null}
                 </div>
-              </div>
+              ) : (
+                <div className="rounded-[1.5rem] border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+                  <p className="text-sm font-semibold text-panel-strong">Spatial evidence is not available yet.</p>
+                  <p className="mt-1 text-sm text-panel-muted">Spatial context will appear once relationship and catchment records exist for this ward.</p>
+                </div>
+              )}
             </Card>
           </section>
         </div>
@@ -1298,6 +1720,103 @@ export default function WardDetailPage() {
                       : "Review alert history or coordinate with an authorized operator if a guided response is still needed."
                     : "Review full alert history if you need older ward-linked alert activity."}
                 </p>
+              </div>
+            )}
+          </Card>
+
+          <Card className="space-y-5 p-6">
+            <div className="flex items-center gap-3">
+              <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+                <ClipboardCheck className="size-5" aria-hidden="true" />
+              </span>
+              <div className="space-y-1">
+                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Preparedness actions</h3>
+                <p className="text-sm text-panel-muted">Ward-linked response tasks and lifecycle state.</p>
+              </div>
+            </div>
+
+            {isLoading ? (
+              <LoadingBlocks count={3} />
+            ) : preparednessActions.length ? (
+              <div className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-4 xl:grid-cols-2">
+                  {[
+                    ["Active", String(preparednessActionSummary.active)],
+                    ["Overdue", String(preparednessActionSummary.overdue)],
+                    ["Blocked", String(preparednessActionSummary.blocked)],
+                    ["Completed", String(preparednessActionSummary.completed)],
+                  ].map(([label, value]) => (
+                    <div
+                      key={label}
+                      className="rounded-[1.25rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-3"
+                    >
+                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">{label}</p>
+                      <p className="mt-2 text-sm font-semibold text-panel-strong">{value}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="space-y-3">
+                  {preparednessActions.slice(0, 4).map((action) => (
+                    <article
+                      key={action.public_id}
+                      className="rounded-[1.35rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-4"
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <StatusBadge
+                          tone={getPreparednessActionTone(action)}
+                          className="rounded-full px-3 py-1 tracking-[0.14em]"
+                        >
+                          {toTitleCase(action.status)}
+                        </StatusBadge>
+                        <span className="text-sm font-semibold text-panel-strong">
+                          {PREPAREDNESS_ACTION_TYPE_LABELS[action.action_type]}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-sm leading-6 text-panel-copy">
+                        Owner: {action.assigned_to_username || action.assigned_to_team || "Unassigned"}
+                      </p>
+                      <p className="text-sm leading-6 text-panel-muted">
+                        Due: {formatOperationalTime(action.due_at)}
+                      </p>
+                      {action.events.length ? (
+                        <div className="mt-3 border-t border-[var(--dashboard-table-line)] pt-3">
+                          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">
+                            Latest lifecycle events
+                          </p>
+                          <ol className="mt-2 space-y-2">
+                            {action.events.slice().reverse().slice(0, 2).map((event) => (
+                              <li key={event.public_id} className="flex gap-2 text-sm">
+                                <span className="mt-2 size-1.5 shrink-0 rounded-full bg-brand" aria-hidden="true" />
+                                <span className="min-w-0">
+                                  <span className="font-semibold text-panel-strong">{toTitleCase(event.event_type)}</span>
+                                  <span className="text-panel-muted">
+                                    {" "}
+                                    {formatOperationalTime(event.created_at)}
+                                  </span>
+                                  {event.detail ? <span className="block text-panel-copy">{event.detail}</span> : null}
+                                </span>
+                              </li>
+                            ))}
+                          </ol>
+                        </div>
+                      ) : null}
+                    </article>
+                  ))}
+                </div>
+
+                <Link
+                  href={`/preparedness-actions?ward_id=${detail?.wardId ?? wardId}`}
+                  className="inline-flex items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--login-link-hover)]"
+                >
+                  Open ward action queue
+                  <ChevronRight className="size-4" aria-hidden="true" />
+                </Link>
+              </div>
+            ) : (
+              <div className="rounded-[1.5rem] border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+                <p className="text-sm font-semibold text-panel-strong">No preparedness actions linked yet</p>
+                <p className="mt-1 text-sm text-panel-muted">Response work will appear here when alert, CHV, or facility workflows create ledger tasks.</p>
               </div>
             )}
           </Card>
