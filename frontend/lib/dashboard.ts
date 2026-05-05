@@ -2553,6 +2553,21 @@ export type SourceDataFeedDefinition = {
   requires_new_ingestion_path: boolean;
   default_reporting_granularity: string;
   feed_policy?: Record<string, unknown>;
+  feed_mode?: "api" | "csv" | "manual" | "fallback" | "demo";
+  csv_upload_enabled?: boolean;
+  connector_status?: {
+    enabled: boolean;
+    connector_key: string;
+    label: string;
+    configured: boolean;
+    status: string;
+    last_run_status: string;
+    last_run_at: string | null;
+    last_successful_fetch_at: string | null;
+    required_settings: string[];
+    credential_values_exposed: boolean;
+    notes: string;
+  };
 };
 
 export type SourceDataFeedTypesResponse = {
@@ -2562,8 +2577,18 @@ export type SourceDataFeedTypesResponse = {
   scope: string;
   feed_count: number;
   feeds: SourceDataFeedDefinition[];
+  feature_flags?: Record<string, boolean>;
   templates: Record<string, { filename: string; columns: string[]; example_row: Record<string, string> }>;
   template_contract_errors: string[];
+  validation_error_catalog?: {
+    schema_version: string;
+    codes: Array<{
+      code: string;
+      severity: string;
+      operator_message: string;
+      remediation: string;
+    }>;
+  };
 };
 
 export type SourceDataValidationIssueRecord = {
@@ -2583,6 +2608,36 @@ export type SourceDataUploadEventRecord = {
   event_at: string;
   actor_username: string | null;
   metadata: Record<string, unknown>;
+};
+
+export type SourceDataDownstreamActionResult = {
+  schema_version: string;
+  action_key: string;
+  action_label?: string;
+  action_status: "available" | "unavailable" | "completed" | "queued" | "failed";
+  requested_by_username?: string | null;
+  started_at?: string;
+  completed_at?: string;
+  queued_at?: string;
+  downstream_celery_task_id?: string;
+  safe_reason?: string;
+  triggers_sms?: boolean;
+  promotes_model?: boolean;
+  evidence?: Record<string, unknown>;
+};
+
+export type SourceDataDownstreamActionDefinition = {
+  action_key: string;
+  label: string;
+  supported_ingestion_families: string[];
+  safe_reason: string;
+  mutates_downstream_evidence: boolean;
+  triggers_sms: boolean;
+  promotes_model: boolean;
+  availability_status: "available" | "unavailable";
+  unavailable_reason: string;
+  recommended: boolean;
+  latest_result: SourceDataDownstreamActionResult | null;
 };
 
 export type SourceDataUploadBatchRecord = {
@@ -2639,6 +2694,7 @@ export type SourceDataUploadBatchRecord = {
   confirmed_at: string | null;
   metadata: Record<string, unknown>;
   validation_summary: Record<string, unknown>;
+  downstream_actions: SourceDataDownstreamActionDefinition[];
   validation_issues: SourceDataValidationIssueRecord[];
   events: SourceDataUploadEventRecord[];
   created_at: string;
@@ -2687,6 +2743,60 @@ export type SourceDataConfirmPayload = {
   force_async?: boolean;
 };
 
+export type SourceDataCancelPayload = {
+  reason: string;
+};
+
+export type SourceDataDownstreamActionPayload = {
+  action_key: string;
+  reason?: string;
+  as_of?: string;
+  prediction_date?: string;
+  prediction_dates?: string[];
+  dataset_role?: "training" | "evaluation";
+  force_async?: boolean;
+};
+
+export type SourceDataDownstreamActionResponse = SourceDataDownstreamActionResult & {
+  batch: SourceDataUploadBatchRecord;
+};
+
+export type SourceDataConnectorRunRecord = {
+  id: number;
+  connector_key: string;
+  target_feed_key: string;
+  feed_mode: string;
+  status: "running" | "success" | "failed" | "skipped";
+  source_name: string;
+  source_ref: string;
+  fetched_record_count: number;
+  upload_batch_public_id: string | null;
+  error_summary: string;
+  safe_metadata: Record<string, unknown>;
+  requested_by_username: string | null;
+  started_at: string;
+  completed_at: string | null;
+};
+
+export type SourceDataConnectorRegistryResponse = {
+  schema_version: string;
+  generated_at: string;
+  enabled: boolean;
+  connectors: Array<NonNullable<SourceDataFeedDefinition["connector_status"]> & {
+    target_feed_key: string;
+    feed_mode: string;
+    source_name: string;
+    source_ref_prefix: string;
+  }>;
+};
+
+export type SourceDataFeedModePayload = {
+  feed_mode: "api" | "csv" | "manual" | "fallback" | "demo";
+  csv_upload_enabled: boolean;
+  authoritative_connector_key?: string;
+  reason?: string;
+};
+
 export type SourceDataErrorFileResponse = {
   filename: string;
   content_type: string;
@@ -2697,6 +2807,136 @@ export type SourceDataErrorFileResponse = {
 
 export type SourceDataCsvTemplateFileResponse = SourceDataErrorFileResponse & {
   feed_key: string;
+};
+
+export type SourceDataFreshnessStatus =
+  | "current"
+  | "due_soon"
+  | "stale"
+  | "missing"
+  | "demo_backed"
+  | "failed";
+
+export type SourceDataFreshnessSource = {
+  key: string;
+  feed_key: string;
+  label: string;
+  domain: string;
+  source_type: string;
+  status: SourceDataFreshnessStatus;
+  truth_state: string;
+  expected_cadence: string;
+  last_source_timestamp: string | null;
+  last_import_timestamp: string | null;
+  current_gap_days: number | null;
+  record_count: number;
+  recommended_action: string;
+  source_path: string;
+};
+
+export type SourceDataFreshnessResponse = {
+  schema_version: string;
+  generated_at: string;
+  state_counts: Record<string, number>;
+  truth_state_counts: Record<string, number>;
+  upload_status_counts: Record<string, number>;
+  sources: SourceDataFreshnessSource[];
+};
+
+export type SourceDataOverviewRecentUpload = {
+  public_id: string;
+  feed_key: string;
+  domain: string;
+  source_type: string;
+  source_name: string;
+  status: string;
+  validation_status: string;
+  import_status: string;
+  row_count: number;
+  accepted_count: number;
+  rejected_count: number;
+  warning_count: number;
+  created_by_username: string | null;
+  confirmed_by_username: string | null;
+  created_at: string | null;
+  confirmed_at: string | null;
+};
+
+export type SourceDataSourceGap = {
+  feed_key: string;
+  label: string;
+  status: SourceDataFreshnessStatus;
+  truth_state: string;
+  recommended_action: string;
+  template_url: string;
+};
+
+export type SourceDataOverviewResponse = {
+  schema_version: string;
+  generated_at: string;
+  freshness: SourceDataFreshnessResponse;
+  feed_statuses: SourceDataFreshnessSource[];
+  source_gaps: SourceDataSourceGap[];
+  recent_uploads: SourceDataOverviewRecentUpload[];
+  source_matrix_reference: string;
+};
+
+export type SourceDataOperationsAlert = {
+  key: string;
+  severity: "default" | "success" | "warning" | "danger" | "info";
+  title: string;
+  message: string;
+  recommended_action: string;
+};
+
+export type SourceDataOperationsTaskRecord = {
+  public_id: string;
+  feed_key: string;
+  status: string;
+  import_celery_task_id?: string;
+  validation_celery_task_id?: string;
+  updated_at: string;
+};
+
+export type SourceDataOperationsResponse = {
+  schema_version: string;
+  generated_at: string;
+  lookback_hours: number;
+  metrics: {
+    upload_count: number;
+    recent_upload_count: number;
+    validation_failure_count: number;
+    import_failure_count: number;
+    stale_feed_count: number;
+    duplicate_attempt_count: number;
+    status_counts: Record<string, number>;
+  };
+  worker_health: {
+    status: "current" | "stale" | "missing" | "failed";
+    latest_heartbeat_at: string | null;
+    latest_task_name: string;
+    latest_status: string;
+    age_seconds: number | null;
+    stale_after_seconds: number;
+  };
+  stuck_tasks: {
+    stale_after_minutes: number;
+    imports: SourceDataOperationsTaskRecord[];
+    validations: SourceDataOperationsTaskRecord[];
+  };
+  retention: {
+    raw_upload_retention_days: number;
+    expired_raw_artifact_count: number;
+    purged_artifact_count: number;
+    next_artifact_expiry_at: string | null;
+    cleanup_task_name: string;
+  };
+  alerts: SourceDataOperationsAlert[];
+  production_controls: {
+    backup_restore_reference: string;
+    antivirus_scanning_hook: string;
+    audit_review_reference: string;
+  };
 };
 
 export type InteroperabilityAuditCheck = {
@@ -3890,6 +4130,42 @@ export async function fetchSourceDataFeedTypesViaBff() {
   return requestDashboardRoute<SourceDataFeedTypesResponse>("/api/dashboard/source-data/feed-types");
 }
 
+export async function fetchSourceDataOverviewViaBff() {
+  return requestDashboardRoute<SourceDataOverviewResponse>("/api/dashboard/source-data/overview");
+}
+
+export async function fetchSourceDataFreshnessViaBff() {
+  return requestDashboardRoute<SourceDataFreshnessResponse>("/api/dashboard/source-data/freshness");
+}
+
+export async function fetchSourceDataOperationsViaBff() {
+  return requestDashboardRoute<SourceDataOperationsResponse>("/api/dashboard/source-data/operations");
+}
+
+export async function fetchSourceDataConnectorsViaBff() {
+  return requestDashboardRoute<SourceDataConnectorRegistryResponse>("/api/dashboard/source-data/connectors");
+}
+
+export async function refreshSourceDataConnectorViaBff(connectorKey: string, payload: { force?: boolean; options?: Record<string, unknown> } = {}) {
+  return requestDashboardRoute<SourceDataConnectorRunRecord>(
+    `/api/dashboard/source-data/connectors/${encodeURIComponent(connectorKey)}/refresh`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function updateSourceDataFeedModeViaBff(feedKey: string, payload: SourceDataFeedModePayload) {
+  return requestDashboardRoute<Pick<SourceDataFeedDefinition, "feed_mode" | "csv_upload_enabled" | "connector_status">>(
+    `/api/dashboard/source-data/feed-modes/${encodeURIComponent(feedKey)}`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
 export async function fetchSourceDataUploadsViaBff(params: SourceDataUploadFilters = {}) {
   const searchParams = new URLSearchParams();
 
@@ -3963,6 +4239,29 @@ export async function approveSourceDataUploadViaBff(publicId: string, payload: S
 export async function confirmSourceDataUploadViaBff(publicId: string, payload: SourceDataConfirmPayload = {}) {
   return requestDashboardRoute<SourceDataUploadBatchRecord>(
     `/api/dashboard/source-data/uploads/${encodeURIComponent(publicId)}/confirm`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function cancelSourceDataUploadViaBff(publicId: string, payload: SourceDataCancelPayload) {
+  return requestDashboardRoute<SourceDataUploadBatchRecord>(
+    `/api/dashboard/source-data/uploads/${encodeURIComponent(publicId)}/cancel`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function runSourceDataDownstreamActionViaBff(
+  publicId: string,
+  payload: SourceDataDownstreamActionPayload,
+) {
+  return requestDashboardRoute<SourceDataDownstreamActionResponse>(
+    `/api/dashboard/source-data/uploads/${encodeURIComponent(publicId)}/downstream-actions`,
     {
       method: "POST",
       body: JSON.stringify(payload),

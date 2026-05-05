@@ -62,8 +62,16 @@ class SourceDataPhaseThreeConfirmImportHistoryTests(APITestCase):
     def valid_weekly_csv(self) -> str:
         return "\n".join(
             [
-                "ward_code,reporting_period_start,reporting_period_end,suspected_cases,confirmed_cases,diarrheal_count,reporting_granularity,source_ref",
-                "MIG-WARD-001,2026-04-27,2026-05-03,3,1,8,week,dhis2-weekly-export:row-1",
+                "ward_code,reporting_period_start,reporting_period_end,suspected_cases,diarrheal_count,reporting_granularity,source_ref",
+                "MIG-WARD-001,2026-04-27,2026-05-03,3,8,week,dhis2-weekly-export:row-1",
+            ]
+        )
+
+    def confirmed_surveillance_csv(self) -> str:
+        return "\n".join(
+            [
+                "ward_code,reporting_period_start,reporting_period_end,confirmed_cases,reporting_granularity,source_ref",
+                "MIG-WARD-001,2026-04-27,2026-05-03,1,week,dhis2-weekly-export:confirmed-row-1",
             ]
         )
 
@@ -229,6 +237,13 @@ class SourceDataPhaseThreeConfirmImportHistoryTests(APITestCase):
         self.assertEqual(same_actor_approval_response.status_code, status.HTTP_400_BAD_REQUEST)
 
         self.client.force_authenticate(self.approver)
+        missing_reason_response = self.client.post(
+            reverse("source-data-upload-approval", kwargs={"public_id": upload_response.data["public_id"]}),
+            {"action": "approve"},
+            format="json",
+        )
+        self.assertEqual(missing_reason_response.status_code, status.HTTP_400_BAD_REQUEST)
+
         approval_response = self.client.post(
             reverse("source-data-upload-approval", kwargs={"public_id": upload_response.data["public_id"]}),
             {"action": "approve", "reason": "Second admin reviewed source and period."},
@@ -241,6 +256,41 @@ class SourceDataPhaseThreeConfirmImportHistoryTests(APITestCase):
         self.assertEqual(confirm_response.status_code, status.HTTP_200_OK)
         self.assertEqual(confirm_response.data["status"], SourceDataUploadBatch.STATUS_IMPORTED)
         self.assertEqual(SurveillanceIngestionRun.objects.count(), 1)
+
+    def test_confirmed_surveillance_truth_requires_second_admin_approval(self):
+        upload_response = self.create_upload(
+            self.surveillance_payload(csv_text=self.confirmed_surveillance_csv()),
+            actor=self.supervisor,
+        )
+        validate_response = self.validate_upload(upload_response.data["public_id"], actor=self.supervisor)
+
+        blocked_confirm_response = self.confirm_upload(upload_response.data["public_id"], actor=self.supervisor)
+
+        self.assertEqual(validate_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            validate_response.data["validation_summary"]["truth_level_counts"]["confirmed_surveillance"],
+            1,
+        )
+        self.assertEqual(blocked_confirm_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("maker-checker", blocked_confirm_response.data["detail"])
+
+        request_response = self.client.post(
+            reverse("source-data-upload-approval", kwargs={"public_id": upload_response.data["public_id"]}),
+            {"action": "request", "reason": "Confirmed surveillance truth updates operational evidence."},
+            format="json",
+        )
+        self.client.force_authenticate(self.approver)
+        approval_response = self.client.post(
+            reverse("source-data-upload-approval", kwargs={"public_id": upload_response.data["public_id"]}),
+            {"action": "approve", "reason": "Confirmed counts reconciled against the source extract."},
+            format="json",
+        )
+        confirm_response = self.confirm_upload(upload_response.data["public_id"], actor=self.supervisor)
+
+        self.assertEqual(request_response.data["approval_risk_category"], "production_surveillance_truth")
+        self.assertEqual(approval_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(confirm_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(confirm_response.data["status"], SourceDataUploadBatch.STATUS_IMPORTED)
 
     def test_analyst_can_view_history_but_cannot_confirm_or_approve(self):
         upload_response = self.create_upload(self.surveillance_payload())
@@ -262,3 +312,48 @@ class SourceDataPhaseThreeConfirmImportHistoryTests(APITestCase):
         self.assertEqual(history_response.status_code, status.HTTP_200_OK)
         self.assertEqual(confirm_response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(approval_response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_upload_can_be_cancelled_before_import_and_audited(self):
+        upload_response = self.create_upload(self.surveillance_payload())
+        public_id = upload_response.data["public_id"]
+
+        self.client.force_authenticate(self.supervisor)
+        cancel_response = self.client.post(
+            reverse("source-data-upload-cancel", kwargs={"public_id": public_id}),
+            {"reason": "Wrong reporting period selected before validation."},
+            format="json",
+        )
+        validate_response = self.client.post(
+            reverse("source-data-upload-validate", kwargs={"public_id": public_id}),
+            {},
+            format="json",
+        )
+
+        self.assertEqual(cancel_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(cancel_response.data["status"], SourceDataUploadBatch.STATUS_CANCELLED)
+        self.assertEqual(
+            cancel_response.data["metadata"]["cancellation"]["reason"],
+            "Wrong reporting period selected before validation.",
+        )
+        self.assertTrue(
+            SourceDataUploadEvent.objects.filter(
+                event_type=SourceDataUploadEvent.EVENT_UPLOAD_CANCELLED,
+                metadata__reason="Wrong reporting period selected before validation.",
+            ).exists()
+        )
+        self.assertEqual(validate_response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_imported_upload_cannot_be_cancelled(self):
+        upload_response = self.create_upload(self.surveillance_payload())
+        self.validate_upload(upload_response.data["public_id"])
+        confirm_response = self.confirm_upload(upload_response.data["public_id"])
+
+        cancel_response = self.client.post(
+            reverse("source-data-upload-cancel", kwargs={"public_id": confirm_response.data["public_id"]}),
+            {"reason": "Trying to cancel after import."},
+            format="json",
+        )
+
+        self.assertEqual(confirm_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(cancel_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("cannot be cancelled", cancel_response.data["detail"])

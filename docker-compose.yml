@@ -36,6 +36,8 @@ services:
     volumes:
       - ./backend:/app
       - ./frontend:/frontend:ro
+      - ./docs:/docs:ro
+      - ./docker-compose.yml:/docker-compose.yml:ro
       - source_uploads:/var/lib/cchis/source_uploads
     env_file:
       - ./.env
@@ -55,6 +57,9 @@ services:
     command: sh -c "celery -A core worker --loglevel=INFO"
     volumes:
       - ./backend:/app
+      - ./frontend:/frontend:ro
+      - ./docs:/docs:ro
+      - ./docker-compose.yml:/docker-compose.yml:ro
       - source_uploads:/var/lib/cchis/source_uploads
     env_file:
       - ./.env
@@ -72,6 +77,9 @@ services:
     command: sh -c "celery -A core beat --loglevel=INFO"
     volumes:
       - ./backend:/app
+      - ./frontend:/frontend:ro
+      - ./docs:/docs:ro
+      - ./docker-compose.yml:/docker-compose.yml:ro
     env_file:
       - ./.env
     depends_on:

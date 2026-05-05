@@ -8,7 +8,7 @@ from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import generics, permissions, status
-from rest_framework.exceptions import ParseError, PermissionDenied, ValidationError
+from rest_framework.exceptions import APIException, ParseError, PermissionDenied, ValidationError
 from rest_framework.filters import OrderingFilter
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
@@ -17,6 +17,7 @@ from rest_framework.views import APIView
 from accounts.audit import record_auth_event
 from accounts.models import AuthAuditEvent, User
 from accounts.permissions import IsAdminOnly, IsAdminOrSupervisor, IsAdminSupervisorOrAnalyst, IsFieldOperator
+from accounts.throttles import AuthScopedRateThrottle
 
 from .tasks import deliver_alert_task, run_risk_model_task, trigger_alerts_task
 
@@ -61,13 +62,34 @@ from .interoperability import (
     create_org_unit_mapping_import_run,
     create_risk_score_export_preview,
 )
+from .source_data.downstream import (
+    ACTION_STATUS_QUEUED,
+    SOURCE_DATA_DOWNSTREAM_SCHEMA_VERSION,
+    run_source_data_downstream_action,
+)
 from .source_data.registry import build_source_data_feed_types_payload
 from .source_data.events import record_source_data_upload_event
+from .source_data.features import (
+    FEATURE_API_CONNECTORS,
+    FEATURE_DOWNSTREAM_ACTIONS,
+    FEATURE_IMPORT_CONFIRM,
+    FEATURE_SOURCE_DATA_OPS,
+    source_data_feature_enabled,
+    source_data_feature_flags_payload,
+)
 from .source_data.imports import (
     confirm_source_data_upload,
     decide_source_data_upload_approval,
     request_source_data_upload_approval,
     source_data_import_risk_category,
+)
+from .source_data.freshness import build_source_data_freshness_payload, build_source_data_overview_payload
+from .source_data.operations import build_source_data_operations_payload
+from .source_data.connectors import (
+    build_source_data_connector_registry_payload,
+    run_source_data_connector_refresh,
+    set_source_data_feed_mode_override,
+    source_data_connector_state_for_feed,
 )
 from .source_data.templates import (
     SOURCE_DATA_TEMPLATE_DOWNLOAD_EVENT,
@@ -75,8 +97,12 @@ from .source_data.templates import (
     source_data_template_contracts,
     validate_source_data_template_contract,
 )
-from .source_data.uploads import create_source_data_upload_batch
-from .source_data.validation import build_source_data_upload_errors_csv, validate_source_data_upload_batch
+from .source_data.uploads import cancel_source_data_upload_batch, create_source_data_upload_batch
+from .source_data.validation import (
+    build_source_data_upload_errors_csv,
+    source_data_validation_error_catalog,
+    validate_source_data_upload_batch,
+)
 from .operational_metric_audit import build_operational_kpi_integrity_audit, build_operational_kpi_me_export
 from .operational_metric_dashboard import build_operational_kpi_dashboard
 from .ussd_governance import create_ussd_session_log
@@ -136,9 +162,14 @@ from .serializers import (
     SensitiveExportDecisionSerializer,
     SensitiveExportRequestCreateSerializer,
     SensitiveExportRequestSerializer,
+    SourceDataDownstreamActionSerializer,
+    SourceDataConnectorRefreshSerializer,
+    SourceDataConnectorRunSerializer,
     SourceDataFeedTypesResponseSerializer,
+    SourceDataFeedModeUpdateSerializer,
     SourceDataUploadApprovalActionSerializer,
     SourceDataUploadBatchSerializer,
+    SourceDataUploadCancelSerializer,
     SourceDataUploadConfirmSerializer,
     SourceDataUploadCreateSerializer,
     SourceDataUploadListResponseSerializer,
@@ -2243,6 +2274,34 @@ class OperationalKPIMEExportAPIView(APIView):
 SOURCE_DATA_UPLOAD_BATCH_LIST_SCHEMA_VERSION = "source-data-upload-batch-list-v1"
 
 
+class SourceDataFeatureDisabled(APIException):
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    default_code = "source_data_feature_disabled"
+
+    def __init__(self, disabled_flags: list[str]):
+        self.disabled_flags = disabled_flags
+        detail = {
+            "detail": "Source-data feature flag is disabled.",
+            "disabled_flags": disabled_flags,
+        }
+        super().__init__(detail)
+
+
+class SourceDataFeatureGateMixin:
+    source_data_required_features = (FEATURE_SOURCE_DATA_OPS,)
+
+    def initial(self, request, *args, **kwargs):
+        response = super().initial(request, *args, **kwargs)
+        disabled_flags = [
+            flag_name
+            for flag_name in self.source_data_required_features
+            if not source_data_feature_enabled(flag_name)
+        ]
+        if disabled_flags:
+            raise SourceDataFeatureDisabled(disabled_flags)
+        return response
+
+
 def _source_data_upload_queryset():
     return (
         SourceDataUploadBatch.objects.select_related(
@@ -2264,20 +2323,93 @@ def _source_data_upload_batch_or_404(public_id):
     return get_object_or_404(_source_data_upload_queryset(), public_id=public_id)
 
 
-class SourceDataFeedTypesAPIView(APIView):
+class SourceDataFeedTypesAPIView(SourceDataFeatureGateMixin, APIView):
     permission_classes = [IsAdminSupervisorOrAnalyst]
 
     def get(self, request):
         payload = {
             **build_source_data_feed_types_payload(),
+            "feature_flags": source_data_feature_flags_payload(),
             "templates": source_data_template_contracts(),
             "template_contract_errors": validate_source_data_template_contract(),
+            "validation_error_catalog": source_data_validation_error_catalog(),
         }
         serializer = SourceDataFeedTypesResponseSerializer(payload)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-class SourceDataCSVTemplateFileAPIView(APIView):
+class SourceDataOverviewAPIView(SourceDataFeatureGateMixin, APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request):
+        return Response(build_source_data_overview_payload(), status=status.HTTP_200_OK)
+
+
+class SourceDataFreshnessAPIView(SourceDataFeatureGateMixin, APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request):
+        return Response(build_source_data_freshness_payload(), status=status.HTTP_200_OK)
+
+
+class SourceDataOperationsAPIView(SourceDataFeatureGateMixin, APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request):
+        return Response(build_source_data_operations_payload(), status=status.HTTP_200_OK)
+
+
+class SourceDataConnectorRegistryAPIView(SourceDataFeatureGateMixin, APIView):
+    source_data_required_features = (FEATURE_SOURCE_DATA_OPS, FEATURE_API_CONNECTORS)
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request):
+        return Response(build_source_data_connector_registry_payload(), status=status.HTTP_200_OK)
+
+
+class SourceDataConnectorRefreshAPIView(SourceDataFeatureGateMixin, APIView):
+    source_data_required_features = (FEATURE_SOURCE_DATA_OPS, FEATURE_API_CONNECTORS)
+    permission_classes = [IsAdminOrSupervisor]
+
+    def post(self, request, connector_key):
+        serializer = SourceDataConnectorRefreshSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        run = run_source_data_connector_refresh(
+            connector_key=connector_key,
+            actor=request.user,
+            options=serializer.validated_data.get("options") or {},
+            force=serializer.validated_data["force"],
+        )
+        response_status = (
+            status.HTTP_200_OK
+            if run.status in {"success", "skipped"}
+            else status.HTTP_400_BAD_REQUEST
+        )
+        return Response(SourceDataConnectorRunSerializer(run).data, status=response_status)
+
+
+class SourceDataFeedModeAPIView(SourceDataFeatureGateMixin, APIView):
+    source_data_required_features = (FEATURE_SOURCE_DATA_OPS, FEATURE_API_CONNECTORS)
+    permission_classes = [IsAdminOnly]
+
+    def post(self, request, feed_key):
+        serializer = SourceDataFeedModeUpdateSerializer(
+            data=request.data,
+            context={"feed_key": feed_key},
+        )
+        serializer.is_valid(raise_exception=True)
+        set_source_data_feed_mode_override(
+            feed_key=feed_key,
+            feed_mode=serializer.validated_data["feed_mode"],
+            csv_upload_enabled=serializer.validated_data["csv_upload_enabled"],
+            authoritative_connector_key=serializer.validated_data["authoritative_connector_key"],
+            reason=serializer.validated_data["reason"],
+            actor=request.user,
+        )
+        return Response(source_data_connector_state_for_feed(feed_key), status=status.HTTP_200_OK)
+
+
+class SourceDataCSVTemplateFileAPIView(SourceDataFeatureGateMixin, APIView):
     permission_classes = [IsAdminSupervisorOrAnalyst]
 
     def get(self, request, feed_key):
@@ -2300,8 +2432,14 @@ class SourceDataCSVTemplateFileAPIView(APIView):
         return Response(template_file, status=status.HTTP_200_OK)
 
 
-class SourceDataUploadListCreateAPIView(APIView):
+class SourceDataUploadListCreateAPIView(SourceDataFeatureGateMixin, APIView):
     parser_classes = [MultiPartParser, FormParser]
+
+    def get_throttles(self):
+        if self.request.method == "POST":
+            self.throttle_scope = "source_data_upload"
+            return [AuthScopedRateThrottle()]
+        return super().get_throttles()
 
     def get_permissions(self):
         if self.request.method == "POST":
@@ -2390,7 +2528,7 @@ class SourceDataUploadListCreateAPIView(APIView):
         return Response(SourceDataUploadBatchSerializer(batch).data, status=status.HTTP_201_CREATED)
 
 
-class SourceDataUploadDetailAPIView(APIView):
+class SourceDataUploadDetailAPIView(SourceDataFeatureGateMixin, APIView):
     permission_classes = [IsAdminSupervisorOrAnalyst]
 
     def get(self, request, public_id):
@@ -2398,8 +2536,10 @@ class SourceDataUploadDetailAPIView(APIView):
         return Response(SourceDataUploadBatchSerializer(batch).data, status=status.HTTP_200_OK)
 
 
-class SourceDataUploadValidateAPIView(APIView):
+class SourceDataUploadValidateAPIView(SourceDataFeatureGateMixin, APIView):
     permission_classes = [IsAdminOrSupervisor]
+    throttle_classes = [AuthScopedRateThrottle]
+    throttle_scope = "source_data_validate"
 
     def post(self, request, public_id):
         batch = _source_data_upload_batch_or_404(public_id)
@@ -2407,6 +2547,7 @@ class SourceDataUploadValidateAPIView(APIView):
             SourceDataUploadBatch.STATUS_CONFIRMING,
             SourceDataUploadBatch.STATUS_IMPORTED,
             SourceDataUploadBatch.STATUS_SUPERSEDED,
+            SourceDataUploadBatch.STATUS_CANCELLED,
         }:
             return Response(
                 {"detail": "This upload cannot be dry-validated in its current lifecycle status."},
@@ -2443,7 +2584,8 @@ class SourceDataUploadValidateAPIView(APIView):
         return Response(SourceDataUploadBatchSerializer(validated_batch).data, status=status.HTTP_200_OK)
 
 
-class SourceDataUploadApprovalAPIView(APIView):
+class SourceDataUploadApprovalAPIView(SourceDataFeatureGateMixin, APIView):
+    source_data_required_features = (FEATURE_SOURCE_DATA_OPS, FEATURE_IMPORT_CONFIRM)
     permission_classes = [IsAdminOrSupervisor]
 
     def post(self, request, public_id):
@@ -2486,7 +2628,8 @@ class SourceDataUploadApprovalAPIView(APIView):
         return Response(SourceDataUploadBatchSerializer(updated_batch).data, status=status.HTTP_200_OK)
 
 
-class SourceDataUploadConfirmAPIView(APIView):
+class SourceDataUploadConfirmAPIView(SourceDataFeatureGateMixin, APIView):
+    source_data_required_features = (FEATURE_SOURCE_DATA_OPS, FEATURE_IMPORT_CONFIRM)
     permission_classes = [IsAdminOrSupervisor]
 
     def post(self, request, public_id):
@@ -2524,7 +2667,138 @@ class SourceDataUploadConfirmAPIView(APIView):
         return Response(SourceDataUploadBatchSerializer(confirmed_batch).data, status=response_status)
 
 
-class SourceDataUploadErrorsFileAPIView(APIView):
+class SourceDataUploadCancelAPIView(SourceDataFeatureGateMixin, APIView):
+    permission_classes = [IsAdminOrSupervisor]
+
+    def post(self, request, public_id):
+        batch = _source_data_upload_batch_or_404(public_id)
+        serializer = SourceDataUploadCancelSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        reason = serializer.validated_data["reason"]
+
+        try:
+            cancelled_batch = cancel_source_data_upload_batch(
+                batch=batch,
+                cancelled_by=request.user,
+                reason=reason,
+            )
+        except ValueError as error:
+            return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+
+        record_source_data_upload_event(
+            request=request,
+            batch=cancelled_batch,
+            event_type=SourceDataUploadEvent.EVENT_UPLOAD_CANCELLED,
+            actor=request.user,
+            metadata={
+                "reason": reason,
+                "previous_status": (cancelled_batch.metadata or {}).get("cancellation", {}).get("previous_status", ""),
+            },
+        )
+        cancelled_batch = _source_data_upload_batch_or_404(cancelled_batch.public_id)
+        return Response(SourceDataUploadBatchSerializer(cancelled_batch).data, status=status.HTTP_200_OK)
+
+
+def _source_data_downstream_options(validated_data: dict) -> dict:
+    options = {
+        key: value
+        for key, value in validated_data.items()
+        if key not in {"action_key", "force_async"}
+    }
+    safe_options = {}
+    for key, value in options.items():
+        if isinstance(value, list):
+            safe_options[key] = [item.isoformat() if hasattr(item, "isoformat") else item for item in value]
+        elif hasattr(value, "isoformat"):
+            safe_options[key] = value.isoformat()
+        else:
+            safe_options[key] = value
+    return safe_options
+
+
+class SourceDataUploadDownstreamActionsAPIView(SourceDataFeatureGateMixin, APIView):
+    source_data_required_features = (FEATURE_SOURCE_DATA_OPS, FEATURE_DOWNSTREAM_ACTIONS)
+    permission_classes = [IsAdminOrSupervisor]
+
+    def post(self, request, public_id):
+        batch = _source_data_upload_batch_or_404(public_id)
+        serializer = SourceDataDownstreamActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        action_key = serializer.validated_data["action_key"]
+        options = _source_data_downstream_options(serializer.validated_data)
+
+        record_source_data_upload_event(
+            request=request,
+            batch=batch,
+            event_type=SourceDataUploadEvent.EVENT_DOWNSTREAM_ACTION_REQUESTED,
+            actor=request.user,
+            metadata={
+                "action_key": action_key,
+                "action_status": "requested",
+                "force_async": serializer.validated_data["force_async"],
+                "production": serializer.validated_data["production"],
+                "replace_existing": serializer.validated_data["replace_existing"],
+                "reason_recorded": bool(serializer.validated_data.get("reason")),
+            },
+        )
+
+        if serializer.validated_data["force_async"]:
+            from risk.tasks import run_source_data_downstream_action_task
+
+            async_result = run_source_data_downstream_action_task.delay(
+                batch.id,
+                action_key,
+                request.user.id,
+                options,
+            )
+            batch.downstream_celery_task_id = async_result.id
+            queued_result = {
+                "schema_version": SOURCE_DATA_DOWNSTREAM_SCHEMA_VERSION,
+                "action_key": action_key,
+                "action_status": ACTION_STATUS_QUEUED,
+                "downstream_celery_task_id": async_result.id,
+                "requested_by_username": request.user.username,
+                "queued_at": timezone.now().isoformat(),
+            }
+            metadata = batch.metadata or {}
+            history = list(metadata.get("downstream_actions") or [])
+            history.append(queued_result)
+            batch.metadata = {
+                **metadata,
+                "downstream_actions": history[-20:],
+                "latest_downstream_action": queued_result,
+            }
+            batch.save(update_fields=["downstream_celery_task_id", "metadata", "updated_at"])
+            batch = _source_data_upload_batch_or_404(batch.public_id)
+            return Response(
+                {
+                    **queued_result,
+                    "batch": SourceDataUploadBatchSerializer(batch).data,
+                },
+                status=status.HTTP_202_ACCEPTED,
+            )
+
+        try:
+            result = run_source_data_downstream_action(
+                batch=batch,
+                action_key=action_key,
+                actor=request.user,
+                options=options,
+            )
+        except ValueError as error:
+            return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+
+        batch = _source_data_upload_batch_or_404(batch.public_id)
+        return Response(
+            {
+                **result,
+                "batch": SourceDataUploadBatchSerializer(batch).data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class SourceDataUploadErrorsFileAPIView(SourceDataFeatureGateMixin, APIView):
     permission_classes = [IsAdminSupervisorOrAnalyst]
 
     def get(self, request, public_id):

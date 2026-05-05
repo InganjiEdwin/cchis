@@ -11,7 +11,7 @@ from .chv_offline import (
     OFFLINE_CHV_UPLOAD_PAYLOAD_VERSION,
     SUPPORTED_PHASE_4_UPLOAD_TYPES,
 )
-from .models import Alert, AlertWorkflowEvent, AlertWorkflowState, CHV, CHVAssignment, CHVCoverageRequest, CHVCoverageRequestEvent, CHVDeviceRegistration, CHVMessage, ContactPreference, DashboardNotification, DashboardNotificationEvent, ETLHeartbeat, ExternalDataElementMapping, ExternalOrgUnitMapping, ExternalSystem, ExternalValueSetMapping, FacilityContact, FacilityReadinessEscalation, FacilityReadinessReview, FacilityReadinessReviewEvent, FacilityReadinessUpdateRequest, FeatureDataset, FeatureDatasetRow, HealthFacility, IngestionRun, InteroperabilityMappingVersion, InteroperabilityRun, InteroperabilityRunError, InteroperabilityRunItem, MessageTemplate, ModelRun, PreparednessAction, PreparednessActionEvent, RiskScore, ScenarioSimulationRun, SensitiveExportDownloadAudit, SensitiveExportRequest, SourceDataUploadArtifact, SourceDataUploadBatch, SourceDataUploadEvent, SourceDataValidationIssue, SyncQueue, TriageSession, UssdMenuVersion, UssdSessionLog, Ward
+from .models import Alert, AlertWorkflowEvent, AlertWorkflowState, CHV, CHVAssignment, CHVCoverageRequest, CHVCoverageRequestEvent, CHVDeviceRegistration, CHVMessage, ContactPreference, DashboardNotification, DashboardNotificationEvent, ETLHeartbeat, ExternalDataElementMapping, ExternalOrgUnitMapping, ExternalSystem, ExternalValueSetMapping, FacilityContact, FacilityReadinessEscalation, FacilityReadinessReview, FacilityReadinessReviewEvent, FacilityReadinessUpdateRequest, FeatureDataset, FeatureDatasetRow, HealthFacility, IngestionRun, InteroperabilityMappingVersion, InteroperabilityRun, InteroperabilityRunError, InteroperabilityRunItem, MessageTemplate, ModelRun, PreparednessAction, PreparednessActionEvent, RiskScore, ScenarioSimulationRun, SensitiveExportDownloadAudit, SensitiveExportRequest, SourceDataConnectorRun, SourceDataFeedModeOverride, SourceDataUploadArtifact, SourceDataUploadBatch, SourceDataUploadEvent, SourceDataValidationIssue, SyncQueue, TriageSession, UssdMenuVersion, UssdSessionLog, Ward
 from .privacy_minimization import (
     PrivacyMinimizationViolation,
     ensure_pii_safe_mapping,
@@ -27,6 +27,14 @@ from .privacy_access import (
     user_can_view_direct_identifiers,
 )
 from .source_data.registry import source_data_feed_definition
+from .source_data.downstream import downstream_actions_for_upload
+from .source_data.connectors import source_data_csv_upload_enabled, source_data_connector_definition
+from .source_data.features import (
+    FEATURE_API_CONNECTORS,
+    FEATURE_FACILITY_READINESS_IMPORT,
+    facility_readiness_snapshot_import_enabled,
+    source_data_api_connectors_enabled,
+)
 
 
 class PiiSafeInputSerializerMixin:
@@ -95,6 +103,9 @@ class SourceDataFeedDefinitionSerializer(serializers.Serializer):
     requires_new_ingestion_path = serializers.BooleanField()
     default_reporting_granularity = serializers.CharField(allow_blank=True)
     feed_policy = serializers.DictField(required=False)
+    feed_mode = serializers.CharField(required=False)
+    csv_upload_enabled = serializers.BooleanField(required=False)
+    connector_status = serializers.DictField(required=False)
 
 
 class SourceDataFeedTypesResponseSerializer(serializers.Serializer):
@@ -104,8 +115,10 @@ class SourceDataFeedTypesResponseSerializer(serializers.Serializer):
     scope = serializers.CharField()
     feed_count = serializers.IntegerField()
     feeds = SourceDataFeedDefinitionSerializer(many=True)
+    feature_flags = serializers.DictField(required=False)
     templates = serializers.DictField()
     template_contract_errors = serializers.ListField(child=serializers.CharField())
+    validation_error_catalog = serializers.DictField(required=False)
 
 
 class SourceDataUploadArtifactSerializer(serializers.ModelSerializer):
@@ -171,6 +184,7 @@ class SourceDataUploadBatchSerializer(serializers.ModelSerializer):
     duplicate_of_public_id = serializers.SerializerMethodField()
     replaces_upload_public_id = serializers.SerializerMethodField()
     validation_summary = serializers.SerializerMethodField()
+    downstream_actions = serializers.SerializerMethodField()
 
     class Meta:
         model = SourceDataUploadBatch
@@ -218,6 +232,7 @@ class SourceDataUploadBatchSerializer(serializers.ModelSerializer):
             "confirmed_at",
             "metadata",
             "validation_summary",
+            "downstream_actions",
             "artifacts",
             "validation_issues",
             "events",
@@ -234,6 +249,9 @@ class SourceDataUploadBatchSerializer(serializers.ModelSerializer):
 
     def get_validation_summary(self, obj):
         return (obj.metadata or {}).get("validation_summary", {})
+
+    def get_downstream_actions(self, obj):
+        return downstream_actions_for_upload(obj)
 
 
 class SourceDataUploadListResponseSerializer(serializers.Serializer):
@@ -280,6 +298,24 @@ class SourceDataUploadCreateSerializer(PiiSafeInputSerializerMixin, serializers.
             raise serializers.ValidationError({"feed_key": "Unsupported source-data feed key."}) from exc
 
         attrs["feed_key"] = definition.feed_key
+        if definition.feed_key == "facility_readiness_snapshot" and not facility_readiness_snapshot_import_enabled():
+            raise serializers.ValidationError(
+                {
+                    "feed_key": (
+                        "Facility readiness snapshot imports are disabled by "
+                        f"{FEATURE_FACILITY_READINESS_IMPORT}."
+                    )
+                }
+            )
+        if not source_data_csv_upload_enabled(definition.feed_key):
+            raise serializers.ValidationError(
+                {
+                    "feed_key": (
+                        "CSV uploads are disabled for this feed because an API connector is authoritative. "
+                        "Ask an administrator to re-enable CSV fallback for corrections."
+                    )
+                }
+            )
         for text_field in (
             "source_name",
             "source_ref",
@@ -329,6 +365,78 @@ class SourceDataUploadCreateSerializer(PiiSafeInputSerializerMixin, serializers.
         return attrs
 
 
+class SourceDataFeedModeUpdateSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = ("reason",)
+
+    feed_mode = serializers.ChoiceField(choices=[choice[0] for choice in SourceDataFeedModeOverride.MODE_CHOICES])
+    csv_upload_enabled = serializers.BooleanField()
+    authoritative_connector_key = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    reason = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        feed_key = self.context.get("feed_key", "")
+        if not source_data_api_connectors_enabled():
+            raise serializers.ValidationError(
+                {"feed_mode": f"API connector feed modes are disabled by {FEATURE_API_CONNECTORS}."}
+            )
+        try:
+            source_data_feed_definition(feed_key)
+        except KeyError as exc:
+            raise serializers.ValidationError({"feed_key": "Unsupported source-data feed key."}) from exc
+
+        connector_key = (attrs.get("authoritative_connector_key") or "").strip()
+        if connector_key:
+            try:
+                connector_definition = source_data_connector_definition(connector_key)
+            except KeyError as exc:
+                raise serializers.ValidationError({"authoritative_connector_key": "Unsupported connector key."}) from exc
+            if connector_definition.target_feed_key != feed_key:
+                raise serializers.ValidationError(
+                    {"authoritative_connector_key": "Connector target feed must match the selected feed."}
+                )
+
+        reason = (attrs.get("reason") or "").strip()
+        if not attrs.get("csv_upload_enabled") and not reason:
+            raise serializers.ValidationError({"reason": "Disabling CSV fallback requires an audit reason."})
+
+        attrs["authoritative_connector_key"] = connector_key
+        attrs["reason"] = reason
+        return attrs
+
+
+class SourceDataConnectorRefreshSerializer(serializers.Serializer):
+    force = serializers.BooleanField(required=False, default=False)
+    options = serializers.DictField(required=False, default=dict)
+
+
+class SourceDataConnectorRunSerializer(serializers.ModelSerializer):
+    upload_batch_public_id = serializers.SerializerMethodField()
+    requested_by_username = serializers.CharField(source="requested_by.username", allow_null=True, read_only=True)
+
+    class Meta:
+        model = SourceDataConnectorRun
+        fields = [
+            "id",
+            "connector_key",
+            "target_feed_key",
+            "feed_mode",
+            "status",
+            "source_name",
+            "source_ref",
+            "fetched_record_count",
+            "upload_batch_public_id",
+            "error_summary",
+            "safe_metadata",
+            "requested_by_username",
+            "started_at",
+            "completed_at",
+        ]
+        read_only_fields = fields
+
+    def get_upload_batch_public_id(self, obj):
+        return str(obj.upload_batch.public_id) if obj.upload_batch_id else None
+
+
 class SourceDataUploadApprovalActionSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
     pii_safe_text_fields = ("reason",)
 
@@ -343,7 +451,7 @@ class SourceDataUploadApprovalActionSerializer(PiiSafeInputSerializerMixin, seri
     def validate(self, attrs):
         action = attrs.get("action")
         reason = (attrs.get("reason") or "").strip()
-        if action in {self.ACTION_REQUEST, self.ACTION_REJECT} and not reason:
+        if action in set(self.ACTION_CHOICES) and not reason:
             raise serializers.ValidationError({"reason": "A reason is required for this approval action."})
         attrs["reason"] = reason
         return attrs
@@ -352,6 +460,58 @@ class SourceDataUploadApprovalActionSerializer(PiiSafeInputSerializerMixin, seri
 class SourceDataUploadConfirmSerializer(serializers.Serializer):
     allow_duplicate_replay = serializers.BooleanField(required=False, default=False)
     force_async = serializers.BooleanField(required=False, default=False)
+
+
+class SourceDataUploadCancelSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = ("reason",)
+
+    reason = serializers.CharField(max_length=1000)
+
+    def validate_reason(self, value):
+        reason = value.strip()
+        if not reason:
+            raise serializers.ValidationError("A cancellation reason is required.")
+        return reason
+
+
+class SourceDataDownstreamActionSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = ("reason",)
+
+    action_key = serializers.CharField(max_length=80)
+    reason = serializers.CharField(required=False, allow_blank=True)
+    as_of = serializers.DateTimeField(required=False, allow_null=True)
+    prediction_date = serializers.DateField(required=False, allow_null=True)
+    prediction_dates = serializers.ListField(
+        child=serializers.DateField(),
+        required=False,
+        allow_empty=True,
+    )
+    start_date = serializers.DateField(required=False, allow_null=True)
+    end_date = serializers.DateField(required=False, allow_null=True)
+    step_days = serializers.IntegerField(required=False, min_value=1, default=1)
+    dataset_role = serializers.ChoiceField(
+        choices=("training", "evaluation"),
+        required=False,
+        default="evaluation",
+    )
+    window_days = serializers.IntegerField(required=False, min_value=1, default=7)
+    include_seeded = serializers.BooleanField(required=False, default=False)
+    include_seeded_surveillance = serializers.BooleanField(required=False, default=False)
+    claimed_forecast_horizon_days = serializers.IntegerField(required=False, min_value=1, max_value=14, default=14)
+    heavy_rain_threshold_mm = serializers.FloatField(required=False, min_value=0, default=50.0)
+    production = serializers.BooleanField(required=False, default=False)
+    replace_existing = serializers.BooleanField(required=False, default=False)
+    force_async = serializers.BooleanField(required=False, default=False)
+
+    def validate(self, attrs):
+        reason = (attrs.get("reason") or "").strip()
+        if attrs.get("production") or attrs.get("replace_existing"):
+            if not reason:
+                raise serializers.ValidationError(
+                    {"reason": "A reason is required for production or replacement downstream actions."}
+                )
+        attrs["reason"] = reason
+        return attrs
 
 
 def validate_pii_safe_serializer_text(value: str, *, field_name: str) -> str:

@@ -178,14 +178,14 @@ SOURCE_DATA_FEED_DECISIONS: tuple[SourceDataFeedDecision, ...] = (
         label="Facility readiness snapshot",
         scope=FEED_SCOPE_MVP,
         domain="facility_readiness",
-        backend_target="new_readiness_snapshot_ingestion_path",
+        backend_target="ingest_facility_readiness_snapshot",
         source_type="readiness_snapshot",
         cadence="weekly_routine_daily_during_alerts",
         ingestion_family=INGESTION_FAMILY_FACILITY_READINESS,
         downstream_action="recompute_readiness_truth_then_facility_burden_forecast",
         required_metadata=("source_name", "source_timestamp", "reporting_period_start", "reporting_period_end"),
-        notes="Canonical CSV path still needs implementation; current readiness workflows are API/review oriented.",
-        requires_new_ingestion_path=True,
+        notes="Canonical facility readiness snapshot CSV for operational stock, staffing, capacity, and service-disruption state.",
+        requires_new_ingestion_path=False,
     ),
     SourceDataFeedDecision(
         feed_key="dhis2_api_scheduled_pull",
@@ -612,8 +612,8 @@ def validate_phase0_contract() -> list[str]:
             errors.append(f"missing_required_metadata:{feed.feed_key}")
 
     readiness = feed_decision_for_key("facility_readiness_snapshot")
-    if not readiness.requires_new_ingestion_path:
-        errors.append("facility_readiness_snapshot_must_mark_new_ingestion_path")
+    if readiness.requires_new_ingestion_path:
+        errors.append("facility_readiness_snapshot_ingestion_path_must_be_active")
 
     for role in (User.ROLE_ADMIN, User.ROLE_SUPERVISOR, User.ROLE_ANALYST, User.ROLE_CHV, "SUPERUSER"):
         if role not in ROLE_PERMISSION_MAP:

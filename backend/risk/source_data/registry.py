@@ -19,6 +19,7 @@ from risk.surveillance_ingestion import (
     adapter_spec_for_surveillance_source_type,
     feed_policy_for_surveillance_source_type,
 )
+from risk.source_data.connectors import source_data_connector_state_for_feed
 
 
 SOURCE_DATA_FEED_REGISTRY_SCHEMA_VERSION = "source-data-feed-registry-v1"
@@ -52,6 +53,7 @@ class SourceDataFeedDefinition:
         payload["required_any_columns"] = [list(group) for group in self.required_any_columns]
         payload["accepted_columns"] = list(self.accepted_columns)
         payload["feed_policy"] = self.feed_policy or {}
+        payload.update(source_data_connector_state_for_feed(self.feed_key))
         return payload
 
 
@@ -146,7 +148,7 @@ def _definition_from_readiness_decision(decision: SourceDataFeedDecision) -> Sou
             "zinc_available",
         ),
         template_url=f"/source-data/templates/{decision.feed_key}/",
-        requires_new_ingestion_path=True,
+        requires_new_ingestion_path=decision.requires_new_ingestion_path,
     )
 
 
@@ -183,4 +185,3 @@ def build_source_data_feed_types_payload() -> dict[str, Any]:
         "feed_count": len(feeds),
         "feeds": feeds,
     }
-

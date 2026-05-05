@@ -95,10 +95,21 @@ TIME_ZONE = "Africa/Nairobi"
 USE_I18N = True
 USE_TZ = True
 
-STATIC_URL = "static/"
+STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "accounts.User"
 
+SOURCE_DATA_OPS_ENABLED = config("SOURCE_DATA_OPS_ENABLED", cast=bool, default=True)
+SOURCE_DATA_IMPORT_CONFIRM_ENABLED = config("SOURCE_DATA_IMPORT_CONFIRM_ENABLED", cast=bool, default=True)
+SOURCE_DATA_DOWNSTREAM_ACTIONS_ENABLED = config("SOURCE_DATA_DOWNSTREAM_ACTIONS_ENABLED", cast=bool, default=True)
+FACILITY_READINESS_SNAPSHOT_IMPORT_ENABLED = config(
+    "FACILITY_READINESS_SNAPSHOT_IMPORT_ENABLED",
+    cast=bool,
+    default=True,
+)
+SOURCE_DATA_API_CONNECTORS_ENABLED = config("SOURCE_DATA_API_CONNECTORS_ENABLED", cast=bool, default=True)
+SOURCE_DATA_PHASE_AUDIT_REQUIRED = config("SOURCE_DATA_PHASE_AUDIT_REQUIRED", cast=bool, default=False)
 SOURCE_DATA_UPLOAD_STORAGE_BACKEND = config("SOURCE_DATA_UPLOAD_STORAGE_BACKEND", default="shared_filesystem")
 SOURCE_DATA_UPLOAD_ROOT = Path(
     config("SOURCE_DATA_UPLOAD_ROOT", default="/var/lib/cchis/source_uploads")
@@ -123,6 +134,48 @@ SOURCE_DATA_LARGE_DELTA_APPROVAL_ROW_THRESHOLD = config(
     cast=int,
     default=10000,
 )
+SOURCE_DATA_TASK_STALE_MINUTES = config("SOURCE_DATA_TASK_STALE_MINUTES", cast=int, default=30)
+SOURCE_DATA_OPERATIONS_ALERT_LOOKBACK_HOURS = config(
+    "SOURCE_DATA_OPERATIONS_ALERT_LOOKBACK_HOURS",
+    cast=int,
+    default=24,
+)
+SOURCE_DATA_FAILED_IMPORT_ALERT_THRESHOLD = config(
+    "SOURCE_DATA_FAILED_IMPORT_ALERT_THRESHOLD",
+    cast=int,
+    default=3,
+)
+SOURCE_DATA_ARTIFACT_CLEANUP_HOUR = config("SOURCE_DATA_ARTIFACT_CLEANUP_HOUR", cast=int, default=2)
+SOURCE_DATA_ARTIFACT_CLEANUP_MINUTE = config("SOURCE_DATA_ARTIFACT_CLEANUP_MINUTE", cast=int, default=15)
+SOURCE_DATA_CONNECTOR_FIXTURE_DIR = config("SOURCE_DATA_CONNECTOR_FIXTURE_DIR", default="")
+SOURCE_DATA_DHIS2_BASE_URL = config("SOURCE_DATA_DHIS2_BASE_URL", default="")
+SOURCE_DATA_DHIS2_USERNAME = config("SOURCE_DATA_DHIS2_USERNAME", default="")
+SOURCE_DATA_DHIS2_PASSWORD = config("SOURCE_DATA_DHIS2_PASSWORD", default="")
+SOURCE_DATA_DHIS2_MAPPING_JSON = config("SOURCE_DATA_DHIS2_MAPPING_JSON", default="")
+SOURCE_DATA_DHIS2_CANONICAL_CSV_URL = config("SOURCE_DATA_DHIS2_CANONICAL_CSV_URL", default="")
+SOURCE_DATA_OPENMRS_BASE_URL = config("SOURCE_DATA_OPENMRS_BASE_URL", default="")
+SOURCE_DATA_OPENMRS_CLIENT_ID = config("SOURCE_DATA_OPENMRS_CLIENT_ID", default="")
+SOURCE_DATA_OPENMRS_CLIENT_SECRET = config("SOURCE_DATA_OPENMRS_CLIENT_SECRET", default="")
+SOURCE_DATA_OPENMRS_MAPPING_JSON = config("SOURCE_DATA_OPENMRS_MAPPING_JSON", default="")
+SOURCE_DATA_OPENMRS_CANONICAL_CSV_URL = config("SOURCE_DATA_OPENMRS_CANONICAL_CSV_URL", default="")
+SOURCE_DATA_WORLDPOP_KNBS_SOURCE_URL = config("SOURCE_DATA_WORLDPOP_KNBS_SOURCE_URL", default="")
+SOURCE_DATA_WORLDPOP_KNBS_RELEASE_VERSION = config("SOURCE_DATA_WORLDPOP_KNBS_RELEASE_VERSION", default="")
+SOURCE_DATA_WORLDPOP_KNBS_CANONICAL_CSV_URL = config("SOURCE_DATA_WORLDPOP_KNBS_CANONICAL_CSV_URL", default="")
+SOURCE_DATA_OSM_OVERPASS_ENDPOINT = config("SOURCE_DATA_OSM_OVERPASS_ENDPOINT", default="")
+SOURCE_DATA_OSM_OVERPASS_QUERY_REF = config("SOURCE_DATA_OSM_OVERPASS_QUERY_REF", default="")
+SOURCE_DATA_OSM_OVERPASS_CANONICAL_CSV_URL = config("SOURCE_DATA_OSM_OVERPASS_CANONICAL_CSV_URL", default="")
+SOURCE_DATA_LOGISTICS_BASE_URL = config("SOURCE_DATA_LOGISTICS_BASE_URL", default="")
+SOURCE_DATA_LOGISTICS_CLIENT_ID = config("SOURCE_DATA_LOGISTICS_CLIENT_ID", default="")
+SOURCE_DATA_LOGISTICS_CLIENT_SECRET = config("SOURCE_DATA_LOGISTICS_CLIENT_SECRET", default="")
+SOURCE_DATA_LOGISTICS_MAPPING_JSON = config("SOURCE_DATA_LOGISTICS_MAPPING_JSON", default="")
+SOURCE_DATA_LOGISTICS_CANONICAL_CSV_URL = config("SOURCE_DATA_LOGISTICS_CANONICAL_CSV_URL", default="")
+SOURCE_DATA_SCHEDULED_CONNECTOR_KEYS = tuple(
+    connector_key.strip()
+    for connector_key in config("SOURCE_DATA_SCHEDULED_CONNECTOR_KEYS", default="dhis2_surveillance_weekly").split(",")
+    if connector_key.strip()
+)
+SOURCE_DATA_CONNECTOR_REFRESH_HOUR = config("SOURCE_DATA_CONNECTOR_REFRESH_HOUR", cast=int, default=5)
+SOURCE_DATA_CONNECTOR_REFRESH_MINUTE = config("SOURCE_DATA_CONNECTOR_REFRESH_MINUTE", cast=int, default=45)
 
 USE_X_FORWARDED_HOST = config("USE_X_FORWARDED_HOST", cast=bool, default=False)
 TRUST_X_FORWARDED_FOR = config("TRUST_X_FORWARDED_FOR", cast=bool, default=False)
@@ -195,6 +248,8 @@ REST_FRAMEWORK = {
         "auth_recovery": config("THROTTLE_AUTH_RECOVERY", default="20/hour"),
         "auth_write": config("THROTTLE_AUTH_WRITE", default="60/minute"),
         "public_ussd": config("THROTTLE_PUBLIC_USSD", default="120/minute"),
+        "source_data_upload": config("THROTTLE_SOURCE_DATA_UPLOAD", default="20/hour"),
+        "source_data_validate": config("THROTTLE_SOURCE_DATA_VALIDATE", default="60/hour"),
     },
     "DEFAULT_RENDERER_CLASSES": [
         "rest_framework.renderers.JSONRenderer",
@@ -364,7 +419,28 @@ CELERY_BEAT_SCHEDULE = {
             "horizon_days": 7,
         },
     },
+    "source-data-upload-artifact-cleanup": {
+        "task": "risk.tasks.cleanup_source_data_upload_artifacts_task",
+        "schedule": crontab(
+            hour=SOURCE_DATA_ARTIFACT_CLEANUP_HOUR,
+            minute=SOURCE_DATA_ARTIFACT_CLEANUP_MINUTE,
+        ),
+    },
 }
+if SOURCE_DATA_API_CONNECTORS_ENABLED:
+    for connector_key in SOURCE_DATA_SCHEDULED_CONNECTOR_KEYS:
+        CELERY_BEAT_SCHEDULE[f"source-data-connector-{connector_key}-refresh"] = {
+            "task": "risk.tasks.run_source_data_connector_refresh_task",
+            "schedule": crontab(
+                hour=SOURCE_DATA_CONNECTOR_REFRESH_HOUR,
+                minute=SOURCE_DATA_CONNECTOR_REFRESH_MINUTE,
+            ),
+            "kwargs": {
+                "connector_key": connector_key,
+                "force": False,
+                "options": {"execution_mode": "scheduled"},
+            },
+        }
 
 EMAIL_PROVIDER = config(
     "EMAIL_PROVIDER",

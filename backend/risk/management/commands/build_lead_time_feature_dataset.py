@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 from django.core.management.base import BaseCommand, CommandError
 
@@ -10,6 +10,13 @@ def _parse_date(value: str) -> date:
         return date.fromisoformat(value)
     except ValueError as error:
         raise CommandError(f"Invalid date '{value}'. Expected YYYY-MM-DD.") from error
+
+
+def _parse_datetime(value: str) -> datetime:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise CommandError(f"Invalid datetime '{value}'. Expected ISO-8601 timestamp.") from error
 
 
 class Command(BaseCommand):
@@ -25,6 +32,11 @@ class Command(BaseCommand):
         parser.add_argument("--start-date", default="", help="First prediction date for a generated date range.")
         parser.add_argument("--end-date", default="", help="Final prediction date for a generated date range.")
         parser.add_argument("--step-days", type=int, default=1)
+        parser.add_argument(
+            "--source-cutoff-as-of",
+            default="",
+            help="Maximum source cutoff timestamp to apply in addition to each prediction date cutoff.",
+        )
         parser.add_argument(
             "--include-seeded-surveillance",
             action="store_true",
@@ -42,6 +54,7 @@ class Command(BaseCommand):
         prediction_dates = [_parse_date(value) for value in options["prediction_date"]]
         start_date = _parse_date(options["start_date"]) if options["start_date"] else None
         end_date = _parse_date(options["end_date"]) if options["end_date"] else None
+        source_cutoff_as_of = _parse_datetime(options["source_cutoff_as_of"]) if options["source_cutoff_as_of"] else None
 
         try:
             snapshot = build_lead_time_feature_dataset(
@@ -49,6 +62,7 @@ class Command(BaseCommand):
                 start_date=start_date,
                 end_date=end_date,
                 step_days=options["step_days"],
+                source_cutoff_as_of=source_cutoff_as_of,
                 include_seeded_surveillance=options["include_seeded_surveillance"],
                 heavy_rain_threshold_mm=options["heavy_rain_threshold_mm"],
                 claimed_forecast_horizon_days=options["claimed_forecast_horizon_days"],

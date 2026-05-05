@@ -441,6 +441,28 @@ class LeadTimeFeaturePhaseTwoTestCase(TestCase):
         self.assertEqual(dataset.lineage_metadata["coverage"]["rows_with_observed_rainfall_records"], 1)
         self.assertEqual(dataset.lineage_metadata["coverage"]["rows_with_forecast_rainfall_records"], 0)
 
+    def test_lead_time_feature_dataset_honors_explicit_source_cutoff_as_of(self):
+        prediction_date = timezone.localdate() + timedelta(days=3)
+        prediction_cutoff = self._cutoff_for_prediction_date(prediction_date)
+        requested_as_of = prediction_cutoff - timedelta(days=2)
+        self._create_population_sources(recorded_at=requested_as_of - timedelta(days=1))
+        self._create_rainfall_run(observed_at=requested_as_of - timedelta(hours=2), rainfall_mm=14)
+        self._create_rainfall_run(observed_at=requested_as_of + timedelta(hours=2), rainfall_mm=99)
+
+        snapshot = build_lead_time_feature_dataset(
+            [self.ward],
+            prediction_dates=[prediction_date],
+            source_cutoff_as_of=requested_as_of,
+        )
+
+        dataset = snapshot.feature_dataset
+        row = FeatureDatasetRow.objects.get(dataset=dataset)
+        values = row.feature_values
+        self.assertEqual(values["source_cutoff_timestamp"], requested_as_of.isoformat())
+        self.assertEqual(values["observed_rainfall_total_3d"], 14)
+        self.assertEqual(dataset.lineage_metadata["source_cutoff_as_of"], requested_as_of.isoformat())
+        self.assertTrue(dataset.lineage_metadata["source_cutoff_as_of_applied"])
+
     def test_phase_3_spatial_features_use_relationship_graph_and_cutoff_safe_neighbor_inputs(self):
         prediction_date = timezone.localdate() + timedelta(days=1)
         source_cutoff = self._cutoff_for_prediction_date(prediction_date)

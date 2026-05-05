@@ -125,6 +125,14 @@ def _prediction_source_cutoff(prediction_date: date) -> datetime:
     return _normalise_aware(datetime.combine(prediction_date, time.min))
 
 
+def _effective_source_cutoff(prediction_date: date, source_cutoff_as_of: datetime | None = None) -> datetime:
+    prediction_cutoff = _prediction_source_cutoff(prediction_date)
+    if source_cutoff_as_of is None:
+        return prediction_cutoff
+    normalised_as_of = _normalise_aware(source_cutoff_as_of)
+    return min(prediction_cutoff, normalised_as_of)
+
+
 def _inclusive_as_of_for_exclusive_cutoff(source_cutoff: datetime) -> datetime:
     return source_cutoff - timedelta(microseconds=1)
 
@@ -1487,6 +1495,7 @@ def build_lead_time_feature_dataset(
     start_date: date | None = None,
     end_date: date | None = None,
     step_days: int = 1,
+    source_cutoff_as_of: datetime | None = None,
     include_seeded_surveillance: bool = False,
     heavy_rain_threshold_mm: float = DEFAULT_HEAVY_RAIN_THRESHOLD_MM,
     claimed_forecast_horizon_days: int = DEFAULT_CLAIMED_FORECAST_HORIZON_DAYS,
@@ -1511,7 +1520,7 @@ def build_lead_time_feature_dataset(
     population_exposure_feature_datasets: list[FeatureDataset] = []
 
     for prediction_date in prediction_date_list:
-        source_cutoff = _prediction_source_cutoff(prediction_date)
+        source_cutoff = _effective_source_cutoff(prediction_date, source_cutoff_as_of=source_cutoff_as_of)
         population_as_of = _inclusive_as_of_for_exclusive_cutoff(source_cutoff)
         population_snapshot = build_population_exposure_feature_dataset(
             ward_list,
@@ -1800,6 +1809,8 @@ def build_lead_time_feature_dataset(
             "generation_mode": LEAD_TIME_FEATURE_GENERATION_MODE,
             "prediction_dates": [item.isoformat() for item in prediction_date_list],
             "source_cutoff_policy": LEAD_TIME_SOURCE_CUTOFF_POLICY,
+            "source_cutoff_as_of": source_cutoff_as_of.isoformat() if source_cutoff_as_of else None,
+            "source_cutoff_as_of_applied": source_cutoff_as_of is not None,
             "rainfall_windows_days": list(LEAD_TIME_RAINFALL_WINDOWS_DAYS),
             "rainfall_window_mode": "trailing_observed_climate_records_before_prediction_date",
             "climate_coverage_schema_version": LEAD_TIME_CLIMATE_COVERAGE_SCHEMA_VERSION,

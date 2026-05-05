@@ -23,8 +23,10 @@ from .models import (
     FacilityForecast,
     FacilityContact,
     FacilityReadinessEscalation,
+    FacilityReadinessFreshness,
     FacilityReadinessReview,
     FacilityReadinessReviewEvent,
+    FacilityReadinessSnapshot,
     FacilityReadinessUpdateRequest,
     FeatureDatasetRow,
     HealthFacility,
@@ -7127,6 +7129,26 @@ def _facility_surge_risk_from_forecast_state(readiness_state: str | None) -> str
     return "LOW"
 
 
+def _facility_staffing_required_from_level(facility: HealthFacility) -> int:
+    if facility.level == HealthFacility.LEVEL_5:
+        return 15
+    if facility.level == HealthFacility.LEVEL_4:
+        return 10
+    return 6
+
+
+def _latest_facility_readiness_snapshot_for_facility(facility: HealthFacility) -> FacilityReadinessSnapshot | None:
+    return facility.readiness_snapshots.select_related("ingestion_run", "source").order_by("-reported_at", "-created_at").first()
+
+
+def _dashboard_freshness_from_readiness_snapshot(snapshot: FacilityReadinessSnapshot) -> str:
+    if snapshot.freshness_state == FacilityReadinessFreshness.STALE:
+        return "STALE"
+    if snapshot.freshness_state == FacilityReadinessFreshness.DELAYED:
+        return "WARNING"
+    return "FRESH"
+
+
 def build_facility_intelligence_snapshot(
     facility: HealthFacility,
     *,
@@ -7147,6 +7169,7 @@ def build_facility_intelligence_snapshot(
     chv_operations = _facility_chv_operations_navigation_payload(facility, user=user)
     promoted_forecast = latest_promoted_facility_forecast_for_facility(facility)
     latest_forecast = promoted_forecast or latest_facility_forecast_for_facility(facility)
+    latest_readiness_snapshot = _latest_facility_readiness_snapshot_for_facility(facility)
     population_exposure_context = build_population_exposure_context_for_facility(facility)
 
     ward_risk_level = latest_risk.risk_level if latest_risk else facility.ward.current_risk_level
@@ -7170,7 +7193,61 @@ def build_facility_intelligence_snapshot(
     )
     proxy_staffing_percent = round((proxy_staffing_filled / proxy_staffing_required) * 100) if proxy_staffing_required else 0
 
-    if latest_forecast and latest_forecast.forecast_run.status == latest_forecast.forecast_run.STATUS_SUCCESS:
+    if latest_readiness_snapshot is not None:
+        projected_cases = proxy_projected_cases
+        surge_risk = _facility_surge_risk_from_forecast_state(latest_readiness_snapshot.readiness_state)
+        ors_estimate_percent = min(100, round((latest_readiness_snapshot.ors_sachets_available / 100) * 100))
+        staffing_required = _facility_staffing_required_from_level(facility)
+        staffing_filled = latest_readiness_snapshot.staff_on_duty
+        staffing_percent = min(100, round((staffing_filled / staffing_required) * 100)) if staffing_required else 0
+        readiness_mode = "source_backed_facility_readiness_snapshot"
+        readiness_backing_source = (
+            "seeded_demo_readiness_snapshot"
+            if latest_readiness_snapshot.source_kind == "seeded_demo"
+            else "source_readiness_snapshot"
+        )
+        dashboard_truth_state = "demo_backed" if latest_readiness_snapshot.source_kind == "seeded_demo" else "source_backed"
+        driving_ward_ids = [facility.ward_id]
+        action_reasoning = [
+            "A source-data facility readiness snapshot is driving this readiness summary.",
+            "Stock, staffing, referral, and service-disruption fields are stored separately from facility contacts.",
+            "This readiness evidence updates facility context but does not send alerts or promote a model.",
+        ]
+        stockout_flags = (latest_readiness_snapshot.raw_payload or {}).get("stockout_flags") or []
+        status_banner_label = (
+            "Source snapshot indicates facility capacity concern"
+            if surge_risk == "EXTREME"
+            else "Source snapshot indicates readiness watch"
+            if surge_risk == "MODERATE"
+            else "Source snapshot indicates routine readiness"
+        )
+        context_summary = (
+            f"{facility.name} is using a source-backed readiness snapshot reported "
+            f"{latest_readiness_snapshot.reported_at:%Y-%m-%d}."
+        )
+        forecast_summary = {
+            "source_kind": "direct_readiness_snapshot",
+            "governance_mode": "source_backed",
+            "model_version": None,
+            "forecast_mode": "source_backed_facility_readiness_snapshot",
+            "projected_pressure_score": max(0, min(100, round(100 - latest_readiness_snapshot.readiness_score))),
+            "projected_readiness_state": latest_readiness_snapshot.readiness_state,
+            "driving_ward_ids": driving_ward_ids,
+            "dashboard_truth_state": dashboard_truth_state,
+            "readiness_snapshot": {
+                "snapshot_id": latest_readiness_snapshot.id,
+                "ingestion_run_id": latest_readiness_snapshot.ingestion_run_id,
+                "source_kind": latest_readiness_snapshot.source_kind,
+                "reported_at": latest_readiness_snapshot.reported_at,
+                "freshness_state": latest_readiness_snapshot.freshness_state,
+                "readiness_score": latest_readiness_snapshot.readiness_score,
+                "stockout_flags": stockout_flags,
+                "service_disruption": latest_readiness_snapshot.service_disruption,
+                "referral_available": latest_readiness_snapshot.referral_available,
+            },
+        }
+        readiness_freshness_state = _dashboard_freshness_from_readiness_snapshot(latest_readiness_snapshot)
+    elif latest_forecast and latest_forecast.forecast_run.status == latest_forecast.forecast_run.STATUS_SUCCESS:
         projected_cases = latest_forecast.projected_case_burden
         surge_risk = _facility_surge_risk_from_forecast_state(latest_forecast.projected_readiness_state)
         ors_state = str((latest_forecast.surge_threshold_state or {}).get("ors", "low")).upper()
@@ -7310,14 +7387,23 @@ def build_facility_intelligence_snapshot(
     status_banner_label = locals().get("status_banner_label", inferred_status_banner_label)
     context_summary = locals().get("context_summary", inferred_context_summary)
 
-    freshness_state = _facility_freshness_state(
-        latest_forecast.generated_at if latest_forecast else facility.updated_at
+    freshness_timestamp = (
+        latest_readiness_snapshot.reported_at
+        if latest_readiness_snapshot is not None
+        else latest_forecast.generated_at
+        if latest_forecast
+        else facility.updated_at
     )
+    freshness_state = locals().get("readiness_freshness_state") or _facility_freshness_state(freshness_timestamp)
 
     is_stale = True
-    freshness_updated_at = latest_forecast.generated_at if latest_forecast else facility.updated_at
+    freshness_updated_at = freshness_timestamp
     if freshness_updated_at is not None:
-        is_stale = (timezone.now() - freshness_updated_at).total_seconds() / 60 > stale_threshold_minutes
+        is_stale = (
+            latest_readiness_snapshot.freshness_state == FacilityReadinessFreshness.STALE
+            if latest_readiness_snapshot is not None
+            else (timezone.now() - freshness_updated_at).total_seconds() / 60 > stale_threshold_minutes
+        )
 
     timeline = [
         {
@@ -7334,6 +7420,28 @@ def build_facility_intelligence_snapshot(
             "details": [f"Facility code: {facility.facility_code}"],
         }
     ]
+
+    if latest_readiness_snapshot is not None:
+        timeline.insert(
+            0,
+            {
+                "id": f"facility-readiness-snapshot-{latest_readiness_snapshot.id}",
+                "title": "Source-backed readiness snapshot available",
+                "description": (
+                    "Facility stock, staffing, referral, and service-disruption fields were imported through "
+                    "the source-data readiness snapshot feed."
+                ),
+                "timestamp": latest_readiness_snapshot.reported_at,
+                "tone": "danger" if latest_readiness_snapshot.readiness_state == "capacity_concern" else "warning" if latest_readiness_snapshot.readiness_state == "watch" else "success",
+                "category": "system",
+                "meta": f"Source kind: {latest_readiness_snapshot.source_kind}",
+                "details": [
+                    f"Readiness state: {latest_readiness_snapshot.readiness_state}",
+                    f"Readiness score: {latest_readiness_snapshot.readiness_score}",
+                    f"Ingestion run: {latest_readiness_snapshot.ingestion_run_id}",
+                ],
+            }
+        )
 
     if population_exposure_context["coverage"]["record_count"]:
         factor_labels = [

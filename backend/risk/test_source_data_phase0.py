@@ -66,7 +66,7 @@ class SourceDataPhaseZeroContractTests(SimpleTestCase):
             feed_decision_for_key("facility_catchment_mapping").source_type,
             PopulationExposureSource.SOURCE_TYPE_CATCHMENT_MAPPING,
         )
-        self.assertTrue(feed_decision_for_key("facility_readiness_snapshot").requires_new_ingestion_path)
+        self.assertFalse(feed_decision_for_key("facility_readiness_snapshot").requires_new_ingestion_path)
 
     def test_role_permissions_and_maker_checker_policy_are_locked(self):
         self.assertIn("source_data:replace_import", ROLE_PERMISSION_MAP[User.ROLE_ADMIN])

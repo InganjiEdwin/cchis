@@ -12,6 +12,7 @@ from django.utils import timezone
 from accounts.models import User
 
 from risk.models import (
+    FacilityReadinessIngestionRun,
     PopulationExposureIngestionRun,
     SourceDataUploadArtifact,
     SourceDataUploadBatch,
@@ -19,8 +20,15 @@ from risk.models import (
     SourceDataValidationIssue,
     SurveillanceIngestionRun,
 )
+from risk.facility_readiness_ingestion import run_facility_readiness_snapshot_ingestion
 from risk.population_exposure_ingestion import run_population_exposure_csv_ingestion
 from risk.source_data.events import record_source_data_upload_system_event
+from risk.source_data.features import (
+    FEATURE_FACILITY_READINESS_IMPORT,
+    FEATURE_IMPORT_CONFIRM,
+    facility_readiness_snapshot_import_enabled,
+    require_source_data_feature,
+)
 from risk.source_data.phase0 import (
     INGESTION_FAMILY_FACILITY_READINESS,
     INGESTION_FAMILY_POPULATION_EXPOSURE,
@@ -68,6 +76,29 @@ def duplicate_replay_requires_approval(batch: SourceDataUploadBatch) -> bool:
     return bool(metadata.get("duplicate_file_sha256") and metadata.get("duplicate_metadata_upload_public_id"))
 
 
+def _validation_summary(batch: SourceDataUploadBatch) -> dict[str, Any]:
+    return (batch.metadata or {}).get("validation_summary") or {}
+
+
+def _contains_production_surveillance_truth(batch: SourceDataUploadBatch) -> bool:
+    if not batch.feed_key.startswith("surveillance_"):
+        return False
+    summary = _validation_summary(batch)
+    truth_level_counts = summary.get("truth_level_counts") or {}
+    case_class_counts = summary.get("case_class_counts") or {}
+
+    def count(mapping: dict[str, Any], key: str) -> int:
+        try:
+            return int(mapping.get(key) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    return bool(
+        count(truth_level_counts, "confirmed_surveillance") > 0
+        or count(case_class_counts, "confirmed") > 0
+    )
+
+
 def source_data_import_risk_category(batch: SourceDataUploadBatch) -> str:
     correction_mode = (batch.correction_mode or "").strip()
     if duplicate_replay_requires_approval(batch):
@@ -78,13 +109,11 @@ def source_data_import_risk_category(batch: SourceDataUploadBatch) -> str:
         return RISK_HISTORICAL_BACKFILL
     if correction_mode == SurveillanceIngestionRun.CORRECTION_AMENDMENT:
         return RISK_REPLACEMENT_IMPORT
+    if _contains_production_surveillance_truth(batch):
+        return RISK_PRODUCTION_SURVEILLANCE_TRUTH
     if batch.row_count >= getattr(settings, "SOURCE_DATA_LARGE_DELTA_APPROVAL_ROW_THRESHOLD", 10000):
         return RISK_UNUSUALLY_LARGE_SOURCE_DELTA
     return ROUTINE_APPROVAL_CATEGORY
-
-
-def _validation_summary(batch: SourceDataUploadBatch) -> dict[str, Any]:
-    return (batch.metadata or {}).get("validation_summary") or {}
 
 
 def _assert_validated_artifact_unchanged(batch: SourceDataUploadBatch) -> SourceDataUploadArtifact:
@@ -112,6 +141,12 @@ def _assert_reason_requirements(batch: SourceDataUploadBatch, risk_category: str
         raise ValueError("Replacement imports require an explicit replacement reason.")
 
 
+def _assert_feed_import_feature_enabled(batch: SourceDataUploadBatch) -> None:
+    definition = source_data_feed_definition(batch.feed_key)
+    if definition.ingestion_family == INGESTION_FAMILY_FACILITY_READINESS and not facility_readiness_snapshot_import_enabled():
+        raise ValueError(f"Facility readiness snapshot imports are disabled by {FEATURE_FACILITY_READINESS_IMPORT}.")
+
+
 def _approval_is_expired(batch: SourceDataUploadBatch) -> bool:
     return bool(batch.approval_expires_at and batch.approval_expires_at <= timezone.now())
 
@@ -127,6 +162,7 @@ def assert_source_data_upload_can_confirm(
         raise ValueError("Upload validation must pass before confirmation.")
     if batch.validation_issues.filter(severity=SourceDataValidationIssue.SEVERITY_ERROR).exists():
         raise ValueError("Upload has validation errors and cannot be confirmed.")
+    _assert_feed_import_feature_enabled(batch)
 
     artifact = _assert_validated_artifact_unchanged(batch)
     risk_category = source_data_import_risk_category(batch)
@@ -165,6 +201,8 @@ def request_source_data_upload_approval(
         batch.save(update_fields=["approval_status", "approval_risk_category", "approval_reason", "updated_at"])
         return batch
     _assert_reason_requirements(batch, risk_category)
+    if not reason.strip():
+        raise ValueError("A reason is required when requesting maker-checker approval.")
 
     batch.approval_status = SourceDataUploadBatch.APPROVAL_PENDING
     batch.approval_risk_category = risk_category
@@ -208,6 +246,8 @@ def decide_source_data_upload_approval(
         raise ValueError("Maker-checker approval has expired.")
     if batch.approval_requested_by_id == decided_by.id or batch.created_by_id == decided_by.id:
         raise ValueError("The uploader/requester cannot approve their own risky import.")
+    if not reason.strip():
+        raise ValueError("A reason is required for maker-checker approval decisions.")
 
     if action == "approve":
         batch.approval_status = SourceDataUploadBatch.APPROVAL_APPROVED
@@ -217,8 +257,7 @@ def decide_source_data_upload_approval(
         raise ValueError("Unsupported approval action.")
     batch.approved_by = decided_by
     batch.approved_at = timezone.now()
-    if reason.strip():
-        batch.approval_reason = reason.strip()
+    batch.approval_reason = reason.strip()
     batch.save(
         update_fields=[
             "approval_status",
@@ -292,7 +331,19 @@ def _execute_domain_import(
         )
 
     if definition.ingestion_family == INGESTION_FAMILY_FACILITY_READINESS:
-        raise ValueError("Facility readiness snapshot import is implemented in Phase 6.")
+        if not facility_readiness_snapshot_import_enabled():
+            raise ValueError(f"Facility readiness snapshot imports are disabled by {FEATURE_FACILITY_READINESS_IMPORT}.")
+        return run_facility_readiness_snapshot_ingestion(
+            file_path=artifact_path,
+            source_name=batch.source_name,
+            source_type=batch.source_type,
+            source_timestamp=batch.source_timestamp,
+            reporting_period_start=batch.reporting_period_start,
+            reporting_period_end=batch.reporting_period_end,
+            source_ref=batch.source_ref,
+            operator_note=batch.operator_note,
+            execution_mode=FacilityReadinessIngestionRun.EXECUTION_MANUAL,
+        )
     raise ValueError(f"Unsupported source-data ingestion family: {definition.ingestion_family}")
 
 
@@ -305,6 +356,10 @@ def _link_domain_run(batch: SourceDataUploadBatch, run) -> None:
         batch.domain_ingestion_run_type = "population_exposure"
         batch.domain_ingestion_run_id = run.id
         batch.population_exposure_ingestion_run = run
+    elif isinstance(run, FacilityReadinessIngestionRun):
+        batch.domain_ingestion_run_type = "facility_readiness"
+        batch.domain_ingestion_run_id = run.id
+        batch.facility_readiness_ingestion_run_id = run.id
     else:
         raise ValueError("Unsupported domain ingestion run type.")
 
@@ -315,6 +370,7 @@ def run_confirmed_source_data_import(
     actor=None,
     worker_execution: bool = False,
 ) -> SourceDataUploadBatch:
+    require_source_data_feature(FEATURE_IMPORT_CONFIRM)
     batch = SourceDataUploadBatch.objects.select_related(
         "replaces_upload",
         "population_exposure_ingestion_run",
@@ -337,7 +393,12 @@ def run_confirmed_source_data_import(
         batch.rejected_count = run.records_rejected
         batch.import_status = (
             SourceDataUploadBatch.IMPORT_FAILED
-            if run.status in {SurveillanceIngestionRun.STATUS_FAILED, PopulationExposureIngestionRun.STATUS_FAILED}
+            if run.status
+            in {
+                SurveillanceIngestionRun.STATUS_FAILED,
+                PopulationExposureIngestionRun.STATUS_FAILED,
+                FacilityReadinessIngestionRun.STATUS_FAILED,
+            }
             else SourceDataUploadBatch.IMPORT_IMPORTED
         )
         batch.status = (
@@ -368,6 +429,7 @@ def run_confirmed_source_data_import(
                 "domain_ingestion_run_id",
                 "surveillance_ingestion_run",
                 "population_exposure_ingestion_run",
+                "facility_readiness_ingestion_run_id",
                 "metadata",
                 "updated_at",
             ]
@@ -414,6 +476,7 @@ def confirm_source_data_upload(
     allow_duplicate_replay: bool = False,
     force_async: bool = False,
 ) -> SourceDataUploadBatch:
+    require_source_data_feature(FEATURE_IMPORT_CONFIRM)
     if not _is_admin_or_supervisor(confirmed_by):
         raise ValueError("Only admins or supervisors can confirm source-data imports.")
 

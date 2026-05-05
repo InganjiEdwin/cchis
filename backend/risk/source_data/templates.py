@@ -270,7 +270,7 @@ SOURCE_DATA_CSV_TEMPLATES: dict[str, SourceDataTemplateDefinition] = {
         ),
         example_row={
             "facility_code": "FAC-MIG-001",
-            "facility_name": "Example Health Facility",
+            "facility_name": "Got Kachola Dispensary",
             "ward_code": "MIG-WARD-001",
             "reported_at": "2026-05-05T08:00:00+03:00",
             "ors_sachets_available": "120",
@@ -369,4 +369,3 @@ def build_source_data_csv_template_file(feed_key: str) -> dict[str, str | int | 
         "payload": payload,
         "payload_sha256": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
     }
-

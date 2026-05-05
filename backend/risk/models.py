@@ -3160,6 +3160,205 @@ class CatchmentPopulationRecord(models.Model):
         return f"{self.facility.name} catchment {self.catchment_population_estimate}"
 
 
+class FacilityReadinessSource(models.Model):
+    SOURCE_TYPE_READINESS_SNAPSHOT = "readiness_snapshot"
+    SOURCE_TYPE_CHOICES = [
+        (SOURCE_TYPE_READINESS_SNAPSHOT, "Readiness snapshot"),
+    ]
+
+    source_name = models.CharField(max_length=120)
+    source_type = models.CharField(max_length=40, choices=SOURCE_TYPE_CHOICES, default=SOURCE_TYPE_READINESS_SNAPSHOT)
+    source_timestamp = models.DateTimeField(null=True, blank=True)
+    submitted_at = models.DateTimeField(default=timezone.now)
+    reporting_period_start = models.DateField(null=True, blank=True)
+    reporting_period_end = models.DateField(null=True, blank=True)
+    source_ref = models.CharField(max_length=255, blank=True)
+    operator_note = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-submitted_at", "source_name"]
+        indexes = [
+            models.Index(fields=["source_type", "reporting_period_start"], name="risk_facsrc_type_period_idx"),
+            models.Index(fields=["source_name", "submitted_at"], name="risk_facsrc_name_sub_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=(
+                    models.Q(reporting_period_start__isnull=True)
+                    | models.Q(reporting_period_end__isnull=True)
+                    | models.Q(reporting_period_start__lte=models.F("reporting_period_end"))
+                ),
+                name="risk_facsrc_period_order",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        period = ""
+        if self.reporting_period_start and self.reporting_period_end:
+            period = f" {self.reporting_period_start}:{self.reporting_period_end}"
+        return f"{self.source_name}{period} [{self.source_type}]"
+
+
+class FacilityReadinessIngestionRun(models.Model):
+    STATUS_RUNNING = "RUNNING"
+    STATUS_SUCCESS = "SUCCESS"
+    STATUS_PARTIAL = "PARTIAL"
+    STATUS_FAILED = "FAILED"
+    STATUS_CHOICES = [
+        (STATUS_RUNNING, "Running"),
+        (STATUS_SUCCESS, "Success"),
+        (STATUS_PARTIAL, "Partial"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    EXECUTION_MANUAL = "manual"
+    EXECUTION_SCHEDULED = "scheduled"
+    EXECUTION_REPLAY = "replay"
+    EXECUTION_MODE_CHOICES = [
+        (EXECUTION_MANUAL, "Manual"),
+        (EXECUTION_SCHEDULED, "Scheduled"),
+        (EXECUTION_REPLAY, "Replay"),
+    ]
+
+    source = models.ForeignKey(
+        FacilityReadinessSource,
+        on_delete=models.PROTECT,
+        related_name="ingestion_runs",
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_RUNNING)
+    source_name = models.CharField(max_length=120)
+    source_type = models.CharField(max_length=40, choices=FacilityReadinessSource.SOURCE_TYPE_CHOICES)
+    source_timestamp = models.DateTimeField(null=True, blank=True)
+    reporting_period_start = models.DateField(null=True, blank=True)
+    reporting_period_end = models.DateField(null=True, blank=True)
+    source_ref = models.CharField(max_length=255, blank=True)
+    adapter_key = models.CharField(max_length=80, default="facility_readiness_snapshot_csv")
+    input_ref = models.CharField(max_length=255, blank=True)
+    execution_mode = models.CharField(max_length=20, choices=EXECUTION_MODE_CHOICES, default=EXECUTION_MANUAL)
+    fallback_used = models.BooleanField(default=False)
+    records_seen = models.PositiveIntegerField(default=0)
+    records_loaded = models.PositiveIntegerField(default=0)
+    records_rejected = models.PositiveIntegerField(default=0)
+    operator_note = models.TextField(blank=True)
+    source_metadata = models.JSONField(default=dict, blank=True)
+    results = models.JSONField(default=dict, blank=True)
+    rejected_rows = models.JSONField(default=list, blank=True)
+    error_summary = models.TextField(blank=True)
+    started_at = models.DateTimeField(default=timezone.now)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-started_at"]
+        indexes = [
+            models.Index(fields=["source_type", "started_at"], name="risk_facrun_type_started_idx"),
+            models.Index(fields=["status", "started_at"], name="risk_facrun_status_idx"),
+            models.Index(fields=["reporting_period_start"], name="risk_facrun_period_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=(
+                    models.Q(reporting_period_start__isnull=True)
+                    | models.Q(reporting_period_end__isnull=True)
+                    | models.Q(reporting_period_start__lte=models.F("reporting_period_end"))
+                ),
+                name="risk_facrun_period_order",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.source_name} [{self.status}] {self.started_at}"
+
+
+class FacilityReadinessSourceKind(models.TextChoices):
+    FACILITY_REPORT = "facility_report", "Facility report"
+    LOGISTICS_SYSTEM = "logistics_system", "Logistics system"
+    COUNTY_OPERATIONS = "county_operations", "County operations"
+    SEEDED_DEMO = "seeded_demo", "Seeded demo"
+
+
+class FacilityReadinessFreshness(models.TextChoices):
+    FRESH = "fresh", "Fresh"
+    DELAYED = "delayed", "Delayed"
+    STALE = "stale", "Stale"
+    REPLAY_DIAGNOSTIC = "replay_diagnostic", "Replay diagnostic"
+    UNKNOWN = "unknown", "Unknown"
+
+
+class FacilityReadinessState(models.TextChoices):
+    READY = "ready", "Ready"
+    WATCH = "watch", "Watch"
+    CAPACITY_CONCERN = "capacity_concern", "Capacity concern"
+
+
+class FacilityReadinessSnapshot(models.Model):
+    facility = models.ForeignKey(
+        HealthFacility,
+        on_delete=models.PROTECT,
+        related_name="readiness_snapshots",
+    )
+    ward = models.ForeignKey(Ward, on_delete=models.PROTECT, related_name="facility_readiness_snapshots")
+    ingestion_run = models.ForeignKey(
+        FacilityReadinessIngestionRun,
+        on_delete=models.PROTECT,
+        related_name="readiness_snapshots",
+    )
+    source = models.ForeignKey(
+        FacilityReadinessSource,
+        on_delete=models.PROTECT,
+        related_name="readiness_snapshots",
+    )
+    reported_at = models.DateTimeField()
+    ors_sachets_available = models.PositiveIntegerField(default=0)
+    iv_fluids_available = models.PositiveIntegerField(default=0)
+    zinc_available = models.PositiveIntegerField(default=0)
+    chlorine_available = models.PositiveIntegerField(default=0)
+    beds_available = models.PositiveIntegerField(default=0)
+    staff_on_duty = models.PositiveIntegerField(default=0)
+    referral_available = models.BooleanField(default=False)
+    service_disruption = models.BooleanField(default=False)
+    stockout_notes = models.TextField(blank=True)
+    source_kind = models.CharField(
+        max_length=40,
+        choices=FacilityReadinessSourceKind.choices,
+        default=FacilityReadinessSourceKind.FACILITY_REPORT,
+    )
+    freshness_state = models.CharField(
+        max_length=40,
+        choices=FacilityReadinessFreshness.choices,
+        default=FacilityReadinessFreshness.UNKNOWN,
+    )
+    readiness_state = models.CharField(
+        max_length=40,
+        choices=FacilityReadinessState.choices,
+        default=FacilityReadinessState.READY,
+    )
+    readiness_score = models.FloatField(default=100.0)
+    source_name = models.CharField(max_length=120)
+    source_ref = models.CharField(max_length=255, blank=True)
+    raw_payload = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-reported_at", "facility__name"]
+        indexes = [
+            models.Index(fields=["facility", "reported_at"], name="risk_facready_fac_rep_idx"),
+            models.Index(fields=["ward", "reported_at"], name="risk_facready_ward_rep_idx"),
+            models.Index(fields=["freshness_state", "reported_at"], name="risk_facready_fresh_idx"),
+            models.Index(fields=["readiness_state", "reported_at"], name="risk_facready_state_idx"),
+            models.Index(fields=["source_kind", "reported_at"], name="risk_facready_source_idx"),
+        ]
+        constraints = [
+            models.UniqueConstraint(fields=["facility", "reported_at"], name="risk_facready_fac_report_uniq"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.facility.name} readiness {self.reported_at} [{self.readiness_state}]"
+
+
 class ETLHeartbeat(models.Model):
     COMPONENT_SCHEDULER = "SCHEDULER"
     COMPONENT_WORKER = "WORKER"
@@ -6317,6 +6516,94 @@ class SourceDataUploadEvent(models.Model):
 
     def __str__(self) -> str:
         return f"{self.upload_batch.public_id} {self.event_type}"
+
+
+class SourceDataConnectorRun(models.Model):
+    STATUS_RUNNING = "running"
+    STATUS_SUCCESS = "success"
+    STATUS_FAILED = "failed"
+    STATUS_SKIPPED = "skipped"
+    STATUS_CHOICES = [
+        (STATUS_RUNNING, "Running"),
+        (STATUS_SUCCESS, "Success"),
+        (STATUS_FAILED, "Failed"),
+        (STATUS_SKIPPED, "Skipped"),
+    ]
+
+    connector_key = models.CharField(max_length=120)
+    target_feed_key = models.CharField(max_length=80)
+    feed_mode = models.CharField(max_length=40, default="api")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_RUNNING)
+    source_name = models.CharField(max_length=160)
+    source_ref = models.CharField(max_length=255, blank=True)
+    fetched_record_count = models.PositiveIntegerField(default=0)
+    upload_batch = models.ForeignKey(
+        SourceDataUploadBatch,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="connector_runs",
+    )
+    error_summary = models.TextField(blank=True)
+    safe_metadata = models.JSONField(default=dict, blank=True)
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="source_data_connector_runs",
+    )
+    started_at = models.DateTimeField(default=timezone.now)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-started_at"]
+        indexes = [
+            models.Index(fields=["connector_key", "started_at"], name="risk_srcconn_key_started_idx"),
+            models.Index(fields=["target_feed_key", "status"], name="risk_srcconn_feed_status_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.connector_key} [{self.status}]"
+
+
+class SourceDataFeedModeOverride(models.Model):
+    MODE_API = "api"
+    MODE_CSV = "csv"
+    MODE_MANUAL = "manual"
+    MODE_FALLBACK = "fallback"
+    MODE_DEMO = "demo"
+    MODE_CHOICES = [
+        (MODE_API, "API"),
+        (MODE_CSV, "CSV"),
+        (MODE_MANUAL, "Manual"),
+        (MODE_FALLBACK, "Fallback"),
+        (MODE_DEMO, "Demo"),
+    ]
+
+    feed_key = models.CharField(max_length=80, unique=True)
+    feed_mode = models.CharField(max_length=40, choices=MODE_CHOICES, default=MODE_CSV)
+    authoritative_connector_key = models.CharField(max_length=120, blank=True)
+    csv_upload_enabled = models.BooleanField(default=True)
+    reason = models.TextField(blank=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="source_data_feed_mode_overrides",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["feed_key"]
+        indexes = [
+            models.Index(fields=["feed_mode", "csv_upload_enabled"], name="risk_srcmode_mode_csv_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.feed_key} mode={self.feed_mode} csv={self.csv_upload_enabled}"
 
 
 class ScenarioSimulationRun(models.Model):

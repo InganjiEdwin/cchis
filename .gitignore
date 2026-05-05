@@ -8,5 +8,12 @@ db.sqlite3
 repomix-output.*
 node_modules/
 .next/
-/docs/
+/docs/*
+!/docs/
+!/docs/CCHIS_DATA_SOURCE_FEEDS.md
+!/docs/SOURCE_DATA_API_CONNECTORS.md
+!/docs/SOURCE_DATA_OPS_PHASE0_ALIGNMENT.md
+!/docs/SOURCE_DATA_OPS_SURFACE_IMPLEMENTATION_PLAN.md
+!/docs/SOURCE_DATA_PRODUCTION_RUNBOOK.md
+!/docs/SOURCE_DATA_VALIDATION_ERROR_CODES.md
 frontend/.npm-cache/

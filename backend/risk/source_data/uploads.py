@@ -12,10 +12,18 @@ from django.db import transaction
 from django.utils import timezone
 
 from risk.models import SourceDataUploadArtifact, SourceDataUploadBatch
+from risk.source_data.features import FEATURE_FACILITY_READINESS_IMPORT, facility_readiness_snapshot_import_enabled
 from risk.source_data.registry import source_data_feed_definition
 
 
 SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+CANCELLABLE_UPLOAD_STATUSES = {
+    SourceDataUploadBatch.STATUS_DRAFT,
+    SourceDataUploadBatch.STATUS_UPLOADED,
+    SourceDataUploadBatch.STATUS_VALIDATION_FAILED,
+    SourceDataUploadBatch.STATUS_READY_FOR_CONFIRMATION,
+    SourceDataUploadBatch.STATUS_IMPORT_FAILED,
+}
 
 
 def safe_upload_filename(filename: str) -> str:
@@ -53,6 +61,8 @@ def create_source_data_upload_batch(
 ) -> SourceDataUploadBatch:
     feed_key = str(metadata["feed_key"])
     definition = source_data_feed_definition(feed_key)
+    if definition.feed_key == "facility_readiness_snapshot" and not facility_readiness_snapshot_import_enabled():
+        raise ValueError(f"Facility readiness snapshot imports are disabled by {FEATURE_FACILITY_READINESS_IMPORT}.")
     replaces_upload = metadata.get("replaces_upload")
     batch = SourceDataUploadBatch.objects.create(
         feed_key=definition.feed_key,
@@ -136,3 +146,34 @@ def latest_upload_artifact(batch: SourceDataUploadBatch) -> SourceDataUploadArti
     if artifact is None:
         raise ValueError("Upload batch has no stored artifact.")
     return artifact
+
+
+@transaction.atomic
+def cancel_source_data_upload_batch(
+    *,
+    batch: SourceDataUploadBatch,
+    cancelled_by,
+    reason: str,
+) -> SourceDataUploadBatch:
+    reason = reason.strip()
+    if not reason:
+        raise ValueError("A cancellation reason is required.")
+    if batch.status == SourceDataUploadBatch.STATUS_CANCELLED:
+        raise ValueError("This source-data upload has already been cancelled.")
+    if batch.status not in CANCELLABLE_UPLOAD_STATUSES:
+        raise ValueError("This source-data upload cannot be cancelled in its current lifecycle status.")
+
+    previous_status = batch.status
+    cancelled_at = timezone.now()
+    batch.status = SourceDataUploadBatch.STATUS_CANCELLED
+    batch.metadata = {
+        **(batch.metadata or {}),
+        "cancellation": {
+            "cancelled_by_user_id": getattr(cancelled_by, "id", None),
+            "cancelled_at": cancelled_at.isoformat(),
+            "reason": reason,
+            "previous_status": previous_status,
+        },
+    }
+    batch.save(update_fields=["status", "metadata", "updated_at"])
+    return batch
