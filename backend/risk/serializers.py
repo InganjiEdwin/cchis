@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 
+from django.conf import settings
 from rest_framework import serializers
 from rest_framework.fields import empty
 from django.utils import timezone
@@ -10,7 +11,7 @@ from .chv_offline import (
     OFFLINE_CHV_UPLOAD_PAYLOAD_VERSION,
     SUPPORTED_PHASE_4_UPLOAD_TYPES,
 )
-from .models import Alert, AlertWorkflowEvent, AlertWorkflowState, CHV, CHVAssignment, CHVCoverageRequest, CHVCoverageRequestEvent, CHVDeviceRegistration, CHVMessage, ContactPreference, DashboardNotification, DashboardNotificationEvent, ETLHeartbeat, ExternalDataElementMapping, ExternalOrgUnitMapping, ExternalSystem, ExternalValueSetMapping, FacilityContact, FacilityReadinessEscalation, FacilityReadinessReview, FacilityReadinessReviewEvent, FacilityReadinessUpdateRequest, FeatureDataset, FeatureDatasetRow, HealthFacility, IngestionRun, InteroperabilityMappingVersion, InteroperabilityRun, InteroperabilityRunError, InteroperabilityRunItem, MessageTemplate, ModelRun, PreparednessAction, PreparednessActionEvent, RiskScore, ScenarioSimulationRun, SensitiveExportDownloadAudit, SensitiveExportRequest, SyncQueue, TriageSession, UssdMenuVersion, UssdSessionLog, Ward
+from .models import Alert, AlertWorkflowEvent, AlertWorkflowState, CHV, CHVAssignment, CHVCoverageRequest, CHVCoverageRequestEvent, CHVDeviceRegistration, CHVMessage, ContactPreference, DashboardNotification, DashboardNotificationEvent, ETLHeartbeat, ExternalDataElementMapping, ExternalOrgUnitMapping, ExternalSystem, ExternalValueSetMapping, FacilityContact, FacilityReadinessEscalation, FacilityReadinessReview, FacilityReadinessReviewEvent, FacilityReadinessUpdateRequest, FeatureDataset, FeatureDatasetRow, HealthFacility, IngestionRun, InteroperabilityMappingVersion, InteroperabilityRun, InteroperabilityRunError, InteroperabilityRunItem, MessageTemplate, ModelRun, PreparednessAction, PreparednessActionEvent, RiskScore, ScenarioSimulationRun, SensitiveExportDownloadAudit, SensitiveExportRequest, SourceDataUploadArtifact, SourceDataUploadBatch, SourceDataUploadEvent, SourceDataValidationIssue, SyncQueue, TriageSession, UssdMenuVersion, UssdSessionLog, Ward
 from .privacy_minimization import (
     PrivacyMinimizationViolation,
     ensure_pii_safe_mapping,
@@ -25,6 +26,7 @@ from .privacy_access import (
     serializer_user,
     user_can_view_direct_identifiers,
 )
+from .source_data.registry import source_data_feed_definition
 
 
 class PiiSafeInputSerializerMixin:
@@ -71,6 +73,285 @@ class PiiSafeInputSerializerMixin:
 
         if errors:
             raise serializers.ValidationError(errors)
+
+
+class SourceDataFeedDefinitionSerializer(serializers.Serializer):
+    feed_key = serializers.CharField()
+    label = serializers.CharField()
+    scope = serializers.CharField()
+    domain = serializers.CharField()
+    backend_target = serializers.CharField()
+    source_type = serializers.CharField()
+    cadence = serializers.CharField()
+    ingestion_family = serializers.CharField()
+    downstream_action = serializers.CharField()
+    required_metadata = serializers.ListField(child=serializers.CharField())
+    adapter_key = serializers.CharField()
+    adapter_notes = serializers.CharField()
+    scheduled_supported = serializers.BooleanField()
+    required_any_columns = serializers.ListField(child=serializers.ListField(child=serializers.CharField()))
+    accepted_columns = serializers.ListField(child=serializers.CharField())
+    template_url = serializers.CharField()
+    requires_new_ingestion_path = serializers.BooleanField()
+    default_reporting_granularity = serializers.CharField(allow_blank=True)
+    feed_policy = serializers.DictField(required=False)
+
+
+class SourceDataFeedTypesResponseSerializer(serializers.Serializer):
+    schema_version = serializers.CharField()
+    phase_contract_schema_version = serializers.CharField()
+    generated_at = serializers.CharField()
+    scope = serializers.CharField()
+    feed_count = serializers.IntegerField()
+    feeds = SourceDataFeedDefinitionSerializer(many=True)
+    templates = serializers.DictField()
+    template_contract_errors = serializers.ListField(child=serializers.CharField())
+
+
+class SourceDataUploadArtifactSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SourceDataUploadArtifact
+        fields = [
+            "id",
+            "original_filename",
+            "content_type",
+            "size_bytes",
+            "sha256",
+            "storage_backend",
+            "retention_expires_at",
+            "redaction_state",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class SourceDataValidationIssueSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SourceDataValidationIssue
+        fields = [
+            "id",
+            "row_number",
+            "severity",
+            "code",
+            "column_name",
+            "message",
+            "safe_context",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class SourceDataUploadEventSerializer(serializers.ModelSerializer):
+    actor_username = serializers.CharField(source="actor.username", allow_null=True, read_only=True)
+
+    class Meta:
+        model = SourceDataUploadEvent
+        fields = [
+            "id",
+            "event_type",
+            "event_at",
+            "actor_username",
+            "metadata",
+        ]
+        read_only_fields = fields
+
+
+class SourceDataUploadBatchSerializer(serializers.ModelSerializer):
+    artifacts = SourceDataUploadArtifactSerializer(many=True, read_only=True)
+    validation_issues = SourceDataValidationIssueSerializer(many=True, read_only=True)
+    events = SourceDataUploadEventSerializer(many=True, read_only=True)
+    created_by_username = serializers.CharField(source="created_by.username", allow_null=True, read_only=True)
+    confirmed_by_username = serializers.CharField(source="confirmed_by.username", allow_null=True, read_only=True)
+    approval_requested_by_username = serializers.CharField(
+        source="approval_requested_by.username",
+        allow_null=True,
+        read_only=True,
+    )
+    approved_by_username = serializers.CharField(source="approved_by.username", allow_null=True, read_only=True)
+    duplicate_of_public_id = serializers.SerializerMethodField()
+    replaces_upload_public_id = serializers.SerializerMethodField()
+    validation_summary = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SourceDataUploadBatch
+        fields = [
+            "public_id",
+            "feed_key",
+            "domain",
+            "source_type",
+            "source_name",
+            "source_ref",
+            "source_timestamp",
+            "release_version",
+            "reporting_period_start",
+            "reporting_period_end",
+            "correction_mode",
+            "replacement_reason",
+            "operator_note",
+            "status",
+            "validation_status",
+            "import_status",
+            "row_count",
+            "accepted_count",
+            "rejected_count",
+            "warning_count",
+            "duplicate_of_public_id",
+            "replaces_upload_public_id",
+            "approval_status",
+            "approval_risk_category",
+            "approval_requested_by_username",
+            "approval_requested_at",
+            "approved_by_username",
+            "approved_at",
+            "approval_reason",
+            "approval_expires_at",
+            "validation_celery_task_id",
+            "import_celery_task_id",
+            "downstream_celery_task_id",
+            "domain_ingestion_run_type",
+            "domain_ingestion_run_id",
+            "surveillance_ingestion_run",
+            "population_exposure_ingestion_run",
+            "facility_readiness_ingestion_run_id",
+            "created_by_username",
+            "confirmed_by_username",
+            "confirmed_at",
+            "metadata",
+            "validation_summary",
+            "artifacts",
+            "validation_issues",
+            "events",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_duplicate_of_public_id(self, obj):
+        return str(obj.duplicate_of.public_id) if obj.duplicate_of_id else None
+
+    def get_replaces_upload_public_id(self, obj):
+        return str(obj.replaces_upload.public_id) if obj.replaces_upload_id else None
+
+    def get_validation_summary(self, obj):
+        return (obj.metadata or {}).get("validation_summary", {})
+
+
+class SourceDataUploadListResponseSerializer(serializers.Serializer):
+    schema_version = serializers.CharField()
+    count = serializers.IntegerField()
+    results = SourceDataUploadBatchSerializer(many=True)
+
+
+class SourceDataUploadCreateSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = (
+        "source_name",
+        "source_ref",
+        "release_version",
+        "replacement_reason",
+        "operator_note",
+    )
+
+    feed_key = serializers.CharField(max_length=80)
+    source_name = serializers.CharField(max_length=160)
+    source_ref = serializers.CharField(required=False, allow_blank=True, max_length=255)
+    source_timestamp = serializers.DateTimeField(required=False, allow_null=True)
+    release_version = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    reporting_period_start = serializers.DateField(required=False, allow_null=True)
+    reporting_period_end = serializers.DateField(required=False, allow_null=True)
+    correction_mode = serializers.CharField(required=False, allow_blank=True, max_length=40)
+    replacement_reason = serializers.CharField(required=False, allow_blank=True)
+    operator_note = serializers.CharField(required=False, allow_blank=True)
+    replaces_upload_public_id = serializers.UUIDField(required=False, allow_null=True, write_only=True)
+    file = serializers.FileField(write_only=True)
+
+    def validate_file(self, uploaded_file):
+        max_size = getattr(settings, "SOURCE_DATA_MAX_UPLOAD_SIZE_BYTES", 20 * 1024 * 1024)
+        if uploaded_file.size > max_size:
+            raise serializers.ValidationError(
+                f"Upload is too large. Maximum source-data upload size is {max_size} bytes."
+            )
+        return uploaded_file
+
+    def validate(self, attrs):
+        feed_key = attrs.get("feed_key", "").strip()
+        try:
+            definition = source_data_feed_definition(feed_key)
+        except KeyError as exc:
+            raise serializers.ValidationError({"feed_key": "Unsupported source-data feed key."}) from exc
+
+        attrs["feed_key"] = definition.feed_key
+        for text_field in (
+            "source_name",
+            "source_ref",
+            "release_version",
+            "correction_mode",
+            "replacement_reason",
+            "operator_note",
+        ):
+            if text_field in attrs and attrs[text_field] is not None:
+                attrs[text_field] = str(attrs[text_field]).strip()
+
+        missing_fields = []
+        for field_name in definition.required_metadata:
+            value = attrs.get(field_name)
+            if value is None or (isinstance(value, str) and not value.strip()):
+                missing_fields.append(field_name)
+        if missing_fields:
+            raise serializers.ValidationError(
+                {
+                    field_name: "This metadata field is required for the selected source-data feed."
+                    for field_name in missing_fields
+                }
+            )
+
+        period_start = attrs.get("reporting_period_start")
+        period_end = attrs.get("reporting_period_end")
+        if period_start and period_end and period_start > period_end:
+            raise serializers.ValidationError(
+                {"reporting_period_end": "Reporting period end must be on or after the start date."}
+            )
+
+        replaces_public_id = attrs.pop("replaces_upload_public_id", None)
+        if replaces_public_id is not None:
+            replaces_upload = SourceDataUploadBatch.objects.filter(public_id=replaces_public_id).first()
+            if replaces_upload is None:
+                raise serializers.ValidationError({"replaces_upload_public_id": "Replacement target was not found."})
+            if replaces_upload.feed_key != definition.feed_key:
+                raise serializers.ValidationError(
+                    {"replaces_upload_public_id": "Replacement target must use the same source-data feed."}
+                )
+            if not (attrs.get("replacement_reason") or "").strip():
+                raise serializers.ValidationError(
+                    {"replacement_reason": "Replacement imports require an explicit replacement reason."}
+                )
+            attrs["replaces_upload"] = replaces_upload
+
+        return attrs
+
+
+class SourceDataUploadApprovalActionSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_text_fields = ("reason",)
+
+    ACTION_REQUEST = "request"
+    ACTION_APPROVE = "approve"
+    ACTION_REJECT = "reject"
+    ACTION_CHOICES = (ACTION_REQUEST, ACTION_APPROVE, ACTION_REJECT)
+
+    action = serializers.ChoiceField(choices=ACTION_CHOICES)
+    reason = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        action = attrs.get("action")
+        reason = (attrs.get("reason") or "").strip()
+        if action in {self.ACTION_REQUEST, self.ACTION_REJECT} and not reason:
+            raise serializers.ValidationError({"reason": "A reason is required for this approval action."})
+        attrs["reason"] = reason
+        return attrs
+
+
+class SourceDataUploadConfirmSerializer(serializers.Serializer):
+    allow_duplicate_replay = serializers.BooleanField(required=False, default=False)
+    force_async = serializers.BooleanField(required=False, default=False)
 
 
 def validate_pii_safe_serializer_text(value: str, *, field_name: str) -> str:

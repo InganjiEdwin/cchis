@@ -4,10 +4,11 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import ChvOfflinePage from "@/app/chv/page";
-import type { CurrentUser } from "@/lib/auth";
+import type { CurrentUser, ThemePreference } from "@/lib/auth";
 
 const mockReplace = vi.fn();
 const mockUseAuth = vi.fn();
+const mockUpdateAppearance = vi.fn();
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({
@@ -71,6 +72,7 @@ function renderChvPage(user: CurrentUser = buildChvUser()) {
     currentUser: user,
     isAuthenticated: true,
     isHydrating: false,
+    updateAppearance: mockUpdateAppearance,
   });
 
   window.localStorage.setItem("cchis.chv_offline.device_id", "web-test-device");
@@ -268,6 +270,10 @@ async function saveBasicFollowUp() {
 describe("ChvOfflinePage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUpdateAppearance.mockImplementation(async (themePreference: ThemePreference) => ({
+      ...buildChvUser(),
+      theme_preference: themePreference,
+    }));
     Object.defineProperty(window, "localStorage", {
       value: createMemoryStorage(),
       configurable: true,
@@ -309,6 +315,30 @@ describe("ChvOfflinePage", () => {
     expect(screen.getByText("Download the offline bundle before using decision support.")).toBeInTheDocument();
     expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(0);
     expect(screen.queryByText("English recommendation shown for this item.")).not.toBeInTheDocument();
+  });
+
+  it("uses the shared appearance preference flow for light, dark, and system modes", async () => {
+    setOnline(false);
+    const user = userEvent.setup();
+    renderChvPage(buildChvUser({ theme_preference: "SYSTEM" }));
+
+    await screen.findByRole("heading", { name: "CHV follow-up" });
+    const appearanceGroup = screen.getByRole("group", { name: "Appearance" });
+
+    expect(screen.getByRole("button", { name: "System" })).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(screen.getByRole("button", { name: "Dark" }));
+    expect(mockUpdateAppearance).toHaveBeenLastCalledWith("DARK");
+    expect(screen.getByRole("button", { name: "Dark" })).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(screen.getByRole("button", { name: "Light" }));
+    expect(mockUpdateAppearance).toHaveBeenLastCalledWith("LIGHT");
+    expect(screen.getByRole("button", { name: "Light" })).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(screen.getByRole("button", { name: "System" }));
+    expect(mockUpdateAppearance).toHaveBeenLastCalledWith("SYSTEM");
+    expect(screen.getByRole("button", { name: "System" })).toHaveAttribute("aria-pressed", "true");
+    expect(appearanceGroup).toBeInTheDocument();
   });
 
   it("caches the selected CHV language for offline use", async () => {

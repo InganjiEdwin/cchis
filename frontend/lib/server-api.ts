@@ -54,6 +54,10 @@ function formatBackendErrorDetail(data: Record<string, unknown>) {
   return typeof data.detail === "string" ? data.detail : "Request failed.";
 }
 
+function isFormDataBody(body: BodyInit | null | undefined) {
+  return typeof FormData !== "undefined" && body instanceof FormData;
+}
+
 async function resolveCookieHeader(explicitCookieHeader?: string) {
   if (explicitCookieHeader !== undefined) {
     return explicitCookieHeader;
@@ -67,7 +71,7 @@ export async function fetchBackendResponse(path: string, init: ServerApiRequestI
   const cookieHeader = await resolveCookieHeader(init.cookieHeader);
   const headers = new Headers(init.headers);
 
-  if (!headers.has("Content-Type") && init.body) {
+  if (!headers.has("Content-Type") && init.body && !isFormDataBody(init.body)) {
     headers.set("Content-Type", "application/json");
   }
 
@@ -120,7 +124,7 @@ export async function fetchBackendJson<T>(path: string, init: ServerApiRequestIn
 
   const headers = new Headers(init.headers);
 
-  if (!headers.has("Content-Type") && init.body) {
+  if (!headers.has("Content-Type") && init.body && !isFormDataBody(init.body)) {
     headers.set("Content-Type", "application/json");
   }
 

@@ -3,12 +3,15 @@ import logging
 from celery import shared_task
 from django.utils import timezone
 
+from accounts.models import User
+
 from risk.facility_forecasting import run_facility_burden_forecast_pipeline
 from risk.ml.ingestion import fetch_rainfall_for_wards
 from risk.ml.pipeline import run_mock_prediction_pipeline
-from risk.models import Alert, ETLHeartbeat, PopulationExposureIngestionRun, RiskScore, SurveillanceIngestionRun, Ward
+from risk.models import Alert, ETLHeartbeat, PopulationExposureIngestionRun, RiskScore, SourceDataUploadBatch, SurveillanceIngestionRun, Ward
 from risk.population_exposure_ingestion import parse_source_timestamp, run_population_exposure_csv_ingestion
 from risk.services import deliver_alert, trigger_alerts_for_riskscore
+from risk.source_data.imports import run_confirmed_source_data_import
 from risk.surveillance_ingestion import (
     parse_surveillance_date,
     parse_surveillance_source_timestamp,
@@ -177,7 +180,38 @@ def run_surveillance_ingestion_task(
     return run.id
 
 
-@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+@shared_task(
+    bind=True,
+    autoretry_for=(Exception,),
+    dont_autoretry_for=(ValueError,),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 3},
+)
+def import_source_data_upload_batch_task(self, batch_id: int, actor_id: int | None = None) -> int:
+    batch = SourceDataUploadBatch.objects.get(pk=batch_id)
+    actor = User.objects.filter(pk=actor_id).first() if actor_id is not None else None
+    imported_batch = run_confirmed_source_data_import(batch, actor=actor, worker_execution=True)
+    logger.info(
+        "import_source_data_upload_batch_task_completed",
+        extra={
+            "source_data_upload_batch_id": imported_batch.id,
+            "source_data_upload_public_id": str(imported_batch.public_id),
+            "status": imported_batch.status,
+            "import_status": imported_batch.import_status,
+            "domain_ingestion_run_type": imported_batch.domain_ingestion_run_type,
+            "domain_ingestion_run_id": imported_batch.domain_ingestion_run_id,
+        },
+    )
+    return imported_batch.id
+
+
+@shared_task(
+    bind=True,
+    autoretry_for=(Exception,),
+    dont_autoretry_for=(ValueError,),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 3},
+)
 def trigger_alerts_task(
     self,
     risk_score_id: int,

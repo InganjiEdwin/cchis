@@ -2533,6 +2533,172 @@ export type ModelOperationsHealthResponse = {
   dashboard_policy: Record<string, unknown>;
 };
 
+export type SourceDataFeedDefinition = {
+  feed_key: string;
+  label: string;
+  scope: string;
+  domain: string;
+  backend_target: string;
+  source_type: string;
+  cadence: string;
+  ingestion_family: string;
+  downstream_action: string;
+  required_metadata: string[];
+  adapter_key: string;
+  adapter_notes: string;
+  scheduled_supported: boolean;
+  required_any_columns: string[][];
+  accepted_columns: string[];
+  template_url: string;
+  requires_new_ingestion_path: boolean;
+  default_reporting_granularity: string;
+  feed_policy?: Record<string, unknown>;
+};
+
+export type SourceDataFeedTypesResponse = {
+  schema_version: string;
+  phase_contract_schema_version: string;
+  generated_at: string;
+  scope: string;
+  feed_count: number;
+  feeds: SourceDataFeedDefinition[];
+  templates: Record<string, { filename: string; columns: string[]; example_row: Record<string, string> }>;
+  template_contract_errors: string[];
+};
+
+export type SourceDataValidationIssueRecord = {
+  id: number;
+  row_number: number | null;
+  severity: "error" | "warning" | "info";
+  code: string;
+  column_name: string;
+  message: string;
+  safe_context: Record<string, unknown>;
+  created_at: string;
+};
+
+export type SourceDataUploadEventRecord = {
+  id: number;
+  event_type: string;
+  event_at: string;
+  actor_username: string | null;
+  metadata: Record<string, unknown>;
+};
+
+export type SourceDataUploadBatchRecord = {
+  public_id: string;
+  feed_key: string;
+  domain: string;
+  source_type: string;
+  source_name: string;
+  source_ref: string;
+  source_timestamp: string | null;
+  release_version: string;
+  reporting_period_start: string | null;
+  reporting_period_end: string | null;
+  correction_mode: string;
+  replacement_reason: string;
+  operator_note: string;
+  status:
+    | "draft"
+    | "uploaded"
+    | "validating"
+    | "validation_failed"
+    | "ready_for_confirmation"
+    | "confirming"
+    | "imported"
+    | "import_failed"
+    | "cancelled"
+    | "superseded";
+  validation_status: "not_started" | "running" | "passed" | "failed";
+  import_status: "not_started" | "running" | "imported" | "failed";
+  row_count: number;
+  accepted_count: number;
+  rejected_count: number;
+  warning_count: number;
+  duplicate_of_public_id: string | null;
+  replaces_upload_public_id: string | null;
+  approval_status: "not_required" | "pending" | "approved" | "rejected" | "expired";
+  approval_risk_category: string;
+  approval_requested_by_username: string | null;
+  approval_requested_at: string | null;
+  approved_by_username: string | null;
+  approved_at: string | null;
+  approval_reason: string;
+  approval_expires_at: string | null;
+  validation_celery_task_id: string;
+  import_celery_task_id: string;
+  downstream_celery_task_id: string;
+  domain_ingestion_run_type: string;
+  domain_ingestion_run_id: number | null;
+  surveillance_ingestion_run: number | null;
+  population_exposure_ingestion_run: number | null;
+  facility_readiness_ingestion_run_id: number | null;
+  created_by_username: string | null;
+  confirmed_by_username: string | null;
+  confirmed_at: string | null;
+  metadata: Record<string, unknown>;
+  validation_summary: Record<string, unknown>;
+  validation_issues: SourceDataValidationIssueRecord[];
+  events: SourceDataUploadEventRecord[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type SourceDataUploadListResponse = {
+  schema_version: string;
+  count: number;
+  results: SourceDataUploadBatchRecord[];
+};
+
+export type SourceDataUploadFilters = {
+  feed_key?: string;
+  domain?: string;
+  status?: string;
+  source_name?: string;
+  actor?: string;
+  date_from?: string;
+  date_to?: string;
+  limit?: number;
+};
+
+export type SourceDataUploadCreatePayload = {
+  feed_key: string;
+  source_name: string;
+  source_timestamp: string;
+  source_ref?: string;
+  release_version?: string;
+  reporting_period_start?: string;
+  reporting_period_end?: string;
+  correction_mode?: string;
+  replacement_reason?: string;
+  operator_note?: string;
+  replaces_upload_public_id?: string;
+  file: File;
+};
+
+export type SourceDataApprovalPayload = {
+  action: "request" | "approve" | "reject";
+  reason?: string;
+};
+
+export type SourceDataConfirmPayload = {
+  allow_duplicate_replay?: boolean;
+  force_async?: boolean;
+};
+
+export type SourceDataErrorFileResponse = {
+  filename: string;
+  content_type: string;
+  row_count: number;
+  payload: string;
+  payload_sha256: string;
+};
+
+export type SourceDataCsvTemplateFileResponse = SourceDataErrorFileResponse & {
+  feed_key: string;
+};
+
 export type InteroperabilityAuditCheck = {
   key: string;
   title: string;
@@ -3229,13 +3395,16 @@ export type FetchOperationalKpiMeExportParams = FetchOperationalKpiDashboardPara
 };
 
 async function requestDashboardRoute<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers);
+  const isFormDataBody = typeof FormData !== "undefined" && init.body instanceof FormData;
+  if (!headers.has("Content-Type") && init.body && !isFormDataBody) {
+    headers.set("Content-Type", "application/json");
+  }
+
   const response = await fetch(path, {
     ...init,
     credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init.headers ?? {}),
-    },
+    headers,
   });
 
   if (!response.ok) {
@@ -3715,6 +3884,100 @@ export async function fetchOperationalKpiDashboardViaBff(params: FetchOperationa
 
 export async function fetchModelOperationsHealthViaBff() {
   return requestDashboardRoute<ModelOperationsHealthResponse>("/api/dashboard/model-health");
+}
+
+export async function fetchSourceDataFeedTypesViaBff() {
+  return requestDashboardRoute<SourceDataFeedTypesResponse>("/api/dashboard/source-data/feed-types");
+}
+
+export async function fetchSourceDataUploadsViaBff(params: SourceDataUploadFilters = {}) {
+  const searchParams = new URLSearchParams();
+
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") {
+      searchParams.set(key, String(value));
+    }
+  }
+
+  const query = searchParams.toString();
+  return requestDashboardRoute<SourceDataUploadListResponse>(
+    `/api/dashboard/source-data/uploads${query ? `?${query}` : ""}`,
+  );
+}
+
+export async function fetchSourceDataUploadViaBff(publicId: string) {
+  return requestDashboardRoute<SourceDataUploadBatchRecord>(
+    `/api/dashboard/source-data/uploads/${encodeURIComponent(publicId)}`,
+  );
+}
+
+export async function createSourceDataUploadViaBff(payload: SourceDataUploadCreatePayload) {
+  const formData = new FormData();
+  formData.set("feed_key", payload.feed_key);
+  formData.set("source_name", payload.source_name);
+  formData.set("source_timestamp", payload.source_timestamp);
+  formData.set("file", payload.file);
+
+  for (const field of [
+    "source_ref",
+    "release_version",
+    "reporting_period_start",
+    "reporting_period_end",
+    "correction_mode",
+    "replacement_reason",
+    "operator_note",
+    "replaces_upload_public_id",
+  ] as const) {
+    const value = payload[field];
+    if (value !== undefined && value !== "") {
+      formData.set(field, value);
+    }
+  }
+
+  return requestDashboardRoute<SourceDataUploadBatchRecord>("/api/dashboard/source-data/uploads", {
+    method: "POST",
+    body: formData,
+  });
+}
+
+export async function validateSourceDataUploadViaBff(publicId: string) {
+  return requestDashboardRoute<SourceDataUploadBatchRecord>(
+    `/api/dashboard/source-data/uploads/${encodeURIComponent(publicId)}/validate`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
+}
+
+export async function approveSourceDataUploadViaBff(publicId: string, payload: SourceDataApprovalPayload) {
+  return requestDashboardRoute<SourceDataUploadBatchRecord>(
+    `/api/dashboard/source-data/uploads/${encodeURIComponent(publicId)}/approval`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function confirmSourceDataUploadViaBff(publicId: string, payload: SourceDataConfirmPayload = {}) {
+  return requestDashboardRoute<SourceDataUploadBatchRecord>(
+    `/api/dashboard/source-data/uploads/${encodeURIComponent(publicId)}/confirm`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export function downloadSourceDataErrorsFile(download: SourceDataErrorFileResponse) {
+  const blob = new Blob([download.payload], { type: `${download.content_type};charset=utf-8;` });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = download.filename;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 export async function fetchInteroperabilityDashboardViaBff() {

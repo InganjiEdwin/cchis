@@ -6036,6 +6036,289 @@ class CHVCoverageRequestEmailDelivery(models.Model):
         return f"{self.coverage_request.public_id} email [{self.status}]"
 
 
+class SourceDataUploadBatch(models.Model):
+    STATUS_DRAFT = "draft"
+    STATUS_UPLOADED = "uploaded"
+    STATUS_VALIDATING = "validating"
+    STATUS_VALIDATION_FAILED = "validation_failed"
+    STATUS_READY_FOR_CONFIRMATION = "ready_for_confirmation"
+    STATUS_CONFIRMING = "confirming"
+    STATUS_IMPORTED = "imported"
+    STATUS_IMPORT_FAILED = "import_failed"
+    STATUS_CANCELLED = "cancelled"
+    STATUS_SUPERSEDED = "superseded"
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, "Draft"),
+        (STATUS_UPLOADED, "Uploaded"),
+        (STATUS_VALIDATING, "Validating"),
+        (STATUS_VALIDATION_FAILED, "Validation failed"),
+        (STATUS_READY_FOR_CONFIRMATION, "Ready for confirmation"),
+        (STATUS_CONFIRMING, "Confirming"),
+        (STATUS_IMPORTED, "Imported"),
+        (STATUS_IMPORT_FAILED, "Import failed"),
+        (STATUS_CANCELLED, "Cancelled"),
+        (STATUS_SUPERSEDED, "Superseded"),
+    ]
+
+    VALIDATION_NOT_STARTED = "not_started"
+    VALIDATION_RUNNING = "running"
+    VALIDATION_PASSED = "passed"
+    VALIDATION_FAILED = "failed"
+    VALIDATION_CHOICES = [
+        (VALIDATION_NOT_STARTED, "Not started"),
+        (VALIDATION_RUNNING, "Running"),
+        (VALIDATION_PASSED, "Passed"),
+        (VALIDATION_FAILED, "Failed"),
+    ]
+
+    IMPORT_NOT_STARTED = "not_started"
+    IMPORT_RUNNING = "running"
+    IMPORT_IMPORTED = "imported"
+    IMPORT_FAILED = "failed"
+    IMPORT_CHOICES = [
+        (IMPORT_NOT_STARTED, "Not started"),
+        (IMPORT_RUNNING, "Running"),
+        (IMPORT_IMPORTED, "Imported"),
+        (IMPORT_FAILED, "Failed"),
+    ]
+
+    APPROVAL_NOT_REQUIRED = "not_required"
+    APPROVAL_PENDING = "pending"
+    APPROVAL_APPROVED = "approved"
+    APPROVAL_REJECTED = "rejected"
+    APPROVAL_EXPIRED = "expired"
+    APPROVAL_CHOICES = [
+        (APPROVAL_NOT_REQUIRED, "Not required"),
+        (APPROVAL_PENDING, "Pending"),
+        (APPROVAL_APPROVED, "Approved"),
+        (APPROVAL_REJECTED, "Rejected"),
+        (APPROVAL_EXPIRED, "Expired"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    feed_key = models.CharField(max_length=80)
+    domain = models.CharField(max_length=80)
+    source_type = models.CharField(max_length=80)
+    source_name = models.CharField(max_length=160)
+    source_ref = models.CharField(max_length=255, blank=True)
+    source_timestamp = models.DateTimeField(null=True, blank=True)
+    release_version = models.CharField(max_length=120, blank=True)
+    reporting_period_start = models.DateField(null=True, blank=True)
+    reporting_period_end = models.DateField(null=True, blank=True)
+    correction_mode = models.CharField(max_length=40, blank=True)
+    replacement_reason = models.TextField(blank=True)
+    operator_note = models.TextField(blank=True)
+    status = models.CharField(max_length=40, choices=STATUS_CHOICES, default=STATUS_UPLOADED)
+    validation_status = models.CharField(max_length=40, choices=VALIDATION_CHOICES, default=VALIDATION_NOT_STARTED)
+    import_status = models.CharField(max_length=40, choices=IMPORT_CHOICES, default=IMPORT_NOT_STARTED)
+    row_count = models.PositiveIntegerField(default=0)
+    accepted_count = models.PositiveIntegerField(default=0)
+    rejected_count = models.PositiveIntegerField(default=0)
+    warning_count = models.PositiveIntegerField(default=0)
+    duplicate_of = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="duplicate_uploads",
+    )
+    replaces_upload = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="replacement_uploads",
+    )
+    approval_status = models.CharField(max_length=40, choices=APPROVAL_CHOICES, default=APPROVAL_NOT_REQUIRED)
+    approval_risk_category = models.CharField(max_length=80, blank=True)
+    approval_requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="source_data_approval_requests",
+    )
+    approval_requested_at = models.DateTimeField(null=True, blank=True)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="source_data_approvals",
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    approval_reason = models.TextField(blank=True)
+    approval_expires_at = models.DateTimeField(null=True, blank=True)
+    validation_celery_task_id = models.CharField(max_length=255, blank=True)
+    import_celery_task_id = models.CharField(max_length=255, blank=True)
+    downstream_celery_task_id = models.CharField(max_length=255, blank=True)
+    domain_ingestion_run_type = models.CharField(max_length=80, blank=True)
+    domain_ingestion_run_id = models.PositiveIntegerField(null=True, blank=True)
+    surveillance_ingestion_run = models.ForeignKey(
+        SurveillanceIngestionRun,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="source_data_upload_batches",
+    )
+    population_exposure_ingestion_run = models.ForeignKey(
+        PopulationExposureIngestionRun,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="source_data_upload_batches",
+    )
+    facility_readiness_ingestion_run_id = models.PositiveIntegerField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="source_data_upload_batches",
+    )
+    confirmed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="source_data_confirmed_upload_batches",
+    )
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["feed_key", "created_at"], name="risk_srcbatch_feed_created_idx"),
+            models.Index(fields=["status", "created_at"], name="risk_srcbatch_status_idx"),
+            models.Index(fields=["validation_status", "created_at"], name="risk_srcbatch_val_idx"),
+            models.Index(fields=["source_type", "source_timestamp"], name="risk_srcbatch_source_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.feed_key} upload {self.public_id} [{self.status}]"
+
+
+class SourceDataUploadArtifact(models.Model):
+    upload_batch = models.ForeignKey(
+        SourceDataUploadBatch,
+        on_delete=models.CASCADE,
+        related_name="artifacts",
+    )
+    original_filename = models.CharField(max_length=255)
+    content_type = models.CharField(max_length=120, blank=True)
+    size_bytes = models.PositiveBigIntegerField(default=0)
+    sha256 = models.CharField(max_length=64)
+    storage_backend = models.CharField(max_length=40, default="shared_filesystem")
+    storage_path = models.CharField(max_length=500)
+    retention_expires_at = models.DateTimeField(null=True, blank=True)
+    redaction_state = models.CharField(max_length=40, default="raw")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["sha256", "created_at"], name="risk_srcart_sha_created_idx"),
+            models.Index(fields=["retention_expires_at"], name="risk_srcart_retention_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.original_filename} {self.sha256[:12]}"
+
+
+class SourceDataValidationIssue(models.Model):
+    SEVERITY_ERROR = "error"
+    SEVERITY_WARNING = "warning"
+    SEVERITY_INFO = "info"
+    SEVERITY_CHOICES = [
+        (SEVERITY_ERROR, "Error"),
+        (SEVERITY_WARNING, "Warning"),
+        (SEVERITY_INFO, "Info"),
+    ]
+
+    upload_batch = models.ForeignKey(
+        SourceDataUploadBatch,
+        on_delete=models.CASCADE,
+        related_name="validation_issues",
+    )
+    row_number = models.PositiveIntegerField(null=True, blank=True)
+    severity = models.CharField(max_length=20, choices=SEVERITY_CHOICES)
+    code = models.CharField(max_length=120)
+    column_name = models.CharField(max_length=120, blank=True)
+    message = models.TextField()
+    safe_context = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["severity", "row_number", "created_at"]
+        indexes = [
+            models.Index(fields=["upload_batch", "severity"], name="risk_srcissue_batch_sev_idx"),
+            models.Index(fields=["code"], name="risk_srcissue_code_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.upload_batch.public_id} {self.severity}:{self.code}"
+
+
+class SourceDataUploadEvent(models.Model):
+    EVENT_TEMPLATE_DOWNLOADED = "template_downloaded"
+    EVENT_UPLOAD_CREATED = "upload_created"
+    EVENT_VALIDATION_STARTED = "validation_started"
+    EVENT_VALIDATION_COMPLETED = "validation_completed"
+    EVENT_CONFIRMATION_REQUESTED = "confirmation_requested"
+    EVENT_IMPORT_STARTED = "import_started"
+    EVENT_IMPORT_COMPLETED = "import_completed"
+    EVENT_IMPORT_FAILED = "import_failed"
+    EVENT_ERRORS_DOWNLOADED = "errors_downloaded"
+    EVENT_DOWNSTREAM_ACTION_REQUESTED = "downstream_action_requested"
+    EVENT_REPLACEMENT_REQUESTED = "replacement_requested"
+    EVENT_UPLOAD_CANCELLED = "upload_cancelled"
+    EVENT_CHOICES = [
+        (EVENT_TEMPLATE_DOWNLOADED, "Template downloaded"),
+        (EVENT_UPLOAD_CREATED, "Upload created"),
+        (EVENT_VALIDATION_STARTED, "Validation started"),
+        (EVENT_VALIDATION_COMPLETED, "Validation completed"),
+        (EVENT_CONFIRMATION_REQUESTED, "Confirmation requested"),
+        (EVENT_IMPORT_STARTED, "Import started"),
+        (EVENT_IMPORT_COMPLETED, "Import completed"),
+        (EVENT_IMPORT_FAILED, "Import failed"),
+        (EVENT_ERRORS_DOWNLOADED, "Errors downloaded"),
+        (EVENT_DOWNSTREAM_ACTION_REQUESTED, "Downstream action requested"),
+        (EVENT_REPLACEMENT_REQUESTED, "Replacement requested"),
+        (EVENT_UPLOAD_CANCELLED, "Upload cancelled"),
+    ]
+
+    upload_batch = models.ForeignKey(
+        SourceDataUploadBatch,
+        on_delete=models.CASCADE,
+        related_name="events",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="source_data_upload_events",
+    )
+    event_type = models.CharField(max_length=80, choices=EVENT_CHOICES)
+    event_at = models.DateTimeField(default=timezone.now)
+    ip_address_hash = models.CharField(max_length=64, blank=True)
+    user_agent_hash = models.CharField(max_length=64, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-event_at", "-id"]
+        indexes = [
+            models.Index(fields=["upload_batch", "event_at"], name="risk_srcevent_batch_time_idx"),
+            models.Index(fields=["event_type", "event_at"], name="risk_srcevent_type_time_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.upload_batch.public_id} {self.event_type}"
+
+
 class ScenarioSimulationRun(models.Model):
     SCENARIO_RAINFALL_INCREASE = "RAINFALL_INCREASE"
     SCENARIO_RESPONSE_DELAY = "RESPONSE_DELAY"

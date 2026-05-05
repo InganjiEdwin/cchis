@@ -70,6 +70,12 @@ export const queryKeys = {
     root: () => ["interoperability"] as const,
     dashboard: () => ["interoperability", "dashboard"] as const,
   },
+  sourceData: {
+    root: () => ["source-data"] as const,
+    feedTypes: () => ["source-data", "feed-types"] as const,
+    uploads: (filters: QueryFilters = {}) => ["source-data", "uploads", filters] as const,
+    upload: (publicId: string) => ["source-data", "upload", publicId] as const,
+  },
   messageGovernance: {
     root: () => ["message-governance"] as const,
     dashboard: (filters: QueryFilters) => ["message-governance", filters] as const,

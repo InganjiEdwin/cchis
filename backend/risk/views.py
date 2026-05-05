@@ -10,10 +10,12 @@ from django.utils import timezone
 from rest_framework import generics, permissions, status
 from rest_framework.exceptions import ParseError, PermissionDenied, ValidationError
 from rest_framework.filters import OrderingFilter
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import User
+from accounts.audit import record_auth_event
+from accounts.models import AuthAuditEvent, User
 from accounts.permissions import IsAdminOnly, IsAdminOrSupervisor, IsAdminSupervisorOrAnalyst, IsFieldOperator
 
 from .tasks import deliver_alert_task, run_risk_model_task, trigger_alerts_task
@@ -36,7 +38,7 @@ from .chv_offline import (
     register_chv_device,
 )
 from .chv_localization import resolve_language_preference, supported_language_or_default
-from .models import Alert, AlertWorkflowEvent, AlertWorkflowState, CHV, CHVDeviceRegistration, CHVMessage, CHVOfflineRejectedSubmissionAudit, ContactPreference, DashboardNotification, FacilityReadinessEscalation, FacilityReadinessReview, FacilityReadinessUpdateRequest, HealthFacility, IngestionRun, InteroperabilityRun, MessageTemplate, ModelRun, PreparednessAction, RiskScore, SensitiveExportRequest, SyncQueue, UssdMenuVersion, UssdSessionLog, Ward
+from .models import Alert, AlertWorkflowEvent, AlertWorkflowState, CHV, CHVDeviceRegistration, CHVMessage, CHVOfflineRejectedSubmissionAudit, ContactPreference, DashboardNotification, FacilityReadinessEscalation, FacilityReadinessReview, FacilityReadinessUpdateRequest, HealthFacility, IngestionRun, InteroperabilityRun, MessageTemplate, ModelRun, PreparednessAction, RiskScore, SensitiveExportRequest, SourceDataUploadBatch, SourceDataUploadEvent, SyncQueue, UssdMenuVersion, UssdSessionLog, Ward
 from .models import CHVAssignment, CHVCoverageRequest, CHVCoverageRequestAlertLink, CHVCoverageRequestEvent
 from .map_data import build_migori_ward_map_summary
 from datetime import timedelta
@@ -59,6 +61,22 @@ from .interoperability import (
     create_org_unit_mapping_import_run,
     create_risk_score_export_preview,
 )
+from .source_data.registry import build_source_data_feed_types_payload
+from .source_data.events import record_source_data_upload_event
+from .source_data.imports import (
+    confirm_source_data_upload,
+    decide_source_data_upload_approval,
+    request_source_data_upload_approval,
+    source_data_import_risk_category,
+)
+from .source_data.templates import (
+    SOURCE_DATA_TEMPLATE_DOWNLOAD_EVENT,
+    build_source_data_csv_template_file,
+    source_data_template_contracts,
+    validate_source_data_template_contract,
+)
+from .source_data.uploads import create_source_data_upload_batch
+from .source_data.validation import build_source_data_upload_errors_csv, validate_source_data_upload_batch
 from .operational_metric_audit import build_operational_kpi_integrity_audit, build_operational_kpi_me_export
 from .operational_metric_dashboard import build_operational_kpi_dashboard
 from .ussd_governance import create_ussd_session_log
@@ -118,6 +136,12 @@ from .serializers import (
     SensitiveExportDecisionSerializer,
     SensitiveExportRequestCreateSerializer,
     SensitiveExportRequestSerializer,
+    SourceDataFeedTypesResponseSerializer,
+    SourceDataUploadApprovalActionSerializer,
+    SourceDataUploadBatchSerializer,
+    SourceDataUploadConfirmSerializer,
+    SourceDataUploadCreateSerializer,
+    SourceDataUploadListResponseSerializer,
     SystemControlStatusSerializer,
     SystemRetryControlsRequestSerializer,
     TriggerContextRequestSerializer,
@@ -2214,6 +2238,310 @@ class OperationalKPIMEExportAPIView(APIView):
         except ValueError as error:
             return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(payload, status=status.HTTP_200_OK)
+
+
+SOURCE_DATA_UPLOAD_BATCH_LIST_SCHEMA_VERSION = "source-data-upload-batch-list-v1"
+
+
+def _source_data_upload_queryset():
+    return (
+        SourceDataUploadBatch.objects.select_related(
+            "created_by",
+            "confirmed_by",
+            "approval_requested_by",
+            "approved_by",
+            "duplicate_of",
+            "replaces_upload",
+            "surveillance_ingestion_run",
+            "population_exposure_ingestion_run",
+        )
+        .prefetch_related("artifacts", "validation_issues", "events__actor")
+        .order_by("-created_at")
+    )
+
+
+def _source_data_upload_batch_or_404(public_id):
+    return get_object_or_404(_source_data_upload_queryset(), public_id=public_id)
+
+
+class SourceDataFeedTypesAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request):
+        payload = {
+            **build_source_data_feed_types_payload(),
+            "templates": source_data_template_contracts(),
+            "template_contract_errors": validate_source_data_template_contract(),
+        }
+        serializer = SourceDataFeedTypesResponseSerializer(payload)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class SourceDataCSVTemplateFileAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request, feed_key):
+        try:
+            template_file = build_source_data_csv_template_file(feed_key)
+        except ValueError as error:
+            return Response({"detail": str(error)}, status=status.HTTP_404_NOT_FOUND)
+
+        record_auth_event(
+            request=request,
+            event_type=SOURCE_DATA_TEMPLATE_DOWNLOAD_EVENT,
+            status=AuthAuditEvent.STATUS_SUCCESS,
+            actor=request.user,
+            metadata={
+                "feed_key": feed_key,
+                "filename": template_file["filename"],
+                "payload_sha256": template_file["payload_sha256"],
+            },
+        )
+        return Response(template_file, status=status.HTTP_200_OK)
+
+
+class SourceDataUploadListCreateAPIView(APIView):
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsAdminOrSupervisor()]
+        return [IsAdminSupervisorOrAnalyst()]
+
+    def get(self, request):
+        queryset = _source_data_upload_queryset()
+        for field_name in (
+            "feed_key",
+            "status",
+            "validation_status",
+            "import_status",
+            "approval_status",
+            "domain",
+            "source_type",
+        ):
+            value = request.query_params.get(field_name)
+            if value:
+                queryset = queryset.filter(**{field_name: value})
+
+        source_name = request.query_params.get("source_name")
+        if source_name:
+            queryset = queryset.filter(source_name__icontains=source_name.strip())
+
+        actor = request.query_params.get("actor")
+        if actor:
+            actor = actor.strip()
+            queryset = queryset.filter(
+                Q(created_by__username__icontains=actor)
+                | Q(confirmed_by__username__icontains=actor)
+                | Q(approval_requested_by__username__icontains=actor)
+                | Q(approved_by__username__icontains=actor)
+                | Q(events__actor__username__icontains=actor)
+            ).distinct()
+
+        date_from = parse_datetime_query_param(
+            request.query_params.get("date_from") or request.query_params.get("created_after")
+        )
+        if date_from is not None:
+            queryset = queryset.filter(created_at__gte=date_from)
+
+        raw_date_to = request.query_params.get("date_to") or request.query_params.get("created_before")
+        date_to = parse_datetime_query_param(raw_date_to)
+        if date_to is not None:
+            if raw_date_to and "T" not in raw_date_to and len(raw_date_to.strip()) <= 10:
+                queryset = queryset.filter(created_at__lt=date_to + timedelta(days=1))
+            else:
+                queryset = queryset.filter(created_at__lte=date_to)
+
+        try:
+            limit = min(max(int(request.query_params.get("limit", 100)), 1), 200)
+        except ValueError:
+            limit = 100
+
+        payload = {
+            "schema_version": SOURCE_DATA_UPLOAD_BATCH_LIST_SCHEMA_VERSION,
+            "count": queryset.count(),
+            "results": list(queryset[:limit]),
+        }
+        serializer = SourceDataUploadListResponseSerializer(payload)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        serializer = SourceDataUploadCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        metadata = dict(serializer.validated_data)
+        uploaded_file = metadata.pop("file")
+        batch = create_source_data_upload_batch(
+            uploaded_file=uploaded_file,
+            created_by=request.user,
+            metadata=metadata,
+        )
+        record_source_data_upload_event(
+            request=request,
+            batch=batch,
+            event_type=SourceDataUploadEvent.EVENT_UPLOAD_CREATED,
+            actor=request.user,
+            metadata={
+                "feed_key": batch.feed_key,
+                "artifact_count": batch.artifacts.count(),
+                "duplicate_of_public_id": str(batch.duplicate_of.public_id) if batch.duplicate_of_id else "",
+            },
+        )
+        batch = _source_data_upload_batch_or_404(batch.public_id)
+        return Response(SourceDataUploadBatchSerializer(batch).data, status=status.HTTP_201_CREATED)
+
+
+class SourceDataUploadDetailAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request, public_id):
+        batch = _source_data_upload_batch_or_404(public_id)
+        return Response(SourceDataUploadBatchSerializer(batch).data, status=status.HTTP_200_OK)
+
+
+class SourceDataUploadValidateAPIView(APIView):
+    permission_classes = [IsAdminOrSupervisor]
+
+    def post(self, request, public_id):
+        batch = _source_data_upload_batch_or_404(public_id)
+        if batch.status in {
+            SourceDataUploadBatch.STATUS_CONFIRMING,
+            SourceDataUploadBatch.STATUS_IMPORTED,
+            SourceDataUploadBatch.STATUS_SUPERSEDED,
+        }:
+            return Response(
+                {"detail": "This upload cannot be dry-validated in its current lifecycle status."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        record_source_data_upload_event(
+            request=request,
+            batch=batch,
+            event_type=SourceDataUploadEvent.EVENT_VALIDATION_STARTED,
+            actor=request.user,
+            metadata={"previous_status": batch.status, "previous_validation_status": batch.validation_status},
+        )
+        try:
+            validated_batch = validate_source_data_upload_batch(batch)
+        except ValueError as error:
+            return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+
+        record_source_data_upload_event(
+            request=request,
+            batch=validated_batch,
+            event_type=SourceDataUploadEvent.EVENT_VALIDATION_COMPLETED,
+            actor=request.user,
+            metadata={
+                "status": validated_batch.status,
+                "validation_status": validated_batch.validation_status,
+                "row_count": validated_batch.row_count,
+                "accepted_count": validated_batch.accepted_count,
+                "rejected_count": validated_batch.rejected_count,
+                "warning_count": validated_batch.warning_count,
+            },
+        )
+        validated_batch = _source_data_upload_batch_or_404(validated_batch.public_id)
+        return Response(SourceDataUploadBatchSerializer(validated_batch).data, status=status.HTTP_200_OK)
+
+
+class SourceDataUploadApprovalAPIView(APIView):
+    permission_classes = [IsAdminOrSupervisor]
+
+    def post(self, request, public_id):
+        batch = _source_data_upload_batch_or_404(public_id)
+        serializer = SourceDataUploadApprovalActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        action = serializer.validated_data["action"]
+        reason = serializer.validated_data.get("reason", "")
+
+        try:
+            if action == SourceDataUploadApprovalActionSerializer.ACTION_REQUEST:
+                updated_batch = request_source_data_upload_approval(
+                    batch=batch,
+                    requested_by=request.user,
+                    reason=reason,
+                )
+            else:
+                updated_batch = decide_source_data_upload_approval(
+                    batch=batch,
+                    decided_by=request.user,
+                    action=action,
+                    reason=reason,
+                )
+        except ValueError as error:
+            return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+
+        record_source_data_upload_event(
+            request=request,
+            batch=updated_batch,
+            event_type=SourceDataUploadEvent.EVENT_CONFIRMATION_REQUESTED,
+            actor=request.user,
+            metadata={
+                "approval_action": action,
+                "approval_status": updated_batch.approval_status,
+                "approval_risk_category": updated_batch.approval_risk_category,
+                "risk_category": source_data_import_risk_category(updated_batch),
+            },
+        )
+        updated_batch = _source_data_upload_batch_or_404(updated_batch.public_id)
+        return Response(SourceDataUploadBatchSerializer(updated_batch).data, status=status.HTTP_200_OK)
+
+
+class SourceDataUploadConfirmAPIView(APIView):
+    permission_classes = [IsAdminOrSupervisor]
+
+    def post(self, request, public_id):
+        batch = _source_data_upload_batch_or_404(public_id)
+        serializer = SourceDataUploadConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        record_source_data_upload_event(
+            request=request,
+            batch=batch,
+            event_type=SourceDataUploadEvent.EVENT_CONFIRMATION_REQUESTED,
+            actor=request.user,
+            metadata={
+                "allow_duplicate_replay": serializer.validated_data["allow_duplicate_replay"],
+                "force_async": serializer.validated_data["force_async"],
+                "risk_category": source_data_import_risk_category(batch),
+            },
+        )
+        try:
+            confirmed_batch = confirm_source_data_upload(
+                batch=batch,
+                confirmed_by=request.user,
+                allow_duplicate_replay=serializer.validated_data["allow_duplicate_replay"],
+                force_async=serializer.validated_data["force_async"],
+            )
+        except ValueError as error:
+            return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+
+        confirmed_batch = _source_data_upload_batch_or_404(confirmed_batch.public_id)
+        response_status = (
+            status.HTTP_202_ACCEPTED
+            if confirmed_batch.status == SourceDataUploadBatch.STATUS_CONFIRMING
+            else status.HTTP_200_OK
+        )
+        return Response(SourceDataUploadBatchSerializer(confirmed_batch).data, status=response_status)
+
+
+class SourceDataUploadErrorsFileAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request, public_id):
+        batch = _source_data_upload_batch_or_404(public_id)
+        errors_file = build_source_data_upload_errors_csv(batch)
+        record_source_data_upload_event(
+            request=request,
+            batch=batch,
+            event_type=SourceDataUploadEvent.EVENT_ERRORS_DOWNLOADED,
+            actor=request.user,
+            metadata={
+                "filename": errors_file["filename"],
+                "payload_sha256": errors_file["payload_sha256"],
+                "row_count": errors_file["row_count"],
+            },
+        )
+        return Response(errors_file, status=status.HTTP_200_OK)
 
 
 class InteroperabilityDashboardAPIView(APIView):
