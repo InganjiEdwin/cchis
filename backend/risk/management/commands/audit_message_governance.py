@@ -7,16 +7,22 @@ from django.db import DatabaseError, connection
 from risk.message_governance import build_message_governance_audit
 from risk.models import (
     Alert,
+    CHV,
+    CHVDeviceRegistration,
     CHVMessage,
+    CHVOfflineRejectedSubmissionAudit,
     ContactPreference,
     FacilityReadinessUpdateRequest,
     MessageTemplate,
+    SyncQueue,
     UssdMenuVersion,
     UssdSessionLog,
 )
 
 
 REQUIRED_AUDIT_MODELS = (
+    CHV,
+    CHVDeviceRegistration,
     MessageTemplate,
     Alert,
     CHVMessage,
@@ -24,6 +30,8 @@ REQUIRED_AUDIT_MODELS = (
     ContactPreference,
     UssdMenuVersion,
     UssdSessionLog,
+    SyncQueue,
+    CHVOfflineRejectedSubmissionAudit,
 )
 
 
@@ -68,7 +76,13 @@ class Command(BaseCommand):
         else:
             self.stdout.write(f"Message governance audit: {audit['overall_status']}")
             self.stdout.write(f"Inventory records: {audit['inventory']['inventory_count']}")
+            self.stdout.write(f"CHV localization surfaces: {audit['chv_localization_inventory']['surface_count']}")
             self.stdout.write(f"Registered templates: {audit['template_count']}")
+            rollout = audit.get("localization_rollout") or {}
+            if rollout:
+                self.stdout.write(f"Strict localization issues: {audit.get('strict_localization_issue_count', 0)}")
+                self.stdout.write(f"Localization fallback rate: {rollout.get('fallback_rate_pct', 0.0)}%")
+                self.stdout.write(f"Missing translations: {rollout.get('missing_translation_count', 0)}")
             for item in audit["audit_checks"]:
                 self.stdout.write(f"- {item['id']}: {item['status']}")
                 self.stdout.write(f"  {item['answer']}")

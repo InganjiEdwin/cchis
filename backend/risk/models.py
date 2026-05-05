@@ -11,6 +11,14 @@ from django.contrib.gis.db import models
 from django.conf import settings
 from django.utils import timezone
 
+from .chv_localization import (
+    DEFAULT_CHV_LANGUAGE,
+    SUPPORTED_CHV_LANGUAGE_CHOICES,
+    SUPPORTED_CHV_LANGUAGES,
+    normalize_language_code,
+    supported_language_or_default,
+)
+
 
 MESSAGE_TEMPLATE_PLACEHOLDER_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
@@ -42,6 +50,57 @@ def _message_template_body_placeholders(body: str) -> set[str]:
             )
         placeholders.add(field_name)
     return placeholders
+
+
+def _ussd_menu_tree_structure_signature(menu_tree: dict) -> dict[str, list[str]]:
+    if not isinstance(menu_tree, dict):
+        return {"routes": [], "nodes": [], "response_types": []}
+    routes = menu_tree.get("routes")
+    nodes = menu_tree.get("nodes")
+    return {
+        "routes": [f"{route}:{node_key}" for route, node_key in sorted(routes.items())]
+        if isinstance(routes, dict)
+        else [],
+        "nodes": sorted(nodes.keys()) if isinstance(nodes, dict) else [],
+        "response_types": [
+            f"{node_key}:{str(node.get('response_type') or '').upper()}"
+            for node_key, node in sorted(nodes.items())
+            if isinstance(node, dict)
+        ]
+        if isinstance(nodes, dict)
+        else [],
+    }
+
+
+USSD_RESPONSE_TEXT_MAX_CHARS = 182
+
+
+def _validate_ussd_response_copy_budget(response_text: str, *, required_prefix: str | None = None) -> None:
+    text = (response_text or "").strip()
+    if required_prefix and not text.startswith(f"{required_prefix} "):
+        raise ValidationError(f"USSD response must start with {required_prefix}.")
+    if len(text) > USSD_RESPONSE_TEXT_MAX_CHARS:
+        raise ValidationError(
+            f"USSD response exceeds {USSD_RESPONSE_TEXT_MAX_CHARS} characters: {len(text)}."
+        )
+
+
+def _validate_ussd_menu_tree_copy_budget(menu_tree: dict) -> None:
+    if not isinstance(menu_tree, dict):
+        raise ValidationError("USSD menu tree must be a JSON object.")
+    nodes = menu_tree.get("nodes")
+    if not isinstance(nodes, dict) or not nodes:
+        raise ValidationError("USSD menu tree requires nodes before approval.")
+    for node_key, node in nodes.items():
+        if not isinstance(node, dict):
+            raise ValidationError(f"USSD node {node_key} must be an object.")
+        response_type = str(node.get("response_type") or "").upper()
+        body = str(node.get("body") or "").strip()
+        if response_type not in {"CON", "END"}:
+            raise ValidationError(f"USSD node {node_key} must use response_type CON or END.")
+        if not body:
+            raise ValidationError(f"USSD node {node_key} requires body copy.")
+        _validate_ussd_response_copy_budget(f"{response_type} {body}", required_prefix=response_type)
 
 
 class Ward(models.Model):
@@ -408,11 +467,24 @@ class MessageTemplate(models.Model):
         (APPROVAL_RETIRED, "Retired"),
     ]
 
+    TRANSLATION_DRAFT = "draft"
+    TRANSLATION_NEEDS_REVIEW = "needs_translation_review"
+    TRANSLATION_APPROVED = "approved"
+    TRANSLATION_RETIRED = "retired"
+    TRANSLATION_BLOCKED_SOURCE_RETIRED = "blocked_source_retired"
+    TRANSLATION_STATUS_CHOICES = [
+        (TRANSLATION_DRAFT, "Draft"),
+        (TRANSLATION_NEEDS_REVIEW, "Needs translation review"),
+        (TRANSLATION_APPROVED, "Approved"),
+        (TRANSLATION_RETIRED, "Retired"),
+        (TRANSLATION_BLOCKED_SOURCE_RETIRED, "Blocked because source is retired"),
+    ]
+
     public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     template_key = models.CharField(max_length=120)
     audience_type = models.CharField(max_length=32, choices=AUDIENCE_CHOICES)
     channel = models.CharField(max_length=32, choices=CHANNEL_CHOICES)
-    language = models.CharField(max_length=20, default="en")
+    language = models.CharField(max_length=20, choices=SUPPORTED_CHV_LANGUAGE_CHOICES, default=DEFAULT_CHV_LANGUAGE)
     version = models.PositiveIntegerField(default=1)
     title = models.CharField(max_length=160)
     body = models.TextField()
@@ -427,6 +499,27 @@ class MessageTemplate(models.Model):
     )
     approved_at = models.DateTimeField(null=True, blank=True)
     retired_at = models.DateTimeField(null=True, blank=True)
+    translation_status = models.CharField(
+        max_length=40,
+        choices=TRANSLATION_STATUS_CHOICES,
+        default=TRANSLATION_DRAFT,
+    )
+    source_template = models.ForeignKey(
+        "risk.MessageTemplate",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="translation_variants",
+    )
+    translation_reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="message_template_translation_reviews",
+    )
+    translation_reviewed_at = models.DateTimeField(null=True, blank=True)
+    translation_review_notes = models.TextField(blank=True)
     owner = models.CharField(max_length=120)
     risk_level = models.CharField(max_length=20, choices=RISK_CHOICES, default=RISK_MEDIUM)
     public_health_caveats = models.TextField(blank=True)
@@ -452,11 +545,16 @@ class MessageTemplate(models.Model):
                 check=models.Q(version__gte=1),
                 name="risk_msgtmpl_version_positive",
             ),
+            models.CheckConstraint(
+                check=models.Q(language__in=SUPPORTED_CHV_LANGUAGES),
+                name="risk_msgtmpl_lang_supported",
+            ),
         ]
         indexes = [
             models.Index(fields=["template_key", "language", "version"], name="risk_msgtmpl_lookup_idx"),
             models.Index(fields=["audience_type", "channel", "approval_status"], name="risk_msgtmpl_status_idx"),
             models.Index(fields=["approval_status", "retired_at"], name="risk_msgtmpl_active_idx"),
+            models.Index(fields=["source_template", "translation_status"], name="risk_msgtmpl_source_trans_idx"),
         ]
 
     @property
@@ -505,13 +603,55 @@ class MessageTemplate(models.Model):
             errors["approval_status"] = ["Only approved templates may carry an approval timestamp."]
         if self.retired_at is not None and self.approval_status != self.APPROVAL_RETIRED:
             errors["approval_status"] = ["Templates with retired_at must use retired approval status."]
+        normalized_language = normalize_language_code(self.language) or DEFAULT_CHV_LANGUAGE
+        if normalized_language not in SUPPORTED_CHV_LANGUAGES:
+            errors["language"] = ["Message template language must be one of: en, sw, luo."]
+        if normalized_language == DEFAULT_CHV_LANGUAGE and self.source_template_id:
+            errors["source_template"] = ["English source templates must not link to another source template."]
+
+        source_template = self.source_template
+        if normalized_language != DEFAULT_CHV_LANGUAGE and source_template is not None:
+            if source_template.language != DEFAULT_CHV_LANGUAGE:
+                errors["source_template"] = ["Translated message templates must link to an English source template."]
+            elif source_template.template_key != self.template_key or source_template.version != self.version:
+                errors["source_template"] = [
+                    "Translated message templates must link to the English source for the same key and version."
+                ]
+            elif sorted(source_template.placeholders or []) != sorted(declared_placeholders or []):
+                errors["placeholders"] = ["Translated message template placeholders must match the English source."]
+
+        translation_review_required = (
+            normalized_language != DEFAULT_CHV_LANGUAGE
+            and (
+                self.translation_status == self.TRANSLATION_APPROVED
+                or self.approval_status == self.APPROVAL_APPROVED
+            )
+        )
+        if translation_review_required:
+            if source_template is None:
+                errors["source_template"] = ["Translated message templates require an English source before approval."]
+            elif source_template.approval_status != self.APPROVAL_APPROVED or source_template.retired_at is not None:
+                errors["source_template"] = ["Translated message templates cannot be approved without an active approved English source."]
+            if self.translation_status != self.TRANSLATION_APPROVED:
+                errors["translation_status"] = ["Translated message templates require approved translation status before use."]
+            if self.translation_reviewed_at is None:
+                errors["translation_reviewed_at"] = ["Approved translated message templates require translation review metadata."]
+
+        public_health_copy = (
+            self.audience_type in {self.AUDIENCE_CHV, self.AUDIENCE_HOUSEHOLD}
+            or self.channel in {self.CHANNEL_USSD, self.CHANNEL_OFFLINE_CHV_BUNDLE}
+            or self.risk_level in {self.RISK_HIGH, self.RISK_CRITICAL}
+        )
+        if translation_review_required and public_health_copy and not self.public_health_caveats.strip():
+            errors["public_health_caveats"] = ["Approved translated public-health copy requires public-health caveats."]
 
         if errors:
             raise ValidationError(errors)
 
     def save(self, *args, **kwargs):
         self.template_key = self.template_key.strip()
-        self.language = self.language.strip().lower() or "en"
+        self.language = normalize_language_code(self.language) or DEFAULT_CHV_LANGUAGE
+        self.translation_review_notes = self.translation_review_notes.strip()
         self.owner = self.owner.strip()
         self.title = self.title.strip()
         super().save(*args, **kwargs)
@@ -1548,11 +1688,38 @@ class CHV(models.Model):
     phone_number = models.CharField(max_length=20, unique=True)
     ward = models.ForeignKey(Ward, on_delete=models.CASCADE, related_name="chvs")
     is_active = models.BooleanField(default=True)
-    language = models.CharField(max_length=20, default="en")
+    language = models.CharField(max_length=20, choices=SUPPORTED_CHV_LANGUAGE_CHOICES, default=DEFAULT_CHV_LANGUAGE)
+    preferred_language = models.CharField(
+        max_length=20,
+        choices=SUPPORTED_CHV_LANGUAGE_CHOICES,
+        default=DEFAULT_CHV_LANGUAGE,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["name"]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(language__in=SUPPORTED_CHV_LANGUAGES),
+                name="risk_chv_language_supported",
+            ),
+            models.CheckConstraint(
+                check=models.Q(preferred_language__in=SUPPORTED_CHV_LANGUAGES),
+                name="risk_chv_preflang_supported",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        legacy_language = normalize_language_code(self.language)
+        preferred_language = normalize_language_code(self.preferred_language)
+        if (not preferred_language or preferred_language == DEFAULT_CHV_LANGUAGE) and legacy_language not in {
+            "",
+            DEFAULT_CHV_LANGUAGE,
+        }:
+            preferred_language = legacy_language
+        self.preferred_language = supported_language_or_default(preferred_language)
+        self.language = self.preferred_language
+        super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return f"{self.name} ({self.ward.name})"
@@ -1588,6 +1755,11 @@ class CHVDeviceRegistration(models.Model):
     contract_version = models.CharField(max_length=64, default="chv-offline-v1")
     app_version = models.CharField(max_length=64, blank=True)
     platform = models.CharField(max_length=20, choices=PLATFORM_CHOICES, default=PLATFORM_UNKNOWN)
+    preferred_language = models.CharField(
+        max_length=20,
+        choices=SUPPORTED_CHV_LANGUAGE_CHOICES,
+        default=DEFAULT_CHV_LANGUAGE,
+    )
     last_bundle_version = models.CharField(max_length=96, blank=True)
     last_sync_at = models.DateTimeField(null=True, blank=True)
     last_seen_at = models.DateTimeField(null=True, blank=True)
@@ -1600,12 +1772,20 @@ class CHVDeviceRegistration(models.Model):
         ordering = ["-last_seen_at", "-registered_at"]
         constraints = [
             models.UniqueConstraint(fields=["user", "device_id"], name="risk_chvdev_user_device_uniq"),
+            models.CheckConstraint(
+                check=models.Q(preferred_language__in=SUPPORTED_CHV_LANGUAGES),
+                name="risk_chvdev_preflang_supported",
+            ),
         ]
         indexes = [
             models.Index(fields=["ward", "is_active"], name="risk_chvdev_ward_active_idx"),
             models.Index(fields=["chv", "is_active"], name="risk_chvdev_chv_active_idx"),
             models.Index(fields=["contract_version", "last_seen_at"], name="risk_chvdev_contract_idx"),
         ]
+
+    def save(self, *args, **kwargs):
+        self.preferred_language = supported_language_or_default(self.preferred_language)
+        super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return f"{self.device_id} [{self.contract_version}]"
@@ -1659,6 +1839,13 @@ class CHVMessage(models.Model):
     )
     template_key = models.CharField(max_length=120, blank=True)
     template_version = models.PositiveIntegerField(null=True, blank=True)
+    requested_language = models.CharField(max_length=20, default=DEFAULT_CHV_LANGUAGE)
+    resolved_language = models.CharField(
+        max_length=20,
+        choices=SUPPORTED_CHV_LANGUAGE_CHOICES,
+        default=DEFAULT_CHV_LANGUAGE,
+    )
+    fallback_used = models.BooleanField(default=False)
     message_body = models.TextField()
     governance_metadata = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_QUEUED)
@@ -1675,7 +1862,20 @@ class CHVMessage(models.Model):
             models.Index(fields=["chv", "created_at"], name="risk_chvmsg_chv_6a85ae_idx"),
             models.Index(fields=["status", "created_at"], name="risk_chvmsg_status_8f9cc6_idx"),
             models.Index(fields=["template_key", "template_version"], name="risk_chvmsg_tpl_idx"),
+            models.Index(fields=["resolved_language", "created_at"], name="risk_chvmsg_reslang_idx"),
         ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(resolved_language__in=SUPPORTED_CHV_LANGUAGES),
+                name="risk_chvmsg_reslang_supported",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        self.requested_language = normalize_language_code(self.requested_language) or DEFAULT_CHV_LANGUAGE
+        self.resolved_language = supported_language_or_default(self.resolved_language or self.requested_language)
+        self.fallback_used = bool(self.fallback_used or self.requested_language != self.resolved_language)
+        super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return f"{self.chv.name} message [{self.status}]"
@@ -3682,6 +3882,13 @@ class Alert(models.Model):
     )
     template_key = models.CharField(max_length=120, blank=True)
     template_version = models.PositiveIntegerField(null=True, blank=True)
+    requested_language = models.CharField(max_length=20, default=DEFAULT_CHV_LANGUAGE)
+    resolved_language = models.CharField(
+        max_length=20,
+        choices=SUPPORTED_CHV_LANGUAGE_CHOICES,
+        default=DEFAULT_CHV_LANGUAGE,
+    )
+    fallback_used = models.BooleanField(default=False)
     message = models.TextField()
     governance_metadata = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_QUEUED)
@@ -3700,7 +3907,20 @@ class Alert(models.Model):
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["template_key", "template_version"], name="risk_alert_tpl_idx"),
+            models.Index(fields=["resolved_language", "created_at"], name="risk_alert_reslang_idx"),
         ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(resolved_language__in=SUPPORTED_CHV_LANGUAGES),
+                name="risk_alert_reslang_supported",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        self.requested_language = normalize_language_code(self.requested_language) or DEFAULT_CHV_LANGUAGE
+        self.resolved_language = supported_language_or_default(self.resolved_language or self.requested_language)
+        self.fallback_used = bool(self.fallback_used or self.requested_language != self.resolved_language)
+        super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return f"{self.channel} to {self.recipient} [{self.status}]"
@@ -3743,10 +3963,23 @@ class UssdMenuVersion(models.Model):
         (STATUS_RETIRED, "Retired"),
     ]
 
+    TRANSLATION_DRAFT = "draft"
+    TRANSLATION_NEEDS_REVIEW = "needs_translation_review"
+    TRANSLATION_APPROVED = "approved"
+    TRANSLATION_RETIRED = "retired"
+    TRANSLATION_BLOCKED_SOURCE_RETIRED = "blocked_source_retired"
+    TRANSLATION_STATUS_CHOICES = [
+        (TRANSLATION_DRAFT, "Draft"),
+        (TRANSLATION_NEEDS_REVIEW, "Needs translation review"),
+        (TRANSLATION_APPROVED, "Approved"),
+        (TRANSLATION_RETIRED, "Retired"),
+        (TRANSLATION_BLOCKED_SOURCE_RETIRED, "Blocked because source is retired"),
+    ]
+
     public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     menu_key = models.CharField(max_length=120, default="cholera_health_menu")
     version_label = models.CharField(max_length=80)
-    language = models.CharField(max_length=20, default="en")
+    language = models.CharField(max_length=20, choices=SUPPORTED_CHV_LANGUAGE_CHOICES, default=DEFAULT_CHV_LANGUAGE)
     title = models.CharField(max_length=160)
     menu_tree = models.JSONField(default=dict, blank=True)
     safe_fallback_copy = models.TextField(default="END Invalid option. Please try again.")
@@ -3761,6 +3994,27 @@ class UssdMenuVersion(models.Model):
     )
     approved_at = models.DateTimeField(null=True, blank=True)
     retired_at = models.DateTimeField(null=True, blank=True)
+    translation_status = models.CharField(
+        max_length=40,
+        choices=TRANSLATION_STATUS_CHOICES,
+        default=TRANSLATION_DRAFT,
+    )
+    source_menu_version = models.ForeignKey(
+        "risk.UssdMenuVersion",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="translation_variants",
+    )
+    translation_reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="ussd_menu_translation_reviews",
+    )
+    translation_reviewed_at = models.DateTimeField(null=True, blank=True)
+    translation_review_notes = models.TextField(blank=True)
     is_active = models.BooleanField(default=False)
     lineage_metadata = models.JSONField(default=dict, blank=True)
     created_by = models.ForeignKey(
@@ -3785,28 +4039,82 @@ class UssdMenuVersion(models.Model):
                 condition=models.Q(is_active=True),
                 name="risk_ussdmenu_one_active_lang",
             ),
+            models.CheckConstraint(
+                check=models.Q(language__in=SUPPORTED_CHV_LANGUAGES),
+                name="risk_ussdmenu_lang_supported",
+            ),
         ]
         indexes = [
             models.Index(fields=["menu_key", "language", "is_active"], name="risk_ussdmenu_active_idx"),
             models.Index(fields=["approval_status", "retired_at"], name="risk_ussdmenu_status_idx"),
+            models.Index(fields=["source_menu_version", "translation_status"], name="risk_ussdmenu_src_tr_idx"),
         ]
 
     def clean(self):
         errors = {}
+        normalized_language = normalize_language_code(self.language) or DEFAULT_CHV_LANGUAGE
         if self.is_active and self.approval_status != self.STATUS_APPROVED:
             errors["is_active"] = ["Only approved USSD menu versions can be active."]
         if self.approval_status == self.STATUS_APPROVED and self.approved_at is None:
             errors["approved_at"] = ["Approved USSD menu versions require an approval timestamp."]
         if self.retired_at is not None and self.approval_status != self.STATUS_RETIRED:
             errors["approval_status"] = ["USSD menu versions with retired_at must use retired status."]
+        if normalized_language not in SUPPORTED_CHV_LANGUAGES:
+            errors["language"] = ["USSD menu language must be one of: en, sw, luo."]
+        if normalized_language == DEFAULT_CHV_LANGUAGE and self.source_menu_version_id:
+            errors["source_menu_version"] = ["English USSD source menus must not link to another source menu."]
+
+        if self.approval_status == self.STATUS_APPROVED or self.is_active:
+            try:
+                _validate_ussd_menu_tree_copy_budget(self.menu_tree or {})
+            except ValidationError as exc:
+                errors.setdefault("menu_tree", []).extend(exc.messages)
+            try:
+                _validate_ussd_response_copy_budget(self.safe_fallback_copy, required_prefix="END")
+            except ValidationError as exc:
+                errors.setdefault("safe_fallback_copy", []).extend(exc.messages)
+
+        source_menu_version = self.source_menu_version
+        if normalized_language != DEFAULT_CHV_LANGUAGE and source_menu_version is not None:
+            if source_menu_version.language != DEFAULT_CHV_LANGUAGE:
+                errors["source_menu_version"] = ["Translated USSD menus must link to an English source menu."]
+            elif source_menu_version.menu_key != self.menu_key:
+                errors["source_menu_version"] = ["Translated USSD menus must link to an English source with the same menu key."]
+            elif _ussd_menu_tree_structure_signature(source_menu_version.menu_tree or {}) != _ussd_menu_tree_structure_signature(
+                self.menu_tree or {}
+            ):
+                errors.setdefault("menu_tree", []).append(
+                    "Translated USSD menus must preserve English source routes and node keys."
+                )
+
+        translation_review_required = (
+            normalized_language != DEFAULT_CHV_LANGUAGE
+            and (
+                self.translation_status == self.TRANSLATION_APPROVED
+                or self.approval_status == self.STATUS_APPROVED
+                or self.is_active
+            )
+        )
+        if translation_review_required:
+            if source_menu_version is None:
+                errors["source_menu_version"] = ["Translated USSD menus require an English source before approval."]
+            elif source_menu_version.approval_status != self.STATUS_APPROVED or source_menu_version.retired_at is not None:
+                errors["source_menu_version"] = ["Translated USSD menus cannot be approved without an active approved English source."]
+            if self.translation_status != self.TRANSLATION_APPROVED:
+                errors["translation_status"] = ["Translated USSD menus require approved translation status before use."]
+            if self.translation_reviewed_at is None:
+                errors["translation_reviewed_at"] = ["Approved translated USSD menus require translation review metadata."]
+            if not self.safe_fallback_copy.strip():
+                errors["safe_fallback_copy"] = ["Translated USSD menus require safe fallback copy."]
         if errors:
             raise ValidationError(errors)
 
     def save(self, *args, **kwargs):
         self.menu_key = self.menu_key.strip() or "cholera_health_menu"
         self.version_label = self.version_label.strip()
-        self.language = self.language.strip().lower() or "en"
+        self.language = normalize_language_code(self.language) or DEFAULT_CHV_LANGUAGE
         self.title = self.title.strip()
+        self.translation_review_notes = self.translation_review_notes.strip()
         super().save(*args, **kwargs)
 
     def __str__(self) -> str:
@@ -3844,7 +4152,14 @@ class UssdSessionLog(models.Model):
     )
     menu_key = models.CharField(max_length=120, default="cholera_health_menu")
     menu_version_label = models.CharField(max_length=80, blank=True)
-    language = models.CharField(max_length=20, default="en")
+    language = models.CharField(max_length=20, choices=SUPPORTED_CHV_LANGUAGE_CHOICES, default=DEFAULT_CHV_LANGUAGE)
+    requested_language = models.CharField(max_length=20, default=DEFAULT_CHV_LANGUAGE)
+    resolved_language = models.CharField(
+        max_length=20,
+        choices=SUPPORTED_CHV_LANGUAGE_CHOICES,
+        default=DEFAULT_CHV_LANGUAGE,
+    )
+    fallback_used = models.BooleanField(default=False)
     menu_level = models.CharField(max_length=50, blank=True)
     session_outcome = models.CharField(max_length=40, choices=OUTCOME_CHOICES, default=OUTCOME_IN_PROGRESS)
     invalid_option = models.BooleanField(default=False)
@@ -3861,6 +4176,22 @@ class UssdSessionLog(models.Model):
             models.Index(fields=["session_outcome", "created_at"], name="risk_ussdlog_outcome_idx"),
             models.Index(fields=["invalid_option", "created_at"], name="risk_ussdlog_invalid_idx"),
         ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(language__in=SUPPORTED_CHV_LANGUAGES),
+                name="risk_ussdlog_lang_supported",
+            ),
+            models.CheckConstraint(
+                check=models.Q(resolved_language__in=SUPPORTED_CHV_LANGUAGES),
+                name="risk_ussdlog_reslang_supported",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        self.language = supported_language_or_default(self.language)
+        self.requested_language = normalize_language_code(self.requested_language) or DEFAULT_CHV_LANGUAGE
+        self.resolved_language = supported_language_or_default(self.resolved_language or self.language)
+        super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return f"USSD {self.session_id} {self.phone_number}"

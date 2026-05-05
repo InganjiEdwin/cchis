@@ -173,6 +173,11 @@ class MessageTemplateSerializer(serializers.ModelSerializer):
             "approved_by_username",
             "approved_at",
             "retired_at",
+            "translation_status",
+            "source_template",
+            "translation_reviewed_by",
+            "translation_reviewed_at",
+            "translation_review_notes",
             "owner",
             "risk_level",
             "public_health_caveats",
@@ -353,6 +358,7 @@ class CHVSerializer(serializers.ModelSerializer):
             "name",
             "phone_number",
             "language",
+            "preferred_language",
             "is_active",
             "ward",
             "ward_name",
@@ -366,6 +372,7 @@ class CHVOperationsSerializer(serializers.Serializer):
     name = serializers.CharField()
     phone_number = serializers.CharField()
     language = serializers.CharField()
+    preferred_language = serializers.CharField()
     is_active = serializers.BooleanField()
     ward = serializers.IntegerField()
     ward_name = serializers.CharField()
@@ -392,6 +399,7 @@ class CHVDeviceRegistrationCreateSerializer(PiiSafeInputSerializerMixin, seriali
     device_id = serializers.CharField(max_length=120)
     contract_version = serializers.CharField(required=False, allow_blank=True, default=OFFLINE_CHV_CONTRACT_VERSION)
     app_version = serializers.CharField(required=False, allow_blank=True, max_length=64)
+    preferred_language = serializers.CharField(required=False, allow_blank=True, max_length=20)
     platform = serializers.ChoiceField(
         choices=[choice[0] for choice in CHVDeviceRegistration.PLATFORM_CHOICES],
         required=False,
@@ -430,6 +438,9 @@ class CHVMessageSerializer(serializers.ModelSerializer):
             "template",
             "template_key",
             "template_version",
+            "requested_language",
+            "resolved_language",
+            "fallback_used",
             "message_body",
             "governance_metadata",
             "status",
@@ -464,7 +475,7 @@ class CHVMessageCreateSerializer(PiiSafeInputSerializerMixin, serializers.Serial
             raise serializers.ValidationError({"message_body": "A message body or template key is required."})
         attrs["message_body"] = message_body
         attrs["template_key"] = template_key
-        attrs["template_language"] = attrs.get("template_language", "").strip().lower() or "en"
+        attrs["template_language"] = attrs.get("template_language", "").strip().lower()
         if attrs.get("emergency_override") and not attrs.get("override_reason", "").strip():
             raise serializers.ValidationError({"override_reason": "Emergency override requires a reason."})
         return attrs
@@ -1048,6 +1059,9 @@ class AlertSerializer(serializers.ModelSerializer):
             "template",
             "template_key",
             "template_version",
+            "requested_language",
+            "resolved_language",
+            "fallback_used",
             "message",
             "governance_metadata",
             "status",
@@ -2508,7 +2522,7 @@ class TriggerPreviewRequestSerializer(PiiSafeInputSerializerMixin, serializers.S
 
     def validate(self, attrs):
         attrs["template_key"] = attrs.get("template_key", "").strip()
-        attrs["template_language"] = attrs.get("template_language", "").strip().lower() or "en"
+        attrs["template_language"] = attrs.get("template_language", "").strip().lower()
         return attrs
 
 
@@ -2548,7 +2562,7 @@ class TriggerAlertRequestSerializer(PiiSafeInputSerializerMixin, serializers.Ser
 
     def validate(self, attrs):
         attrs["template_key"] = attrs.get("template_key", "").strip()
-        attrs["template_language"] = attrs.get("template_language", "").strip().lower() or "en"
+        attrs["template_language"] = attrs.get("template_language", "").strip().lower()
         return attrs
 
 
@@ -2692,6 +2706,9 @@ class UssdSessionLogSerializer(serializers.ModelSerializer):
             "menu_key",
             "menu_version_label",
             "language",
+            "requested_language",
+            "resolved_language",
+            "fallback_used",
             "menu_level",
             "session_outcome",
             "invalid_option",
@@ -2747,6 +2764,11 @@ class UssdMenuVersionSerializer(serializers.ModelSerializer):
             "approved_by",
             "approved_at",
             "retired_at",
+            "translation_status",
+            "source_menu_version",
+            "translation_reviewed_by",
+            "translation_reviewed_at",
+            "translation_review_notes",
             "is_active",
             "lineage_metadata",
             "created_by",
@@ -2883,6 +2905,10 @@ class CHVSyncRequestSerializer(PiiSafeInputSerializerMixin, serializers.Serializ
     ward_id = serializers.IntegerField(required=False)
     phone_number = serializers.CharField(required=False, allow_blank=True, default="")
     source_device_id = serializers.CharField(required=False, allow_blank=True, default="")
+    language = serializers.CharField(required=False, allow_blank=True, max_length=20)
+    requested_language = serializers.CharField(required=False, allow_blank=True, max_length=20)
+    resolved_language = serializers.CharField(required=False, allow_blank=True, max_length=20)
+    fallback_used = serializers.BooleanField(required=False, default=False)
     payloads = SyncPayloadSerializer(many=True, required=False)
     uploads = SyncPayloadSerializer(many=True, required=False)
 
@@ -2940,6 +2966,9 @@ class CHVSyncRequestSerializer(PiiSafeInputSerializerMixin, serializers.Serializ
         attrs["source_device_id"] = source_device_id
         attrs["payloads"] = normalized_payloads
         attrs["contract_version"] = (attrs.get("contract_version") or OFFLINE_CHV_CONTRACT_VERSION).strip()
+        attrs["language"] = (attrs.get("language") or "").strip().lower()
+        attrs["requested_language"] = (attrs.get("requested_language") or attrs["language"]).strip().lower()
+        attrs["resolved_language"] = (attrs.get("resolved_language") or "").strip().lower()
         return attrs
 
     def validate_payloads(self, value):

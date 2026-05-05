@@ -74,12 +74,20 @@ function renderChvPage(user: CurrentUser = buildChvUser()) {
   });
 
   window.localStorage.setItem("cchis.chv_offline.device_id", "web-test-device");
-  render(React.createElement(ChvOfflinePage));
+  return render(React.createElement(ChvOfflinePage));
 }
 
-function buildOfflineContractResponse() {
+function buildOfflineContractResponse(language = "en", resolvedLanguage = language, fallbackUsed = false) {
   return {
     contract_version: "chv-offline-v1",
+    requested_language: language,
+    resolved_language: resolvedLanguage,
+    fallback_used: fallbackUsed,
+    language: {
+      requested_language: language,
+      resolved_language: resolvedLanguage,
+      fallback_used: fallbackUsed,
+    },
     session_scope: {
       ward_id: 12,
       scope_key: "ward:server-ward:chv:server-chv",
@@ -88,6 +96,9 @@ function buildOfflineContractResponse() {
       version: "chv-bundle-live-001",
       generated_at: "2026-05-04T08:00:00Z",
       expires_at: "2026-05-05T08:00:00Z",
+      requested_language: language,
+      resolved_language: resolvedLanguage,
+      fallback_used: fallbackUsed,
       task_bundle: {
         schema_version: "chv-task-bundle-v1",
         tasks: [
@@ -107,11 +118,19 @@ function buildOfflineContractResponse() {
       },
       guidance_bundle: {
         schema_version: "chv-guidance-bundle-v1",
+        requested_language: language,
+        resolved_language: resolvedLanguage,
+        fallback_used: fallbackUsed,
+        content_unavailable: false,
+        governance_status: "approved",
         items: [
           {
             guidance_public_id: "guidance-live-1",
-            template_key: "cholera.prevention.safe_water",
-            language: "en",
+            template_key: "cholera.household.prevention_guidance_offline_bundle",
+            language: resolvedLanguage,
+            requested_language: language,
+            resolved_language: resolvedLanguage,
+            fallback_used: fallbackUsed,
             version: 2,
             audience_type: "CHV",
             title: "Live safe water",
@@ -122,6 +141,78 @@ function buildOfflineContractResponse() {
       },
       decision_support_rule_bundle: {
         version: "cholera-triage-rules-v1",
+        requested_language: language,
+        resolved_language: resolvedLanguage,
+        fallback_used: fallbackUsed,
+        content_unavailable: false,
+        governance_status: "approved",
+        missing_recommendation_keys: [],
+        recommendations: [
+          {
+            recommendation_public_id: "recommendation-live-1",
+            recommendation_key: "urgent_referral",
+            template_key: "cholera.chv.triage.urgent_referral_offline",
+            language: resolvedLanguage,
+            requested_language: language,
+            resolved_language: resolvedLanguage,
+            fallback_used: fallbackUsed,
+            version: 1,
+            audience_type: "chv",
+            title: "Live urgent referral",
+            body: "Approved urgent referral copy.",
+            public_health_caveats: "Approved CHV triage copy.",
+            source: "governed_message_template",
+            governance_status: "approved",
+          },
+          {
+            recommendation_public_id: "recommendation-live-2",
+            recommendation_key: "facility_assessment",
+            template_key: "cholera.chv.triage.facility_assessment_offline",
+            language: resolvedLanguage,
+            requested_language: language,
+            resolved_language: resolvedLanguage,
+            fallback_used: fallbackUsed,
+            version: 1,
+            audience_type: "chv",
+            title: "Live facility assessment",
+            body: "Approved facility assessment copy.",
+            public_health_caveats: "Approved CHV triage copy.",
+            source: "governed_message_template",
+            governance_status: "approved",
+          },
+          {
+            recommendation_public_id: "recommendation-live-3",
+            recommendation_key: "ors_and_prevention",
+            template_key: "cholera.chv.triage.ors_and_prevention_offline",
+            language: resolvedLanguage,
+            requested_language: language,
+            resolved_language: resolvedLanguage,
+            fallback_used: fallbackUsed,
+            version: 1,
+            audience_type: "chv",
+            title: "Live ORS advice",
+            body: "Approved ORS and prevention copy.",
+            public_health_caveats: "Approved CHV triage copy.",
+            source: "governed_message_template",
+            governance_status: "approved",
+          },
+          {
+            recommendation_public_id: "recommendation-live-4",
+            recommendation_key: "record_symptoms",
+            template_key: "cholera.chv.triage.record_symptoms_offline",
+            language: resolvedLanguage,
+            requested_language: language,
+            resolved_language: resolvedLanguage,
+            fallback_used: fallbackUsed,
+            version: 1,
+            audience_type: "chv",
+            title: "Live record symptoms",
+            body: "Approved record symptoms copy.",
+            public_health_caveats: "Approved CHV triage copy.",
+            source: "governed_message_template",
+            governance_status: "approved",
+          },
+        ],
       },
     },
     sync_health_record: {
@@ -133,11 +224,15 @@ function buildOfflineContractResponse() {
   };
 }
 
-function buildDeviceRegistrationResponse() {
+function buildDeviceRegistrationResponse(language = "en", resolvedLanguage = language, fallbackUsed = false) {
   return {
     public_id: "11111111-1111-4111-8111-111111111111",
     device_id: "web-test-device",
     contract_version: "chv-offline-v1",
+    preferred_language: resolvedLanguage,
+    requested_language: language,
+    resolved_language: resolvedLanguage,
+    fallback_used: fallbackUsed,
     download_bundle_version: "chv-bundle-live-001",
     session_scope: {
       ward_id: 12,
@@ -194,16 +289,118 @@ describe("ChvOfflinePage", () => {
 
     await saveBasicFollowUp();
 
+    expect(screen.getByRole("navigation", { name: "CHV offline views" })).toBeInTheDocument();
     expect(screen.getByText("Follow-up saved on this device.")).toBeInTheDocument();
     expect(screen.getAllByText("Pending").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: /sync now/i })).toBeDisabled();
     expect(mockReplace).not.toHaveBeenCalled();
   });
 
+  it("marks local governed content unavailable without claiming an English health fallback", async () => {
+    setOnline(false);
+    const user = userEvent.setup();
+    renderChvPage();
+
+    await screen.findByRole("heading", { name: "CHV follow-up" });
+    await user.click(screen.getByRole("button", { name: /start triage/i }));
+    await user.click(screen.getByRole("button", { name: "Diarrhea" }));
+
+    expect(screen.getByText("Recommendation unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Download the offline bundle before using decision support.")).toBeInTheDocument();
+    expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(0);
+    expect(screen.queryByText("English recommendation shown for this item.")).not.toBeInTheDocument();
+  });
+
+  it("caches the selected CHV language for offline use", async () => {
+    setOnline(false);
+    const user = userEvent.setup();
+    const view = renderChvPage();
+
+    await screen.findByRole("heading", { name: "CHV follow-up" });
+    await user.selectOptions(screen.getByRole("combobox", { name: "Language" }), "sw");
+
+    expect(await screen.findByRole("heading", { name: "Ufuatiliaji wa CHV" })).toBeInTheDocument();
+    expect(screen.getAllByText("Imerejea Kiingereza").length).toBeGreaterThan(0);
+    expect(window.localStorage.getItem("cchis.chv_offline.local.ward-12.user-7")).toContain(
+      '"selectedLanguage":"sw"',
+    );
+
+    view.unmount();
+    renderChvPage();
+
+    expect(await screen.findByRole("heading", { name: "Ufuatiliaji wa CHV" })).toBeInTheDocument();
+  });
+
+  it("requests a selected live language bundle and marks missing translation fallback", async () => {
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(_url);
+      if (url.startsWith("/api/chv/offline/contract")) {
+        const language = new URL(`http://localhost${url}`).searchParams.get("language") ?? "en";
+        return jsonResponse(language === "sw" ? buildOfflineContractResponse("sw", "en", true) : buildOfflineContractResponse());
+      }
+      if (url === "/api/chv/device-registrations") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { preferred_language?: string };
+        const preferredLanguage = body.preferred_language ?? "en";
+        return jsonResponse(
+          preferredLanguage === "sw"
+            ? buildDeviceRegistrationResponse("sw", "en", true)
+            : buildDeviceRegistrationResponse(),
+          201,
+        );
+      }
+      return jsonResponse({ detail: "Unexpected request." }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderChvPage();
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("language=en"), expect.any(Object));
+    });
+    await user.selectOptions(screen.getByRole("combobox", { name: "Language" }), "sw");
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("language=sw"), expect.any(Object));
+    });
+    const registrationCalls = fetchMock.mock.calls.filter((call) => String(call[0]) === "/api/chv/device-registrations");
+    const latestRegistrationBody = JSON.parse(String(registrationCalls.at(-1)?.[1]?.body ?? "{}")) as {
+      preferred_language?: string;
+    };
+    expect(latestRegistrationBody.preferred_language).toBe("sw");
+    await waitFor(() => {
+      expect(screen.getAllByText("Imerejea Kiingereza").length).toBeGreaterThan(0);
+    });
+  });
+
+  it("renders triage recommendation copy from the governed offline bundle", async () => {
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL) => {
+      const url = String(_url);
+      if (url.startsWith("/api/chv/offline/contract")) {
+        return jsonResponse(buildOfflineContractResponse());
+      }
+      if (url === "/api/chv/device-registrations") {
+        return jsonResponse(buildDeviceRegistrationResponse(), 201);
+      }
+      return jsonResponse({ detail: "Unexpected request." }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderChvPage();
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("language=en"), expect.any(Object));
+    });
+    await user.click(screen.getByRole("button", { name: /start triage/i }));
+    await user.click(screen.getByRole("button", { name: "Diarrhea" }));
+
+    expect(screen.getByText("Live ORS advice")).toBeInTheDocument();
+    expect(screen.getByText("Approved ORS and prevention copy.")).toBeInTheDocument();
+  });
+
   it("syncs pending triage when online without sending local-only task fields", async () => {
     const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
       const url = String(_url);
-      if (url === "/api/chv/offline/contract") {
+      if (url.startsWith("/api/chv/offline/contract")) {
         return jsonResponse(buildOfflineContractResponse());
       }
       if (url === "/api/chv/device-registrations") {
@@ -278,7 +475,7 @@ describe("ChvOfflinePage", () => {
   it("loads live assigned tasks, registers the device, and syncs prevention visits", async () => {
     const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
       const url = String(_url);
-      if (url === "/api/chv/offline/contract") {
+      if (url.startsWith("/api/chv/offline/contract")) {
         return jsonResponse(buildOfflineContractResponse());
       }
       if (url === "/api/chv/device-registrations") {
@@ -324,7 +521,10 @@ describe("ChvOfflinePage", () => {
     renderChvPage();
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/api/chv/offline/contract", expect.any(Object));
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringMatching(/^\/api\/chv\/offline\/contract/),
+        expect.any(Object),
+      );
       expect(fetchMock).toHaveBeenCalledWith("/api/chv/device-registrations", expect.any(Object));
     });
 
@@ -363,7 +563,7 @@ describe("ChvOfflinePage", () => {
   it("does not mark unrelated pending work rejected when one queued item fails", async () => {
     const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
       const url = String(_url);
-      if (url === "/api/chv/offline/contract") {
+      if (url.startsWith("/api/chv/offline/contract")) {
         return jsonResponse(buildOfflineContractResponse());
       }
       if (url === "/api/chv/device-registrations") {
@@ -418,7 +618,7 @@ describe("ChvOfflinePage", () => {
     await userEvent.setup().click(await screen.findByRole("button", { name: /save prevention visit/i }));
     await userEvent.setup().click(screen.getByRole("button", { name: /sync now/i }));
 
-    expect(await screen.findByText("1 sent, 1 rejected. Preparedness action not found.")).toBeInTheDocument();
+    expect(await screen.findByText("1 sent, 1 rejected. Unable to sync offline work.")).toBeInTheDocument();
     const syncCalls = fetchMock.mock.calls.filter((call) => String(call[0]) === "/api/chv/sync");
     expect(syncCalls).toHaveLength(2);
     expect(screen.getAllByText("Rejected").length).toBeGreaterThan(0);
@@ -427,7 +627,7 @@ describe("ChvOfflinePage", () => {
   it("keeps pending work queued when sync fails with a retryable server error", async () => {
     const fetchMock = vi.fn(async (_url: RequestInfo | URL) => {
       const url = String(_url);
-      if (url === "/api/chv/offline/contract") {
+      if (url.startsWith("/api/chv/offline/contract")) {
         return jsonResponse(buildOfflineContractResponse());
       }
       if (url === "/api/chv/device-registrations") {
@@ -442,7 +642,8 @@ describe("ChvOfflinePage", () => {
     await saveBasicFollowUp();
     await userEvent.setup().click(screen.getByRole("button", { name: /sync now/i }));
 
-    expect(await screen.findByText("0 sent, 1 waiting to retry. Backend unavailable.")).toBeInTheDocument();
+    expect(await screen.findByText("0 sent, 1 waiting to retry. Unable to sync offline work.")).toBeInTheDocument();
+    expect(screen.queryByText("Backend unavailable.")).not.toBeInTheDocument();
     expect(screen.getAllByText("Pending").length).toBeGreaterThan(0);
     expect(screen.queryByText("Rejected")).not.toBeInTheDocument();
   });
@@ -462,7 +663,8 @@ describe("ChvOfflinePage", () => {
     await saveBasicFollowUp();
     await userEvent.setup().click(screen.getByRole("button", { name: /sync now/i }));
 
-    expect((await screen.findAllByText("Ward not found.")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("Unable to sync offline work.")).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Ward not found.")).not.toBeInTheDocument();
     expect(screen.getAllByText("Rejected").length).toBeGreaterThan(0);
   });
 });

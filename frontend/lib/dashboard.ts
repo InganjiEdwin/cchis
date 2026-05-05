@@ -2677,6 +2677,12 @@ export type InteroperabilityCsvTemplateFileResponse = InteroperabilityErrorFileR
 };
 
 export type MessageTemplateApprovalStatus = "draft" | "pending_review" | "approved" | "rejected" | "retired";
+export type MessageTemplateTranslationStatus =
+  | "draft"
+  | "needs_translation_review"
+  | "approved"
+  | "retired"
+  | "blocked_source_retired";
 export type MessageTemplateAudienceType = "chv" | "household" | "facility_contact" | "county_operator" | "system_operator";
 export type MessageTemplateChannel = "sms" | "ussd" | "dashboard" | "offline_chv_bundle";
 
@@ -2695,6 +2701,14 @@ export type MessageTemplateRecord = {
   approved_by_username: string;
   approved_at: string | null;
   retired_at: string | null;
+  translation_status?: MessageTemplateTranslationStatus;
+  source_template?: string;
+  source_template_key?: string;
+  source_template_version?: number | null;
+  translation_reviewed_by?: number | null;
+  translation_reviewed_by_username?: string;
+  translation_reviewed_at?: string | null;
+  translation_review_notes?: string;
   owner: string;
   risk_level: "low" | "medium" | "high" | "critical";
   public_health_caveats: string;
@@ -2725,6 +2739,100 @@ export type MessageTemplateRecord = {
     facility_update_request_count: number;
     total_delivery_count: number;
   };
+};
+
+export type MessageLanguagePreviewRecord = {
+  language: string;
+  label: string;
+  exists: boolean;
+  public_id: string;
+  title: string;
+  approval_status: MessageTemplateApprovalStatus | "";
+  translation_status: MessageTemplateTranslationStatus | "";
+  source_template: string;
+  source_template_key: string;
+  source_template_version: number | null;
+  body: string;
+  rendered_body: string;
+  delivery_rendered_body: string;
+  requested_language: string;
+  resolved_language: string;
+  fallback_used: boolean;
+  placeholders: string[];
+  placeholder_parity_status: "source" | "pass" | "warning" | "missing";
+  placeholder_warnings: string[];
+  render_error: string;
+};
+
+export type TemplateLanguageCoverageVariant = {
+  language: string;
+  label: string;
+  exists: boolean;
+  public_id: string;
+  title: string;
+  approval_status: MessageTemplateApprovalStatus | "";
+  translation_status: MessageTemplateTranslationStatus | "";
+  placeholder_parity_status: "source" | "pass" | "warning" | "missing";
+  warnings: string[];
+};
+
+export type TemplateLanguageCoverageWarning = {
+  language: string;
+  label: string;
+  message: string;
+};
+
+export type TemplateLanguageCoverageRow = {
+  template_key: string;
+  version: number;
+  title: string;
+  audience_type: MessageTemplateAudienceType;
+  channel: MessageTemplateChannel;
+  risk_level: "low" | "medium" | "high" | "critical";
+  owner: string;
+  requires_translation: boolean;
+  present_languages: string[];
+  missing_languages: string[];
+  missing_language_labels: string[];
+  variants: TemplateLanguageCoverageVariant[];
+  placeholder_warnings: TemplateLanguageCoverageWarning[];
+  translation_review_warnings: TemplateLanguageCoverageWarning[];
+};
+
+export type TemplateLanguageCoverageMatrix = {
+  supported_languages: Array<{ code: string; label: string }>;
+  row_count: number;
+  missing_variant_count: number;
+  placeholder_warning_count: number;
+  translation_review_warning_count: number;
+  rows: TemplateLanguageCoverageRow[];
+};
+
+export type MissingTranslationDashboardItem = {
+  issue_type:
+    | "missing_variant"
+    | "placeholder_parity"
+    | "translation_review"
+    | "missing_ussd_menu"
+    | "ussd_route_parity"
+    | "offline_guidance_fallback";
+  severity: "low" | "medium" | "high";
+  template_key: string;
+  version: number;
+  version_label?: string;
+  title: string;
+  audience_type: MessageTemplateAudienceType;
+  channel: MessageTemplateChannel;
+  language: string;
+  label: string;
+  message: string;
+};
+
+export type MissingTranslationDashboard = {
+  total_issue_count: number;
+  by_issue_type: Record<string, number>;
+  by_severity: Record<string, number>;
+  items: MissingTranslationDashboardItem[];
 };
 
 export type MessageDeliveryOutcomeRow = {
@@ -2776,6 +2884,9 @@ export type MessageDeliveryRecord = {
   channel: string;
   template_key: string;
   template_version: number | null;
+  requested_language: string;
+  resolved_language: string;
+  fallback_used: boolean;
   status: string;
   created_at: string;
 };
@@ -2834,6 +2945,9 @@ export type UssdGovernanceAnalytics = {
     menu_key: string;
     menu_version_label: string;
     language: string;
+    requested_language: string;
+    resolved_language: string;
+    fallback_used: boolean;
     menu_level: string;
     session_outcome: string;
     invalid_option: boolean;
@@ -2841,6 +2955,41 @@ export type UssdGovernanceAnalytics = {
     is_terminal: boolean;
     created_at: string;
   }>;
+};
+
+export type UssdRoutePreviewRecord = {
+  route: string;
+  route_label: string;
+  node_key: string;
+  response_type: string;
+  body: string;
+  response_text: string;
+  character_count: number;
+};
+
+export type UssdMenuLanguageRoutePreview = {
+  language: string;
+  label: string;
+  exists: boolean;
+  public_id: string;
+  title: string;
+  approval_status: "DRAFT" | "APPROVED" | "RETIRED" | "";
+  translation_status: MessageTemplateTranslationStatus | "";
+  safe_fallback_copy: string;
+  requested_language: string;
+  resolved_language: string;
+  fallback_used: boolean;
+  route_count: number;
+  routes: UssdRoutePreviewRecord[];
+  warnings: string[];
+};
+
+export type UssdRouteTreePreviewRecord = {
+  menu_key: string;
+  source_menu_version: string;
+  source_version_label: string;
+  source_title: string;
+  languages: UssdMenuLanguageRoutePreview[];
 };
 
 export type UssdMenuVersionRecord = {
@@ -2854,6 +3003,13 @@ export type UssdMenuVersionRecord = {
   approved_by_username: string;
   approved_at: string | null;
   retired_at: string | null;
+  translation_status?: MessageTemplateTranslationStatus;
+  source_menu_version?: string;
+  source_menu_version_label?: string;
+  translation_reviewed_by?: number | null;
+  translation_reviewed_by_username?: string;
+  translation_reviewed_at?: string | null;
+  translation_review_notes?: string;
   is_active: boolean;
   safe_fallback_copy: string;
   lineage_metadata: Record<string, unknown>;
@@ -2863,12 +3019,87 @@ export type UssdMenuVersionRecord = {
   updated_at: string;
   route_count: number;
   node_count: number;
+  route_tree_preview: UssdRoutePreviewRecord[];
   validation_status: "pass" | "fail";
   validation_messages: string[];
 };
 
+export type OfflineGuidancePreviewItem = {
+  guidance_public_id: string;
+  template_key: string;
+  version: number;
+  title: string;
+  language: string;
+  requested_language: string;
+  resolved_language: string;
+  fallback_used: boolean;
+  audience_type: MessageTemplateAudienceType;
+  body: string;
+  rendered_body: string;
+  public_health_caveats: string;
+};
+
+export type OfflineGuidanceLanguagePreview = {
+  language: string;
+  label: string;
+  requested_language: string;
+  resolved_language: string;
+  fallback_used: boolean;
+  item_count: number;
+  items: OfflineGuidancePreviewItem[];
+  warnings: string[];
+};
+
+export type LocalizationRolloutCounterRecord = {
+  key: string;
+  count: number;
+};
+
+export type LocalizationFallbackMetric = {
+  surface: string;
+  total_count: number;
+  fallback_count: number;
+  fallback_rate_pct: number;
+  by_requested_language: LocalizationRolloutCounterRecord[];
+  by_resolved_language: LocalizationRolloutCounterRecord[];
+  fallback_by_resolved_language: LocalizationRolloutCounterRecord[];
+};
+
+export type LocalizationReviewAgeRecord = {
+  model: string;
+  public_id: string;
+  key: string;
+  language: string;
+  status: string;
+  age_days: number;
+};
+
+export type LocalizationRolloutSnapshot = {
+  schema_version: "chv-localization-rollout-phase-7-v1";
+  generated_at: string;
+  supported_languages: string[];
+  default_language: string;
+  chv_preferred_language_counts: LocalizationRolloutCounterRecord[];
+  active_chv_count: number;
+  device_preferred_language_counts: LocalizationRolloutCounterRecord[];
+  active_device_count: number;
+  offline_bundle_requests_by_language: LocalizationFallbackMetric;
+  fallback_metrics: LocalizationFallbackMetric[];
+  fallback_rate_pct: number;
+  ussd_sessions_by_language_and_outcome: Array<{ language: string; outcome: string; count: number }>;
+  chv_sms_deliveries_by_language_and_outcome: Array<{ language: string; outcome: string; count: number }>;
+  missing_translation_count: number;
+  translation_review_age: {
+    pending_review_count: number;
+    max_age_days: number;
+    average_age_days: number;
+    oldest_records: LocalizationReviewAgeRecord[];
+  };
+  rollout_path: Array<{ step: string; status: string }>;
+};
+
 export type MessageGovernanceDashboardResponse = {
-  schema_version: "message-management-phase-5-v1";
+  schema_version: "message-management-phase-7-v1";
   generated_at: string;
   filters: Record<string, string>;
   available_filters: {
@@ -2902,15 +3133,28 @@ export type MessageGovernanceDashboardResponse = {
     ussd_abandonment_rate_pct: number;
     ussd_menu_version_count: number;
     active_ussd_menu_version_count: number;
+    missing_translation_count: number;
+    placeholder_parity_warning_count: number;
+    translation_review_warning_count: number;
+    missing_translation_issue_count: number;
+    offline_guidance_language_count: number;
+    strict_localization_issue_count: number;
+    localization_fallback_rate_pct: number;
     audit_status: "pass" | "fail";
   };
   templates: MessageTemplateRecord[];
+  template_language_coverage: TemplateLanguageCoverageMatrix;
+  missing_translation_dashboard: MissingTranslationDashboard;
   ussd_menu_versions: UssdMenuVersionRecord[];
+  ussd_route_tree_preview: UssdRouteTreePreviewRecord[];
+  offline_guidance_preview: OfflineGuidanceLanguagePreview[];
   delivery_summary: MessageDeliverySummary;
   ussd_analytics: UssdGovernanceAnalytics;
   audit: {
     schema_version: string;
     overall_status: "pass" | "fail";
+    strict_localization_issue_count: number;
+    localization_rollout: LocalizationRolloutSnapshot;
     checks: Array<{
       id: string;
       status: "pass" | "fail";
@@ -2922,11 +3166,12 @@ export type MessageGovernanceDashboardResponse = {
 };
 
 export type MessageTemplateDetailResponse = {
-  schema_version: "message-management-phase-5-v1";
+  schema_version: "message-management-phase-7-v1";
   generated_at: string;
   template: MessageTemplateRecord;
   version_history: MessageTemplateRecord[];
   language_variants: MessageTemplateRecord[];
+  side_by_side_preview: MessageLanguagePreviewRecord[];
   delivery_summary: MessageDeliverySummary;
 };
 
@@ -2941,6 +3186,11 @@ export type FetchMessageGovernanceParams = {
 };
 
 export type MessageTemplateApprovalPayload = {
+  action: "approve" | "request_review" | "reject" | "retire";
+  reason?: string;
+};
+
+export type UssdMenuVersionApprovalPayload = {
   action: "approve" | "request_review" | "reject" | "retire";
   reason?: string;
 };
@@ -3418,6 +3668,19 @@ export async function approveMessageTemplateViaBff(
 ) {
   return requestDashboardRoute<MessageTemplateDetailResponse>(
     `/api/dashboard/message-governance/templates/${encodeURIComponent(publicId)}/approval`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function approveUssdMenuVersionViaBff(
+  publicId: string,
+  payload: UssdMenuVersionApprovalPayload,
+) {
+  return requestDashboardRoute<UssdMenuVersionRecord>(
+    `/api/dashboard/message-governance/ussd-menu-versions/${encodeURIComponent(publicId)}/approval`,
     {
       method: "POST",
       body: JSON.stringify(payload),

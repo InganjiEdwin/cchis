@@ -5,6 +5,7 @@ import type {
   ChvOfflineUploadType,
   ChvPendingSyncItem,
 } from "@/lib/chv-offline-store";
+import { normalizeChvLanguage } from "@/lib/chv-localization";
 
 export const CHV_OFFLINE_CONTRACT_VERSION = "chv-offline-v1";
 export const CHV_OFFLINE_DEVICE_ID_KEY = "cchis.chv_offline.device_id";
@@ -56,6 +57,9 @@ export type ChvOfflineSyncRequest = {
   source_device_id: string;
   device_registration_id?: string;
   ward_id: number;
+  requested_language?: string;
+  resolved_language?: string;
+  fallback_used?: boolean;
   session_scope: {
     ward_id: number;
     scope_key: string;
@@ -77,6 +81,14 @@ export type ChvOfflineSyncResult = {
 export type ChvOfflineSyncResponse = {
   message: string;
   contract_version: string;
+  requested_language?: string;
+  resolved_language?: string;
+  fallback_used?: boolean;
+  language?: {
+    requested_language: string;
+    resolved_language: string;
+    fallback_used: boolean;
+  };
   processed_count: number;
   sync_health_record: {
     last_successful_sync_at: string | null;
@@ -89,6 +101,14 @@ export type ChvOfflineSyncResponse = {
 
 export type ChvOfflineContractResponse = {
   contract_version: string;
+  requested_language: string;
+  resolved_language: string;
+  fallback_used: boolean;
+  language: {
+    requested_language: string;
+    resolved_language: string;
+    fallback_used: boolean;
+  };
   session_scope: {
     ward_id: number;
     scope_key: string;
@@ -101,6 +121,10 @@ export type ChvOfflineDeviceRegistrationResponse = {
   public_id: string;
   device_id: string;
   contract_version: string;
+  preferred_language: string;
+  requested_language: string;
+  resolved_language: string;
+  fallback_used: boolean;
   download_bundle_version: string;
   session_scope: {
     ward_id: number;
@@ -199,12 +223,26 @@ export function buildChvOfflineSyncRequest(
   if (typeof user.ward !== "number") {
     throw new ChvOfflineApiError("An assigned ward is required before syncing.");
   }
+  const syncLanguage = pendingItems[0]
+    ? {
+        requestedLanguage: normalizeChvLanguage(pendingItems[0].requestedLanguage),
+        resolvedLanguage: normalizeChvLanguage(pendingItems[0].resolvedLanguage),
+        fallbackUsed: pendingItems[0].fallbackUsed,
+      }
+    : {
+        requestedLanguage: store.bundleMetadata?.requestedLanguage ?? store.selectedLanguage,
+        resolvedLanguage: store.bundleMetadata?.resolvedLanguage ?? store.selectedLanguage,
+        fallbackUsed: store.bundleMetadata?.fallbackUsed ?? false,
+      };
 
   return {
     contract_version: CHV_OFFLINE_CONTRACT_VERSION,
     source_device_id: sourceDeviceId,
     ...(deviceRegistrationId ? { device_registration_id: deviceRegistrationId } : {}),
     ward_id: user.ward,
+    requested_language: syncLanguage.requestedLanguage,
+    resolved_language: syncLanguage.resolvedLanguage,
+    fallback_used: syncLanguage.fallbackUsed,
     session_scope: {
       ward_id: user.ward,
       scope_key: store.scopeKey,
@@ -221,8 +259,19 @@ export function buildChvOfflineSyncRequest(
   };
 }
 
-export async function fetchChvOfflineContractViaBff() {
-  const response = await fetch("/api/chv/offline/contract", {
+export async function fetchChvOfflineContractViaBff(options: {
+  language?: string;
+  deviceRegistrationId?: string;
+} = {}) {
+  const params = new URLSearchParams();
+  if (options.language) {
+    params.set("language", options.language);
+  }
+  if (options.deviceRegistrationId) {
+    params.set("device_registration_id", options.deviceRegistrationId);
+  }
+  const queryString = params.toString();
+  const response = await fetch(`/api/chv/offline/contract${queryString ? `?${queryString}` : ""}`, {
     method: "GET",
     credentials: "include",
   });
@@ -239,6 +288,7 @@ export async function postChvDeviceRegistrationViaBff(payload: {
   contract_version?: string;
   app_version?: string;
   platform?: "ANDROID" | "IOS" | "WEB" | "UNKNOWN";
+  preferred_language?: string;
 }) {
   const response = await fetch("/api/chv/device-registrations", {
     method: "POST",
@@ -260,19 +310,7 @@ export async function postChvDeviceRegistrationViaBff(payload: {
   return (await response.json()) as ChvOfflineDeviceRegistrationResponse;
 }
 
-async function readErrorDetail(response: Response) {
-  try {
-    const body = (await response.json()) as Record<string, unknown>;
-    if (typeof body.detail === "string") {
-      return body.detail;
-    }
-    if (typeof body.message === "string") {
-      return body.message;
-    }
-  } catch {
-    // Keep the generic message below.
-  }
-
+async function readErrorDetail(_response: Response) {
   return "Unable to sync offline work.";
 }
 

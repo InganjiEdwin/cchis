@@ -4,9 +4,10 @@ import { ServerApiError, fetchBackendJson } from "@/lib/server-api";
 
 export async function GET(request: Request) {
   const cookieHeader = request.headers.get("cookie") ?? "";
+  const search = new URL(request.url).search;
 
   try {
-    const contract = await fetchBackendJson<Record<string, unknown>>("/chv/offline/contract/", {
+    const contract = await fetchBackendJson<Record<string, unknown>>(`/chv/offline/contract/${search}`, {
       cookieHeader,
     });
 
@@ -19,4 +20,3 @@ export async function GET(request: Request) {
     return NextResponse.json({ detail: "Unable to load CHV offline bundle." }, { status: 500 });
   }
 }
-

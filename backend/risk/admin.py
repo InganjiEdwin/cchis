@@ -192,14 +192,23 @@ class MessageTemplateAdmin(admin.ModelAdmin):
         "audience_type",
         "channel",
         "approval_status",
+        "translation_status",
         "owner",
         "risk_level",
         "approved_at",
         "retired_at",
     )
     search_fields = ("template_key", "title", "body", "owner", "public_id")
-    list_filter = ("audience_type", "channel", "language", "approval_status", "risk_level", "owner")
-    autocomplete_fields = ("approved_by", "created_by")
+    list_filter = (
+        "audience_type",
+        "channel",
+        "language",
+        "approval_status",
+        "translation_status",
+        "risk_level",
+        "owner",
+    )
+    autocomplete_fields = ("approved_by", "created_by", "source_template", "translation_reviewed_by")
     readonly_fields = ("public_id", "created_at", "updated_at")
 
 
@@ -1133,6 +1142,8 @@ class AlertAdmin(admin.ModelAdmin):
         "channel",
         "recipient",
         "status",
+        "resolved_language",
+        "fallback_used",
         "attempt_count",
         "max_attempts",
         "next_retry_at",
@@ -1140,7 +1151,7 @@ class AlertAdmin(admin.ModelAdmin):
         "created_at",
     )
     search_fields = ("ward__name", "recipient", "external_id", "delivery_backend")
-    list_filter = ("channel", "status", "created_at")
+    list_filter = ("channel", "status", "resolved_language", "fallback_used", "created_at")
 
 
 @admin.register(CHVCoverageRequest)
@@ -1468,15 +1479,16 @@ class UssdMenuVersionAdmin(admin.ModelAdmin):
         "version_label",
         "language",
         "approval_status",
+        "translation_status",
         "is_active",
         "approved_at",
         "retired_at",
         "updated_at",
     )
     search_fields = ("menu_key", "version_label", "language", "title")
-    list_filter = ("language", "approval_status", "is_active", "created_at", "updated_at")
+    list_filter = ("language", "approval_status", "translation_status", "is_active", "created_at", "updated_at")
     readonly_fields = ("public_id", "created_at", "updated_at")
-    autocomplete_fields = ("approved_by", "created_by")
+    autocomplete_fields = ("approved_by", "created_by", "source_menu_version", "translation_reviewed_by")
 
     def save_model(self, request, obj, form, change):
         if obj.created_by_id is None:

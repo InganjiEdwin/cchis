@@ -187,7 +187,7 @@ def trigger_alerts_task(
     guided_request_metadata: dict | None = None,
     template_key: str = "",
     template_version: int | None = None,
-    template_language: str = "en",
+    template_language: str | None = None,
     template_context: dict | None = None,
 ) -> int:
     risk_score = RiskScore.objects.select_related("ward", "model_run").get(id=risk_score_id)

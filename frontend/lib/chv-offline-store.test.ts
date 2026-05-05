@@ -10,12 +10,14 @@ import {
   describeChvOfflineBundleFreshness,
   getChvOfflineStoreKey,
   isChvOfflineBundleStale,
+  markChvOfflineCachedBundleLanguageFallback,
   markChvPendingSyncItemAttempted,
   markChvSyncItemSent,
   movePendingSyncItemToFailed,
   queueChvPendingSyncItem,
   readChvOfflineStore,
   recordChvSyncConflict,
+  setChvOfflineSelectedLanguage,
   upsertPreventionVisitDraft,
   upsertSymptomTriageDraft,
   writeChvOfflineStore,
@@ -55,6 +57,9 @@ function bundle(overrides: Partial<ChvOfflineDownloadBundleInput> = {}): ChvOffl
     version: "chv-bundle-phase2",
     generated_at: "2026-05-04T07:50:00.000Z",
     expires_at: "2026-05-05T07:50:00.000Z",
+    requested_language: "en",
+    resolved_language: "en",
+    fallback_used: false,
     task_bundle: {
       schema_version: "chv-task-bundle-v1",
       tasks: [
@@ -74,11 +79,19 @@ function bundle(overrides: Partial<ChvOfflineDownloadBundleInput> = {}): ChvOffl
     },
     guidance_bundle: {
       schema_version: "chv-guidance-bundle-v1",
+      requested_language: "en",
+      resolved_language: "en",
+      fallback_used: false,
+      content_unavailable: false,
+      governance_status: "approved",
       items: [
         {
           guidance_public_id: "guidance-public-1",
-          template_key: "cholera.prevention.core_fallback",
+          template_key: "cholera.household.prevention_guidance_offline_bundle",
           language: "en",
+          requested_language: "en",
+          resolved_language: "en",
+          fallback_used: false,
           version: 1,
           audience_type: "chv",
           title: "Core cholera prevention guidance",
@@ -89,6 +102,30 @@ function bundle(overrides: Partial<ChvOfflineDownloadBundleInput> = {}): ChvOffl
     },
     decision_support_rule_bundle: {
       version: "cholera-triage-rules-v1",
+      requested_language: "en",
+      resolved_language: "en",
+      fallback_used: false,
+      content_unavailable: false,
+      governance_status: "approved",
+      missing_recommendation_keys: [],
+      recommendations: [
+        {
+          recommendation_public_id: "recommendation-public-1",
+          recommendation_key: "urgent_referral",
+          template_key: "cholera.chv.triage.urgent_referral_offline",
+          language: "en",
+          requested_language: "en",
+          resolved_language: "en",
+          fallback_used: false,
+          version: 1,
+          audience_type: "chv",
+          title: "Refer now",
+          body: "Dehydration signs need facility review.",
+          public_health_caveats: "Approved offline CHV triage recommendation.",
+          source: "governed_message_template",
+          governance_status: "approved",
+        },
+      ],
     },
     ...overrides,
   };
@@ -104,8 +141,10 @@ describe("CHV offline local data model", () => {
 
     expect(store.schemaVersion).toBe(CHV_OFFLINE_LOCAL_SCHEMA_VERSION);
     expect(store.scopeKey).toBe(scopeKey);
+    expect(store.selectedLanguage).toBe("en");
     expect(store.assignedTasks).toEqual([]);
     expect(store.wardGuidance).toEqual([]);
+    expect(store.decisionSupportRecommendations).toEqual([]);
     expect(store.symptomTriageDrafts).toEqual([]);
     expect(store.preventionVisitDrafts).toEqual([]);
     expect(store.pendingSyncItems).toEqual([]);
@@ -139,6 +178,14 @@ describe("CHV offline local data model", () => {
     const store = cacheChvOfflineDownloadBundle(createEmptyChvOfflineStore(scopeKey, baseNow), bundle(), "chv-offline-v1", baseNow);
 
     expect(store.bundleMetadata?.downloadBundleVersion).toBe("chv-bundle-phase2");
+    expect(store.bundleMetadata?.requestedLanguage).toBe("en");
+    expect(store.bundleMetadata?.resolvedLanguage).toBe("en");
+    expect(store.bundleMetadata?.fallbackUsed).toBe(false);
+    expect(store.bundleMetadata?.guidanceContentUnavailable).toBe(false);
+    expect(store.bundleMetadata?.guidanceGovernanceStatus).toBe("approved");
+    expect(store.bundleMetadata?.decisionSupportContentUnavailable).toBe(false);
+    expect(store.bundleMetadata?.decisionSupportGovernanceStatus).toBe("approved");
+    expect(store.bundleMetadata?.missingDecisionSupportRecommendationKeys).toEqual([]);
     expect(store.bundleMetadata?.taskBundleSchemaVersion).toBe("chv-task-bundle-v1");
     expect(store.bundleMetadata?.guidanceBundleSchemaVersion).toBe("chv-guidance-bundle-v1");
     expect(store.assignedTasks).toHaveLength(1);
@@ -146,6 +193,9 @@ describe("CHV offline local data model", () => {
       schemaVersion: CHV_OFFLINE_LOCAL_SCHEMA_VERSION,
       taskPublicId: "task-public-1",
       taskType: "preparedness_action",
+      requestedLanguage: "en",
+      resolvedLanguage: "en",
+      fallbackUsed: false,
       wardId: 12,
       allowedUploadTypes: ["task_ack", "prevention_visit"],
       downloadBundleVersion: "chv-bundle-phase2",
@@ -154,8 +204,172 @@ describe("CHV offline local data model", () => {
     expect(store.wardGuidance[0]).toMatchObject({
       schemaVersion: CHV_OFFLINE_LOCAL_SCHEMA_VERSION,
       guidancePublicId: "guidance-public-1",
-      templateKey: "cholera.prevention.core_fallback",
+      templateKey: "cholera.household.prevention_guidance_offline_bundle",
+      requestedLanguage: "en",
+      resolvedLanguage: "en",
+      fallbackUsed: false,
       downloadBundleVersion: "chv-bundle-phase2",
+    });
+    expect(store.decisionSupportRecommendations).toHaveLength(1);
+    expect(store.decisionSupportRecommendations[0]).toMatchObject({
+      schemaVersion: CHV_OFFLINE_LOCAL_SCHEMA_VERSION,
+      recommendationKey: "urgent_referral",
+      templateKey: "cholera.chv.triage.urgent_referral_offline",
+      requestedLanguage: "en",
+      resolvedLanguage: "en",
+      fallbackUsed: false,
+      governanceStatus: "approved",
+      downloadBundleVersion: "chv-bundle-phase2",
+    });
+  });
+
+  it("preserves fail-closed governed content unavailable metadata", () => {
+    const store = cacheChvOfflineDownloadBundle(
+      createEmptyChvOfflineStore(scopeKey, baseNow),
+      bundle({
+        guidance_bundle: {
+          ...bundle().guidance_bundle,
+          content_unavailable: true,
+          governance_status: "no_approved_guidance_templates",
+          items: [],
+        },
+        decision_support_rule_bundle: {
+          ...bundle().decision_support_rule_bundle,
+          content_unavailable: true,
+          governance_status: "missing_required_recommendation_templates",
+          missing_recommendation_keys: ["urgent_referral"],
+          recommendations: [],
+        },
+      }),
+      "chv-offline-v1",
+      baseNow,
+    );
+
+    expect(store.bundleMetadata).toMatchObject({
+      guidanceContentUnavailable: true,
+      guidanceGovernanceStatus: "no_approved_guidance_templates",
+      decisionSupportContentUnavailable: true,
+      decisionSupportGovernanceStatus: "missing_required_recommendation_templates",
+      missingDecisionSupportRecommendationKeys: ["urgent_referral"],
+    });
+    expect(store.wardGuidance).toEqual([]);
+    expect(store.decisionSupportRecommendations).toEqual([]);
+  });
+
+  it("caches selected language and marks English fallback when translated guidance is missing", () => {
+    let store = createEmptyChvOfflineStore(scopeKey, baseNow);
+    store = setChvOfflineSelectedLanguage(store, "sw", baseNow);
+    store = cacheChvOfflineDownloadBundle(
+      store,
+      bundle({
+        version: "chv-bundle-sw-fallback",
+        requested_language: "sw",
+        resolved_language: "en",
+        fallback_used: true,
+        guidance_bundle: {
+          ...bundle().guidance_bundle,
+          requested_language: "sw",
+          resolved_language: "en",
+          fallback_used: true,
+          items: bundle().guidance_bundle.items.map((item) => ({
+            ...item,
+            requested_language: "sw",
+            resolved_language: "en",
+            fallback_used: true,
+          })),
+        },
+      }),
+      "chv-offline-v1",
+      baseNow,
+    );
+
+    expect(store.selectedLanguage).toBe("sw");
+    expect(store.bundleMetadata).toMatchObject({
+      requestedLanguage: "sw",
+      resolvedLanguage: "en",
+      fallbackUsed: true,
+    });
+    expect(store.assignedTasks[0]).toMatchObject({
+      requestedLanguage: "sw",
+      resolvedLanguage: "en",
+      fallbackUsed: true,
+    });
+    expect(store.wardGuidance[0]).toMatchObject({
+      requestedLanguage: "sw",
+      resolvedLanguage: "en",
+      fallbackUsed: true,
+    });
+
+    writeChvOfflineStore(store, storage);
+    expect(readChvOfflineStore(scopeKey, storage, baseNow).selectedLanguage).toBe("sw");
+  });
+
+  it("uses task bundle language metadata separately from guidance fallback", () => {
+    const store = cacheChvOfflineDownloadBundle(
+      setChvOfflineSelectedLanguage(createEmptyChvOfflineStore(scopeKey, baseNow), "sw", baseNow),
+      bundle({
+        requested_language: "sw",
+        resolved_language: "en",
+        fallback_used: true,
+        task_bundle: {
+          ...bundle().task_bundle,
+          requested_language: "sw",
+          resolved_language: "sw",
+          fallback_used: false,
+        },
+        guidance_bundle: {
+          ...bundle().guidance_bundle,
+          requested_language: "sw",
+          resolved_language: "en",
+          fallback_used: true,
+        },
+      }),
+      "chv-offline-v1",
+      baseNow,
+    );
+
+    expect(store.bundleMetadata).toMatchObject({
+      requestedLanguage: "sw",
+      resolvedLanguage: "en",
+      fallbackUsed: true,
+    });
+    expect(store.assignedTasks[0]).toMatchObject({
+      requestedLanguage: "sw",
+      resolvedLanguage: "sw",
+      fallbackUsed: false,
+    });
+  });
+
+  it("marks an existing cached bundle as fallback when language changes offline", () => {
+    let store = cacheChvOfflineDownloadBundle(
+      createEmptyChvOfflineStore(scopeKey, baseNow),
+      bundle(),
+      "chv-offline-v1",
+      baseNow,
+    );
+
+    store = markChvOfflineCachedBundleLanguageFallback(store, "luo", new Date("2026-05-04T09:00:00.000Z"));
+
+    expect(store.selectedLanguage).toBe("luo");
+    expect(store.bundleMetadata).toMatchObject({
+      requestedLanguage: "luo",
+      resolvedLanguage: "en",
+      fallbackUsed: true,
+    });
+    expect(store.assignedTasks[0]).toMatchObject({
+      requestedLanguage: "luo",
+      resolvedLanguage: "en",
+      fallbackUsed: true,
+    });
+    expect(store.wardGuidance[0]).toMatchObject({
+      requestedLanguage: "luo",
+      resolvedLanguage: "en",
+      fallbackUsed: true,
+    });
+    expect(store.decisionSupportRecommendations[0]).toMatchObject({
+      requestedLanguage: "luo",
+      resolvedLanguage: "en",
+      fallbackUsed: true,
     });
   });
 
@@ -171,11 +385,53 @@ describe("CHV offline local data model", () => {
       reason: "expired_bundle",
       downloadBundleVersion: "chv-bundle-phase2",
     });
+
+    const translatedStore = cacheChvOfflineDownloadBundle(
+      setChvOfflineSelectedLanguage(emptyStore, "luo", baseNow),
+      bundle({
+        version: "chv-bundle-luo",
+        requested_language: "luo",
+        resolved_language: "luo",
+        guidance_bundle: {
+          ...bundle().guidance_bundle,
+          requested_language: "luo",
+          resolved_language: "luo",
+          items: bundle().guidance_bundle.items.map((item) => ({
+            ...item,
+            language: "luo",
+            requested_language: "luo",
+            resolved_language: "luo",
+          })),
+        },
+      }),
+      "chv-offline-v1",
+      baseNow,
+    );
+    expect(describeChvOfflineBundleFreshness(translatedStore, new Date("2026-05-06T08:00:00.000Z"))).toMatchObject({
+      isStale: true,
+      reason: "expired_bundle",
+      downloadBundleVersion: "chv-bundle-luo",
+    });
   });
 
   it("stores versioned drafts and pending sync envelopes without direct household identifiers", () => {
     let store = createEmptyChvOfflineStore(scopeKey, baseNow);
-    store = cacheChvOfflineDownloadBundle(store, bundle(), "chv-offline-v1", baseNow);
+    store = cacheChvOfflineDownloadBundle(
+      setChvOfflineSelectedLanguage(store, "sw", baseNow),
+      bundle({
+        requested_language: "sw",
+        resolved_language: "en",
+        fallback_used: true,
+        guidance_bundle: {
+          ...bundle().guidance_bundle,
+          requested_language: "sw",
+          resolved_language: "en",
+          fallback_used: true,
+        },
+      }),
+      "chv-offline-v1",
+      baseNow,
+    );
     store = upsertSymptomTriageDraft(
       store,
       {
@@ -225,11 +481,17 @@ describe("CHV offline local data model", () => {
       schemaVersion: CHV_OFFLINE_LOCAL_SCHEMA_VERSION,
       localId: "triage-draft-1",
       draftType: "symptom_triage",
+      requestedLanguage: "sw",
+      resolvedLanguage: "en",
+      fallbackUsed: true,
       wardId: 12,
     });
     expect(store.preventionVisitDrafts[0]).toMatchObject({
       schemaVersion: CHV_OFFLINE_LOCAL_SCHEMA_VERSION,
       draftType: "prevention_visit",
+      requestedLanguage: "sw",
+      resolvedLanguage: "en",
+      fallbackUsed: true,
       householdsReachedCount: 4,
     });
     expect(store.pendingSyncItems[0]).toMatchObject({
@@ -237,7 +499,17 @@ describe("CHV offline local data model", () => {
       clientSubmissionId: "client-1",
       idempotencyKey: "idem-1",
       uploadType: "symptom_triage",
+      requestedLanguage: "sw",
+      resolvedLanguage: "en",
+      fallbackUsed: true,
       downloadBundleVersion: "chv-bundle-phase2",
+    });
+
+    store = setChvOfflineSelectedLanguage(store, "luo", baseNow);
+    expect(store.pendingSyncItems[0]).toMatchObject({
+      requestedLanguage: "sw",
+      resolvedLanguage: "en",
+      fallbackUsed: true,
     });
     expect(JSON.stringify(store)).not.toContain("household_name");
     expect(JSON.stringify(store)).not.toContain("caregiver_name");
@@ -293,6 +565,9 @@ describe("CHV offline local data model", () => {
         sourceDeviceId: "field-device-1",
         downloadBundleVersion: "chv-bundle-phase2",
         lastSuccessfulSyncAt: "2026-05-04T11:05:00.000Z",
+        requestedLanguage: "en",
+        resolvedLanguage: "en",
+        fallbackUsed: false,
         pendingUploadCount: 0,
         failedUploadCount: 1,
         syncHealth: "ONLINE",

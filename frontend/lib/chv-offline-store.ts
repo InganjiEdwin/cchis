@@ -1,3 +1,5 @@
+import { normalizeChvLanguage, type ChvSupportedLanguage } from "@/lib/chv-localization";
+
 const HOURS_TO_MS = 60 * 60 * 1000;
 const DAYS_TO_MS = 24 * HOURS_TO_MS;
 
@@ -43,6 +45,14 @@ export type ChvOfflineBundleMetadata = {
   schemaVersion: typeof CHV_OFFLINE_LOCAL_SCHEMA_VERSION;
   contractVersion: string;
   downloadBundleVersion: string;
+  requestedLanguage: string;
+  resolvedLanguage: string;
+  fallbackUsed: boolean;
+  guidanceContentUnavailable: boolean;
+  guidanceGovernanceStatus: string;
+  decisionSupportContentUnavailable: boolean;
+  decisionSupportGovernanceStatus: string;
+  missingDecisionSupportRecommendationKeys: string[];
   taskBundleSchemaVersion: string;
   guidanceBundleSchemaVersion: string;
   ruleBundleVersion: string;
@@ -54,6 +64,9 @@ export type ChvOfflineBundleMetadata = {
 export type ChvOfflineAssignedTask = LocalEntityBase & {
   taskPublicId: string;
   taskType: string;
+  requestedLanguage: string;
+  resolvedLanguage: string;
+  fallbackUsed: boolean;
   actionType?: string;
   coverageRequestPublicId?: string;
   status: string;
@@ -72,6 +85,9 @@ export type ChvOfflineWardGuidance = LocalEntityBase & {
   guidancePublicId: string;
   templateKey: string;
   language: string;
+  requestedLanguage: string;
+  resolvedLanguage: string;
+  fallbackUsed: boolean;
   version: number;
   audienceType: string;
   title: string;
@@ -80,8 +96,29 @@ export type ChvOfflineWardGuidance = LocalEntityBase & {
   downloadBundleVersion: string;
 };
 
+export type ChvOfflineDecisionSupportRecommendation = LocalEntityBase & {
+  recommendationPublicId: string;
+  recommendationKey: string;
+  templateKey: string;
+  language: string;
+  requestedLanguage: string;
+  resolvedLanguage: string;
+  fallbackUsed: boolean;
+  version: number;
+  audienceType: string;
+  title: string;
+  body: string;
+  publicHealthCaveats: string;
+  source: string;
+  governanceStatus: string;
+  downloadBundleVersion: string;
+};
+
 export type ChvSymptomTriageDraft = LocalEntityBase & {
   draftType: "symptom_triage";
+  requestedLanguage: string;
+  resolvedLanguage: string;
+  fallbackUsed: boolean;
   wardId: number;
   wardPublicId: string;
   diarrhea: boolean;
@@ -93,6 +130,9 @@ export type ChvSymptomTriageDraft = LocalEntityBase & {
 
 export type ChvPreventionVisitDraft = LocalEntityBase & {
   draftType: "prevention_visit";
+  requestedLanguage: string;
+  resolvedLanguage: string;
+  fallbackUsed: boolean;
   taskPublicId: string;
   actionPublicId: string;
   visitCompleted: boolean;
@@ -107,6 +147,9 @@ export type ChvPendingSyncItem = LocalEntityBase & {
   idempotencyKey: string;
   uploadType: ChvOfflineUploadType;
   status: Extract<ChvOfflineSyncStatus, "PENDING" | "SENDING">;
+  requestedLanguage: string;
+  resolvedLanguage: string;
+  fallbackUsed: boolean;
   payload: Record<string, unknown>;
   draftLocalId: string | null;
   downloadBundleVersion: string;
@@ -118,6 +161,9 @@ export type ChvFailedSyncItem = LocalEntityBase & {
   clientSubmissionId: string;
   idempotencyKey: string;
   uploadType: ChvOfflineUploadType;
+  requestedLanguage: string;
+  resolvedLanguage: string;
+  fallbackUsed: boolean;
   payload: Record<string, unknown>;
   draftLocalId: string | null;
   downloadBundleVersion: string;
@@ -131,6 +177,9 @@ export type ChvConflictItem = LocalEntityBase & {
   clientSubmissionId: string;
   idempotencyKey: string;
   uploadType: ChvOfflineUploadType;
+  requestedLanguage: string;
+  resolvedLanguage: string;
+  fallbackUsed: boolean;
   conflictState: ChvOfflineConflictState;
   serverReceipt: Record<string, unknown>;
   resolutionStatus: "UNRESOLVED" | "RESOLVED" | "DISMISSED";
@@ -144,6 +193,9 @@ export type ChvLastSuccessfulSyncMetadata = {
   sourceDeviceId: string;
   downloadBundleVersion: string;
   lastSuccessfulSyncAt: string;
+  requestedLanguage: string;
+  resolvedLanguage: string;
+  fallbackUsed: boolean;
   pendingUploadCount: number;
   failedUploadCount: number;
   syncHealth: "ONLINE" | "DELAYED" | "OFFLINE";
@@ -153,12 +205,14 @@ export type ChvLastSuccessfulSyncMetadata = {
 export type ChvOfflineLocalStore = {
   schemaVersion: typeof CHV_OFFLINE_LOCAL_SCHEMA_VERSION;
   scopeKey: string;
+  selectedLanguage: ChvSupportedLanguage;
   createdAt: string;
   updatedAt: string;
   retentionRules: typeof CHV_OFFLINE_RETENTION_RULES;
   bundleMetadata: ChvOfflineBundleMetadata | null;
   assignedTasks: ChvOfflineAssignedTask[];
   wardGuidance: ChvOfflineWardGuidance[];
+  decisionSupportRecommendations: ChvOfflineDecisionSupportRecommendation[];
   symptomTriageDrafts: ChvSymptomTriageDraft[];
   preventionVisitDrafts: ChvPreventionVisitDraft[];
   pendingSyncItems: ChvPendingSyncItem[];
@@ -171,8 +225,19 @@ export type ChvOfflineDownloadBundleInput = {
   version: string;
   generated_at: string;
   expires_at: string;
+  requested_language?: string;
+  resolved_language?: string;
+  fallback_used?: boolean;
   task_bundle: {
     schema_version: string;
+    requested_language?: string;
+    resolved_language?: string;
+    fallback_used?: boolean;
+    language?: {
+      requested_language?: string;
+      resolved_language?: string;
+      fallback_used?: boolean;
+    };
     tasks: Array<{
       task_public_id: string;
       task_type: string;
@@ -191,10 +256,18 @@ export type ChvOfflineDownloadBundleInput = {
   };
   guidance_bundle: {
     schema_version: string;
+    requested_language?: string;
+    resolved_language?: string;
+    fallback_used?: boolean;
+    content_unavailable?: boolean;
+    governance_status?: string;
     items: Array<{
       guidance_public_id: string;
       template_key: string;
       language: string;
+      requested_language?: string;
+      resolved_language?: string;
+      fallback_used?: boolean;
       version: number;
       audience_type: string;
       title: string;
@@ -204,11 +277,36 @@ export type ChvOfflineDownloadBundleInput = {
   };
   decision_support_rule_bundle: {
     version: string;
+    requested_language?: string;
+    resolved_language?: string;
+    fallback_used?: boolean;
+    content_unavailable?: boolean;
+    governance_status?: string;
+    missing_recommendation_keys?: string[];
+    recommendations?: Array<{
+      recommendation_public_id?: string;
+      recommendation_key: string;
+      template_key: string;
+      language: string;
+      requested_language?: string;
+      resolved_language?: string;
+      fallback_used?: boolean;
+      version: number;
+      audience_type?: string;
+      title: string;
+      body: string;
+      public_health_caveats?: string;
+      source?: string;
+      governance_status?: string;
+    }>;
   };
 };
 
 export type ChvSymptomTriageDraftInput = {
   draftId?: string;
+  requestedLanguage?: string;
+  resolvedLanguage?: string;
+  fallbackUsed?: boolean;
   wardId: number;
   wardPublicId: string;
   diarrhea?: boolean;
@@ -220,6 +318,9 @@ export type ChvSymptomTriageDraftInput = {
 
 export type ChvPreventionVisitDraftInput = {
   draftId?: string;
+  requestedLanguage?: string;
+  resolvedLanguage?: string;
+  fallbackUsed?: boolean;
   taskPublicId?: string;
   actionPublicId?: string;
   visitCompleted?: boolean;
@@ -235,6 +336,9 @@ export type ChvPendingSyncItemInput = {
   idempotencyKey?: string;
   uploadType: ChvOfflineUploadType;
   status?: Extract<ChvOfflineSyncStatus, "PENDING" | "SENDING">;
+  requestedLanguage?: string;
+  resolvedLanguage?: string;
+  fallbackUsed?: boolean;
   payload: Record<string, unknown>;
   draftLocalId?: string | null;
   downloadBundleVersion?: string;
@@ -273,6 +377,23 @@ function touch(store: ChvOfflineLocalStore, now: Date): ChvOfflineLocalStore {
   };
 }
 
+function languageMetadataForStore(
+  store: Pick<ChvOfflineLocalStore, "selectedLanguage" | "bundleMetadata">,
+  input: { requestedLanguage?: string; resolvedLanguage?: string; fallbackUsed?: boolean } = {},
+) {
+  const requestedLanguage = normalizeChvLanguage(
+    input.requestedLanguage ?? store.bundleMetadata?.requestedLanguage ?? store.selectedLanguage,
+  );
+  const resolvedLanguage = normalizeChvLanguage(
+    input.resolvedLanguage ?? store.bundleMetadata?.resolvedLanguage ?? requestedLanguage,
+  );
+  return {
+    requestedLanguage,
+    resolvedLanguage,
+    fallbackUsed: Boolean(input.fallbackUsed ?? store.bundleMetadata?.fallbackUsed ?? requestedLanguage !== resolvedLanguage),
+  };
+}
+
 function browserStorage(storage?: Storage) {
   if (storage) {
     return storage;
@@ -287,17 +408,23 @@ export function getChvOfflineStoreKey(scopeKey: string) {
   return `${CHV_OFFLINE_STORE_KEY_PREFIX}.${encodeURIComponent(scopeKey)}`;
 }
 
-export function createEmptyChvOfflineStore(scopeKey: string, now = new Date()): ChvOfflineLocalStore {
+export function createEmptyChvOfflineStore(
+  scopeKey: string,
+  now = new Date(),
+  selectedLanguage: ChvSupportedLanguage = "en",
+): ChvOfflineLocalStore {
   const timestamp = iso(now);
   return {
     schemaVersion: CHV_OFFLINE_LOCAL_SCHEMA_VERSION,
     scopeKey,
+    selectedLanguage,
     createdAt: timestamp,
     updatedAt: timestamp,
     retentionRules: CHV_OFFLINE_RETENTION_RULES,
     bundleMetadata: null,
     assignedTasks: [],
     wardGuidance: [],
+    decisionSupportRecommendations: [],
     symptomTriageDrafts: [],
     preventionVisitDrafts: [],
     pendingSyncItems: [],
@@ -317,21 +444,114 @@ function normalizeStore(value: unknown, scopeKey: string, now: Date): ChvOffline
     return createEmptyChvOfflineStore(scopeKey, now);
   }
 
+  const selectedLanguage = normalizeChvLanguage(
+    candidate.selectedLanguage ?? candidate.bundleMetadata?.requestedLanguage ?? candidate.bundleMetadata?.resolvedLanguage,
+  );
+  const bundleMetadata = candidate.bundleMetadata
+    ? {
+        ...candidate.bundleMetadata,
+        requestedLanguage: normalizeChvLanguage(candidate.bundleMetadata.requestedLanguage ?? selectedLanguage),
+        resolvedLanguage: normalizeChvLanguage(candidate.bundleMetadata.resolvedLanguage ?? selectedLanguage),
+        fallbackUsed: candidate.bundleMetadata.fallbackUsed ?? false,
+        guidanceContentUnavailable: Boolean(candidate.bundleMetadata.guidanceContentUnavailable ?? false),
+        guidanceGovernanceStatus: candidate.bundleMetadata.guidanceGovernanceStatus ?? "unknown",
+        decisionSupportContentUnavailable: Boolean(candidate.bundleMetadata.decisionSupportContentUnavailable ?? false),
+        decisionSupportGovernanceStatus: candidate.bundleMetadata.decisionSupportGovernanceStatus ?? "unknown",
+        missingDecisionSupportRecommendationKeys: Array.isArray(
+          candidate.bundleMetadata.missingDecisionSupportRecommendationKeys,
+        )
+          ? candidate.bundleMetadata.missingDecisionSupportRecommendationKeys
+          : [],
+      }
+    : null;
+  const lastSuccessfulSync = candidate.lastSuccessfulSync
+    ? {
+        ...candidate.lastSuccessfulSync,
+        requestedLanguage: normalizeChvLanguage(candidate.lastSuccessfulSync.requestedLanguage ?? selectedLanguage),
+        resolvedLanguage: normalizeChvLanguage(candidate.lastSuccessfulSync.resolvedLanguage ?? selectedLanguage),
+        fallbackUsed: candidate.lastSuccessfulSync.fallbackUsed ?? false,
+      }
+    : null;
+  const storeLanguageMetadata = languageMetadataForStore({ selectedLanguage, bundleMetadata });
+
   return {
     schemaVersion: CHV_OFFLINE_LOCAL_SCHEMA_VERSION,
     scopeKey,
+    selectedLanguage,
     createdAt: candidate.createdAt || iso(now),
     updatedAt: candidate.updatedAt || iso(now),
     retentionRules: CHV_OFFLINE_RETENTION_RULES,
-    bundleMetadata: candidate.bundleMetadata ?? null,
-    assignedTasks: Array.isArray(candidate.assignedTasks) ? candidate.assignedTasks : [],
-    wardGuidance: Array.isArray(candidate.wardGuidance) ? candidate.wardGuidance : [],
-    symptomTriageDrafts: Array.isArray(candidate.symptomTriageDrafts) ? candidate.symptomTriageDrafts : [],
-    preventionVisitDrafts: Array.isArray(candidate.preventionVisitDrafts) ? candidate.preventionVisitDrafts : [],
-    pendingSyncItems: Array.isArray(candidate.pendingSyncItems) ? candidate.pendingSyncItems : [],
-    failedSyncItems: Array.isArray(candidate.failedSyncItems) ? candidate.failedSyncItems : [],
-    conflictItems: Array.isArray(candidate.conflictItems) ? candidate.conflictItems : [],
-    lastSuccessfulSync: candidate.lastSuccessfulSync ?? null,
+    bundleMetadata,
+    assignedTasks: Array.isArray(candidate.assignedTasks)
+      ? candidate.assignedTasks.map((task) => ({
+          ...task,
+          requestedLanguage: normalizeChvLanguage(task.requestedLanguage ?? storeLanguageMetadata.requestedLanguage),
+          resolvedLanguage: normalizeChvLanguage(task.resolvedLanguage ?? storeLanguageMetadata.resolvedLanguage),
+          fallbackUsed: task.fallbackUsed ?? storeLanguageMetadata.fallbackUsed,
+        }))
+      : [],
+    wardGuidance: Array.isArray(candidate.wardGuidance)
+      ? candidate.wardGuidance.map((guidance) => ({
+          ...guidance,
+          requestedLanguage: normalizeChvLanguage(guidance.requestedLanguage ?? guidance.language ?? selectedLanguage),
+          resolvedLanguage: normalizeChvLanguage(guidance.resolvedLanguage ?? guidance.language ?? selectedLanguage),
+          fallbackUsed: guidance.fallbackUsed ?? false,
+        }))
+      : [],
+    decisionSupportRecommendations: Array.isArray(candidate.decisionSupportRecommendations)
+      ? candidate.decisionSupportRecommendations.map((recommendation) => ({
+          ...recommendation,
+          language: normalizeChvLanguage(recommendation.language ?? storeLanguageMetadata.resolvedLanguage),
+          requestedLanguage: normalizeChvLanguage(
+            recommendation.requestedLanguage ?? storeLanguageMetadata.requestedLanguage,
+          ),
+          resolvedLanguage: normalizeChvLanguage(
+            recommendation.resolvedLanguage ?? recommendation.language ?? storeLanguageMetadata.resolvedLanguage,
+          ),
+          fallbackUsed: recommendation.fallbackUsed ?? storeLanguageMetadata.fallbackUsed,
+        }))
+      : [],
+    symptomTriageDrafts: Array.isArray(candidate.symptomTriageDrafts)
+      ? candidate.symptomTriageDrafts.map((draft) => ({
+          ...draft,
+          requestedLanguage: normalizeChvLanguage(draft.requestedLanguage ?? storeLanguageMetadata.requestedLanguage),
+          resolvedLanguage: normalizeChvLanguage(draft.resolvedLanguage ?? storeLanguageMetadata.resolvedLanguage),
+          fallbackUsed: draft.fallbackUsed ?? storeLanguageMetadata.fallbackUsed,
+        }))
+      : [],
+    preventionVisitDrafts: Array.isArray(candidate.preventionVisitDrafts)
+      ? candidate.preventionVisitDrafts.map((draft) => ({
+          ...draft,
+          requestedLanguage: normalizeChvLanguage(draft.requestedLanguage ?? storeLanguageMetadata.requestedLanguage),
+          resolvedLanguage: normalizeChvLanguage(draft.resolvedLanguage ?? storeLanguageMetadata.resolvedLanguage),
+          fallbackUsed: draft.fallbackUsed ?? storeLanguageMetadata.fallbackUsed,
+        }))
+      : [],
+    pendingSyncItems: Array.isArray(candidate.pendingSyncItems)
+      ? candidate.pendingSyncItems.map((item) => ({
+          ...item,
+          requestedLanguage: normalizeChvLanguage(item.requestedLanguage ?? storeLanguageMetadata.requestedLanguage),
+          resolvedLanguage: normalizeChvLanguage(item.resolvedLanguage ?? storeLanguageMetadata.resolvedLanguage),
+          fallbackUsed: item.fallbackUsed ?? storeLanguageMetadata.fallbackUsed,
+        }))
+      : [],
+    failedSyncItems: Array.isArray(candidate.failedSyncItems)
+      ? candidate.failedSyncItems.map((item) => ({
+          ...item,
+          requestedLanguage: normalizeChvLanguage(item.requestedLanguage ?? storeLanguageMetadata.requestedLanguage),
+          resolvedLanguage: normalizeChvLanguage(item.resolvedLanguage ?? storeLanguageMetadata.resolvedLanguage),
+          fallbackUsed: item.fallbackUsed ?? storeLanguageMetadata.fallbackUsed,
+        }))
+      : [],
+    conflictItems: Array.isArray(candidate.conflictItems)
+      ? candidate.conflictItems.map((item) => ({
+          ...item,
+          requestedLanguage: normalizeChvLanguage(item.requestedLanguage ?? storeLanguageMetadata.requestedLanguage),
+          resolvedLanguage: normalizeChvLanguage(item.resolvedLanguage ?? storeLanguageMetadata.resolvedLanguage),
+          fallbackUsed: item.fallbackUsed ?? storeLanguageMetadata.fallbackUsed,
+        }))
+      : [],
+    lastSuccessfulSync,
   };
 }
 
@@ -370,6 +590,59 @@ export function clearChvOfflineStore(scopeKey: string, storage?: Storage) {
   targetStorage.removeItem(getChvOfflineStoreKey(scopeKey));
 }
 
+export function setChvOfflineSelectedLanguage(
+  store: ChvOfflineLocalStore,
+  language: string,
+  now = new Date(),
+): ChvOfflineLocalStore {
+  return touch(
+    {
+      ...store,
+      selectedLanguage: normalizeChvLanguage(language),
+    },
+    now,
+  );
+}
+
+export function markChvOfflineCachedBundleLanguageFallback(
+  store: ChvOfflineLocalStore,
+  requestedLanguage: string,
+  now = new Date(),
+): ChvOfflineLocalStore {
+  const language = normalizeChvLanguage(requestedLanguage);
+  if (!store.bundleMetadata) {
+    return setChvOfflineSelectedLanguage(store, language, now);
+  }
+  const bundleMetadata = {
+    ...store.bundleMetadata,
+    requestedLanguage: language,
+    fallbackUsed: store.bundleMetadata.fallbackUsed || store.bundleMetadata.resolvedLanguage !== language,
+  };
+  return touch(
+    {
+      ...store,
+      selectedLanguage: language,
+      bundleMetadata,
+      assignedTasks: store.assignedTasks.map((task) => ({
+        ...task,
+        requestedLanguage: language,
+        fallbackUsed: task.fallbackUsed || task.resolvedLanguage !== language,
+      })),
+      wardGuidance: store.wardGuidance.map((guidance) => ({
+        ...guidance,
+        requestedLanguage: language,
+        fallbackUsed: guidance.fallbackUsed || guidance.resolvedLanguage !== language,
+      })),
+      decisionSupportRecommendations: store.decisionSupportRecommendations.map((recommendation) => ({
+        ...recommendation,
+        requestedLanguage: language,
+        fallbackUsed: recommendation.fallbackUsed || recommendation.resolvedLanguage !== language,
+      })),
+    },
+    now,
+  );
+}
+
 export function cacheChvOfflineDownloadBundle(
   store: ChvOfflineLocalStore,
   bundle: ChvOfflineDownloadBundleInput,
@@ -379,14 +652,58 @@ export function cacheChvOfflineDownloadBundle(
   const cachedAt = iso(now);
   const downloadBundleVersion = bundle.version;
   const taskExpiresAt = addMs(now, CHV_OFFLINE_RETENTION_RULES.assignedTasksDays * DAYS_TO_MS);
+  const bundleLanguage = {
+    requestedLanguage: normalizeChvLanguage(
+      bundle.requested_language ?? bundle.guidance_bundle.requested_language ?? store.selectedLanguage,
+    ),
+    resolvedLanguage: normalizeChvLanguage(
+      bundle.resolved_language ?? bundle.guidance_bundle.resolved_language ?? store.selectedLanguage,
+    ),
+    fallbackUsed: Boolean(bundle.fallback_used ?? bundle.guidance_bundle.fallback_used ?? false),
+  };
+  const taskLanguage = {
+    requestedLanguage: normalizeChvLanguage(
+      bundle.task_bundle.requested_language
+        ?? bundle.task_bundle.language?.requested_language
+        ?? bundleLanguage.requestedLanguage,
+    ),
+    resolvedLanguage: normalizeChvLanguage(
+      bundle.task_bundle.resolved_language
+        ?? bundle.task_bundle.language?.resolved_language
+        ?? bundleLanguage.resolvedLanguage,
+    ),
+    fallbackUsed: Boolean(
+      bundle.task_bundle.fallback_used
+        ?? bundle.task_bundle.language?.fallback_used
+        ?? bundleLanguage.fallbackUsed,
+    ),
+  };
+  const ruleLanguage = {
+    requestedLanguage: normalizeChvLanguage(
+      bundle.decision_support_rule_bundle.requested_language ?? bundleLanguage.requestedLanguage,
+    ),
+    resolvedLanguage: normalizeChvLanguage(
+      bundle.decision_support_rule_bundle.resolved_language ?? bundleLanguage.resolvedLanguage,
+    ),
+    fallbackUsed: Boolean(bundle.decision_support_rule_bundle.fallback_used ?? bundleLanguage.fallbackUsed),
+  };
 
   return touch(
     {
       ...store,
+      selectedLanguage: bundleLanguage.requestedLanguage,
       bundleMetadata: {
         schemaVersion: CHV_OFFLINE_LOCAL_SCHEMA_VERSION,
         contractVersion,
         downloadBundleVersion,
+        requestedLanguage: bundleLanguage.requestedLanguage,
+        resolvedLanguage: bundleLanguage.resolvedLanguage,
+        fallbackUsed: bundleLanguage.fallbackUsed,
+        guidanceContentUnavailable: Boolean(bundle.guidance_bundle.content_unavailable ?? false),
+        guidanceGovernanceStatus: bundle.guidance_bundle.governance_status ?? "unknown",
+        decisionSupportContentUnavailable: Boolean(bundle.decision_support_rule_bundle.content_unavailable ?? false),
+        decisionSupportGovernanceStatus: bundle.decision_support_rule_bundle.governance_status ?? "unknown",
+        missingDecisionSupportRecommendationKeys: bundle.decision_support_rule_bundle.missing_recommendation_keys ?? [],
         taskBundleSchemaVersion: bundle.task_bundle.schema_version,
         guidanceBundleSchemaVersion: bundle.guidance_bundle.schema_version,
         ruleBundleVersion: bundle.decision_support_rule_bundle.version,
@@ -403,6 +720,9 @@ export function cacheChvOfflineDownloadBundle(
         expiresAt: taskExpiresAt,
         taskPublicId: task.task_public_id,
         taskType: task.task_type,
+        requestedLanguage: taskLanguage.requestedLanguage,
+        resolvedLanguage: taskLanguage.resolvedLanguage,
+        fallbackUsed: taskLanguage.fallbackUsed,
         actionType: task.action_type,
         coverageRequestPublicId: task.coverage_request_public_id,
         status: task.status,
@@ -425,12 +745,49 @@ export function cacheChvOfflineDownloadBundle(
         expiresAt: bundle.expires_at,
         guidancePublicId: guidance.guidance_public_id,
         templateKey: guidance.template_key,
-        language: guidance.language,
+        language: normalizeChvLanguage(guidance.language),
+        requestedLanguage: normalizeChvLanguage(
+          guidance.requested_language ?? bundle.guidance_bundle.requested_language ?? bundle.requested_language ?? store.selectedLanguage,
+        ),
+        resolvedLanguage: normalizeChvLanguage(guidance.resolved_language ?? guidance.language),
+        fallbackUsed: Boolean(guidance.fallback_used ?? guidance.language !== (bundle.requested_language ?? guidance.language)),
         version: guidance.version,
         audienceType: guidance.audience_type,
         title: guidance.title,
         body: guidance.body,
         publicHealthCaveats: guidance.public_health_caveats ?? "",
+        downloadBundleVersion,
+      })),
+      decisionSupportRecommendations: (bundle.decision_support_rule_bundle.recommendations ?? []).map((recommendation) => ({
+        schemaVersion: CHV_OFFLINE_LOCAL_SCHEMA_VERSION,
+        localId: `decision-support-${recommendation.recommendation_public_id ?? recommendation.recommendation_key}`,
+        scopeKey: store.scopeKey,
+        createdAt: cachedAt,
+        updatedAt: cachedAt,
+        expiresAt: bundle.expires_at,
+        recommendationPublicId: recommendation.recommendation_public_id ?? recommendation.recommendation_key,
+        recommendationKey: recommendation.recommendation_key,
+        templateKey: recommendation.template_key,
+        language: normalizeChvLanguage(recommendation.language),
+        requestedLanguage: normalizeChvLanguage(
+          recommendation.requested_language
+            ?? bundle.decision_support_rule_bundle.requested_language
+            ?? bundle.requested_language
+            ?? store.selectedLanguage,
+        ),
+        resolvedLanguage: normalizeChvLanguage(recommendation.resolved_language ?? recommendation.language),
+        fallbackUsed: Boolean(
+          recommendation.fallback_used
+            ?? bundle.decision_support_rule_bundle.fallback_used
+            ?? recommendation.language !== ruleLanguage.requestedLanguage,
+        ),
+        version: recommendation.version,
+        audienceType: recommendation.audience_type ?? "chv",
+        title: recommendation.title,
+        body: recommendation.body,
+        publicHealthCaveats: recommendation.public_health_caveats ?? "",
+        source: recommendation.source ?? "governed_message_template",
+        governanceStatus: recommendation.governance_status ?? "approved",
         downloadBundleVersion,
       })),
     },
@@ -477,6 +834,7 @@ export function upsertSymptomTriageDraft(
   const timestamp = iso(now);
   const localId = input.draftId || createLocalId("triage-draft");
   const existing = store.symptomTriageDrafts.find((draft) => draft.localId === localId);
+  const language = languageMetadataForStore(store, input);
   const draft: ChvSymptomTriageDraft = {
     schemaVersion: CHV_OFFLINE_LOCAL_SCHEMA_VERSION,
     localId,
@@ -485,6 +843,9 @@ export function upsertSymptomTriageDraft(
     updatedAt: timestamp,
     expiresAt: addMs(now, CHV_OFFLINE_RETENTION_RULES.symptomTriageDraftHours * HOURS_TO_MS),
     draftType: "symptom_triage",
+    requestedLanguage: existing?.requestedLanguage ?? language.requestedLanguage,
+    resolvedLanguage: existing?.resolvedLanguage ?? language.resolvedLanguage,
+    fallbackUsed: existing?.fallbackUsed ?? language.fallbackUsed,
     wardId: input.wardId,
     wardPublicId: input.wardPublicId,
     diarrhea: input.diarrhea ?? existing?.diarrhea ?? false,
@@ -514,6 +875,7 @@ export function upsertPreventionVisitDraft(
   const timestamp = iso(now);
   const localId = input.draftId || createLocalId("prevention-draft");
   const existing = store.preventionVisitDrafts.find((draft) => draft.localId === localId);
+  const language = languageMetadataForStore(store, input);
   const draft: ChvPreventionVisitDraft = {
     schemaVersion: CHV_OFFLINE_LOCAL_SCHEMA_VERSION,
     localId,
@@ -522,6 +884,9 @@ export function upsertPreventionVisitDraft(
     updatedAt: timestamp,
     expiresAt: addMs(now, CHV_OFFLINE_RETENTION_RULES.preventionVisitDraftHours * HOURS_TO_MS),
     draftType: "prevention_visit",
+    requestedLanguage: existing?.requestedLanguage ?? language.requestedLanguage,
+    resolvedLanguage: existing?.resolvedLanguage ?? language.resolvedLanguage,
+    fallbackUsed: existing?.fallbackUsed ?? language.fallbackUsed,
     taskPublicId: input.taskPublicId ?? existing?.taskPublicId ?? "",
     actionPublicId: input.actionPublicId ?? existing?.actionPublicId ?? "",
     visitCompleted: input.visitCompleted ?? existing?.visitCompleted ?? false,
@@ -552,6 +917,7 @@ export function queueChvPendingSyncItem(
   const timestamp = iso(now);
   const localId = input.localId || createLocalId("sync");
   const clientSubmissionId = input.clientSubmissionId || localId;
+  const language = languageMetadataForStore(store, input);
   const item: ChvPendingSyncItem = {
     schemaVersion: CHV_OFFLINE_LOCAL_SCHEMA_VERSION,
     localId,
@@ -563,6 +929,9 @@ export function queueChvPendingSyncItem(
     idempotencyKey: input.idempotencyKey || clientSubmissionId,
     uploadType: input.uploadType,
     status: input.status ?? "PENDING",
+    requestedLanguage: language.requestedLanguage,
+    resolvedLanguage: language.resolvedLanguage,
+    fallbackUsed: language.fallbackUsed,
     payload: input.payload,
     draftLocalId: input.draftLocalId ?? null,
     downloadBundleVersion: input.downloadBundleVersion ?? store.bundleMetadata?.downloadBundleVersion ?? "",
@@ -602,6 +971,9 @@ export function movePendingSyncItemToFailed(
     clientSubmissionId: pending.clientSubmissionId,
     idempotencyKey: pending.idempotencyKey,
     uploadType: pending.uploadType,
+    requestedLanguage: pending.requestedLanguage,
+    resolvedLanguage: pending.resolvedLanguage,
+    fallbackUsed: pending.fallbackUsed,
     payload: pending.payload,
     draftLocalId: pending.draftLocalId,
     downloadBundleVersion: pending.downloadBundleVersion,
@@ -663,6 +1035,9 @@ export function recordChvSyncConflict(
     clientSubmissionId: string;
     idempotencyKey: string;
     uploadType: ChvOfflineUploadType;
+    requestedLanguage?: string;
+    resolvedLanguage?: string;
+    fallbackUsed?: boolean;
     conflictState: ChvOfflineConflictState;
     serverReceipt?: Record<string, unknown>;
     resolutionStatus?: "UNRESOLVED" | "RESOLVED" | "DISMISSED";
@@ -671,6 +1046,7 @@ export function recordChvSyncConflict(
 ): ChvOfflineLocalStore {
   const timestamp = iso(now);
   const localId = conflict.localId || `conflict-${conflict.idempotencyKey}`;
+  const language = languageMetadataForStore(store, conflict);
   const item: ChvConflictItem = {
     schemaVersion: CHV_OFFLINE_LOCAL_SCHEMA_VERSION,
     localId,
@@ -681,6 +1057,9 @@ export function recordChvSyncConflict(
     clientSubmissionId: conflict.clientSubmissionId,
     idempotencyKey: conflict.idempotencyKey,
     uploadType: conflict.uploadType,
+    requestedLanguage: language.requestedLanguage,
+    resolvedLanguage: language.resolvedLanguage,
+    fallbackUsed: language.fallbackUsed,
     conflictState: conflict.conflictState,
     serverReceipt: conflict.serverReceipt ?? {},
     resolutionStatus: conflict.resolutionStatus ?? "UNRESOLVED",
@@ -753,6 +1132,7 @@ export function applyChvOfflineRetentionRules(
       ...store,
       assignedTasks: store.assignedTasks.filter((item) => !hasExpired(item.expiresAt, now)),
       wardGuidance: store.wardGuidance.filter((item) => !hasExpired(item.expiresAt, now)),
+      decisionSupportRecommendations: store.decisionSupportRecommendations.filter((item) => !hasExpired(item.expiresAt, now)),
       symptomTriageDrafts: store.symptomTriageDrafts.filter((item) => !hasExpired(item.expiresAt, now)),
       preventionVisitDrafts: store.preventionVisitDrafts.filter((item) => !hasExpired(item.expiresAt, now)),
       pendingSyncItems: store.pendingSyncItems.filter((item) => !hasExpired(item.expiresAt, now)),

@@ -31,18 +31,26 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { cn } from "@/lib/cn";
 import type {
   FetchMessageGovernanceParams,
+  LocalizationRolloutSnapshot,
+  MessageLanguagePreviewRecord,
   MessageDeliveryOutcomeRow,
   MessageDeliveryReachRow,
   MessageDeliveryTemplateRow,
+  MissingTranslationDashboardItem,
+  OfflineGuidanceLanguagePreview,
+  TemplateLanguageCoverageRow,
   MessageOptOutMonitoringRow,
   MessageTemplateApprovalPayload,
   MessageTemplateRecord,
+  UssdMenuVersionApprovalPayload,
+  UssdRouteTreePreviewRecord,
   UssdMenuVersionRecord,
 } from "@/lib/dashboard";
 import { formatRelativeTimestamp } from "@/lib/freshness";
 import { MESSAGE_GOVERNANCE_ROLES, canApproveMessageTemplates } from "@/lib/roles";
 import {
   useApproveMessageTemplateMutation,
+  useApproveUssdMenuVersionMutation,
   useMessageGovernanceDashboardQuery,
   useMessageTemplateDetailQuery,
 } from "@/queries/use-message-governance-query";
@@ -72,6 +80,15 @@ function toTitleCase(value: string) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function languageLabel(language: string) {
+  const labels: Record<string, string> = {
+    en: "English",
+    sw: "Kiswahili",
+    luo: "Dholuo",
+  };
+  return labels[language] ?? language.toUpperCase();
 }
 
 function formatTimestamp(timestamp: string | null | undefined) {
@@ -115,6 +132,66 @@ function riskTone(riskLevel: string): BadgeTone {
   if (riskLevel === "critical" || riskLevel === "high") return "danger";
   if (riskLevel === "medium") return "warning";
   return "info";
+}
+
+function issueTone(severity: string): BadgeTone {
+  if (severity === "high") return "danger";
+  if (severity === "medium") return "warning";
+  return "info";
+}
+
+function previewRowsFromVariants(languageVariants: MessageTemplateRecord[]): MessageLanguagePreviewRecord[] {
+  const variantsByLanguage = new Map(languageVariants.map((variant) => [variant.language, variant]));
+  const source = variantsByLanguage.get("en");
+  return ["en", "sw", "luo"].map((language) => {
+    const variant = variantsByLanguage.get(language);
+    if (!variant) {
+      return {
+        language,
+        label: languageLabel(language),
+        exists: false,
+        public_id: "",
+        title: "",
+        approval_status: "",
+        translation_status: "",
+        source_template: source?.public_id ?? "",
+        source_template_key: source?.template_key ?? "",
+        source_template_version: source?.version ?? null,
+        body: "",
+        rendered_body: "",
+        delivery_rendered_body: source?.preview.rendered_body ?? "",
+        requested_language: language,
+        resolved_language: source?.language ?? "",
+        fallback_used: Boolean(source),
+        placeholders: [],
+        placeholder_parity_status: "missing",
+        placeholder_warnings: [`Missing ${languageLabel(language)} variant.`],
+        render_error: "",
+      };
+    }
+    return {
+      language,
+      label: languageLabel(language),
+      exists: true,
+      public_id: variant.public_id,
+      title: variant.title,
+      approval_status: variant.approval_status,
+      translation_status: variant.translation_status ?? "",
+      source_template: variant.source_template ?? "",
+      source_template_key: variant.source_template_key ?? "",
+      source_template_version: variant.source_template_version ?? null,
+      body: variant.body,
+      rendered_body: variant.preview.rendered_body,
+      delivery_rendered_body: variant.preview.rendered_body,
+      requested_language: language,
+      resolved_language: language,
+      fallback_used: false,
+      placeholders: variant.preview.declared_placeholders,
+      placeholder_parity_status: language === "en" ? "source" : "pass",
+      placeholder_warnings: [],
+      render_error: variant.preview.render_error,
+    };
+  });
 }
 
 function SummaryTile({
@@ -206,10 +283,76 @@ function TemplateList({
   );
 }
 
+function SideBySideLanguagePreview({ rows }: { rows: MessageLanguagePreviewRecord[] }) {
+  if (!rows.length) {
+    return (
+      <Card className="p-5">
+        <p className="font-semibold text-panel-strong">No language previews available</p>
+      </Card>
+    );
+  }
+
+  return (
+    <section className="grid gap-3">
+      <div className="flex items-center gap-2">
+        <Eye className="size-4 text-brand" />
+        <h4 className="font-semibold text-panel-strong">Side-by-Side Language Preview</h4>
+      </div>
+      <div className="grid gap-3 xl:grid-cols-3">
+        {rows.map((row) => (
+          <div key={row.language} className="grid min-h-[13rem] gap-3 rounded-2xl border border-panel-table-wrap p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="font-semibold text-panel-strong">{row.label}</p>
+                <p className="text-xs text-panel-muted">{row.language.toUpperCase()}</p>
+              </div>
+              <div className="flex flex-wrap gap-1">
+                <StatusBadge tone={row.exists ? approvalTone(row.approval_status) : "danger"}>
+                  {row.exists ? toTitleCase(row.approval_status) : "Missing"}
+                </StatusBadge>
+                <StatusBadge tone={row.placeholder_parity_status === "warning" || row.placeholder_parity_status === "missing" ? "warning" : "success"}>
+                  {row.placeholder_parity_status === "source" ? "Source" : toTitleCase(row.placeholder_parity_status)}
+                </StatusBadge>
+              </div>
+            </div>
+            <div className="rounded-2xl border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] p-3">
+              <p className="whitespace-pre-wrap text-sm leading-6 text-panel-copy">
+                {row.rendered_body || row.delivery_rendered_body || "No preview text available."}
+              </p>
+            </div>
+            {row.fallback_used && row.delivery_rendered_body ? (
+              <div className="rounded-2xl border border-[color-mix(in_srgb,var(--warning)_38%,var(--dashboard-table-line))] bg-[color-mix(in_srgb,var(--warning)_8%,transparent)] p-3">
+                <p className="text-xs font-semibold uppercase text-panel-muted">Delivery fallback</p>
+                <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-panel-copy">{row.delivery_rendered_body}</p>
+              </div>
+            ) : null}
+            {row.placeholders.length ? (
+              <div className="flex flex-wrap gap-1">
+                {row.placeholders.map((placeholder) => (
+                  <StatusBadge key={placeholder} tone="info">{placeholder}</StatusBadge>
+                ))}
+              </div>
+            ) : null}
+            {row.placeholder_warnings.length ? (
+              <div className="grid gap-1">
+                <p className="text-xs font-semibold uppercase text-panel-muted">Placeholder parity</p>
+                {row.placeholder_warnings.map((warning, index) => (
+                  <p key={`${row.language}-warning-${index}`} className="text-xs leading-5 text-[color:var(--warning)]">{warning}</p>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function TemplateDetailPanel({
   template,
   versionHistory,
   languageVariants,
+  sideBySidePreview,
   canApprove,
   onApprovalAction,
   isUpdating,
@@ -217,6 +360,7 @@ function TemplateDetailPanel({
   template: MessageTemplateRecord | null;
   versionHistory: MessageTemplateRecord[];
   languageVariants: MessageTemplateRecord[];
+  sideBySidePreview: MessageLanguagePreviewRecord[];
   canApprove: boolean;
   onApprovalAction: (action: MessageTemplateApprovalPayload["action"], reason: string) => Promise<void>;
   isUpdating: boolean;
@@ -259,22 +403,7 @@ function TemplateDetailPanel({
         </div>
       </div>
 
-      <section className="grid gap-3">
-        <div className="flex items-center gap-2">
-          <Eye className="size-4 text-brand" />
-          <h4 className="font-semibold text-panel-strong">Language Preview</h4>
-        </div>
-        <div className="rounded-2xl border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] p-4">
-          <p className="whitespace-pre-wrap text-sm leading-6 text-panel-copy">{template.preview.rendered_body}</p>
-        </div>
-        {template.preview.declared_placeholders.length ? (
-          <div className="flex flex-wrap gap-2">
-            {template.preview.declared_placeholders.map((placeholder) => (
-              <StatusBadge key={placeholder} tone="info">{placeholder}</StatusBadge>
-            ))}
-          </div>
-        ) : null}
-      </section>
+      <SideBySideLanguagePreview rows={sideBySidePreview} />
 
       <section className="grid gap-3">
         <div className="flex items-center gap-2">
@@ -374,6 +503,14 @@ function TemplateDetailPanel({
             disabled={!canApprove || isUpdating}
           >
             Request review
+          </Button>
+          <Button
+            type="button"
+            variant="danger"
+            onClick={() => submitApproval("reject")}
+            disabled={!canApprove || isUpdating}
+          >
+            Reject
           </Button>
           <Button
             type="button"
@@ -542,7 +679,284 @@ function TemplateUsageTable({ rows }: { rows: MessageDeliveryTemplateRow[] }) {
   );
 }
 
-function UssdMenuVersionList({ menuVersions }: { menuVersions: UssdMenuVersionRecord[] }) {
+function LanguageCoverageMatrix({ rows }: { rows: TemplateLanguageCoverageRow[] }) {
+  if (!rows.length) {
+    return (
+      <Card className="p-5">
+        <p className="font-semibold text-panel-strong">No governed template coverage rows</p>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="overflow-hidden rounded-panel border border-panel-table-wrap bg-panel">
+      <div className="grid grid-cols-[1.25fr_0.55fr_1fr_1fr] gap-3 border-b border-[var(--dashboard-table-line)] px-4 py-3 text-sm font-semibold text-panel-muted max-[860px]:hidden">
+        <span>Template</span>
+        <span>Version</span>
+        <span>Coverage</span>
+        <span>Warnings</span>
+      </div>
+      {rows.slice(0, 12).map((row) => (
+        <div
+          key={`${row.template_key}-${row.version}`}
+          className="grid grid-cols-[1.25fr_0.55fr_1fr_1fr] gap-3 border-b border-[var(--dashboard-table-line)] px-4 py-3 text-sm last:border-b-0 max-[860px]:grid-cols-1"
+        >
+          <span className="min-w-0">
+            <span className="block truncate font-semibold text-panel-strong">{row.title}</span>
+            <span className="mt-1 block truncate text-xs text-panel-muted">{row.template_key}</span>
+          </span>
+          <span className="text-panel-copy">v{row.version}</span>
+          <span className="flex flex-wrap gap-1">
+            {row.variants.map((variant) => (
+              <StatusBadge
+                key={variant.language}
+                tone={variant.exists ? (variant.placeholder_parity_status === "warning" ? "warning" : "success") : "danger"}
+              >
+                {variant.label}
+              </StatusBadge>
+            ))}
+          </span>
+          <span className="grid gap-1">
+            {row.missing_language_labels.length ? (
+              <span className="text-[color:var(--danger)]">
+                Missing {row.missing_language_labels.join(", ")}
+              </span>
+            ) : null}
+            {row.placeholder_warnings.length ? (
+              <span className="text-[color:var(--warning)]">
+                Placeholder parity {row.placeholder_warnings.length}
+              </span>
+            ) : null}
+            {row.translation_review_warnings.length ? (
+              <span className="text-[color:var(--warning)]">
+                Review metadata {row.translation_review_warnings.length}
+              </span>
+            ) : null}
+            {!row.missing_language_labels.length && !row.placeholder_warnings.length && !row.translation_review_warnings.length ? (
+              <span className="text-panel-muted">No warnings</span>
+            ) : null}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MissingTranslationDashboardPanel({ items }: { items: MissingTranslationDashboardItem[] }) {
+  if (!items.length) {
+    return (
+      <Card className="p-5">
+        <p className="font-semibold text-panel-strong">No missing translations or parity warnings</p>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="grid gap-3">
+      {items.slice(0, 8).map((item, index) => (
+        <Card key={`${item.issue_type}-${item.template_key}-${item.language}-${index}`} className="grid gap-2 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="truncate font-semibold text-panel-strong">{item.title}</p>
+              <p className="mt-1 text-sm text-panel-muted">
+                {item.template_key} · {item.version_label ?? `v${item.version}`} · {item.label}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <StatusBadge tone={issueTone(item.severity)}>{toTitleCase(item.severity)}</StatusBadge>
+              <StatusBadge tone="info">{toTitleCase(item.issue_type)}</StatusBadge>
+            </div>
+          </div>
+          <p className="text-sm leading-6 text-panel-copy">{item.message}</p>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+function LocalizationRolloutPanel({ rollout, strictIssueCount }: { rollout: LocalizationRolloutSnapshot; strictIssueCount: number }) {
+  const fallbackMetrics = rollout.fallback_metrics.length
+    ? rollout.fallback_metrics
+    : [rollout.offline_bundle_requests_by_language].filter(Boolean);
+
+  return (
+    <Card className="grid gap-4 p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium text-panel-muted">Phase 7</p>
+          <h3 className="mt-1 text-lg font-semibold text-panel-strong">Localization Rollout</h3>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <StatusBadge tone={strictIssueCount ? "danger" : "success"}>
+            {strictIssueCount ? `${strictIssueCount} strict issues` : "Strict audit pass"}
+          </StatusBadge>
+          <StatusBadge tone={rollout.fallback_rate_pct ? "warning" : "success"}>
+            Fallback {formatPercent(rollout.fallback_rate_pct)}
+          </StatusBadge>
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-3">
+        <div className="rounded-2xl border border-panel-table-wrap p-3">
+          <p className="text-xs text-panel-muted">Active CHVs</p>
+          <p className="mt-1 text-xl font-semibold text-panel-strong">{rollout.active_chv_count}</p>
+          <p className="mt-1 text-xs text-panel-muted">
+            {rollout.chv_preferred_language_counts.map((item) => `${item.key.toUpperCase()} ${item.count}`).join(" · ") || "No language preferences"}
+          </p>
+        </div>
+        <div className="rounded-2xl border border-panel-table-wrap p-3">
+          <p className="text-xs text-panel-muted">Missing translations</p>
+          <p className="mt-1 text-xl font-semibold text-panel-strong">{rollout.missing_translation_count}</p>
+          <p className="mt-1 text-xs text-panel-muted">Rollout blocking coverage gaps</p>
+        </div>
+        <div className="rounded-2xl border border-panel-table-wrap p-3">
+          <p className="text-xs text-panel-muted">Review age</p>
+          <p className="mt-1 text-xl font-semibold text-panel-strong">{rollout.translation_review_age.max_age_days}d</p>
+          <p className="mt-1 text-xs text-panel-muted">
+            {rollout.translation_review_age.pending_review_count} variants awaiting review
+          </p>
+        </div>
+      </div>
+
+      <div className="grid gap-3 xl:grid-cols-[0.95fr_1.05fr]">
+        <div className="grid gap-2">
+          <p className="text-sm font-semibold text-panel-strong">Fallback Rate By Surface</p>
+          {fallbackMetrics.map((metric) => (
+            <div key={metric.surface} className="grid gap-1 rounded-2xl border border-panel-table-wrap px-3 py-2 text-sm">
+              <div className="grid grid-cols-[1fr_auto_auto] gap-3">
+                <span className="font-semibold text-panel-strong">{toTitleCase(metric.surface)}</span>
+                <span className="text-panel-muted">{metric.fallback_count}/{metric.total_count}</span>
+                <span className={metric.fallback_count ? "text-[color:var(--warning)]" : "text-panel-copy"}>
+                  {formatPercent(metric.fallback_rate_pct)}
+                </span>
+              </div>
+              <p className="text-xs text-panel-muted">
+                Requested {metric.by_requested_language.map((item) => `${item.key.toUpperCase()} ${item.count}`).join(" · ") || "none"}
+              </p>
+            </div>
+          ))}
+        </div>
+        <div className="grid gap-2">
+          <p className="text-sm font-semibold text-panel-strong">Rollout Path</p>
+          {rollout.rollout_path.map((step) => (
+            <div key={step.step} className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-panel-table-wrap px-3 py-2 text-sm">
+              <span className="font-semibold text-panel-strong">{toTitleCase(step.step)}</span>
+              <StatusBadge tone={step.status === "complete" || step.status === "active" || step.status === "ready" ? "success" : step.status === "blocked" ? "danger" : "warning"}>
+                {toTitleCase(step.status)}
+              </StatusBadge>
+            </div>
+          ))}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function UssdRouteTreePreview({ previews }: { previews: UssdRouteTreePreviewRecord[] }) {
+  if (!previews.length) {
+    return (
+      <Card className="p-5">
+        <p className="font-semibold text-panel-strong">No active USSD route tree preview</p>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="grid gap-4">
+      {previews.map((preview) => (
+        <Card key={preview.menu_key} className="grid gap-4 p-4">
+          <div>
+            <p className="font-semibold text-panel-strong">{preview.source_title || preview.menu_key}</p>
+            <p className="mt-1 text-sm text-panel-muted">
+              {preview.menu_key} · {preview.source_version_label || "no source version"}
+            </p>
+          </div>
+          <div className="grid gap-3 xl:grid-cols-3">
+            {preview.languages.map((languagePreview) => (
+              <div key={languagePreview.language} className="grid gap-3 rounded-2xl border border-panel-table-wrap p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-semibold text-panel-strong">{languagePreview.label}</p>
+                  <div className="flex flex-wrap gap-1">
+                    <StatusBadge tone={languagePreview.exists ? "success" : "danger"}>
+                      {languagePreview.exists ? "Active" : "Fallback"}
+                    </StatusBadge>
+                    {languagePreview.warnings.length ? <StatusBadge tone="warning">Warnings</StatusBadge> : null}
+                  </div>
+                </div>
+                <div className="grid gap-2">
+                  {languagePreview.routes.slice(0, 4).map((route) => (
+                    <div key={`${languagePreview.language}-${route.route_label}`} className="rounded-2xl border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] p-3">
+                      <p className="text-xs font-semibold uppercase text-panel-muted">
+                        {route.route_label} · {route.response_type}
+                      </p>
+                      <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-panel-copy">{route.response_text}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-panel-muted">Fallback: {languagePreview.safe_fallback_copy}</p>
+              </div>
+            ))}
+          </div>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+function OfflineGuidancePreview({ previews }: { previews: OfflineGuidanceLanguagePreview[] }) {
+  if (!previews.length) {
+    return (
+      <Card className="p-5">
+        <p className="font-semibold text-panel-strong">No offline guidance preview</p>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="grid gap-3 xl:grid-cols-3">
+      {previews.map((preview) => (
+        <Card key={preview.language} className="grid gap-3 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="font-semibold text-panel-strong">{preview.label}</p>
+              <p className="text-sm text-panel-muted">
+                {preview.item_count} items · resolved {preview.resolved_language.toUpperCase()}
+              </p>
+            </div>
+            {preview.fallback_used ? <StatusBadge tone="warning">Fallback</StatusBadge> : <StatusBadge tone="success">Ready</StatusBadge>}
+          </div>
+          <div className="grid gap-2">
+            {preview.items.slice(0, 3).map((item) => (
+              <div key={`${preview.language}-${item.guidance_public_id}`} className="rounded-2xl border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] p-3">
+                <p className="text-xs font-semibold uppercase text-panel-muted">{item.title}</p>
+                <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-panel-copy">{item.rendered_body}</p>
+              </div>
+            ))}
+          </div>
+          {preview.warnings.length ? (
+            <p className="text-xs leading-5 text-[color:var(--warning)]">{preview.warnings.join(" ")}</p>
+          ) : null}
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+function UssdMenuVersionList({
+  menuVersions,
+  canApprove,
+  isUpdating,
+  onApprovalAction,
+}: {
+  menuVersions: UssdMenuVersionRecord[];
+  canApprove: boolean;
+  isUpdating: boolean;
+  onApprovalAction: (
+    publicId: string,
+    title: string,
+    action: UssdMenuVersionApprovalPayload["action"],
+  ) => void;
+}) {
   if (!menuVersions.length) {
     return (
       <Card className="p-5">
@@ -575,6 +989,41 @@ function UssdMenuVersionList({ menuVersions }: { menuVersions: UssdMenuVersionRe
             <span>{version.node_count} nodes</span>
             <span>Fallback: {version.safe_fallback_copy}</span>
           </div>
+          {canApprove ? (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                onClick={() => onApprovalAction(version.public_id, version.title, "approve")}
+                disabled={isUpdating || version.approval_status === "APPROVED"}
+              >
+                Approve
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => onApprovalAction(version.public_id, version.title, "request_review")}
+                disabled={isUpdating}
+              >
+                Review
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => onApprovalAction(version.public_id, version.title, "reject")}
+                disabled={isUpdating}
+              >
+                Reject
+              </Button>
+              <Button
+                size="sm"
+                variant="danger"
+                onClick={() => onApprovalAction(version.public_id, version.title, "retire")}
+                disabled={isUpdating || version.approval_status === "RETIRED"}
+              >
+                Retire
+              </Button>
+            </div>
+          ) : null}
         </Card>
       ))}
     </div>
@@ -588,6 +1037,7 @@ export default function MessageGovernancePage() {
   const { currentUser } = useAuth();
   const { data, isPending, error, refetch, isFetching } = useMessageGovernanceDashboardQuery(filters);
   const approveMutation = useApproveMessageTemplateMutation();
+  const approveUssdMutation = useApproveUssdMenuVersionMutation();
   const [draftFilters, setDraftFilters] = useState(filters);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -625,6 +1075,7 @@ export default function MessageGovernancePage() {
     : [];
   const versionHistory = selectedTemplateDetail?.version_history ?? fallbackVersionHistory;
   const languageVariants = selectedTemplateDetail?.language_variants ?? fallbackLanguageVariants;
+  const sideBySidePreview = selectedTemplateDetail?.side_by_side_preview ?? previewRowsFromVariants(languageVariants);
 
   function updateDraft(key: keyof FetchMessageGovernanceParams, value: string) {
     setDraftFilters((current) => ({ ...current, [key]: value || undefined }));
@@ -659,6 +1110,28 @@ export default function MessageGovernancePage() {
       await refetch();
     } catch (approvalError) {
       setActionError(approvalError instanceof Error ? approvalError.message : "Unable to update template approval.");
+    }
+  }
+
+  async function handleUssdApprovalAction(
+    publicId: string,
+    title: string,
+    action: UssdMenuVersionApprovalPayload["action"],
+  ) {
+    setActionError(null);
+    setActionMessage(null);
+    try {
+      await approveUssdMutation.mutateAsync({
+        publicId,
+        payload: {
+          action,
+          reason: "Reviewed from the message governance dashboard.",
+        },
+      });
+      setActionMessage(`${toTitleCase(action)} saved for ${title}.`);
+      await refetch();
+    } catch (approvalError) {
+      setActionError(approvalError instanceof Error ? approvalError.message : "Unable to update USSD menu approval.");
     }
   }
 
@@ -821,7 +1294,35 @@ export default function MessageGovernancePage() {
               <SummaryTile icon={<Ban className="size-5" />} label="Opt-outs" value={data.summary.opt_out_count} tone="warning" />
               <SummaryTile icon={<Smartphone className="size-5" />} label="USSD completion" value={formatPercent(data.summary.ussd_completion_rate_pct)} />
               <SummaryTile icon={<AlertTriangle className="size-5" />} label="Invalid USSD" value={formatPercent(data.summary.ussd_invalid_input_rate_pct)} tone="warning" />
+              <SummaryTile icon={<Languages className="size-5" />} label="Missing translations" value={data.summary.missing_translation_count} tone={data.summary.missing_translation_count ? "danger" : "success"} />
+              <SummaryTile icon={<AlertTriangle className="size-5" />} label="Placeholder parity" value={data.summary.placeholder_parity_warning_count} tone={data.summary.placeholder_parity_warning_count ? "warning" : "success"} />
+              <SummaryTile icon={<ShieldCheck className="size-5" />} label="Review warnings" value={data.summary.translation_review_warning_count} tone={data.summary.translation_review_warning_count ? "warning" : "success"} />
+              <SummaryTile icon={<ShieldCheck className="size-5" />} label="Strict localization" value={data.summary.strict_localization_issue_count} tone={data.summary.strict_localization_issue_count ? "danger" : "success"} />
+              <SummaryTile icon={<Languages className="size-5" />} label="Fallback rate" value={formatPercent(data.summary.localization_fallback_rate_pct)} tone={data.summary.localization_fallback_rate_pct ? "warning" : "success"} />
             </section>
+
+            <section className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+              <section className="grid content-start gap-4">
+                <div className="flex items-center gap-3">
+                  <Languages className="size-5 text-brand" />
+                  <h3 className="text-lg font-semibold text-panel-strong">Language Coverage Matrix</h3>
+                </div>
+                <LanguageCoverageMatrix rows={data.template_language_coverage.rows} />
+              </section>
+
+              <section className="grid content-start gap-4">
+                <div className="flex items-center gap-3">
+                  <AlertTriangle className="size-5 text-brand" />
+                  <h3 className="text-lg font-semibold text-panel-strong">Missing Translation Dashboard</h3>
+                </div>
+                <MissingTranslationDashboardPanel items={data.missing_translation_dashboard.items} />
+              </section>
+            </section>
+
+            <LocalizationRolloutPanel
+              rollout={data.audit.localization_rollout}
+              strictIssueCount={data.audit.strict_localization_issue_count}
+            />
 
             <section className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
               <section className="grid content-start gap-4">
@@ -845,6 +1346,7 @@ export default function MessageGovernancePage() {
                   template={selectedTemplate}
                   versionHistory={versionHistory}
                   languageVariants={languageVariants}
+                  sideBySidePreview={sideBySidePreview}
                   canApprove={canApprove}
                   onApprovalAction={handleApprovalAction}
                   isUpdating={approveMutation.isPending}
@@ -912,10 +1414,31 @@ export default function MessageGovernancePage() {
 
             <section className="grid gap-4">
               <div className="flex items-center gap-3">
+                <Smartphone className="size-5 text-brand" />
+                <h3 className="text-lg font-semibold text-panel-strong">USSD Route Tree Preview</h3>
+              </div>
+              <UssdRouteTreePreview previews={data.ussd_route_tree_preview} />
+            </section>
+
+            <section className="grid gap-4">
+              <div className="flex items-center gap-3">
+                <ClipboardCheck className="size-5 text-brand" />
+                <h3 className="text-lg font-semibold text-panel-strong">Offline Guidance Preview</h3>
+              </div>
+              <OfflineGuidancePreview previews={data.offline_guidance_preview} />
+            </section>
+
+            <section className="grid gap-4">
+              <div className="flex items-center gap-3">
                 <Languages className="size-5 text-brand" />
                 <h3 className="text-lg font-semibold text-panel-strong">USSD Menu Versions</h3>
               </div>
-              <UssdMenuVersionList menuVersions={data.ussd_menu_versions} />
+              <UssdMenuVersionList
+                menuVersions={data.ussd_menu_versions}
+                canApprove={canApprove}
+                isUpdating={approveUssdMutation.isPending}
+                onApprovalAction={handleUssdApprovalAction}
+              />
             </section>
           </>
         ) : null}

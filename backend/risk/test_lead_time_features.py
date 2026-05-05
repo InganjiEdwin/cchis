@@ -597,8 +597,8 @@ class LeadTimeFeaturePhaseTwoTestCase(TestCase):
         self.assertEqual(values["water_proximity_spatial_feature_value"], 0.34)
         self.assertTrue(values["leakage_proof"]["passes_cutoff_check"])
         self.assertEqual(
-            values["leakage_proof"]["max_spatial_relationship_generated_at"],
-            relationship.generated_at.isoformat(),
+            datetime.fromisoformat(values["leakage_proof"]["max_spatial_relationship_generated_at"]),
+            relationship.generated_at,
         )
         self.assertLess(
             values["leakage_proof"]["max_neighbor_surveillance_reporting_period_end"],

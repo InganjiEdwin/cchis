@@ -6388,7 +6388,7 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.authenticate(self.supervisor_user.username)
         response = self.client.post(
             reverse("trigger-alerts"),
-            {"risk_level": Ward.RISK_HIGH, "send_sms": False},
+            {"send_sms": False},
             format="json",
         )
 
@@ -7085,6 +7085,7 @@ class EmailProviderFoundationTestCase(AuthenticatedAPITestCase):
                 "serviceCode": "*123#",
                 "phoneNumber": "+254700000001",
                 "text": "2*1",
+                "language": "en",
             },
             format="json",
         )
@@ -7101,6 +7102,7 @@ class EmailProviderFoundationTestCase(AuthenticatedAPITestCase):
                 "serviceCode": "*123#",
                 "phoneNumber": "+254700000001",
                 "text": "9",
+                "language": "en",
             },
             format="json",
         )

@@ -35,7 +35,8 @@ from .chv_offline import (
     record_chv_offline_rejected_submission_audit,
     register_chv_device,
 )
-from .models import Alert, AlertWorkflowEvent, AlertWorkflowState, CHV, CHVDeviceRegistration, CHVMessage, CHVOfflineRejectedSubmissionAudit, ContactPreference, DashboardNotification, FacilityReadinessEscalation, FacilityReadinessReview, FacilityReadinessUpdateRequest, HealthFacility, IngestionRun, InteroperabilityRun, MessageTemplate, ModelRun, PreparednessAction, RiskScore, SensitiveExportRequest, SyncQueue, UssdSessionLog, Ward
+from .chv_localization import resolve_language_preference, supported_language_or_default
+from .models import Alert, AlertWorkflowEvent, AlertWorkflowState, CHV, CHVDeviceRegistration, CHVMessage, CHVOfflineRejectedSubmissionAudit, ContactPreference, DashboardNotification, FacilityReadinessEscalation, FacilityReadinessReview, FacilityReadinessUpdateRequest, HealthFacility, IngestionRun, InteroperabilityRun, MessageTemplate, ModelRun, PreparednessAction, RiskScore, SensitiveExportRequest, SyncQueue, UssdMenuVersion, UssdSessionLog, Ward
 from .models import CHVAssignment, CHVCoverageRequest, CHVCoverageRequestAlertLink, CHVCoverageRequestEvent
 from .map_data import build_migori_ward_map_summary
 from datetime import timedelta
@@ -46,7 +47,9 @@ from .notifications import notification_summary_for_user, notifications_for_user
 from .message_management import (
     build_message_management_dashboard,
     build_message_template_detail,
+    build_ussd_menu_version_record,
     transition_message_template_approval,
+    transition_ussd_menu_version_approval,
 )
 from .interoperability import (
     build_interoperability_dashboard_snapshot,
@@ -566,7 +569,40 @@ class CHVOfflineContractAPIView(APIView):
         if error_response is not None:
             return error_response
 
-        return Response(build_chv_offline_contract(request.user, ward), status=status.HTTP_200_OK)
+        device_registration = None
+        device_registration_id = (request.query_params.get("device_registration_id") or "").strip()
+        if device_registration_id:
+            try:
+                device_public_id = uuid.UUID(device_registration_id)
+            except ValueError:
+                device_public_id = None
+            if device_public_id is not None:
+                device_registration = (
+                    CHVDeviceRegistration.objects.filter(
+                        public_id=device_public_id,
+                        user=request.user,
+                        ward=ward,
+                        is_active=True,
+                    )
+                    .select_related("ward", "chv")
+                    .first()
+                )
+
+        requested_language = (
+            request.query_params.get("language")
+            or request.query_params.get("lang")
+            or request.query_params.get("requested_language")
+            or ""
+        )
+        return Response(
+            build_chv_offline_contract(
+                request.user,
+                ward,
+                requested_language=requested_language,
+                device_registration=device_registration,
+            ),
+            status=status.HTTP_200_OK,
+        )
 
 
 class CHVDeviceRegistrationAPIView(APIView):
@@ -586,6 +622,7 @@ class CHVDeviceRegistrationAPIView(APIView):
             contract_version=serializer.validated_data.get("contract_version") or OFFLINE_CHV_CONTRACT_VERSION,
             app_version=serializer.validated_data.get("app_version", ""),
             platform=serializer.validated_data.get("platform", CHVDeviceRegistration.PLATFORM_UNKNOWN),
+            preferred_language=serializer.validated_data.get("preferred_language", ""),
             metadata=serializer.validated_data.get("metadata", {}),
         )
         return Response(device_registration_payload(registration, request.user), status=status.HTTP_201_CREATED)
@@ -631,7 +668,7 @@ class CHVMessageListCreateAPIView(APIView):
                 override_reason=serializer.validated_data.get("override_reason", ""),
                 template_key=serializer.validated_data.get("template_key", ""),
                 template_version=serializer.validated_data.get("template_version"),
-                template_language=serializer.validated_data.get("template_language", "en"),
+                template_language=serializer.validated_data.get("template_language") or None,
                 template_context=serializer.validated_data.get("template_context", {}),
             )
         except ValueError as exc:
@@ -1326,7 +1363,7 @@ class FacilityReadinessUpdateRequestCreateAPIView(APIView):
                 override_reason=serializer.validated_data.get("override_reason", ""),
                 template_key=serializer.validated_data.get("template_key", ""),
                 template_version=serializer.validated_data.get("template_version"),
-                template_language=serializer.validated_data.get("template_language", "en"),
+                template_language=serializer.validated_data.get("template_language") or "en",
                 template_context=serializer.validated_data.get("template_context", {}),
             )
         except ValueError as exc:
@@ -2266,7 +2303,12 @@ class MessageGovernanceDashboardAPIView(APIView):
     permission_classes = [IsAdminSupervisorOrAnalyst]
 
     def get(self, request):
-        queryset = MessageTemplate.objects.all().order_by("template_key", "language", "-version")
+        queryset = MessageTemplate.objects.select_related(
+            "approved_by",
+            "created_by",
+            "source_template",
+            "translation_reviewed_by",
+        ).order_by("template_key", "language", "-version")
         q = request.query_params.get("q")
         audience_type = request.query_params.get("audience_type")
         channel = request.query_params.get("channel")
@@ -2314,7 +2356,7 @@ class MessageTemplateGovernanceDetailAPIView(APIView):
 
     def get(self, request, public_id):
         template = get_object_or_404(
-            MessageTemplate.objects.select_related("approved_by", "created_by"),
+            MessageTemplate.objects.select_related("approved_by", "created_by", "source_template", "translation_reviewed_by"),
             public_id=public_id,
         )
         payload = build_message_template_detail(
@@ -2329,7 +2371,10 @@ class MessageTemplateApprovalAPIView(APIView):
     permission_classes = [IsAdminOnly]
 
     def post(self, request, public_id):
-        template = get_object_or_404(MessageTemplate.objects.select_related("approved_by", "created_by"), public_id=public_id)
+        template = get_object_or_404(
+            MessageTemplate.objects.select_related("approved_by", "created_by", "source_template", "translation_reviewed_by"),
+            public_id=public_id,
+        )
         action = (request.data.get("action") or "approve").strip()
         reason = (request.data.get("reason") or "").strip()
         try:
@@ -2344,6 +2389,37 @@ class MessageTemplateApprovalAPIView(APIView):
 
         payload = build_message_template_detail(updated_template)
         return Response(payload, status=status.HTTP_200_OK)
+
+
+class UssdMenuVersionApprovalAPIView(APIView):
+    permission_classes = [IsAdminOnly]
+
+    def post(self, request, public_id):
+        menu_version = get_object_or_404(
+            UssdMenuVersion.objects.select_related(
+                "approved_by",
+                "created_by",
+                "source_menu_version",
+                "translation_reviewed_by",
+            ),
+            public_id=public_id,
+        )
+        action = (request.data.get("action") or "approve").strip()
+        reason = (request.data.get("reason") or "").strip()
+        try:
+            updated_menu_version = transition_ussd_menu_version_approval(
+                menu_version,
+                action=action,
+                actor=request.user,
+                reason=reason,
+            )
+        except DjangoValidationError as error:
+            return Response(
+                {"errors": error.message_dict if hasattr(error, "message_dict") else error.messages},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(build_ussd_menu_version_record(updated_menu_version), status=status.HTTP_200_OK)
 
 
 class TriggerAlertContextAPIView(APIView):
@@ -2395,7 +2471,7 @@ class TriggerAlertPreviewAPIView(APIView):
                 serializer.validated_data.get("message_override"),
                 template_key=serializer.validated_data.get("template_key", ""),
                 template_version=serializer.validated_data.get("template_version"),
-                template_language=serializer.validated_data.get("template_language", "en"),
+                template_language=serializer.validated_data.get("template_language") or "en",
                 template_context=serializer.validated_data.get("template_context", {}),
             )
         except ValueError as exc:
@@ -2416,7 +2492,7 @@ class TriggerAlertsAPIView(APIView):
         message_override = serializer.validated_data.get("message_override")
         template_key = serializer.validated_data.get("template_key", "")
         template_version = serializer.validated_data.get("template_version")
-        template_language = serializer.validated_data.get("template_language", "en")
+        template_language = serializer.validated_data.get("template_language") or None
         template_context = serializer.validated_data.get("template_context", {})
 
         queryset = RiskScore.objects.select_related("ward", "model_run").all()
@@ -2456,7 +2532,7 @@ class TriggerAlertsAPIView(APIView):
                 message_override,
                 template_key=template_key,
                 template_version=template_version,
-                template_language=template_language,
+                template_language=template_language or "en",
                 template_context=template_context,
             )
         except ValueError as exc:
@@ -2848,6 +2924,30 @@ class CHVSyncAPIView(APIView):
             source_device_id = source_device_id or device_registration.device_id
 
         phone_number = phone_number or (getattr(user, "phone_number", "") or "")
+        client_requested_language = (
+            serializer.validated_data.get("requested_language")
+            or serializer.validated_data.get("language")
+            or ""
+        )
+        client_resolved_language = serializer.validated_data.get("resolved_language") or ""
+        requested_language = client_requested_language or client_resolved_language
+        language_resolution = resolve_language_preference(
+            requested_language=requested_language,
+            device_registration=device_registration,
+            chv=device_registration.chv if device_registration is not None else None,
+            user=user,
+        )
+        resolved_language = supported_language_or_default(client_resolved_language or language_resolution.resolved_language)
+        fallback_used = bool(
+            serializer.validated_data.get("fallback_used")
+            or language_resolution.fallback_used
+            or language_resolution.requested_language != resolved_language
+        )
+        language_metadata = {
+            **language_resolution.as_metadata(),
+            "resolved_language": resolved_language,
+            "fallback_used": fallback_used,
+        }
 
         processed = []
         for payload in payloads:
@@ -2860,6 +2960,7 @@ class CHVSyncAPIView(APIView):
                     contract_version=contract_version,
                     device_registration=device_registration,
                     download_bundle_version=download_bundle_version,
+                    language_metadata=language_metadata,
                     user=user,
                 )
             except SyncPayloadProcessingError as exc:
@@ -2892,10 +2993,12 @@ class CHVSyncAPIView(APIView):
                     "replayed": replayed,
                     "contract_version": sync_item.contract_version,
                     "upload_type": sync_item.upload_type,
+                    "language": language_metadata,
                     "domain_record": domain_record,
                 }
             else:
                 server_receipt["replayed"] = replayed
+                server_receipt.setdefault("language", language_metadata)
             result = {
                 "sync_queue_id": sync_item.id,
                 "client_submission_id": sync_item.client_submission_id,
@@ -2904,6 +3007,7 @@ class CHVSyncAPIView(APIView):
                 "sync_status": sync_item.status,
                 "conflict_state": SyncQueue.CONFLICT_REPLAYED if replayed else sync_item.conflict_state,
                 "replayed": replayed,
+                "language": language_metadata,
                 "server_receipt": server_receipt,
                 "domain_record": server_receipt.get("domain_record") or domain_record,
             }
@@ -2918,6 +3022,10 @@ class CHVSyncAPIView(APIView):
             {
                 "message": "Offline payloads synced successfully.",
                 "contract_version": contract_version,
+                "requested_language": language_resolution.requested_language,
+                "resolved_language": resolved_language,
+                "fallback_used": fallback_used,
+                "language": language_metadata,
                 "processed_count": len(processed),
                 "sync_health_record": build_sync_health_record(
                     ward=ward,
@@ -2940,7 +3048,10 @@ class USSDMenuAPIView(APIView):
         service_code = (request.data.get("serviceCode") or request.data.get("service_code") or "").strip()
         phone_number = (request.data.get("phoneNumber") or request.data.get("phone_number") or "").strip()
         text = (request.data.get("text") or "").strip()
-        language = (request.data.get("language") or request.data.get("lang") or "").strip()
+        raw_language = request.data.get("language")
+        if raw_language is None:
+            raw_language = request.data.get("lang")
+        language = str(raw_language).strip() if raw_language is not None else None
 
         log = create_ussd_session_log(
             session_id=session_id or "unknown-session",
@@ -2960,7 +3071,15 @@ class UssdSessionLogListAPIView(generics.ListAPIView):
     serializer_class = UssdSessionLogSerializer
     permission_classes = [IsAdminOrSupervisor]
     filter_backends = [OrderingFilter]
-    ordering_fields = ["created_at", "session_id", "language", "session_outcome", "menu_version_label"]
+    ordering_fields = [
+        "created_at",
+        "session_id",
+        "language",
+        "requested_language",
+        "resolved_language",
+        "session_outcome",
+        "menu_version_label",
+    ]
     ordering = ["-created_at"]
 
     def _can_filter_direct_identifier(self) -> bool:
@@ -2978,6 +3097,7 @@ class UssdSessionLogListAPIView(generics.ListAPIView):
         session_id = self.request.query_params.get("session_id")
         phone_number = self.request.query_params.get("phone_number")
         language = self.request.query_params.get("language")
+        resolved_language = self.request.query_params.get("resolved_language")
         session_outcome = self.request.query_params.get("session_outcome")
         invalid_option = self.request.query_params.get("invalid_option")
         menu_version_label = self.request.query_params.get("menu_version_label")
@@ -2989,6 +3109,8 @@ class UssdSessionLogListAPIView(generics.ListAPIView):
             queryset = queryset.filter(session_id=session_id)
         if language:
             queryset = queryset.filter(language=language.strip().lower())
+        if resolved_language:
+            queryset = queryset.filter(resolved_language=resolved_language.strip().lower())
         if session_outcome:
             queryset = queryset.filter(session_outcome=session_outcome.strip().upper())
         normalized_invalid_option = invalid_option.strip().lower() if invalid_option else ""

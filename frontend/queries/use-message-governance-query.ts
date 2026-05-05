@@ -4,10 +4,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   approveMessageTemplateViaBff,
+  approveUssdMenuVersionViaBff,
   fetchMessageGovernanceDashboardViaBff,
   fetchMessageTemplateDetailViaBff,
   type FetchMessageGovernanceParams,
   type MessageTemplateApprovalPayload,
+  type UssdMenuVersionApprovalPayload,
 } from "@/lib/dashboard";
 import { queryKeys } from "@/lib/query-keys";
 
@@ -42,6 +44,23 @@ export function useApproveMessageTemplateMutation() {
         queryClient.invalidateQueries({ queryKey: queryKeys.messageGovernance.root() }),
         queryClient.invalidateQueries({ queryKey: queryKeys.messageGovernance.template(detail.template.public_id) }),
       ]);
+    },
+  });
+}
+
+export function useApproveUssdMenuVersionMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      publicId,
+      payload,
+    }: {
+      publicId: string;
+      payload: UssdMenuVersionApprovalPayload;
+    }) => approveUssdMenuVersionViaBff(publicId, payload),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.messageGovernance.root() });
     },
   });
 }

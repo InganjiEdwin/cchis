@@ -13,6 +13,11 @@ from django.conf import settings
 from django.db.models import Count, Max, Q
 from django.utils import timezone
 
+from .chv_localization import (
+    DEFAULT_CHV_LANGUAGE,
+    LanguageResolution,
+    resolve_language_preference,
+)
 from .models import (
     CHV,
     CHVAssignment,
@@ -40,6 +45,13 @@ OFFLINE_CHV_MONITORING_WINDOW_HOURS = 24
 OFFLINE_CHV_MONITORING_AUDIT_DAYS = 7
 OFFLINE_CHV_REJECTED_UPLOAD_THRESHOLD = 3
 OFFLINE_CHV_REJECTION_AUDIT_MAX_ITEMS = 20
+
+OFFLINE_CHV_DECISION_SUPPORT_RECOMMENDATION_TEMPLATE_KEYS = {
+    "urgent_referral": "cholera.chv.triage.urgent_referral_offline",
+    "facility_assessment": "cholera.chv.triage.facility_assessment_offline",
+    "ors_and_prevention": "cholera.chv.triage.ors_and_prevention_offline",
+    "record_symptoms": "cholera.chv.triage.record_symptoms_offline",
+}
 
 SUPPORTED_PHASE_1_UPLOAD_TYPES = {
     SyncQueue.UPLOAD_SYMPTOM_TRIAGE,
@@ -193,8 +205,14 @@ def sync_contract_payload() -> dict:
         },
         "user_session_scope": {
             "version": "chv-session-scope-v1",
-            "required_fields": ["user_id", "role", "ward_id", "ward_public_id", "scope_key"],
+            "required_fields": ["user_id", "role", "ward_id", "ward_public_id", "scope_key", "language"],
             "privacy_rule": "no phone number or household identifier is required in the bundle scope",
+        },
+        "language_preference": {
+            "version": "chv-language-preference-v1",
+            "supported_languages": ["en", "sw", "luo"],
+            "default_language": "en",
+            "fields": ["requested_language", "resolved_language", "fallback_used"],
         },
         "download_bundle_version": {
             "version": "chv-download-bundle-v1",
@@ -207,11 +225,12 @@ def sync_contract_payload() -> dict:
         },
         "guidance_bundle": {
             "version": OFFLINE_CHV_GUIDANCE_BUNDLE_SCHEMA_VERSION,
-            "source": "approved offline_chv_bundle message templates with a safe fallback",
+            "source": "approved offline_chv_bundle message templates; missing governed content fails closed with content_unavailable metadata",
         },
         "decision_support_rule_bundle": {
             "version": OFFLINE_CHV_RULE_BUNDLE_VERSION,
-            "boundary": "rule-based first aid guidance, not diagnosis automation",
+            "boundary_code": "chv_decision_support_not_diagnosis",
+            "display_copy_rule": "CHV-visible decision-support copy must come from approved offline_chv_bundle recommendation templates.",
         },
         "upload_envelope": {
             "version": OFFLINE_CHV_UPLOAD_ENVELOPE_VERSION,
@@ -255,10 +274,27 @@ def resolve_chv_for_user(user, ward: Ward) -> CHV | None:
     return None
 
 
-def build_session_scope(user, ward: Ward) -> dict:
+def resolve_chv_language_for_user(
+    user,
+    ward: Ward,
+    *,
+    requested_language: str | None = None,
+    device_registration: CHVDeviceRegistration | None = None,
+    chv: CHV | None = None,
+) -> LanguageResolution:
+    return resolve_language_preference(
+        requested_language=requested_language,
+        device_registration=device_registration,
+        chv=chv if chv is not None else resolve_chv_for_user(user, ward),
+        user=user,
+    )
+
+
+def build_session_scope(user, ward: Ward, *, language_resolution: LanguageResolution | None = None) -> dict:
     chv = resolve_chv_for_user(user, ward)
     chv_public_id = str(chv.public_id) if chv else None
     scope_key = f"ward:{ward.public_id}:chv:{chv_public_id or f'user-{user.id}'}"
+    language_metadata = language_resolution.as_metadata() if language_resolution is not None else {}
     return {
         "user_id": user.id,
         "role": getattr(user, "role", ""),
@@ -270,6 +306,7 @@ def build_session_scope(user, ward: Ward) -> dict:
         "chv_public_id": chv_public_id,
         "scope_type": "assigned_chv_ward" if chv else "assigned_user_ward",
         "scope_key": scope_key,
+        "language": language_metadata,
     }
 
 
@@ -305,7 +342,13 @@ def _task_from_assignment(assignment: CHVAssignment) -> dict:
     }
 
 
-def build_task_bundle(user, ward: Ward) -> dict:
+def build_task_bundle(
+    user,
+    ward: Ward,
+    *,
+    language_resolution: LanguageResolution | None = None,
+) -> dict:
+    language_resolution = language_resolution or resolve_chv_language_for_user(user, ward)
     chv = resolve_chv_for_user(user, ward)
     action_queryset = (
         PreparednessAction.objects.filter(ward=ward, status__in=PreparednessAction.ACTIVE_STATUSES)
@@ -331,26 +374,68 @@ def build_task_bundle(user, ward: Ward) -> dict:
 
     return {
         "schema_version": OFFLINE_CHV_TASK_BUNDLE_SCHEMA_VERSION,
-        "scope_key": build_session_scope(user, ward)["scope_key"],
+        "scope_key": build_session_scope(user, ward, language_resolution=language_resolution)["scope_key"],
+        "requested_language": language_resolution.requested_language,
+        "resolved_language": language_resolution.resolved_language,
+        "fallback_used": language_resolution.fallback_used,
+        "language": language_resolution.as_metadata(),
         "tasks": [*action_tasks, *assignment_tasks],
         "retention_rule": "keep assigned task metadata until successful sync plus 7 days, then purge local details",
     }
 
 
-def build_guidance_bundle(user, ward: Ward) -> dict:
-    language = (getattr(user, "language", "") or "").strip().lower() or "en"
-    templates = MessageTemplate.objects.filter(
+def _select_guidance_templates(language_resolution: LanguageResolution):
+    requested_language = language_resolution.resolved_language
+    queryset = MessageTemplate.objects.filter(
         channel=MessageTemplate.CHANNEL_OFFLINE_CHV_BUNDLE,
         approval_status=MessageTemplate.APPROVAL_APPROVED,
         retired_at__isnull=True,
         audience_type__in=[MessageTemplate.AUDIENCE_CHV, MessageTemplate.AUDIENCE_HOUSEHOLD],
-    ).filter(Q(language=language) | Q(language="en")).order_by("template_key", "language", "-version")
+    ).exclude(
+        template_key__in=OFFLINE_CHV_DECISION_SUPPORT_RECOMMENDATION_TEMPLATE_KEYS.values(),
+    ).filter(
+        Q(language=DEFAULT_CHV_LANGUAGE)
+        | Q(
+            language=requested_language,
+            translation_status=MessageTemplate.TRANSLATION_APPROVED,
+            source_template__isnull=False,
+            source_template__approval_status=MessageTemplate.APPROVAL_APPROVED,
+            source_template__retired_at__isnull=True,
+        )
+    ).order_by(
+        "template_key",
+        "-version",
+        "language",
+    )
+
+    selected_by_key: dict[str, MessageTemplate] = {}
+    for template in queryset[:200]:
+        existing = selected_by_key.get(template.template_key)
+        if existing is None:
+            selected_by_key[template.template_key] = template
+            continue
+        if existing.language != requested_language and template.language == requested_language:
+            selected_by_key[template.template_key] = template
+    return list(selected_by_key.values())
+
+
+def build_guidance_bundle(
+    user,
+    ward: Ward,
+    *,
+    language_resolution: LanguageResolution | None = None,
+) -> dict:
+    language_resolution = language_resolution or resolve_chv_language_for_user(user, ward)
+    templates = _select_guidance_templates(language_resolution)
 
     guidance_items = [
         {
             "guidance_public_id": str(template.public_id),
             "template_key": template.template_key,
             "language": template.language,
+            "requested_language": language_resolution.requested_language,
+            "resolved_language": template.language,
+            "fallback_used": language_resolution.fallback_used or template.language != language_resolution.requested_language,
             "version": template.version,
             "audience_type": template.audience_type,
             "title": template.title,
@@ -360,34 +445,134 @@ def build_guidance_bundle(user, ward: Ward) -> dict:
         for template in templates[:50]
     ]
 
-    if not guidance_items:
-        guidance_items.append(
-            {
-                "guidance_public_id": "cholera-prevention-core-v1",
-                "template_key": "cholera.prevention.core_fallback",
-                "language": "en",
-                "version": 1,
-                "audience_type": MessageTemplate.AUDIENCE_CHV,
-                "title": "Core cholera prevention guidance",
-                "body": (
-                    "Use safe water, wash hands with soap, prepare ORS for dehydration risk, "
-                    "and refer danger signs to the nearest active facility."
-                ),
-                "public_health_caveats": "Fallback content until an approved offline CHV bundle template is available.",
-            }
-        )
+    bundle_resolved_language = (
+        language_resolution.resolved_language
+        if any(item["language"] == language_resolution.resolved_language for item in guidance_items)
+        else DEFAULT_CHV_LANGUAGE
+    )
+    bundle_fallback_used = (
+        language_resolution.fallback_used
+        or any(item["fallback_used"] for item in guidance_items)
+        or bundle_resolved_language != language_resolution.requested_language
+    )
 
     return {
         "schema_version": OFFLINE_CHV_GUIDANCE_BUNDLE_SCHEMA_VERSION,
         "ward_public_id": str(ward.public_id),
+        "requested_language": language_resolution.requested_language,
+        "resolved_language": bundle_resolved_language,
+        "fallback_used": bundle_fallback_used,
+        "content_unavailable": not guidance_items,
+        "governance_status": "approved" if guidance_items else "no_approved_guidance_templates",
         "items": guidance_items,
         "retention_rule": "replace when a newer bundle version is downloaded or after 24 hours without refresh",
     }
 
 
-def build_decision_support_rule_bundle() -> dict:
+def _select_decision_support_recommendation_templates(language_resolution: LanguageResolution):
+    requested_language = language_resolution.resolved_language
+    required_template_keys = set(OFFLINE_CHV_DECISION_SUPPORT_RECOMMENDATION_TEMPLATE_KEYS.values())
+    english_sources = MessageTemplate.objects.filter(
+        channel=MessageTemplate.CHANNEL_OFFLINE_CHV_BUNDLE,
+        audience_type=MessageTemplate.AUDIENCE_CHV,
+        template_key__in=required_template_keys,
+        language=DEFAULT_CHV_LANGUAGE,
+        approval_status=MessageTemplate.APPROVAL_APPROVED,
+        retired_at__isnull=True,
+    ).order_by("template_key", "-version")
+
+    source_by_key: dict[str, MessageTemplate] = {}
+    for source in english_sources:
+        source_by_key.setdefault(source.template_key, source)
+
+    selected: dict[str, MessageTemplate] = {}
+    for recommendation_key, template_key in OFFLINE_CHV_DECISION_SUPPORT_RECOMMENDATION_TEMPLATE_KEYS.items():
+        source = source_by_key.get(template_key)
+        if source is None:
+            continue
+        if requested_language == DEFAULT_CHV_LANGUAGE:
+            selected[recommendation_key] = source
+            continue
+        translation = MessageTemplate.objects.filter(
+            channel=MessageTemplate.CHANNEL_OFFLINE_CHV_BUNDLE,
+            audience_type=MessageTemplate.AUDIENCE_CHV,
+            template_key=template_key,
+            version=source.version,
+            language=requested_language,
+            approval_status=MessageTemplate.APPROVAL_APPROVED,
+            translation_status=MessageTemplate.TRANSLATION_APPROVED,
+            source_template=source,
+            retired_at__isnull=True,
+            source_template__approval_status=MessageTemplate.APPROVAL_APPROVED,
+            source_template__retired_at__isnull=True,
+        ).first()
+        selected[recommendation_key] = translation or source
+    return selected
+
+
+def _decision_support_recommendation_items(language_resolution: LanguageResolution) -> list[dict]:
+    selected_templates = _select_decision_support_recommendation_templates(language_resolution)
+    items: list[dict] = []
+    for recommendation_key, template_key in OFFLINE_CHV_DECISION_SUPPORT_RECOMMENDATION_TEMPLATE_KEYS.items():
+        template = selected_templates.get(recommendation_key)
+        if template is None:
+            continue
+        items.append(
+            {
+                "recommendation_public_id": str(template.public_id),
+                "recommendation_key": recommendation_key,
+                "template_key": template.template_key,
+                "language": template.language,
+                "requested_language": language_resolution.requested_language,
+                "resolved_language": template.language,
+                "fallback_used": language_resolution.fallback_used
+                or template.language != language_resolution.requested_language,
+                "version": template.version,
+                "audience_type": template.audience_type,
+                "title": template.title,
+                "body": template.body,
+                "public_health_caveats": template.public_health_caveats,
+                "source": "governed_message_template",
+                "governance_status": "approved",
+            }
+        )
+    return items
+
+
+def build_decision_support_rule_bundle(
+    *,
+    language_resolution: LanguageResolution | None = None,
+) -> dict:
+    language_resolution = language_resolution or LanguageResolution(
+        requested_language=DEFAULT_CHV_LANGUAGE,
+        resolved_language=DEFAULT_CHV_LANGUAGE,
+        fallback_used=False,
+        preference_source="default",
+    )
+    recommendations = _decision_support_recommendation_items(language_resolution)
+    missing_recommendation_keys = [
+        recommendation_key
+        for recommendation_key in OFFLINE_CHV_DECISION_SUPPORT_RECOMMENDATION_TEMPLATE_KEYS
+        if not any(item["recommendation_key"] == recommendation_key for item in recommendations)
+    ]
+    bundle_resolved_language = (
+        language_resolution.resolved_language
+        if any(item["language"] == language_resolution.resolved_language for item in recommendations)
+        else DEFAULT_CHV_LANGUAGE
+    )
+    bundle_fallback_used = (
+        language_resolution.fallback_used
+        or any(item["fallback_used"] for item in recommendations)
+        or bundle_resolved_language != language_resolution.requested_language
+    )
     return {
         "version": OFFLINE_CHV_RULE_BUNDLE_VERSION,
+        "requested_language": language_resolution.requested_language,
+        "resolved_language": bundle_resolved_language,
+        "fallback_used": bundle_fallback_used,
+        "content_unavailable": bool(missing_recommendation_keys),
+        "governance_status": "approved" if not missing_recommendation_keys else "missing_required_recommendation_templates",
+        "missing_recommendation_keys": missing_recommendation_keys,
         "rules": [
             {
                 "rule_id": "danger_sign_referral",
@@ -405,15 +590,25 @@ def build_decision_support_rule_bundle() -> dict:
                 "then": {"referral_needed": False, "recommendation_key": "ors_and_prevention"},
             },
         ],
-        "medical_boundary": "These rules support CHV escalation and prevention advice. They do not diagnose cholera.",
+        "recommendations": recommendations,
+        "medical_boundary": {
+            "code": "chv_decision_support_not_diagnosis",
+            "display_copy_rule": "Render CHV-visible boundary copy only from governed templates.",
+        },
     }
 
 
-def build_download_bundle(user, ward: Ward) -> dict:
+def build_download_bundle(
+    user,
+    ward: Ward,
+    *,
+    language_resolution: LanguageResolution | None = None,
+) -> dict:
     now = timezone.now()
-    task_bundle = build_task_bundle(user, ward)
-    guidance_bundle = build_guidance_bundle(user, ward)
-    rule_bundle = build_decision_support_rule_bundle()
+    language_resolution = language_resolution or resolve_chv_language_for_user(user, ward)
+    task_bundle = build_task_bundle(user, ward, language_resolution=language_resolution)
+    guidance_bundle = build_guidance_bundle(user, ward, language_resolution=language_resolution)
+    rule_bundle = build_decision_support_rule_bundle(language_resolution=language_resolution)
     task_updated_at = PreparednessAction.objects.filter(ward=ward).aggregate(Max("updated_at"))["updated_at__max"]
     assignment_updated_at = CHVAssignment.objects.filter(ward=ward).aggregate(Max("updated_at"))["updated_at__max"]
     guidance_updated_at = MessageTemplate.objects.filter(
@@ -431,6 +626,13 @@ def build_download_bundle(user, ward: Ward) -> dict:
         "guidance_items": [
             (item["template_key"], item["language"], item["version"]) for item in guidance_bundle["items"]
         ],
+        "decision_support_recommendations": [
+            (item["recommendation_key"], item["template_key"], item["language"], item["version"], item["governance_status"])
+            for item in rule_bundle["recommendations"]
+        ],
+        "requested_language": language_resolution.requested_language,
+        "resolved_language": guidance_bundle["resolved_language"],
+        "language_fallback_used": guidance_bundle["fallback_used"] or rule_bundle["fallback_used"],
         "rule_version": rule_bundle["version"],
     }
     version = f"chv-bundle-{_json_hash(fingerprint)[:16]}"
@@ -438,10 +640,77 @@ def build_download_bundle(user, ward: Ward) -> dict:
         "version": version,
         "generated_at": now,
         "expires_at": now + timedelta(hours=24),
+        "requested_language": language_resolution.requested_language,
+        "resolved_language": guidance_bundle["resolved_language"],
+        "fallback_used": guidance_bundle["fallback_used"] or rule_bundle["fallback_used"],
         "task_bundle": task_bundle,
         "guidance_bundle": guidance_bundle,
         "decision_support_rule_bundle": rule_bundle,
     }
+
+
+def _record_offline_bundle_request(
+    registration: CHVDeviceRegistration | None,
+    *,
+    language_resolution: LanguageResolution,
+    download_bundle: dict,
+) -> None:
+    if registration is None:
+        return
+
+    now = timezone.now()
+    requested_language = language_resolution.requested_language
+    resolved_language = download_bundle["resolved_language"]
+    fallback_used = bool(language_resolution.fallback_used or download_bundle["fallback_used"])
+    metadata = dict(registration.metadata or {})
+    language_metadata = metadata.get("language") if isinstance(metadata.get("language"), dict) else {}
+    request_counts = metadata.get("offline_bundle_request_counts")
+    if not isinstance(request_counts, list):
+        request_counts = []
+
+    matched = False
+    for entry in request_counts:
+        if not isinstance(entry, dict):
+            continue
+        if (
+            entry.get("requested_language") == requested_language
+            and entry.get("resolved_language") == resolved_language
+            and bool(entry.get("fallback_used")) == fallback_used
+        ):
+            try:
+                entry["count"] = int(entry.get("count", 0)) + 1
+            except (TypeError, ValueError):
+                entry["count"] = 1
+            matched = True
+            break
+    if not matched:
+        request_counts.append(
+            {
+                "requested_language": requested_language,
+                "resolved_language": resolved_language,
+                "fallback_used": fallback_used,
+                "count": 1,
+            }
+        )
+
+    metadata["offline_bundle_request_counts"] = request_counts
+    metadata["last_offline_bundle_request"] = {
+        "requested_language": requested_language,
+        "resolved_language": resolved_language,
+        "fallback_used": fallback_used,
+        "bundle_version": download_bundle["version"],
+        "requested_at": now.isoformat(),
+    }
+    metadata["language"] = {
+        **language_metadata,
+        **language_resolution.as_metadata(),
+        "bundle_resolved_language": resolved_language,
+        "bundle_fallback_used": download_bundle["fallback_used"],
+    }
+    registration.metadata = metadata
+    registration.last_bundle_version = download_bundle["version"]
+    registration.last_seen_at = now
+    registration.save(update_fields=["metadata", "last_bundle_version", "last_seen_at", "updated_at"])
 
 
 def build_sync_health_record(
@@ -484,14 +753,39 @@ def build_sync_health_record(
     }
 
 
-def build_chv_offline_contract(user, ward: Ward) -> dict:
-    download_bundle = build_download_bundle(user, ward)
+def build_chv_offline_contract(
+    user,
+    ward: Ward,
+    *,
+    requested_language: str | None = None,
+    device_registration: CHVDeviceRegistration | None = None,
+) -> dict:
+    language_resolution = resolve_chv_language_for_user(
+        user,
+        ward,
+        requested_language=requested_language,
+        device_registration=device_registration,
+    )
+    download_bundle = build_download_bundle(user, ward, language_resolution=language_resolution)
+    _record_offline_bundle_request(
+        device_registration,
+        language_resolution=language_resolution,
+        download_bundle=download_bundle,
+    )
     return {
         "contract_version": OFFLINE_CHV_CONTRACT_VERSION,
         "generated_at": timezone.now(),
+        "requested_language": language_resolution.requested_language,
+        "resolved_language": download_bundle["resolved_language"],
+        "fallback_used": language_resolution.fallback_used or download_bundle["fallback_used"],
+        "language": {
+            **language_resolution.as_metadata(),
+            "bundle_resolved_language": download_bundle["resolved_language"],
+            "bundle_fallback_used": download_bundle["fallback_used"],
+        },
         "workflow_audit": workflow_audit_payload(),
         "sync_contracts": sync_contract_payload(),
-        "session_scope": build_session_scope(user, ward),
+        "session_scope": build_session_scope(user, ward, language_resolution=language_resolution),
         "download_bundle": download_bundle,
         "sync_health_record": build_sync_health_record(
             ward=ward,
@@ -508,10 +802,17 @@ def register_chv_device(
     contract_version: str,
     app_version: str = "",
     platform: str = CHVDeviceRegistration.PLATFORM_UNKNOWN,
+    preferred_language: str = "",
     metadata: dict | None = None,
 ) -> CHVDeviceRegistration:
-    download_bundle = build_download_bundle(user, ward)
     chv = resolve_chv_for_user(user, ward)
+    language_resolution = resolve_chv_language_for_user(
+        user,
+        ward,
+        requested_language=preferred_language,
+        chv=chv,
+    )
+    download_bundle = build_download_bundle(user, ward, language_resolution=language_resolution)
     normalized_platform = (platform or CHVDeviceRegistration.PLATFORM_UNKNOWN).strip().upper()
     valid_platforms = {choice[0] for choice in CHVDeviceRegistration.PLATFORM_CHOICES}
     if normalized_platform not in valid_platforms:
@@ -525,10 +826,14 @@ def register_chv_device(
             "contract_version": contract_version.strip() or OFFLINE_CHV_CONTRACT_VERSION,
             "app_version": app_version.strip(),
             "platform": normalized_platform,
+            "preferred_language": language_resolution.resolved_language,
             "last_bundle_version": download_bundle["version"],
             "last_seen_at": timezone.now(),
             "is_active": True,
-            "metadata": metadata or {},
+            "metadata": {
+                **(metadata or {}),
+                "language": language_resolution.as_metadata(),
+            },
         },
     )
     return registration
@@ -536,18 +841,33 @@ def register_chv_device(
 
 def device_registration_payload(registration: CHVDeviceRegistration, user) -> dict:
     ward = registration.ward
+    language_resolution = resolve_chv_language_for_user(
+        user,
+        ward,
+        requested_language=registration.preferred_language,
+        device_registration=registration,
+    )
     return {
         "public_id": str(registration.public_id),
         "device_id": registration.device_id,
         "contract_version": registration.contract_version,
         "app_version": registration.app_version,
         "platform": registration.platform,
+        "preferred_language": registration.preferred_language,
+        "requested_language": language_resolution.requested_language,
+        "resolved_language": language_resolution.resolved_language,
+        "fallback_used": language_resolution.fallback_used,
+        "language": language_resolution.as_metadata(),
         "is_active": registration.is_active,
         "registered_at": registration.registered_at,
         "last_seen_at": registration.last_seen_at,
         "last_sync_at": registration.last_sync_at,
         "download_bundle_version": registration.last_bundle_version,
-        "session_scope": build_session_scope(user, ward),
+        "session_scope": build_session_scope(
+            user,
+            ward,
+            language_resolution=language_resolution,
+        ),
         "sync_health_record": build_sync_health_record(ward=ward, device_registration=registration),
     }
 

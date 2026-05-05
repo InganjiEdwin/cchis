@@ -2202,6 +2202,31 @@ def _message_template_snapshot(render_result: TemplateRenderResult | None) -> di
     }
 
 
+def _message_template_language_snapshot(render_result: TemplateRenderResult | None) -> dict:
+    if render_result is None:
+        return {
+            "requested_language": "en",
+            "resolved_language": "en",
+            "fallback_used": False,
+        }
+    metadata = render_result.metadata or {}
+    requested_language = (metadata.get("requested_language") or render_result.template.language or "en").strip().lower()
+    resolved_language = (metadata.get("resolved_language") or render_result.template.language or "en").strip().lower()
+    return {
+        "requested_language": requested_language or "en",
+        "resolved_language": resolved_language or "en",
+        "fallback_used": bool(metadata.get("fallback_used")),
+    }
+
+
+def _message_delivery_language_metadata(rendered_template: TemplateRenderResult | None) -> dict:
+    language_snapshot = _message_template_language_snapshot(rendered_template)
+    return {
+        **language_snapshot,
+        "template_language": rendered_template.template.language if rendered_template else "",
+    }
+
+
 def _message_delivery_governance_metadata(
     *,
     rendered_template: TemplateRenderResult | None = None,
@@ -2213,7 +2238,8 @@ def _message_delivery_governance_metadata(
     return {
         "schema_version": MESSAGE_AUDIENCE_GOVERNANCE_SCHEMA_VERSION,
         "workflow": workflow,
-        "template": template_reference(rendered_template.template) if rendered_template else {},
+        "template": rendered_template.metadata if rendered_template else {},
+        "language": _message_delivery_language_metadata(rendered_template),
         "audience_decision": audience_decision or {},
         "audience_scope": audience_scope or {},
         **(extra or {}),
@@ -2730,7 +2756,7 @@ def create_chv_message(
         rendered_template = render_message_template(
             template_key=template_key,
             version=template_version,
-            language=template_language or chv.language or "en",
+            language=template_language or chv.preferred_language or chv.language or "en",
             context=_template_context_for_chv(chv, template_context),
             audience_type=MessageTemplate.AUDIENCE_CHV,
             channel=MessageTemplate.CHANNEL_SMS,
@@ -2756,12 +2782,13 @@ def create_chv_message(
             "ward_id": chv.ward_id,
             "delivery_mode": mode,
             "delivery_backend": delivery_backend,
-            "message_template": template_reference(rendered_template.template) if rendered_template else {},
+            "message_template": rendered_template.metadata if rendered_template else {},
             "audience_scope": audience_scope,
         },
         message_purpose=MESSAGE_PURPOSE_OPERATIONAL,
     )
     template_snapshot = _message_template_snapshot(rendered_template)
+    language_snapshot = _message_template_language_snapshot(rendered_template)
     message_record = CHVMessage.objects.create(
         chv=chv,
         ward=chv.ward,
@@ -2769,6 +2796,7 @@ def create_chv_message(
         channel=channel,
         message_body=resolved_message_body,
         **template_snapshot,
+        **language_snapshot,
         governance_metadata=_message_delivery_governance_metadata(
             rendered_template=rendered_template,
             audience_decision=audience_decision,
@@ -2811,7 +2839,7 @@ def create_alerts_for_riskscore(
     guided_request_metadata: dict | None = None,
     template_key: str = "",
     template_version: int | None = None,
-    template_language: str = "en",
+    template_language: str | None = None,
     template_context: dict | None = None,
     template_audience_type: str = MessageTemplate.AUDIENCE_CHV,
     template_channel: str = MessageTemplate.CHANNEL_SMS,
@@ -2834,11 +2862,12 @@ def create_alerts_for_riskscore(
         or {},
     }
     rendered_template = None
+    requested_template_language = (template_language or "").strip().lower()
     if template_key:
         rendered_template = render_message_template(
             template_key=template_key,
             version=template_version,
-            language=template_language,
+            language=requested_template_language or "en",
             context=_template_context_for_alert(ward, risk_score, template_context),
             audience_type=template_audience_type,
             channel=template_channel,
@@ -2900,6 +2929,7 @@ def create_alerts_for_riskscore(
         last_attempted_at=delivered_at,
         sent_at=delivered_at,
         **_message_template_snapshot(dashboard_rendered_template),
+        **_message_template_language_snapshot(dashboard_rendered_template),
         governance_metadata=_message_delivery_governance_metadata(
             rendered_template=dashboard_rendered_template,
             audience_decision=dashboard_audience_decision,
@@ -2918,6 +2948,25 @@ def create_alerts_for_riskscore(
 
         for chv in chvs:
             audience_scope = _assert_chv_operational_scope(chv, None)
+            sms_rendered_template = rendered_template
+            sms_message = message
+            sms_request_metadata = request_metadata
+            if template_key:
+                sms_rendered_template = render_message_template(
+                    template_key=template_key,
+                    version=template_version,
+                    language=requested_template_language or chv.preferred_language or chv.language or "en",
+                    context=_template_context_for_alert(ward, risk_score, template_context),
+                    audience_type=template_audience_type,
+                    channel=template_channel,
+                )
+                sms_message = sms_rendered_template.body
+                sms_request_metadata = {
+                    **request_metadata,
+                    "message_template": sms_rendered_template.metadata,
+                    "message_preview_used": sms_message,
+                    "message_mode": MESSAGE_MODE_TEMPLATE_RENDERED,
+                }
             try:
                 _preference, audience_decision = authorize_contact_message(
                     audience_type=ContactPreference.AUDIENCE_CHV,
@@ -2930,7 +2979,7 @@ def create_alerts_for_riskscore(
                         "ward_id": ward.id,
                         "risk_score_id": risk_score.id,
                         "audience_scope": audience_scope,
-                        "message_template": template_reference(rendered_template.template) if rendered_template else {},
+                        "message_template": sms_rendered_template.metadata if sms_rendered_template else {},
                     },
                     message_purpose=MESSAGE_PURPOSE_RISK_ALERT,
                 )
@@ -2951,14 +3000,15 @@ def create_alerts_for_riskscore(
                 risk_score=risk_score,
                 channel=Alert.CHANNEL_SMS,
                 recipient=chv.phone_number,
-                message=message,
+                message=sms_message,
                 status=Alert.STATUS_QUEUED,
                 delivery_backend=config("SMS_PROVIDER", default="stub").strip().lower() or "stub",
-                guided_request_metadata=request_metadata,
+                guided_request_metadata=sms_request_metadata,
                 max_attempts=config("ALERT_MAX_ATTEMPTS", cast=int, default=3),
-                **_message_template_snapshot(rendered_template),
+                **_message_template_snapshot(sms_rendered_template),
+                **_message_template_language_snapshot(sms_rendered_template),
                 governance_metadata=_message_delivery_governance_metadata(
-                    rendered_template=rendered_template,
+                    rendered_template=sms_rendered_template,
                     audience_decision=audience_decision,
                     audience_scope=audience_scope,
                     workflow="risk_alert_sms",
@@ -3218,7 +3268,7 @@ def trigger_alerts_for_riskscore(
     guided_request_metadata: dict | None = None,
     template_key: str = "",
     template_version: int | None = None,
-    template_language: str = "en",
+    template_language: str | None = None,
     template_context: dict | None = None,
 ) -> list[Alert]:
     return create_alerts_for_riskscore(
@@ -7874,6 +7924,7 @@ def _mark_sync_item_rejected(
     sync_item: SyncQueue,
     exc: Exception,
     payload_version: str,
+    language_metadata: dict | None = None,
 ) -> None:
     processed_at = timezone.now()
     conflict_state = (
@@ -7893,6 +7944,7 @@ def _mark_sync_item_rejected(
         "contract_version": sync_item.contract_version,
         "payload_version": payload_version,
         "upload_type": sync_item.upload_type,
+        "language": language_metadata or {},
         "conflict_state": conflict_state,
         "domain_record": {},
         "explanation": str(exc),
@@ -7917,6 +7969,7 @@ def process_sync_payload(
     contract_version: str = SyncQueue.CONTRACT_VERSION_DEFAULT,
     device_registration: CHVDeviceRegistration | None = None,
     download_bundle_version: str = "",
+    language_metadata: dict | None = None,
     user=None,
 ) -> tuple[SyncQueue, dict, bool]:
     client_submission_id = (payload.get("client_submission_id") or "").strip()
@@ -8054,6 +8107,7 @@ def process_sync_payload(
             "contract_version": sync_item.contract_version,
             "payload_version": payload_version,
             "upload_type": sync_item.upload_type,
+            "language": language_metadata or {},
             "domain_record": domain_record,
         }
         sync_item.status = SyncQueue.STATUS_PROCESSED
@@ -8073,6 +8127,7 @@ def process_sync_payload(
             sync_item=sync_item,
             exc=exc,
             payload_version=payload_version,
+            language_metadata=language_metadata,
         )
         _touch_failed_chv_device_registration(
             device_registration=device_registration,
@@ -8169,6 +8224,7 @@ def build_chv_operations_snapshot(chv_queryset) -> list[dict]:
                 "name": chv.name,
                 "phone_number": chv.phone_number,
                 "language": chv.language,
+                "preferred_language": chv.preferred_language,
                 "is_active": chv.is_active,
                 "ward": chv.ward_id,
                 "ward_name": chv.ward.name,

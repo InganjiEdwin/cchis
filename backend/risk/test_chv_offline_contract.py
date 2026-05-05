@@ -203,6 +203,45 @@ class CHVOfflineContractPhaseOneTests(APITestCase):
         sync_item.device_registration.refresh_from_db()
         self.assertIsNotNone(sync_item.device_registration.last_sync_at)
 
+    def test_sync_receipt_preserves_bundle_language_fallback_metadata(self):
+        self.authenticate_chv()
+        payload = {
+            "contract_version": "chv-offline-v1",
+            "ward_id": self.ward.id,
+            "source_device_id": "field-device-language-fallback",
+            "requested_language": "sw",
+            "resolved_language": "en",
+            "fallback_used": True,
+            "uploads": [
+                {
+                    "client_submission_id": "language-fallback-submission",
+                    "idempotency_key": "language-fallback-idem",
+                    "upload_type": "symptom_triage",
+                    "payload": {
+                        "diarrhea": True,
+                        "vomiting": False,
+                        "dehydration": False,
+                        "fever": False,
+                        "text_input": "",
+                    },
+                }
+            ],
+        }
+
+        response = self.client.post(reverse("chv-sync"), payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["requested_language"], "sw")
+        self.assertEqual(response.data["resolved_language"], "en")
+        self.assertTrue(response.data["fallback_used"])
+        language_metadata = response.data["results"][0]["server_receipt"]["language"]
+        self.assertEqual(language_metadata["requested_language"], "sw")
+        self.assertEqual(language_metadata["resolved_language"], "en")
+        self.assertTrue(language_metadata["fallback_used"])
+        sync_item = SyncQueue.objects.get(client_submission_id="language-fallback-submission")
+        self.assertEqual(sync_item.server_receipt["language"]["resolved_language"], "en")
+        self.assertTrue(sync_item.server_receipt["language"]["fallback_used"])
+
     def test_phase_four_prevention_visit_completes_action_and_writes_sync_audit_event(self):
         self.authenticate_chv()
         action = PreparednessAction.objects.create(

@@ -9,9 +9,11 @@ const mockUseAuth = vi.fn();
 const mockUseMessageGovernanceDashboardQuery = vi.fn();
 const mockUseMessageTemplateDetailQuery = vi.fn();
 const mockUseApproveMessageTemplateMutation = vi.fn();
+const mockUseApproveUssdMenuVersionMutation = vi.fn();
 const mockPush = vi.fn();
 const mockRefetch = vi.fn();
 const mockMutateAsync = vi.fn();
+const mockUssdMutateAsync = vi.fn();
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mockPush }),
@@ -44,6 +46,7 @@ vi.mock("@/queries/use-message-governance-query", () => ({
   useMessageGovernanceDashboardQuery: (...args: unknown[]) => mockUseMessageGovernanceDashboardQuery(...args),
   useMessageTemplateDetailQuery: (...args: unknown[]) => mockUseMessageTemplateDetailQuery(...args),
   useApproveMessageTemplateMutation: () => mockUseApproveMessageTemplateMutation(),
+  useApproveUssdMenuVersionMutation: () => mockUseApproveUssdMenuVersionMutation(),
 }));
 
 function buildDashboard(): MessageGovernanceDashboardResponse {
@@ -103,13 +106,13 @@ function buildDashboard(): MessageGovernanceDashboardResponse {
   };
 
   return {
-    schema_version: "message-management-phase-5-v1",
+    schema_version: "message-management-phase-7-v1",
     generated_at: "2026-05-04T10:00:00Z",
     filters: {},
     available_filters: {
       audience_types: ["chv", "household", "facility_contact", "county_operator", "system_operator"],
       channels: ["sms", "ussd", "dashboard", "offline_chv_bundle"],
-      languages: ["en", "sw"],
+      languages: ["en", "luo", "sw"],
       approval_statuses: ["draft", "pending_review", "approved", "rejected", "retired"],
     },
     summary: {
@@ -137,6 +140,13 @@ function buildDashboard(): MessageGovernanceDashboardResponse {
       ussd_abandonment_rate_pct: 33.333333,
       ussd_menu_version_count: 1,
       active_ussd_menu_version_count: 1,
+      missing_translation_count: 1,
+      placeholder_parity_warning_count: 0,
+      translation_review_warning_count: 0,
+      missing_translation_issue_count: 1,
+      offline_guidance_language_count: 3,
+      strict_localization_issue_count: 0,
+      localization_fallback_rate_pct: 12.5,
       audit_status: "pass",
     },
     templates: [
@@ -174,8 +184,266 @@ function buildDashboard(): MessageGovernanceDashboardResponse {
         updated_at: "2026-05-04T08:00:00Z",
         route_count: 6,
         node_count: 6,
+        route_tree_preview: [
+          {
+            route: "",
+            route_label: "root",
+            node_key: "root",
+            response_type: "CON",
+            body: "Welcome to CCHIS Health Menu\n1. Flood safety advice",
+            response_text: "CON Welcome to CCHIS Health Menu\n1. Flood safety advice",
+            character_count: 54,
+          },
+        ],
         validation_status: "pass",
         validation_messages: [],
+      },
+    ],
+    template_language_coverage: {
+      supported_languages: [
+        { code: "en", label: "English" },
+        { code: "sw", label: "Kiswahili" },
+        { code: "luo", label: "Dholuo" },
+      ],
+      row_count: 1,
+      missing_variant_count: 1,
+      placeholder_warning_count: 0,
+      translation_review_warning_count: 0,
+      rows: [
+        {
+          template_key: "cholera.household.prevent",
+          version: 1,
+          title: "Household prevention",
+          audience_type: "household",
+          channel: "sms",
+          risk_level: "high",
+          owner: "county_health_promotion",
+          requires_translation: true,
+          present_languages: ["en", "sw"],
+          missing_languages: ["luo"],
+          missing_language_labels: ["Dholuo"],
+          variants: [
+            {
+              language: "en",
+              label: "English",
+              exists: true,
+              public_id: "template-pending",
+              title: "Household prevention",
+              approval_status: "pending_review",
+              translation_status: "draft",
+              placeholder_parity_status: "source",
+              warnings: [],
+            },
+            {
+              language: "sw",
+              label: "Kiswahili",
+              exists: true,
+              public_id: "template-sw",
+              title: "Household prevention SW",
+              approval_status: "draft",
+              translation_status: "draft",
+              placeholder_parity_status: "pass",
+              warnings: [],
+            },
+            {
+              language: "luo",
+              label: "Dholuo",
+              exists: false,
+              public_id: "",
+              title: "",
+              approval_status: "",
+              translation_status: "",
+              placeholder_parity_status: "missing",
+              warnings: ["Missing Dholuo variant."],
+            },
+          ],
+          placeholder_warnings: [],
+          translation_review_warnings: [],
+        },
+      ],
+    },
+    missing_translation_dashboard: {
+      total_issue_count: 1,
+      by_issue_type: { missing_variant: 1 },
+      by_severity: { high: 1 },
+      items: [
+        {
+          issue_type: "missing_variant",
+          severity: "high",
+          template_key: "cholera.household.prevent",
+          version: 1,
+          title: "Household prevention",
+          audience_type: "household",
+          channel: "sms",
+          language: "luo",
+          label: "Dholuo",
+          message: "Missing Dholuo variant before rollout.",
+        },
+      ],
+    },
+    ussd_route_tree_preview: [
+      {
+        menu_key: "cholera_health_menu",
+        source_menu_version: "ussd-menu-1",
+        source_version_label: "builtin-v1",
+        source_title: "CCHIS Cholera Health USSD Menu",
+        languages: [
+          {
+            language: "en",
+            label: "English",
+            exists: true,
+            public_id: "ussd-menu-1",
+            title: "CCHIS Cholera Health USSD Menu",
+            approval_status: "APPROVED",
+            translation_status: "approved",
+            safe_fallback_copy: "END Invalid option. Please try again.",
+            requested_language: "en",
+            resolved_language: "en",
+            fallback_used: false,
+            route_count: 1,
+            routes: [
+              {
+                route: "",
+                route_label: "root",
+                node_key: "root",
+                response_type: "CON",
+                body: "Welcome to CCHIS Health Menu\n1. Flood safety advice",
+                response_text: "CON Welcome to CCHIS Health Menu\n1. Flood safety advice",
+                character_count: 54,
+              },
+            ],
+            warnings: [],
+          },
+          {
+            language: "sw",
+            label: "Kiswahili",
+            exists: false,
+            public_id: "",
+            title: "",
+            approval_status: "",
+            translation_status: "",
+            safe_fallback_copy: "END Invalid option. Please try again.",
+            requested_language: "sw",
+            resolved_language: "en",
+            fallback_used: true,
+            route_count: 1,
+            routes: [
+              {
+                route: "",
+                route_label: "root",
+                node_key: "root",
+                response_type: "CON",
+                body: "Welcome to CCHIS Health Menu\n1. Flood safety advice",
+                response_text: "CON Welcome to CCHIS Health Menu\n1. Flood safety advice",
+                character_count: 54,
+              },
+            ],
+            warnings: ["Missing active Kiswahili USSD menu; English fallback would be used."],
+          },
+          {
+            language: "luo",
+            label: "Dholuo",
+            exists: false,
+            public_id: "",
+            title: "",
+            approval_status: "",
+            translation_status: "",
+            safe_fallback_copy: "END Invalid option. Please try again.",
+            requested_language: "luo",
+            resolved_language: "en",
+            fallback_used: true,
+            route_count: 1,
+            routes: [
+              {
+                route: "",
+                route_label: "root",
+                node_key: "root",
+                response_type: "CON",
+                body: "Welcome to CCHIS Health Menu\n1. Flood safety advice",
+                response_text: "CON Welcome to CCHIS Health Menu\n1. Flood safety advice",
+                character_count: 54,
+              },
+            ],
+            warnings: ["Missing active Dholuo USSD menu; English fallback would be used."],
+          },
+        ],
+      },
+    ],
+    offline_guidance_preview: [
+      {
+        language: "en",
+        label: "English",
+        requested_language: "en",
+        resolved_language: "en",
+        fallback_used: false,
+        item_count: 1,
+        items: [
+          {
+            guidance_public_id: "offline-guidance-en",
+            template_key: "cholera.household.prevention_guidance_offline_bundle",
+            version: 1,
+            title: "Core cholera prevention guidance",
+            language: "en",
+            requested_language: "en",
+            resolved_language: "en",
+            fallback_used: false,
+            audience_type: "chv",
+            body: "Use safe water and wash hands with soap.",
+            rendered_body: "Use safe water and wash hands with soap.",
+            public_health_caveats: "Approved public-health copy.",
+          },
+        ],
+        warnings: [],
+      },
+      {
+        language: "sw",
+        label: "Kiswahili",
+        requested_language: "sw",
+        resolved_language: "en",
+        fallback_used: true,
+        item_count: 1,
+        items: [
+          {
+            guidance_public_id: "offline-guidance-en",
+            template_key: "cholera.household.prevention_guidance_offline_bundle",
+            version: 1,
+            title: "Core cholera prevention guidance",
+            language: "en",
+            requested_language: "sw",
+            resolved_language: "en",
+            fallback_used: true,
+            audience_type: "chv",
+            body: "Use safe water and wash hands with soap.",
+            rendered_body: "Use safe water and wash hands with soap.",
+            public_health_caveats: "Approved public-health copy.",
+          },
+        ],
+        warnings: ["Kiswahili guidance uses English fallback."],
+      },
+      {
+        language: "luo",
+        label: "Dholuo",
+        requested_language: "luo",
+        resolved_language: "en",
+        fallback_used: true,
+        item_count: 1,
+        items: [
+          {
+            guidance_public_id: "offline-guidance-en",
+            template_key: "cholera.household.prevention_guidance_offline_bundle",
+            version: 1,
+            title: "Core cholera prevention guidance",
+            language: "en",
+            requested_language: "luo",
+            resolved_language: "en",
+            fallback_used: true,
+            audience_type: "chv",
+            body: "Use safe water and wash hands with soap.",
+            rendered_body: "Use safe water and wash hands with soap.",
+            public_health_caveats: "Approved public-health copy.",
+          },
+        ],
+        warnings: ["Dholuo guidance uses English fallback."],
       },
     ],
     delivery_summary: {
@@ -267,8 +535,80 @@ function buildDashboard(): MessageGovernanceDashboardResponse {
       recent_logs: [],
     },
     audit: {
-      schema_version: "message-governance-phase-0-5-v1",
+      schema_version: "message-governance-phase-7-v1",
       overall_status: "pass",
+      strict_localization_issue_count: 0,
+      localization_rollout: {
+        schema_version: "chv-localization-rollout-phase-7-v1",
+        generated_at: "2026-05-04T10:00:00Z",
+        supported_languages: ["en", "sw", "luo"],
+        default_language: "en",
+        chv_preferred_language_counts: [
+          { key: "en", count: 1 },
+          { key: "sw", count: 1 },
+        ],
+        active_chv_count: 2,
+        device_preferred_language_counts: [
+          { key: "en", count: 1 },
+        ],
+        active_device_count: 1,
+        offline_bundle_requests_by_language: {
+          surface: "offline_bundle",
+          total_count: 1,
+          fallback_count: 0,
+          fallback_rate_pct: 0,
+          by_requested_language: [{ key: "en", count: 1 }],
+          by_resolved_language: [{ key: "en", count: 1 }],
+          fallback_by_resolved_language: [],
+        },
+        fallback_metrics: [
+          {
+            surface: "chv_sms",
+            total_count: 2,
+            fallback_count: 0,
+            fallback_rate_pct: 0,
+            by_requested_language: [{ key: "en", count: 2 }],
+            by_resolved_language: [{ key: "en", count: 2 }],
+            fallback_by_resolved_language: [],
+          },
+          {
+            surface: "offline_bundle",
+            total_count: 1,
+            fallback_count: 1,
+            fallback_rate_pct: 100,
+            by_requested_language: [{ key: "sw", count: 1 }],
+            by_resolved_language: [{ key: "en", count: 1 }],
+            fallback_by_resolved_language: [{ key: "en", count: 1 }],
+          },
+        ],
+        fallback_rate_pct: 12.5,
+        ussd_sessions_by_language_and_outcome: [
+          { language: "en", outcome: "COMPLETED", count: 1 },
+        ],
+        chv_sms_deliveries_by_language_and_outcome: [
+          { language: "en", outcome: "DELIVERED", count: 1 },
+        ],
+        missing_translation_count: 1,
+        translation_review_age: {
+          pending_review_count: 1,
+          max_age_days: 2,
+          average_age_days: 2,
+          oldest_records: [
+            {
+              model: "risk.MessageTemplate",
+              public_id: "template-sw",
+              key: "cholera.household.prevent",
+              language: "sw",
+              status: "draft",
+              age_days: 2,
+            },
+          ],
+        },
+        rollout_path: [
+          { step: "ship_english_audit_with_required_language_gaps", status: "complete" },
+          { step: "monitor_fallback_and_failure_rates", status: "active" },
+        ],
+      },
       checks: [],
     },
   };
@@ -288,11 +628,79 @@ function buildTemplateDetail(dashboard: MessageGovernanceDashboardResponse): Mes
   };
 
   return {
-    schema_version: "message-management-phase-5-v1",
+    schema_version: "message-management-phase-7-v1",
     generated_at: dashboard.generated_at,
     template,
     version_history: [nextVersion, template],
     language_variants: dashboard.templates,
+    side_by_side_preview: [
+      {
+        language: "en",
+        label: "English",
+        exists: true,
+        public_id: "template-pending",
+        title: "Household prevention",
+        approval_status: "pending_review",
+        translation_status: "draft",
+        source_template: "template-pending",
+        source_template_key: "cholera.household.prevent",
+        source_template_version: 1,
+        body: "Use treated water in {ward_name}.",
+        rendered_body: "Use treated water in Kanyasa.",
+        delivery_rendered_body: "Use treated water in Kanyasa.",
+        requested_language: "en",
+        resolved_language: "en",
+        fallback_used: false,
+        placeholders: ["ward_name"],
+        placeholder_parity_status: "source",
+        placeholder_warnings: [],
+        render_error: "",
+      },
+      {
+        language: "sw",
+        label: "Kiswahili",
+        exists: true,
+        public_id: "template-sw",
+        title: "Household prevention SW",
+        approval_status: "draft",
+        translation_status: "draft",
+        source_template: "template-pending",
+        source_template_key: "cholera.household.prevent",
+        source_template_version: 1,
+        body: "Tumia maji salama {ward_name}.",
+        rendered_body: "Tumia maji salama Kanyasa.",
+        delivery_rendered_body: "Use treated water in Kanyasa.",
+        requested_language: "sw",
+        resolved_language: "en",
+        fallback_used: true,
+        placeholders: ["ward_name"],
+        placeholder_parity_status: "warning",
+        placeholder_warnings: ["Variant is not approved for use; English fallback would be shown to users."],
+        render_error: "",
+      },
+      {
+        language: "luo",
+        label: "Dholuo",
+        exists: false,
+        public_id: "",
+        title: "",
+        approval_status: "",
+        translation_status: "",
+        source_template: "template-pending",
+        source_template_key: "cholera.household.prevent",
+        source_template_version: 1,
+        body: "",
+        rendered_body: "",
+        delivery_rendered_body: "Use treated water in Kanyasa.",
+        requested_language: "luo",
+        resolved_language: "en",
+        fallback_used: true,
+        placeholders: [],
+        placeholder_parity_status: "missing",
+        placeholder_warnings: ["Missing Dholuo variant; English fallback would be used."],
+        render_error: "",
+      },
+    ],
     delivery_summary: dashboard.delivery_summary,
   };
 }
@@ -302,6 +710,7 @@ describe("MessageGovernancePage", () => {
     vi.clearAllMocks();
     mockRefetch.mockResolvedValue({});
     mockMutateAsync.mockResolvedValue({});
+    mockUssdMutateAsync.mockResolvedValue({});
     const dashboard = buildDashboard();
     mockUseAuth.mockReturnValue({
       currentUser: {
@@ -333,16 +742,27 @@ describe("MessageGovernancePage", () => {
       mutateAsync: mockMutateAsync,
       isPending: false,
     });
+    mockUseApproveUssdMenuVersionMutation.mockReturnValue({
+      mutateAsync: mockUssdMutateAsync,
+      isPending: false,
+    });
   });
 
   it("renders template review, delivery outcomes, and USSD analytics", async () => {
     render(React.createElement(MessageGovernancePage));
 
     expect(screen.getByText(/Message Governance \| Templates, public-health copy approval/i)).toBeInTheDocument();
+    expect(screen.getByText("Language Coverage Matrix")).toBeInTheDocument();
+    expect(screen.getByText("Missing Translation Dashboard")).toBeInTheDocument();
+    expect(screen.getByText("Missing Dholuo variant before rollout.")).toBeInTheDocument();
+    expect(screen.getByText("Localization Rollout")).toBeInTheDocument();
+    expect(screen.getByText("Strict audit pass")).toBeInTheDocument();
     expect(screen.getByText("Template List")).toBeInTheDocument();
     expect(screen.getAllByText("Household prevention").length).toBeGreaterThan(0);
-    await screen.findByText("Language Preview");
-    expect(screen.getByText("Use treated water in Kanyasa.")).toBeInTheDocument();
+    await screen.findByText("Side-by-Side Language Preview");
+    expect(screen.getAllByText("Use treated water in Kanyasa.").length).toBeGreaterThan(0);
+    expect(screen.getByText("Tumia maji salama Kanyasa.")).toBeInTheDocument();
+    expect(screen.getAllByText("Placeholder parity").length).toBeGreaterThan(0);
     expect(screen.getByText("Audience Preview")).toBeInTheDocument();
     expect(screen.getByText("Attribution")).toBeInTheDocument();
     expect(screen.getByText("Version History")).toBeInTheDocument();
@@ -352,18 +772,21 @@ describe("MessageGovernancePage", () => {
     expect(screen.getByText("Opt-Out Monitoring")).toBeInTheDocument();
     expect(screen.getByText("Template Usage by Version")).toBeInTheDocument();
     expect(screen.getByText("USSD Session Analytics")).toBeInTheDocument();
+    expect(screen.getByText("USSD Route Tree Preview")).toBeInTheDocument();
+    expect(screen.getByText("Offline Guidance Preview")).toBeInTheDocument();
     expect(screen.getByText("USSD Menu Versions")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /reject/i }).length).toBeGreaterThan(0);
     expect(mockUseMessageTemplateDetailQuery).toHaveBeenCalledWith("template-pending");
   });
 
   it("submits admin approval through the mutation contract", async () => {
     render(React.createElement(MessageGovernancePage));
 
-    await screen.findByText("Language Preview");
+    await screen.findByText("Side-by-Side Language Preview");
     fireEvent.change(screen.getByPlaceholderText("Review note"), {
       target: { value: "Approved by county health promotion." },
     });
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    fireEvent.click(screen.getAllByRole("button", { name: /approve/i })[0]);
 
     await waitFor(() => {
       expect(mockMutateAsync).toHaveBeenCalledWith({
@@ -371,6 +794,24 @@ describe("MessageGovernancePage", () => {
         payload: {
           action: "approve",
           reason: "Approved by county health promotion.",
+        },
+      });
+    });
+    expect(mockRefetch).toHaveBeenCalled();
+  });
+
+  it("submits USSD menu review actions through the mutation contract", async () => {
+    render(React.createElement(MessageGovernancePage));
+
+    await screen.findByText("USSD Menu Versions");
+    fireEvent.click(screen.getAllByRole("button", { name: /reject/i }).at(-1) as HTMLElement);
+
+    await waitFor(() => {
+      expect(mockUssdMutateAsync).toHaveBeenCalledWith({
+        publicId: "ussd-menu-1",
+        payload: {
+          action: "reject",
+          reason: "Reviewed from the message governance dashboard.",
         },
       });
     });
