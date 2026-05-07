@@ -271,7 +271,12 @@ describe("AlertDetailPage", () => {
 
     expect(await screen.findByText("Next action")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Send follow-up SMS" })).toBeInTheDocument();
-    expect(screen.getByText(/Reason: Retry is pending/i)).toBeInTheDocument();
+    expect(screen.getByText(/Delivery retry is still pending/i)).toBeInTheDocument();
+    expect(screen.getByText("Why now")).toBeInTheDocument();
+    expect(screen.getByText("Retry pending")).toBeInTheDocument();
+    expect(screen.getByText("Can this page send it?")).toBeInTheDocument();
+    expect(screen.getByText("SMS not available here")).toBeInTheDocument();
+    expect(screen.getByText("Why this action?")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Continue in ward workflow/i })).toHaveAttribute("href", "/wards/12");
     expect(screen.queryByText("Dispatch Additional CHVs Unavailable")).not.toBeInTheDocument();
     expect(screen.queryByText("Send Follow-up SMS Unavailable")).not.toBeInTheDocument();
@@ -383,9 +388,7 @@ describe("AlertDetailPage", () => {
 
     const button = await screen.findByRole("button", { name: "View CHV coverage request" });
     expect(button).toBeInTheDocument();
-    expect(
-      screen.getByText("A live CHV coverage request already exists for this ward, so this alert links to that request."),
-    ).toBeInTheDocument();
+    expect(screen.getByText("CHV request already linked")).toBeInTheDocument();
 
     fireEvent.click(button);
 

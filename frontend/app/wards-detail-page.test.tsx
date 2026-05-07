@@ -1,5 +1,6 @@
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import WardDetailPage from "@/app/(dashboard)/wards/[id]/page";
@@ -704,6 +705,16 @@ vi.mock("@/queries/use-ward-detail-query", () => ({
   useWardDetailQuery: (...args: unknown[]) => mockUseWardDetailQuery(...args),
 }));
 
+async function selectWardDetailTab(name: "Situation" | "Response" | "Evidence" | "History") {
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("tab", { name }));
+}
+
+async function toggleWardDisclosure(name: string | RegExp) {
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name }));
+}
+
 describe("WardDetailPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -734,7 +745,7 @@ describe("WardDetailPage", () => {
     });
   });
 
-  it("renders the operational ward detail layout with preserved back link state", async () => {
+  it("defaults to the action-first Situation tab with preserved back link state", async () => {
     render(React.createElement(WardDetailPage));
 
     await waitFor(() => {
@@ -750,24 +761,56 @@ describe("WardDetailPage", () => {
       "href",
       "/wards?risk=HIGH&page=2",
     );
-    expect(screen.getByText("Risk history")).toBeInTheDocument();
-    expect(screen.getByText("Recent alerts")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Situation" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Response" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Evidence" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "History" })).toBeInTheDocument();
+    expect(screen.getByText("Risk explanation")).toBeInTheDocument();
+    expect(screen.getByText("Spatial context")).toBeInTheDocument();
+    expect(screen.queryByText("Forecast horizon and evidence")).not.toBeInTheDocument();
+    expect(screen.queryByText("Risk history")).not.toBeInTheDocument();
+    expect(screen.queryByText("Recent alerts")).not.toBeInTheDocument();
     expect(screen.getByText("Recommended action")).toBeInTheDocument();
+    expect(screen.getByText("Spatial context").closest("section")).not.toHaveClass("lg:grid-cols-2");
   });
 
   it("renders phase 6 evidence for horizon, confidence, outcomes, review workflow, and CHV follow-through", async () => {
     render(React.createElement(WardDetailPage));
+
+    expect(await screen.findByText("Risk explanation")).toBeInTheDocument();
+    expect(screen.getByText(/Forecast rainfall is elevated at 92 mm from open-meteo-forecast/i)).toBeInTheDocument();
+    expect(screen.getByText("Spatial context")).toBeInTheDocument();
+    expect(screen.getByText("Neighboring high-risk wards")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /spillover signals/i })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText(/1 high-risk neighboring ward/i)).toBeInTheDocument();
+    expect(screen.queryByText("North Kadem")).not.toBeInTheDocument();
+    await toggleWardDisclosure(/spillover signals/i);
+    expect(screen.getByText("North Kadem")).toBeInTheDocument();
+    expect(screen.getByText("Approximate link")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /catchment pressure/i })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("Approximate")).toBeInTheDocument();
+    await toggleWardDisclosure(/catchment pressure/i);
+    expect(screen.getAllByText("Kamagambo Health Centre").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /spatial caveats/i })).toHaveAttribute("aria-expanded", "false");
+    await toggleWardDisclosure(/spatial caveats/i);
+    expect(screen.getByText(/facility catchments are approximate/i)).toBeInTheDocument();
+
+    await selectWardDetailTab("Evidence");
 
     expect(await screen.findByText("Forecast horizon and evidence")).toBeInTheDocument();
     expect(screen.getAllByText("7 to 14 days").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Promoted").length).toBeGreaterThan(0);
     expect(screen.getByText("14-day climate horizon caveated")).toBeInTheDocument();
     expect(screen.getByText("Climate source truth")).toBeInTheDocument();
-    expect(screen.getAllByText("Forecast rainfall").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /climate source truth/i })).toHaveAttribute("aria-expanded", "false");
+    await toggleWardDisclosure(/climate source truth/i);
+    expect(screen.getAllByText(/Forecast rainfall/i).length).toBeGreaterThan(0);
     expect(screen.getByText("open-meteo-forecast")).toBeInTheDocument();
     expect(screen.getByText("3/14 days")).toBeInTheDocument();
     expect(screen.getByText(/Missing forecast lead days: 4, 5, 6, 7, 8, 9, 10, 11 \+3 more/i)).toBeInTheDocument();
-    expect(screen.getByText(/Forecast rainfall is elevated at 92 mm from open-meteo-forecast/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /model readiness evidence/i })).toHaveAttribute("aria-expanded", "false");
+    await toggleWardDisclosure(/model readiness evidence/i);
+    expect(screen.getByText("model_version=v1")).toBeInTheDocument();
     expect(screen.getByText("High confidence")).toBeInTheDocument();
     expect(screen.getByText("Prediction outcomes")).toBeInTheDocument();
     expect(screen.getByText("False alerts")).toBeInTheDocument();
@@ -777,18 +820,17 @@ describe("WardDetailPage", () => {
     expect(screen.getByText("Model quality")).toBeInTheDocument();
     expect(screen.getByText("Response quality")).toBeInTheDocument();
     expect(screen.getByText("Active outbreak with downstream response gap")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /response pathway detail/i })).toHaveAttribute("aria-expanded", "false");
+    await toggleWardDisclosure(/response pathway detail/i);
+    expect(screen.getByText("Alert issued")).toBeInTheDocument();
     expect(screen.getByText("Preparedness action outcome history")).toBeInTheDocument();
     expect(screen.getByText("Field verification")).toBeInTheDocument();
     expect(screen.getByText("False-alert context")).toBeInTheDocument();
-    expect(screen.getByText("Spatial context")).toBeInTheDocument();
-    expect(screen.getByText("Neighboring high-risk wards")).toBeInTheDocument();
-    expect(screen.getByText("North Kadem")).toBeInTheDocument();
-    expect(screen.getByText("Approximate")).toBeInTheDocument();
-    expect(screen.getByText("Approximate link")).toBeInTheDocument();
-    expect(screen.getAllByText("Kamagambo Health Centre").length).toBeGreaterThan(0);
-    expect(screen.getByText(/facility catchments are approximate/i)).toBeInTheDocument();
     expect(screen.getByText("Alert candidate review")).toBeInTheDocument();
-    expect(screen.getByText("CHV action status")).toBeInTheDocument();
+
+    await selectWardDetailTab("Response");
+
+    expect(await screen.findByText("CHV action status")).toBeInTheDocument();
     expect(screen.getByText(/linked alerts: alert-7/i)).toBeInTheDocument();
   });
 
@@ -829,8 +871,13 @@ describe("WardDetailPage", () => {
 
     render(React.createElement(WardDetailPage));
 
+    await selectWardDetailTab("Response");
+
     expect(await screen.findByText("Preparedness actions")).toBeInTheDocument();
     expect(screen.getByText("Latest lifecycle events")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /latest lifecycle events/i })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Started field verification with CHV team.")).not.toBeInTheDocument();
+    await toggleWardDisclosure(/latest lifecycle events/i);
     expect(screen.getByText("Started field verification with CHV team.")).toBeInTheDocument();
   });
 
@@ -861,8 +908,9 @@ describe("WardDetailPage", () => {
 
     render(React.createElement(WardDetailPage));
 
+    expect(await screen.findByText("Read-only trigger access.")).toBeInTheDocument();
     expect(
-      await screen.findByText(/recommended action is visible, but this role cannot start or review trigger work from this page/i),
+      screen.getByText(/recommendation is visible, but this role cannot start or review trigger work from this page/i),
     ).toBeInTheDocument();
     expect(screen.getByText("View full alert history")).toBeInTheDocument();
     expect(screen.queryByText(/Trigger alert mock/)).not.toBeInTheDocument();
@@ -896,21 +944,53 @@ describe("WardDetailPage", () => {
     render(React.createElement(WardDetailPage));
 
     expect(await screen.findByRole("heading", { name: "North Kamagambo" })).toBeInTheDocument();
-    expect(await screen.findByText("Risk history")).toBeInTheDocument();
+    expect(await screen.findByText("Risk explanation")).toBeInTheDocument();
     expect(await screen.findByText("Trigger alert mock | Review trigger | 12 | North Kamagambo")).toBeInTheDocument();
-    expect(screen.getByText("Recent alerts")).toBeInTheDocument();
+
+    await selectWardDetailTab("Response");
+
+    expect(await screen.findByText("Recent alerts")).toBeInTheDocument();
     expect(screen.getByText(/no recent alerts for this ward/i)).toBeInTheDocument();
   });
 
   it("renders explicit trigger state, stale freshness, and action-first controls without scrolling assumptions", async () => {
     render(React.createElement(WardDetailPage));
 
-    expect(await screen.findAllByText("Awaiting review")).toHaveLength(2);
-    expect(screen.getByText("Stale data")).toBeInTheDocument();
+    expect((await screen.findAllByText(/last known awaiting review/i)).length).toBeGreaterThan(0);
+    expect(screen.getByLabelText("Ward data quality")).toBeInTheDocument();
+    const staleBadge = screen.getByRole("button", { name: "Stale data" });
+    expect(staleBadge).toBeInTheDocument();
+    expect(staleBadge).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(staleBadge);
+    expect(staleBadge).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(/has not been refreshed within the expected update window/i)).toBeInTheDocument();
+    const climateBadge = screen.getByRole("button", { name: "14-day climate horizon caveated" });
+    await userEvent.click(climateBadge);
+    expect(screen.getByText(/weather signal does not fully cover the forecast period/i)).toBeInTheDocument();
+    expect(screen.getByText("Model: Promoted")).toBeInTheDocument();
+    expect(screen.getByText("Climate: 14-day climate horizon caveated")).toBeInTheDocument();
+    expect(screen.getByText("High confidence")).toBeInTheDocument();
     expect(screen.getByText("Action required. Review active alerts and trigger status.")).toBeInTheDocument();
-    expect(screen.getAllByText("View full alert history")).toHaveLength(2);
-    expect(screen.getByText("Data status")).toBeInTheDocument();
+    expect(screen.getAllByText("View full alert history").length).toBeGreaterThan(0);
     expect(screen.getByText("Trigger alert mock | Review trigger | 12 | North Kamagambo")).toBeInTheDocument();
+
+    await selectWardDetailTab("History");
+
+    expect(await screen.findByText("Data status")).toBeInTheDocument();
+    expect(screen.getByText("Ward context")).toBeInTheDocument();
+  });
+
+  it("switches to Response and does not describe queued alerts as delivered", async () => {
+    render(React.createElement(WardDetailPage));
+
+    await selectWardDetailTab("Response");
+
+    expect(await screen.findByText("Recent alerts")).toBeInTheDocument();
+    expect(screen.getByText("Queued for SMS • Risk 86/100")).toBeInTheDocument();
+    expect(screen.queryByText(/Delivered \(SMS\)/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Delivered via SMS/i)).not.toBeInTheDocument();
+    expect(screen.getByText("CHV action status")).toBeInTheDocument();
+    expect(screen.getByText("Preparedness actions")).toBeInTheDocument();
   });
 
   it("shows compact operational empty states when signals, history, and alerts are unavailable", async () => {
@@ -957,13 +1037,16 @@ describe("WardDetailPage", () => {
     expect(screen.getByText("No active signals or trends detected.")).toBeInTheDocument();
     expect(screen.getByText("This ward is currently under routine monitoring.")).toBeInTheDocument();
     expect(screen.queryByText("Risk history")).not.toBeInTheDocument();
-    expect(screen.getByText("No recent alerts for this ward")).toBeInTheDocument();
     expect(screen.getByText(/Latest record:/i)).toBeInTheDocument();
     expect(screen.getByText("Review alert history")).toBeInTheDocument();
     expect(screen.getByText("Continue routine surveillance")).toBeInTheDocument();
     expect(screen.getByText("No decision required at this time.")).toBeInTheDocument();
     expect(screen.getByText("Context: Routine monitoring (no active escalation)")).toBeInTheDocument();
     expect(screen.getByText("Trigger alert mock | Open trigger flow | 12 | North Kamagambo")).toBeInTheDocument();
+
+    await selectWardDetailTab("Response");
+
+    expect(await screen.findByText("No recent alerts for this ward")).toBeInTheDocument();
   });
 
   it("uses backend freshness state instead of re-deriving staleness from timestamps", async () => {
@@ -987,7 +1070,7 @@ describe("WardDetailPage", () => {
 
     render(React.createElement(WardDetailPage));
 
-    expect(await screen.findByText(/ward detail \| migori county ward decision console \| .* \| default/i)).toBeInTheDocument();
+    expect(await screen.findByText(/ward decision \| migori county ward operating view \| .* \| default/i)).toBeInTheDocument();
     expect(screen.getByText("Fresh data")).toBeInTheDocument();
     expect(screen.queryByText(/ \| stale$/i)).not.toBeInTheDocument();
   });
@@ -1044,11 +1127,13 @@ describe("WardDetailPage", () => {
 
     render(React.createElement(WardDetailPage));
 
-    expect(await screen.findAllByText("Resolved")).toHaveLength(2);
+    const responseResolvedBadge = await screen.findByRole("button", { name: "Response resolved" });
+    await userEvent.click(responseResolvedBadge);
+    expect(screen.getByText(/the response workflow is closed/i)).toBeInTheDocument();
     expect(screen.getByText("Fresh data")).toBeInTheDocument();
     expect(screen.getByText("No active trigger action is required right now.")).toBeInTheDocument();
     expect(screen.getByText("Review full alert history")).toBeInTheDocument();
-    expect(screen.getByText(/current next step: review alert history\. open trigger flow only if conditions change\./i)).toBeInTheDocument();
+    expect(screen.getByText(/review alert history first\. open trigger flow only if conditions change\./i)).toBeInTheDocument();
     expect(screen.queryByText(/Trigger alert mock/)).not.toBeInTheDocument();
   });
 
@@ -1088,6 +1173,8 @@ describe("WardDetailPage", () => {
     });
 
     render(React.createElement(WardDetailPage));
+
+    await selectWardDetailTab("History");
 
     expect(await screen.findByText("No recent alerts for this ward")).toBeInTheDocument();
     expect(screen.getByText("Review full alert history if you need older ward-linked alert activity.")).toBeInTheDocument();
@@ -1141,7 +1228,7 @@ describe("WardDetailPage", () => {
     render(React.createElement(WardDetailPage));
 
     expect(await screen.findByText("Trigger alert mock | Open Trigger Flow | 12 | North Kamagambo")).toBeInTheDocument();
-    expect(screen.getAllByText("No active trigger").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/no active trigger/i).length).toBeGreaterThan(0);
     expect(screen.getByText("Trigger alert mock | Open Trigger Flow | 12 | North Kamagambo")).toBeInTheDocument();
     expect(screen.getByText("View full alert history")).toBeInTheDocument();
     expect(screen.getByText("No decision required at this time.")).toBeInTheDocument();
@@ -1170,6 +1257,8 @@ describe("WardDetailPage", () => {
     render(React.createElement(WardDetailPage));
 
     expect(await screen.findByText("No decision required at this time.")).toBeInTheDocument();
+    expect(screen.getByText("Last known low risk")).toBeInTheDocument();
+    expect(screen.getByText("Last known no active trigger")).toBeInTheDocument();
     expect(screen.getByText("This ward is under routine monitoring.")).toBeInTheDocument();
     expect(screen.getByText("Context: Routine monitoring (no active escalation)")).toBeInTheDocument();
   });

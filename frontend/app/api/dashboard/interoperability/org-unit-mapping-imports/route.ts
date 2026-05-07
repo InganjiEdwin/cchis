@@ -21,6 +21,6 @@ export async function POST(request: Request) {
     if (error instanceof ServerApiError) {
       return NextResponse.json({ detail: error.message }, { status: error.status });
     }
-    return NextResponse.json({ detail: "Unable to create interoperability mapping import." }, { status: 500 });
+    return NextResponse.json({ detail: "Unable to check the location matching file." }, { status: 500 });
   }
 }

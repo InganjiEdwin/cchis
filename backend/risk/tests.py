@@ -32,6 +32,7 @@ from rest_framework.settings import api_settings
 from accounts.audit import get_client_ip
 from accounts.admin import AccessRequestAdmin
 from accounts.models import AccessRequest, AuthAuditEvent, PasswordResetToken, PreAuthToken, TwoFactorRecoveryCode
+from accounts.services import create_current_policy_acceptances
 from accounts.turnstile import TurnstileVerificationResult
 from accounts.two_factor import (
     consume_recovery_code,
@@ -320,6 +321,10 @@ class AuthenticatedAPITestCase(APITestCase):
         user.is_superuser = is_superuser
         user.is_active = True
         user.save()
+        create_current_policy_acceptances(
+            user,
+            metadata={"accepted_via": "authenticated_api_test_fixture"},
+        )
         return user
 
     def authenticate(self, username: str, password: str | None = None) -> str:
@@ -8847,6 +8852,32 @@ class ZZZNotificationWebsocketLifecycleIsolationTest(AuthenticatedAPITestCase):
     def test_notification_websocket_receives_lifecycle_updates(self):
         self.authenticate(self.analyst_user.username)
         async_to_sync(self._exercise_notification_websocket_lifecycle)()
+
+    @override_settings(
+        CHANNEL_LAYERS={
+            "default": {
+                "BACKEND": "channels.layers.InMemoryChannelLayer",
+            }
+        }
+    )
+    def test_policy_missing_user_cannot_open_notification_websocket(self):
+        self.analyst_user.policy_acceptances.all().delete()
+        async_to_sync(self._exercise_policy_missing_notification_websocket_rejected)()
+
+    async def _exercise_policy_missing_notification_websocket_rejected(self):
+        token = AccessToken.for_user(self.analyst_user)
+        token["purpose"] = "dashboard_notifications_stream"
+        token["role"] = self.analyst_user.role
+        token["ward_id"] = self.analyst_user.ward_id
+
+        communicator = WebsocketCommunicator(
+            application,
+            f"/ws/notifications/stream/?token={token}",
+        )
+        connected, close_code = await communicator.connect()
+
+        self.assertFalse(connected)
+        self.assertEqual(close_code, 4401)
 
     async def _exercise_notification_websocket_lifecycle(self):
         list_response = await sync_to_async(self.client.get)(reverse("notification-list"))

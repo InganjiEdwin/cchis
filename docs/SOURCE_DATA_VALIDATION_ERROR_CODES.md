@@ -19,6 +19,7 @@ This catalog is the stable operator contract for source-data diagnostics. Valida
 | `empty_file` | error | Export the template with headers and at least one data row. |
 | `no_data_rows` | error | Keep the header row and add source-data rows before uploading. |
 | `row_limit_exceeded` | error | Split the CSV into smaller source-data uploads. |
+| `row_has_extra_columns` | error | Remove trailing cells or extra delimiters that are not named by the header row. |
 | `pii_header_detected` | error | Remove personal-information columns such as names, phone numbers, or IDs. |
 | `pii_phone_value_detected` | error | Remove phone numbers from the CSV before upload. |
 | `pii_email_value_detected` | error | Remove email addresses from the CSV before upload. |

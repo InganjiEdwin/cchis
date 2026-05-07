@@ -36,6 +36,7 @@ vi.mock("@/components/auth-provider", () => ({
 }));
 
 vi.mock("@/lib/navigation", () => ({
+  buildPolicyReviewRoute: (returnTo: string) => `/policy-review?returnTo=${encodeURIComponent(returnTo)}`,
   getDefaultRoute: (...args: unknown[]) => mockGetDefaultRoute(...args),
 }));
 
@@ -173,6 +174,44 @@ describe("SetupTwoFactorPage", () => {
 
     await waitFor(() => {
       expect(storageSetItemSpy).not.toHaveBeenCalledWith(expect.any(String), expect.stringContaining(recoveryCodes[0]));
+    });
+  });
+
+  it("routes completed login enrollment with missing policy acceptance to policy review", async () => {
+    const user = userEvent.setup();
+    mockConfirmTwoFactorEnrollment.mockResolvedValue({
+      detail: "Two-factor enrollment completed successfully.",
+      user: buildUser({
+        is_totp_enabled: true,
+        policy_acceptance: {
+          required: true,
+          is_current: false,
+          terms_version: "terms-2026-05",
+          privacy_version: "privacy-2026-05",
+          cookie_notice_version: "cookies-2026-05",
+          accepted_terms_version: null,
+          accepted_privacy_version: null,
+          accepted_cookie_notice_version: null,
+          missing_documents: ["TERMS", "PRIVACY", "COOKIE_NOTICE"],
+          terms_url: "/terms",
+          privacy_url: "/privacy",
+          cookie_notice_url: "/privacy#cookies",
+        },
+      }),
+      enrollment_completed: true,
+      recovery_codes: [],
+      recovery_codes_generated: false,
+    });
+    renderSetupPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Policy: REQUIRED")).toBeInTheDocument();
+    });
+    await user.type(screen.getByLabelText("Verification code"), "123456");
+    await user.click(screen.getByRole("button", { name: /finish two-factor setup/i }));
+
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith("/policy-review?returnTo=%2Foverview");
     });
   });
 });

@@ -1,0 +1,112 @@
+{
+  "after": {
+    "current_seeded_density_records": 0,
+    "current_seeded_population_records": 0,
+    "other_seeded_exposure_records": 200,
+    "other_seeded_exposure_records_by_type": [
+      {
+        "count": 40,
+        "exposure_type": "exposed_population_proxy",
+        "freshness_state": "fresh"
+      },
+      {
+        "count": 40,
+        "exposure_type": "floodplain_exposure",
+        "freshness_state": "fresh"
+      },
+      {
+        "count": 40,
+        "exposure_type": "settlement_concentration",
+        "freshness_state": "fresh"
+      },
+      {
+        "count": 40,
+        "exposure_type": "wash_vulnerability",
+        "freshness_state": "fresh"
+      },
+      {
+        "count": 40,
+        "exposure_type": "water_body_proximity",
+        "freshness_state": "fresh"
+      }
+    ],
+    "out_of_scope_current_seeded_density_records": 0,
+    "out_of_scope_current_seeded_population_records": 0,
+    "retired_seeded_density_records": 40,
+    "retired_seeded_population_records": 40
+  },
+  "applied": true,
+  "before": {
+    "current_seeded_density_records": 0,
+    "current_seeded_population_records": 0,
+    "other_seeded_exposure_records": 200,
+    "other_seeded_exposure_records_by_type": [
+      {
+        "count": 40,
+        "exposure_type": "exposed_population_proxy",
+        "freshness_state": "fresh"
+      },
+      {
+        "count": 40,
+        "exposure_type": "floodplain_exposure",
+        "freshness_state": "fresh"
+      },
+      {
+        "count": 40,
+        "exposure_type": "settlement_concentration",
+        "freshness_state": "fresh"
+      },
+      {
+        "count": 40,
+        "exposure_type": "wash_vulnerability",
+        "freshness_state": "fresh"
+      },
+      {
+        "count": 40,
+        "exposure_type": "water_body_proximity",
+        "freshness_state": "fresh"
+      }
+    ],
+    "out_of_scope_current_seeded_density_records": 0,
+    "out_of_scope_current_seeded_population_records": 0
+  },
+  "county": "Migori",
+  "gates": {
+    "applied": true,
+    "density_candidates_within_expected": true,
+    "density_replacement_complete": true,
+    "no_current_seeded_density_records": true,
+    "no_current_seeded_population_records": true,
+    "other_seeded_exposure_records_preserved": true,
+    "out_of_scope_seeded_density_preserved": true,
+    "out_of_scope_seeded_population_preserved": true,
+    "population_candidates_within_expected": true,
+    "population_replacement_complete": true,
+    "replacement_density_ward_count_expected": true,
+    "replacement_population_and_density_ward_sets_match": true,
+    "replacement_population_ward_count_expected": true,
+    "replacement_run_success": true,
+    "replacement_ward_count_expected": true
+  },
+  "generated_at": "2026-05-05T21:23:36.136490+00:00",
+  "passed": true,
+  "phase": "migori_knbs_worldpop_seeded_population_density_retirement",
+  "reason": "WorldPop 2026 Migori gridded population import replaced seeded population and density demo records.",
+  "records_marked": {
+    "canonical_records_total": 0,
+    "density_exposure_records": 0,
+    "population_baseline_records": 0
+  },
+  "replacement_density_ward_count": 40,
+  "replacement_population_ward_count": 40,
+  "replacement_run": {
+    "id": 2,
+    "release_version": "WorldPop G2_CN_POP_R25A_100m KEN 2026 v1",
+    "source_name": "WorldPop R2025A constrained 100m Migori ward aggregate",
+    "source_ref": "https://data.worldpop.org/GIS/Population/Global_2015_2030/R2025A/2026/KEN/v1/100m/constrained/ken_pop_2026_CN_100m_R2025A_v1.tif",
+    "source_type": "gridded_population",
+    "status": "SUCCESS"
+  },
+  "replacement_ward_count": 40,
+  "scope": "population_and_density"
+}

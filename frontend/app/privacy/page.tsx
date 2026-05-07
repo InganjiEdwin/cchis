@@ -78,13 +78,54 @@ const sections = [
     ],
   },
   {
-    title: "6. Data Retention",
+    id: "cookies",
+    title: "6. Cookies and Browser Storage",
+    body: [
+      "CHIS uses essential cookies and browser storage to keep authorized users signed in, protect accounts, remember display preferences, support two-factor setup, and maintain security checks. These are used for system operation and security, not advertising.",
+    ],
+    storageItems: [
+      {
+        name: "cchis_refresh",
+        copy: "HTTP-only refresh cookie for session continuity.",
+      },
+      {
+        name: "cchis.current_user",
+        copy: "Browser storage for dashboard session hydration.",
+      },
+      {
+        name: "cchis.pre_auth_token",
+        copy: "Temporary browser storage during two-factor verification.",
+      },
+      {
+        name: "cchis.enrollment_token",
+        copy: "Temporary browser storage during two-factor enrollment.",
+      },
+      {
+        name: "cchis.recovery_code_login_notice",
+        copy: "Session notice after recovery-code login.",
+      },
+      {
+        name: "cchis.theme_preference",
+        copy: "Theme preference.",
+      },
+      {
+        name: "cchis.cookie_notice_ack.*",
+        copy: "Remembers that the cookie notice was dismissed.",
+      },
+      {
+        name: "Cloudflare Turnstile",
+        copy: "May load for public access requests and after repeated failed sign-in attempts if configured.",
+      },
+    ],
+  },
+  {
+    title: "7. Data Retention",
     body: [
       "System information is retained only as long as required for operations, accountability, and reporting needs, and is reviewed periodically against administrative requirements.",
     ],
   },
   {
-    title: "7. User Responsibilities",
+    title: "8. User Responsibilities",
     body: [
       "Authorized users are responsible for protecting their credentials, respecting role boundaries, and reporting any suspected misuse or unauthorized access immediately.",
     ],
@@ -105,12 +146,12 @@ export default function PrivacyPage() {
               <span className="text-sm font-medium text-panel-muted">Privacy Policy</span>
             </div>
             <h1 className="text-5xl font-semibold tracking-tight text-panel-strong">Privacy Policy</h1>
-            <p className="text-sm text-panel-muted">Last updated: April 2026</p>
+            <p className="text-sm text-panel-muted">Last updated: May 2026</p>
           </div>
 
           <Card className="space-y-8 p-6 md:p-8">
             {sections.map((section) => (
-              <article key={section.title} className="space-y-4">
+              <article key={section.title} id={section.id} className="scroll-mt-20 space-y-4">
                 <h2 className="text-2xl font-semibold text-panel-strong">{section.title}</h2>
                 {section.body?.map((paragraph) => (
                   <p key={paragraph} className="text-sm leading-7 text-panel-copy">{paragraph}</p>
@@ -135,6 +176,16 @@ export default function PrivacyPage() {
                     ))}
                   </div>
                 ) : null}
+                {section.storageItems ? (
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {section.storageItems.map((item) => (
+                      <div key={item.name} className="rounded-xl border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 py-3">
+                        <code className="text-xs font-semibold text-panel-strong">{item.name}</code>
+                        <p className="mt-1 text-sm leading-6 text-panel-copy">{item.copy}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
                 {section.note ? (
                 <div className="flex items-center gap-3 rounded-2xl border border-[color-mix(in_srgb,var(--warning)_24%,white)] bg-[color-mix(in_srgb,var(--warning)_8%,white)] px-4 py-3 text-sm text-[color:var(--warning)] dark:border-[color-mix(in_srgb,var(--warning)_30%,transparent)] dark:bg-[color-mix(in_srgb,var(--warning)_14%,transparent)] dark:text-[color-mix(in_srgb,var(--warning)_86%,white)]">
                   <DatabaseZap className="size-5 shrink-0" aria-hidden="true" />
@@ -151,7 +202,7 @@ export default function PrivacyPage() {
             ))}
 
             <article className="space-y-4">
-              <h2 className="text-2xl font-semibold text-panel-strong">8. Contact Information</h2>
+              <h2 className="text-2xl font-semibold text-panel-strong">9. Contact Information</h2>
               <div className="grid gap-4 md:grid-cols-2">
                 <Card className="p-5">
                   <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Administrator</span>

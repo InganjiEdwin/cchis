@@ -1,0 +1,534 @@
+{
+  "route": "http://localhost:3000/wards/1?returnTo=%2Fwards%3Fscope%3DMigori%26sort%3Drisk_desc",
+  "screenshots": {
+    "desktop": "/Users/edwininganji/VSCodeProjects/cchis/frontend/test-artifacts/ward-detail-phase7/ward-detail-desktop.png",
+    "mobile": "/Users/edwininganji/VSCodeProjects/cchis/frontend/test-artifacts/ward-detail-phase7/ward-detail-mobile.png"
+  },
+  "checks": [
+    {
+      "label": "desktop-situation",
+      "url": "http://localhost:3000/wards/1?returnTo=%2Fwards%3Fscope%3DMigori%26sort%3Drisk_desc",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "heading": "Ward Decision",
+      "selectedTab": "Situation",
+      "tabs": [
+        {
+          "label": "Situation",
+          "selected": true
+        },
+        {
+          "label": "Response",
+          "selected": false
+        },
+        {
+          "label": "Evidence",
+          "selected": false
+        },
+        {
+          "label": "History",
+          "selected": false
+        }
+      ],
+      "mapPathCount": 2,
+      "primaryActionVisibleWithoutScrolling": true,
+      "horizontalOverflow": false,
+      "overflowingElements": [],
+      "blankLargeSections": 0,
+      "brokenTextPresent": false,
+      "loadingTextPresent": false,
+      "visibleTextSample": "Migori County CLIMATE HEALTH INTELLIGENCE SYSTEM Early Warning & Action Ward Intelligence Alerts Action Queue Message Governance Model Health Operational KPIs Interoperability Source Data Facility Readiness System Summary Profile Demo Analyst ANALYST Migori Co"
+    },
+    {
+      "label": "desktop-response",
+      "url": "http://localhost:3000/wards/1?returnTo=%2Fwards%3Fscope%3DMigori%26sort%3Drisk_desc",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "heading": "Ward Decision",
+      "selectedTab": "Response",
+      "tabs": [
+        {
+          "label": "Situation",
+          "selected": false
+        },
+        {
+          "label": "Response",
+          "selected": true
+        },
+        {
+          "label": "Evidence",
+          "selected": false
+        },
+        {
+          "label": "History",
+          "selected": false
+        }
+      ],
+      "mapPathCount": 0,
+      "primaryActionVisibleWithoutScrolling": true,
+      "horizontalOverflow": false,
+      "overflowingElements": [],
+      "blankLargeSections": 0,
+      "brokenTextPresent": false,
+      "loadingTextPresent": false,
+      "visibleTextSample": "Migori County CLIMATE HEALTH INTELLIGENCE SYSTEM Early Warning & Action Ward Intelligence Alerts Action Queue Message Governance Model Health Operational KPIs Interoperability Source Data Facility Readiness System Summary Profile Demo Analyst ANALYST Migori Co"
+    },
+    {
+      "label": "desktop-evidence",
+      "url": "http://localhost:3000/wards/1?returnTo=%2Fwards%3Fscope%3DMigori%26sort%3Drisk_desc",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "heading": "Ward Decision",
+      "selectedTab": "Evidence",
+      "tabs": [
+        {
+          "label": "Situation",
+          "selected": false
+        },
+        {
+          "label": "Response",
+          "selected": false
+        },
+        {
+          "label": "Evidence",
+          "selected": true
+        },
+        {
+          "label": "History",
+          "selected": false
+        }
+      ],
+      "mapPathCount": 0,
+      "primaryActionVisibleWithoutScrolling": true,
+      "horizontalOverflow": false,
+      "overflowingElements": [],
+      "blankLargeSections": 0,
+      "brokenTextPresent": false,
+      "loadingTextPresent": false,
+      "visibleTextSample": "Migori County CLIMATE HEALTH INTELLIGENCE SYSTEM Early Warning & Action Ward Intelligence Alerts Action Queue Message Governance Model Health Operational KPIs Interoperability Source Data Facility Readiness System Summary Profile Demo Analyst ANALYST Migori Co"
+    },
+    {
+      "label": "desktop-history",
+      "url": "http://localhost:3000/wards/1?returnTo=%2Fwards%3Fscope%3DMigori%26sort%3Drisk_desc",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "heading": "Ward Decision",
+      "selectedTab": "History",
+      "tabs": [
+        {
+          "label": "Situation",
+          "selected": false
+        },
+        {
+          "label": "Response",
+          "selected": false
+        },
+        {
+          "label": "Evidence",
+          "selected": false
+        },
+        {
+          "label": "History",
+          "selected": true
+        }
+      ],
+      "mapPathCount": 0,
+      "primaryActionVisibleWithoutScrolling": true,
+      "horizontalOverflow": false,
+      "overflowingElements": [],
+      "blankLargeSections": 0,
+      "brokenTextPresent": false,
+      "loadingTextPresent": false,
+      "visibleTextSample": "Migori County CLIMATE HEALTH INTELLIGENCE SYSTEM Early Warning & Action Ward Intelligence Alerts Action Queue Message Governance Model Health Operational KPIs Interoperability Source Data Facility Readiness System Summary Profile Demo Analyst ANALYST Migori Co"
+    },
+    {
+      "label": "desktop-situation",
+      "url": "http://localhost:3000/wards/1?returnTo=%2Fwards%3Fscope%3DMigori%26sort%3Drisk_desc",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "heading": "Ward Decision",
+      "selectedTab": "Situation",
+      "tabs": [
+        {
+          "label": "Situation",
+          "selected": true
+        },
+        {
+          "label": "Response",
+          "selected": false
+        },
+        {
+          "label": "Evidence",
+          "selected": false
+        },
+        {
+          "label": "History",
+          "selected": false
+        }
+      ],
+      "mapPathCount": 2,
+      "primaryActionVisibleWithoutScrolling": true,
+      "horizontalOverflow": false,
+      "overflowingElements": [],
+      "blankLargeSections": 0,
+      "brokenTextPresent": false,
+      "loadingTextPresent": false,
+      "visibleTextSample": "Migori County CLIMATE HEALTH INTELLIGENCE SYSTEM Early Warning & Action Ward Intelligence Alerts Action Queue Message Governance Model Health Operational KPIs Interoperability Source Data Facility Readiness System Summary Profile Demo Analyst ANALYST Migori Co"
+    },
+    {
+      "label": "mobile-situation",
+      "url": "http://localhost:3000/wards/1?returnTo=%2Fwards%3Fscope%3DMigori%26sort%3Drisk_desc",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "heading": "Ward Decision",
+      "selectedTab": "Situation",
+      "tabs": [
+        {
+          "label": "Situation",
+          "selected": true
+        },
+        {
+          "label": "Response",
+          "selected": false
+        },
+        {
+          "label": "Evidence",
+          "selected": false
+        },
+        {
+          "label": "History",
+          "selected": false
+        }
+      ],
+      "mapPathCount": 2,
+      "primaryActionVisibleWithoutScrolling": true,
+      "horizontalOverflow": false,
+      "overflowingElements": [
+        {
+          "tag": "nav",
+          "className": "grid content-start gap-1.5 max-[960px]:flex max-[960px]:w-max max-[960px]:gap-2",
+          "text": "Early Warning & ActionWard IntelligenceAlertsAction QueueMessage GovernanceModel",
+          "parentText": "Early Warning & ActionWard IntelligenceAlertsAction QueueMessage GovernanceModel HealthOperational KPIsInteroperabilityS",
+          "parentClassName": "col-start-1 row-start-2 min-h-0 overflow-y-auto overscroll-contain pb-44 pr-1 pt-5 [scrollbar-color:color-mix(in_srgb,var(--dashboard-sidebar-border)_82%,transparent)_transparent] [scrollbar-width:thin] max-[960px]:w-full max-[960px]:min-w-0 max-[960px]:overflow-x-auto max-[960px]:overflow-y-hidden max-[960px]:pb-1 max-[960px]:pr-0 max-[960px]:pt-0",
+          "right": 1785
+        },
+        {
+          "tag": "a",
+          "className": "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition max-[960px]:shrink-0 max-[960px]:rounded-full max-[960px]:px-3 max-[960px]:py-2 max-[960px]:text-xs text-[var(--dashboard-sidebar-text)] hover:bg-[var(--dashboard-nav-hover)] hover:text-[var(--dashboard-sidebar-title)]",
+          "text": "Alerts",
+          "parentText": "Early Warning & ActionWard IntelligenceAlertsAction QueueMessage GovernanceModel HealthOperational KPIsInteroperabilityS",
+          "parentClassName": "grid content-start gap-1.5 max-[960px]:flex max-[960px]:w-max max-[960px]:gap-2",
+          "right": 457
+        },
+        {
+          "tag": "svg",
+          "className": "lucide lucide-bell size-4 shrink-0",
+          "text": "",
+          "parentText": "Alerts",
+          "parentClassName": "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition max-[960px]:shrink-0 max-[960px]:rounded-full max-[960px]:px-3 max-[960px]:py-2 max-[960px]:text-xs text-[var(--dashboard-sidebar-text)] hover:bg-[var(--dashboard-nav-hover)] hover:text-[var(--dashboard-sidebar-title)]",
+          "right": 400
+        },
+        {
+          "tag": "path",
+          "className": "",
+          "text": "",
+          "parentText": "",
+          "parentClassName": "lucide lucide-bell size-4 shrink-0",
+          "right": 398
+        }
+      ],
+      "blankLargeSections": 0,
+      "brokenTextPresent": false,
+      "loadingTextPresent": false,
+      "visibleTextSample": "Migori County CLIMATE HEALTH INTELLIGENCE SYSTEM Early Warning & Action Ward Intelligence Alerts Action Queue Message Governance Model Health Operational KPIs Interoperability Source Data Facility Readiness System Summary Profile Ward Decision Migori County wa"
+    },
+    {
+      "label": "mobile-response",
+      "url": "http://localhost:3000/wards/1?returnTo=%2Fwards%3Fscope%3DMigori%26sort%3Drisk_desc",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "heading": "Ward Decision",
+      "selectedTab": "Response",
+      "tabs": [
+        {
+          "label": "Situation",
+          "selected": false
+        },
+        {
+          "label": "Response",
+          "selected": true
+        },
+        {
+          "label": "Evidence",
+          "selected": false
+        },
+        {
+          "label": "History",
+          "selected": false
+        }
+      ],
+      "mapPathCount": 0,
+      "primaryActionVisibleWithoutScrolling": true,
+      "horizontalOverflow": false,
+      "overflowingElements": [
+        {
+          "tag": "nav",
+          "className": "grid content-start gap-1.5 max-[960px]:flex max-[960px]:w-max max-[960px]:gap-2",
+          "text": "Early Warning & ActionWard IntelligenceAlertsAction QueueMessage GovernanceModel",
+          "parentText": "Early Warning & ActionWard IntelligenceAlertsAction QueueMessage GovernanceModel HealthOperational KPIsInteroperabilityS",
+          "parentClassName": "col-start-1 row-start-2 min-h-0 overflow-y-auto overscroll-contain pb-44 pr-1 pt-5 [scrollbar-color:color-mix(in_srgb,var(--dashboard-sidebar-border)_82%,transparent)_transparent] [scrollbar-width:thin] max-[960px]:w-full max-[960px]:min-w-0 max-[960px]:overflow-x-auto max-[960px]:overflow-y-hidden max-[960px]:pb-1 max-[960px]:pr-0 max-[960px]:pt-0",
+          "right": 1785
+        },
+        {
+          "tag": "a",
+          "className": "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition max-[960px]:shrink-0 max-[960px]:rounded-full max-[960px]:px-3 max-[960px]:py-2 max-[960px]:text-xs text-[var(--dashboard-sidebar-text)] hover:bg-[var(--dashboard-nav-hover)] hover:text-[var(--dashboard-sidebar-title)]",
+          "text": "Alerts",
+          "parentText": "Early Warning & ActionWard IntelligenceAlertsAction QueueMessage GovernanceModel HealthOperational KPIsInteroperabilityS",
+          "parentClassName": "grid content-start gap-1.5 max-[960px]:flex max-[960px]:w-max max-[960px]:gap-2",
+          "right": 457
+        },
+        {
+          "tag": "svg",
+          "className": "lucide lucide-bell size-4 shrink-0",
+          "text": "",
+          "parentText": "Alerts",
+          "parentClassName": "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition max-[960px]:shrink-0 max-[960px]:rounded-full max-[960px]:px-3 max-[960px]:py-2 max-[960px]:text-xs text-[var(--dashboard-sidebar-text)] hover:bg-[var(--dashboard-nav-hover)] hover:text-[var(--dashboard-sidebar-title)]",
+          "right": 400
+        },
+        {
+          "tag": "path",
+          "className": "",
+          "text": "",
+          "parentText": "",
+          "parentClassName": "lucide lucide-bell size-4 shrink-0",
+          "right": 398
+        }
+      ],
+      "blankLargeSections": 0,
+      "brokenTextPresent": false,
+      "loadingTextPresent": false,
+      "visibleTextSample": "Migori County CLIMATE HEALTH INTELLIGENCE SYSTEM Early Warning & Action Ward Intelligence Alerts Action Queue Message Governance Model Health Operational KPIs Interoperability Source Data Facility Readiness System Summary Profile Ward Decision Migori County wa"
+    },
+    {
+      "label": "mobile-evidence",
+      "url": "http://localhost:3000/wards/1?returnTo=%2Fwards%3Fscope%3DMigori%26sort%3Drisk_desc",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "heading": "Ward Decision",
+      "selectedTab": "Evidence",
+      "tabs": [
+        {
+          "label": "Situation",
+          "selected": false
+        },
+        {
+          "label": "Response",
+          "selected": false
+        },
+        {
+          "label": "Evidence",
+          "selected": true
+        },
+        {
+          "label": "History",
+          "selected": false
+        }
+      ],
+      "mapPathCount": 0,
+      "primaryActionVisibleWithoutScrolling": true,
+      "horizontalOverflow": false,
+      "overflowingElements": [
+        {
+          "tag": "nav",
+          "className": "grid content-start gap-1.5 max-[960px]:flex max-[960px]:w-max max-[960px]:gap-2",
+          "text": "Early Warning & ActionWard IntelligenceAlertsAction QueueMessage GovernanceModel",
+          "parentText": "Early Warning & ActionWard IntelligenceAlertsAction QueueMessage GovernanceModel HealthOperational KPIsInteroperabilityS",
+          "parentClassName": "col-start-1 row-start-2 min-h-0 overflow-y-auto overscroll-contain pb-44 pr-1 pt-5 [scrollbar-color:color-mix(in_srgb,var(--dashboard-sidebar-border)_82%,transparent)_transparent] [scrollbar-width:thin] max-[960px]:w-full max-[960px]:min-w-0 max-[960px]:overflow-x-auto max-[960px]:overflow-y-hidden max-[960px]:pb-1 max-[960px]:pr-0 max-[960px]:pt-0",
+          "right": 1785
+        },
+        {
+          "tag": "a",
+          "className": "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition max-[960px]:shrink-0 max-[960px]:rounded-full max-[960px]:px-3 max-[960px]:py-2 max-[960px]:text-xs text-[var(--dashboard-sidebar-text)] hover:bg-[var(--dashboard-nav-hover)] hover:text-[var(--dashboard-sidebar-title)]",
+          "text": "Alerts",
+          "parentText": "Early Warning & ActionWard IntelligenceAlertsAction QueueMessage GovernanceModel HealthOperational KPIsInteroperabilityS",
+          "parentClassName": "grid content-start gap-1.5 max-[960px]:flex max-[960px]:w-max max-[960px]:gap-2",
+          "right": 457
+        },
+        {
+          "tag": "svg",
+          "className": "lucide lucide-bell size-4 shrink-0",
+          "text": "",
+          "parentText": "Alerts",
+          "parentClassName": "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition max-[960px]:shrink-0 max-[960px]:rounded-full max-[960px]:px-3 max-[960px]:py-2 max-[960px]:text-xs text-[var(--dashboard-sidebar-text)] hover:bg-[var(--dashboard-nav-hover)] hover:text-[var(--dashboard-sidebar-title)]",
+          "right": 400
+        },
+        {
+          "tag": "path",
+          "className": "",
+          "text": "",
+          "parentText": "",
+          "parentClassName": "lucide lucide-bell size-4 shrink-0",
+          "right": 398
+        }
+      ],
+      "blankLargeSections": 0,
+      "brokenTextPresent": false,
+      "loadingTextPresent": false,
+      "visibleTextSample": "Migori County CLIMATE HEALTH INTELLIGENCE SYSTEM Early Warning & Action Ward Intelligence Alerts Action Queue Message Governance Model Health Operational KPIs Interoperability Source Data Facility Readiness System Summary Profile Ward Decision Migori County wa"
+    },
+    {
+      "label": "mobile-history",
+      "url": "http://localhost:3000/wards/1?returnTo=%2Fwards%3Fscope%3DMigori%26sort%3Drisk_desc",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "heading": "Ward Decision",
+      "selectedTab": "History",
+      "tabs": [
+        {
+          "label": "Situation",
+          "selected": false
+        },
+        {
+          "label": "Response",
+          "selected": false
+        },
+        {
+          "label": "Evidence",
+          "selected": false
+        },
+        {
+          "label": "History",
+          "selected": true
+        }
+      ],
+      "mapPathCount": 0,
+      "primaryActionVisibleWithoutScrolling": true,
+      "horizontalOverflow": false,
+      "overflowingElements": [
+        {
+          "tag": "nav",
+          "className": "grid content-start gap-1.5 max-[960px]:flex max-[960px]:w-max max-[960px]:gap-2",
+          "text": "Early Warning & ActionWard IntelligenceAlertsAction QueueMessage GovernanceModel",
+          "parentText": "Early Warning & ActionWard IntelligenceAlertsAction QueueMessage GovernanceModel HealthOperational KPIsInteroperabilityS",
+          "parentClassName": "col-start-1 row-start-2 min-h-0 overflow-y-auto overscroll-contain pb-44 pr-1 pt-5 [scrollbar-color:color-mix(in_srgb,var(--dashboard-sidebar-border)_82%,transparent)_transparent] [scrollbar-width:thin] max-[960px]:w-full max-[960px]:min-w-0 max-[960px]:overflow-x-auto max-[960px]:overflow-y-hidden max-[960px]:pb-1 max-[960px]:pr-0 max-[960px]:pt-0",
+          "right": 1785
+        },
+        {
+          "tag": "a",
+          "className": "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition max-[960px]:shrink-0 max-[960px]:rounded-full max-[960px]:px-3 max-[960px]:py-2 max-[960px]:text-xs text-[var(--dashboard-sidebar-text)] hover:bg-[var(--dashboard-nav-hover)] hover:text-[var(--dashboard-sidebar-title)]",
+          "text": "Alerts",
+          "parentText": "Early Warning & ActionWard IntelligenceAlertsAction QueueMessage GovernanceModel HealthOperational KPIsInteroperabilityS",
+          "parentClassName": "grid content-start gap-1.5 max-[960px]:flex max-[960px]:w-max max-[960px]:gap-2",
+          "right": 457
+        },
+        {
+          "tag": "svg",
+          "className": "lucide lucide-bell size-4 shrink-0",
+          "text": "",
+          "parentText": "Alerts",
+          "parentClassName": "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition max-[960px]:shrink-0 max-[960px]:rounded-full max-[960px]:px-3 max-[960px]:py-2 max-[960px]:text-xs text-[var(--dashboard-sidebar-text)] hover:bg-[var(--dashboard-nav-hover)] hover:text-[var(--dashboard-sidebar-title)]",
+          "right": 400
+        },
+        {
+          "tag": "path",
+          "className": "",
+          "text": "",
+          "parentText": "",
+          "parentClassName": "lucide lucide-bell size-4 shrink-0",
+          "right": 398
+        }
+      ],
+      "blankLargeSections": 0,
+      "brokenTextPresent": false,
+      "loadingTextPresent": false,
+      "visibleTextSample": "Migori County CLIMATE HEALTH INTELLIGENCE SYSTEM Early Warning & Action Ward Intelligence Alerts Action Queue Message Governance Model Health Operational KPIs Interoperability Source Data Facility Readiness System Summary Profile Ward Decision Migori County wa"
+    },
+    {
+      "label": "mobile-situation",
+      "url": "http://localhost:3000/wards/1?returnTo=%2Fwards%3Fscope%3DMigori%26sort%3Drisk_desc",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "heading": "Ward Decision",
+      "selectedTab": "Situation",
+      "tabs": [
+        {
+          "label": "Situation",
+          "selected": true
+        },
+        {
+          "label": "Response",
+          "selected": false
+        },
+        {
+          "label": "Evidence",
+          "selected": false
+        },
+        {
+          "label": "History",
+          "selected": false
+        }
+      ],
+      "mapPathCount": 2,
+      "primaryActionVisibleWithoutScrolling": true,
+      "horizontalOverflow": false,
+      "overflowingElements": [
+        {
+          "tag": "nav",
+          "className": "grid content-start gap-1.5 max-[960px]:flex max-[960px]:w-max max-[960px]:gap-2",
+          "text": "Early Warning & ActionWard IntelligenceAlertsAction QueueMessage GovernanceModel",
+          "parentText": "Early Warning & ActionWard IntelligenceAlertsAction QueueMessage GovernanceModel HealthOperational KPIsInteroperabilityS",
+          "parentClassName": "col-start-1 row-start-2 min-h-0 overflow-y-auto overscroll-contain pb-44 pr-1 pt-5 [scrollbar-color:color-mix(in_srgb,var(--dashboard-sidebar-border)_82%,transparent)_transparent] [scrollbar-width:thin] max-[960px]:w-full max-[960px]:min-w-0 max-[960px]:overflow-x-auto max-[960px]:overflow-y-hidden max-[960px]:pb-1 max-[960px]:pr-0 max-[960px]:pt-0",
+          "right": 1785
+        },
+        {
+          "tag": "a",
+          "className": "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition max-[960px]:shrink-0 max-[960px]:rounded-full max-[960px]:px-3 max-[960px]:py-2 max-[960px]:text-xs text-[var(--dashboard-sidebar-text)] hover:bg-[var(--dashboard-nav-hover)] hover:text-[var(--dashboard-sidebar-title)]",
+          "text": "Alerts",
+          "parentText": "Early Warning & ActionWard IntelligenceAlertsAction QueueMessage GovernanceModel HealthOperational KPIsInteroperabilityS",
+          "parentClassName": "grid content-start gap-1.5 max-[960px]:flex max-[960px]:w-max max-[960px]:gap-2",
+          "right": 457
+        },
+        {
+          "tag": "svg",
+          "className": "lucide lucide-bell size-4 shrink-0",
+          "text": "",
+          "parentText": "Alerts",
+          "parentClassName": "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition max-[960px]:shrink-0 max-[960px]:rounded-full max-[960px]:px-3 max-[960px]:py-2 max-[960px]:text-xs text-[var(--dashboard-sidebar-text)] hover:bg-[var(--dashboard-nav-hover)] hover:text-[var(--dashboard-sidebar-title)]",
+          "right": 400
+        },
+        {
+          "tag": "path",
+          "className": "",
+          "text": "",
+          "parentText": "",
+          "parentClassName": "lucide lucide-bell size-4 shrink-0",
+          "right": 398
+        }
+      ],
+      "blankLargeSections": 0,
+      "brokenTextPresent": false,
+      "loadingTextPresent": false,
+      "visibleTextSample": "Migori County CLIMATE HEALTH INTELLIGENCE SYSTEM Early Warning & Action Ward Intelligence Alerts Action Queue Message Governance Model Health Operational KPIs Interoperability Source Data Facility Readiness System Summary Profile Ward Decision Migori County wa"
+    }
+  ]
+}

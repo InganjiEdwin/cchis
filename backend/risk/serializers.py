@@ -404,7 +404,9 @@ class SourceDataFeedModeUpdateSerializer(PiiSafeInputSerializerMixin, serializer
         return attrs
 
 
-class SourceDataConnectorRefreshSerializer(serializers.Serializer):
+class SourceDataConnectorRefreshSerializer(PiiSafeInputSerializerMixin, serializers.Serializer):
+    pii_safe_mapping_fields = ("options",)
+
     force = serializers.BooleanField(required=False, default=False)
     options = serializers.DictField(required=False, default=dict)
 

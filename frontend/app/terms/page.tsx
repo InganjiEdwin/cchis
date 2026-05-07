@@ -44,7 +44,7 @@ export default function TermsPage() {
               <span className="text-sm font-medium text-panel-muted">Terms of Service</span>
             </div>
             <h1 className="text-5xl font-semibold tracking-tight text-panel-strong">Terms of Service</h1>
-            <p className="text-sm text-panel-muted">Last updated: April 2026</p>
+            <p className="text-sm text-panel-muted">Last updated: May 2026</p>
           </div>
 
           <Card className="space-y-8 p-6 md:p-8">
@@ -77,6 +77,9 @@ export default function TermsPage() {
                     <p className="mt-2 text-sm leading-6 text-panel-copy">{card.copy}</p>
                   </Card>
                 ))}
+              </div>
+              <div className="rounded-2xl border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 py-3 text-sm leading-6 text-panel-copy">
+                You are responsible for maintaining the security of your account. CHIS uses essential sign-in and security cookies to provide authorized access. Continued dashboard use requires accepting the current Terms and Privacy Policy when prompted.
               </div>
             </article>
 

@@ -1,0 +1,202 @@
+{
+  "artifact": {
+    "content_matches_phase1": true,
+    "exact_hash_matches_phase1": false,
+    "id": 1,
+    "normalised_text_sha256": "374b00dec8ec673155f894f031b6036a57f1e13d442c6ce3d592300d22f8347c",
+    "original_filename": "worldpop_knbs_population_20260505195432.csv",
+    "phase1_csv_sha256": "858d74c593232d5040a24f30e517434236aa6e2e30125c85dac305bc71753b87",
+    "phase1_normalised_text_sha256": "374b00dec8ec673155f894f031b6036a57f1e13d442c6ce3d592300d22f8347c",
+    "sha256": "374b00dec8ec673155f894f031b6036a57f1e13d442c6ce3d592300d22f8347c",
+    "size_bytes": 19306,
+    "storage_path": "/var/lib/cchis/source_uploads/d41e0b40-45ee-457e-889a-cf5bebd101b8/worldpop_knbs_population_20260505195432.csv"
+  },
+  "connector_definition": {
+    "canonical_csv_url_setting": "SOURCE_DATA_WORLDPOP_KNBS_CANONICAL_CSV_URL",
+    "connector_key": "worldpop_knbs_population",
+    "default_release_version_setting": "SOURCE_DATA_WORLDPOP_KNBS_RELEASE_VERSION",
+    "default_source_ref_setting": "SOURCE_DATA_WORLDPOP_KNBS_SOURCE_URL",
+    "feed_mode": "api",
+    "fixture_filenames": [
+      "migori_worldpop_2026_population.csv"
+    ],
+    "label": "WorldPop/KNBS processed population refresh",
+    "notes": "Processed WorldPop release reconciled against KNBS and aggregated into CCHIS ward geometry; CSV fallback remains available for corrections.",
+    "required_settings": [
+      "SOURCE_DATA_WORLDPOP_KNBS_SOURCE_URL",
+      "SOURCE_DATA_WORLDPOP_KNBS_RELEASE_VERSION"
+    ],
+    "source_name": "WorldPop R2025A constrained 100m Migori ward aggregate",
+    "source_ref_prefix": "worldpop-knbs",
+    "target_feed_key": "gridded_population"
+  },
+  "connector_run": {
+    "completed_at": "2026-05-05T19:54:32.588738+00:00",
+    "connector_key": "worldpop_knbs_population",
+    "error_summary": "",
+    "feed_mode": "api",
+    "fetched_record_count": 40,
+    "id": 1,
+    "safe_metadata": {
+      "canonical_csv_url_configured": false,
+      "credential_values_exposed": false,
+      "fixture_configured": true,
+      "fixture_filename": "migori_worldpop_2026_population.csv",
+      "required_settings_present": {
+        "SOURCE_DATA_WORLDPOP_KNBS_RELEASE_VERSION": true,
+        "SOURCE_DATA_WORLDPOP_KNBS_SOURCE_URL": true
+      },
+      "transport": "fixture_csv",
+      "validated_upload_public_id": "d41e0b40-45ee-457e-889a-cf5bebd101b8",
+      "validation_status": "passed"
+    },
+    "source_name": "WorldPop R2025A constrained 100m Migori ward aggregate",
+    "source_ref": "https://data.worldpop.org/GIS/Population/Global_2015_2030/R2025A/2026/KEN/v1/100m/constrained/ken_pop_2026_CN_100m_R2025A_v1.tif",
+    "started_at": "2026-05-05T19:54:32.340740+00:00",
+    "status": "success",
+    "target_feed_key": "gridded_population"
+  },
+  "connector_state_for_feed": {
+    "connector_status": {
+      "configured": false,
+      "connector_key": "worldpop_knbs_population",
+      "credential_values_exposed": false,
+      "enabled": true,
+      "label": "WorldPop/KNBS processed population refresh",
+      "last_run_at": "2026-05-05T19:54:32.340740+00:00",
+      "last_run_status": "success",
+      "last_successful_fetch_at": "2026-05-05T19:54:32.588738+00:00",
+      "notes": "Processed WorldPop release reconciled against KNBS and aggregated into CCHIS ward geometry; CSV fallback remains available for corrections.",
+      "required_settings": [
+        "SOURCE_DATA_WORLDPOP_KNBS_SOURCE_URL",
+        "SOURCE_DATA_WORLDPOP_KNBS_RELEASE_VERSION"
+      ],
+      "status": "success"
+    },
+    "csv_upload_enabled": true,
+    "feed_mode": "csv"
+  },
+  "generated_at": "2026-05-05T21:34:53.462510+00:00",
+  "passed": true,
+  "phase": "migori_knbs_worldpop_phase_6_source_data_connector",
+  "phase1_summary_path": "/app/risk/data/source_feeds/migori_worldpop_2026_population_summary.json",
+  "phase6_gates": {
+    "artifact_content_matches_phase1": true,
+    "connector_fetched_count_matches_upload_row_count": true,
+    "connector_fetched_expected_rows": true,
+    "connector_run_success": true,
+    "connector_run_target_feed_expected": true,
+    "connector_safe_metadata_no_credentials": true,
+    "connector_source_name_matches_definition": true,
+    "connector_source_ref_matches_phase1": true,
+    "connector_targets_gridded_population": true,
+    "csv_fallback_remains_available": true,
+    "freshness_gridded_population_csv_backed": true,
+    "freshness_gridded_population_has_records": true,
+    "freshness_gridded_population_not_demo_backed": true,
+    "freshness_population_baseline_missing_until_knbs_import": true,
+    "freshness_population_baseline_not_demo_backed": true,
+    "no_validation_errors": true,
+    "overview_recent_upload_exposes_connector_batch": true,
+    "phase1_summary_passed": true,
+    "upload_accepted_count_expected": true,
+    "upload_batch_linked": true,
+    "upload_connector_metadata_linked": true,
+    "upload_feed_key_expected": true,
+    "upload_rejected_count_zero": true,
+    "upload_release_version_matches": true,
+    "upload_row_count_expected": true,
+    "upload_source_name_matches_definition": true,
+    "upload_source_ref_matches_phase1": true,
+    "upload_source_timestamp_matches_phase1": true,
+    "upload_source_type_expected": true,
+    "upload_validation_passed": true
+  },
+  "source_data_freshness": {
+    "gridded_population": {
+      "current_gap_days": 247,
+      "domain": "population_exposure",
+      "expected_cadence": "quarterly_or_source_change",
+      "feed_key": "gridded_population",
+      "key": "feed:gridded_population",
+      "label": "Gridded population",
+      "last_import_timestamp": "2026-05-05T19:26:28.255813+00:00",
+      "last_source_timestamp": "2025-08-31T21:00:00+00:00",
+      "recommended_action": "Upload or refresh Gridded population; the current source is stale.",
+      "record_count": 40,
+      "source_path": "csv_upload",
+      "source_type": "gridded_population",
+      "status": "stale",
+      "truth_state": "csv_backed"
+    },
+    "population_baseline": {
+      "current_gap_days": null,
+      "domain": "population",
+      "expected_cadence": "annual_or_source_change",
+      "feed_key": "population_baseline",
+      "key": "feed:population_baseline",
+      "label": "Population baseline",
+      "last_import_timestamp": null,
+      "last_source_timestamp": null,
+      "recommended_action": "Download the template and upload Population baseline.",
+      "record_count": 0,
+      "source_path": "csv_upload",
+      "source_type": "population_baseline",
+      "status": "missing",
+      "truth_state": "missing"
+    },
+    "truth_state_counts": {
+      "csv_backed": 1,
+      "derived": 2,
+      "fallback": 2,
+      "missing": 11
+    }
+  },
+  "source_data_overview": {
+    "recent_connector_upload_visible": true,
+    "recent_uploads": [
+      {
+        "accepted_count": 40,
+        "confirmed_at": null,
+        "confirmed_by_username": null,
+        "created_at": "2026-05-05T19:54:32.482255+00:00",
+        "created_by_username": null,
+        "domain": "population_exposure",
+        "feed_key": "gridded_population",
+        "import_status": "not_started",
+        "public_id": "d41e0b40-45ee-457e-889a-cf5bebd101b8",
+        "rejected_count": 0,
+        "row_count": 40,
+        "source_name": "WorldPop R2025A constrained 100m Migori ward aggregate",
+        "source_type": "gridded_population",
+        "status": "ready_for_confirmation",
+        "validation_status": "passed",
+        "warning_count": 0
+      }
+    ]
+  },
+  "upload_batch": {
+    "accepted_count": 40,
+    "feed_key": "gridded_population",
+    "id": 1,
+    "public_id": "d41e0b40-45ee-457e-889a-cf5bebd101b8",
+    "rejected_count": 0,
+    "release_version": "WorldPop G2_CN_POP_R25A_100m KEN 2026 v1",
+    "row_count": 40,
+    "source_data_connector_metadata": {
+      "connector_key": "worldpop_knbs_population",
+      "connector_run_id": 1,
+      "csv_fallback_available": true,
+      "feed_mode": "api"
+    },
+    "source_name": "WorldPop R2025A constrained 100m Migori ward aggregate",
+    "source_ref": "https://data.worldpop.org/GIS/Population/Global_2015_2030/R2025A/2026/KEN/v1/100m/constrained/ken_pop_2026_CN_100m_R2025A_v1.tif",
+    "source_timestamp": "2025-09-01T00:00:00+00:00",
+    "source_type": "gridded_population",
+    "status": "ready_for_confirmation",
+    "validation_error_count": 0,
+    "validation_status": "passed",
+    "validation_warning_count": 0,
+    "warning_count": 0
+  }
+}

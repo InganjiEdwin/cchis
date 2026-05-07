@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -22,6 +22,11 @@ vi.mock("next/link", () => ({
     React.createElement("a", { href, ...props }, children),
 }));
 
+vi.mock("next/script", () => ({
+  default: ({ src }: { src: string }) =>
+    React.createElement("script", { src, "data-testid": "next-script" }),
+}));
+
 vi.mock("@/components/auth-provider", () => ({
   useAuth: () => mockUseAuth(),
 }));
@@ -35,6 +40,7 @@ vi.mock("@/lib/auth", async () => {
 });
 
 vi.mock("@/lib/navigation", () => ({
+  buildPolicyReviewRoute: (returnTo: string) => `/policy-review?returnTo=${encodeURIComponent(returnTo)}`,
   getDefaultRoute: (...args: unknown[]) => mockGetDefaultRoute(...args),
 }));
 
@@ -92,6 +98,25 @@ describe("LoginPage", () => {
     expect(mockReplace).toHaveBeenCalledWith("/overview");
   });
 
+  it("discloses essential cookies and links to current legal pages", () => {
+    render(React.createElement(LoginPage));
+
+    const disclosure = screen.getByLabelText("Cookie and policy disclosure");
+
+    expect(within(disclosure).getByText(/CHIS uses essential cookies for sign-in and security/i)).toBeInTheDocument();
+    expect(within(disclosure).getByRole("link", { name: "Cookie notice" })).toHaveAttribute("href", "/privacy#cookies");
+    expect(within(disclosure).getByRole("link", { name: "Privacy Policy" })).toHaveAttribute("href", "/privacy");
+    expect(within(disclosure).getByRole("link", { name: "Terms of Service" })).toHaveAttribute("href", "/terms");
+  });
+
+  it("does not load the login Turnstile script before the challenge is required", () => {
+    vi.stubEnv("NEXT_PUBLIC_TURNSTILE_SITE_KEY", "site-key");
+
+    render(React.createElement(LoginPage));
+
+    expect(document.querySelector('script[src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"]')).toBeNull();
+  });
+
   it("routes CHV users to the offline field surface", async () => {
     const user = userEvent.setup();
 
@@ -118,6 +143,46 @@ describe("LoginPage", () => {
       expect(mockGetDefaultRoute).toHaveBeenCalledWith("CHV");
     });
     expect(mockReplace).toHaveBeenCalledWith("/chv");
+  });
+
+  it("routes authenticated users with missing policy acceptance to policy review", async () => {
+    const user = userEvent.setup();
+
+    mockLogin.mockResolvedValue({
+      id: 1,
+      username: "analyst_demo",
+      email: "analyst@example.com",
+      full_name: "Demo Analyst",
+      phone_number: null,
+      role: "ANALYST",
+      ward: 3,
+      ward_name: "Macalder Kanyarwanda",
+      is_active: true,
+      policy_acceptance: {
+        required: true,
+        is_current: false,
+        terms_version: "terms-2026-05",
+        privacy_version: "privacy-2026-05",
+        cookie_notice_version: "cookies-2026-05",
+        accepted_terms_version: null,
+        accepted_privacy_version: null,
+        accepted_cookie_notice_version: null,
+        missing_documents: ["TERMS", "PRIVACY", "COOKIE_NOTICE"],
+        terms_url: "/terms",
+        privacy_url: "/privacy",
+        cookie_notice_url: "/privacy#cookies",
+      },
+    });
+
+    render(React.createElement(LoginPage));
+
+    await user.type(screen.getByLabelText("Username"), "analyst_demo");
+    await user.type(screen.getByLabelText("Password"), "ChangeMe123!");
+    await user.click(screen.getByRole("button", { name: /access system/i }));
+
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith("/policy-review?returnTo=%2Foverview");
+    });
   });
 
   it("routes to 2fa verification when the backend requires a second step", async () => {
@@ -211,6 +276,7 @@ describe("LoginPage", () => {
 
     expect(await screen.findByText("Complete the verification challenge to continue.")).toBeInTheDocument();
     expect(screen.getByText("Additional verification is required after repeated sign-in failures.")).toBeInTheDocument();
+    expect(document.querySelector('script[src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"]')).toBeInTheDocument();
     expect(mockReplace).not.toHaveBeenCalled();
   });
 });

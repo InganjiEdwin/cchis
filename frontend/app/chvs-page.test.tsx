@@ -494,27 +494,30 @@ describe("ChvsPage", () => {
     render(React.createElement(ChvsPage));
 
     expect(mockUseChvOperationsQuery).toHaveBeenCalledWith({ enabled: true });
+    expect(screen.getByText(/CHV Coverage & Field Readiness/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "What should be reviewed first?" })).toBeInTheDocument();
     expect(screen.getByText("Coverage gaps")).toBeInTheDocument();
-    expect(screen.getByText("Active today")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Operational Insights" })).toBeInTheDocument();
+    expect(screen.getByText("Active CHVs")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Recommended Next Steps" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "CHV Directory" })).toBeInTheDocument();
     expect(screen.queryByText("Alert delivery rate")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Planning Summary" })).not.toBeInTheDocument();
-    expect(screen.getByText(/Gap = 0 active CHVs/i)).toBeInTheDocument();
+    expect(screen.getByText(/Gap means no active CHV coverage/i)).toBeInTheDocument();
   }, 20000);
 
   it("renders offline sync monitoring metrics and backend decisions", () => {
     render(React.createElement(ChvsPage));
 
-    expect(screen.getByRole("heading", { name: "Offline Sync Health" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Field Sync Health" })).toBeInTheDocument();
     expect(screen.getByText("Active devices")).toBeInTheDocument();
     expect(screen.getByText("Successful syncs (24h)")).toBeInTheDocument();
-    expect(screen.getByText("Pre-validation rejects")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Offline Sync Audit" })).toBeInTheDocument();
+    expect(screen.getByText("Rejected before upload")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Sync Issues & Rejections" })).toBeInTheDocument();
     expect(screen.getByText("Repeated rejected uploads")).toBeInTheDocument();
     expect(screen.getByText("Rejected before sync persistence")).toBeInTheDocument();
     expect(screen.getByText("Accepted prevention_visit and linked it to preparedness_action.")).toBeInTheDocument();
     expect(screen.getByText("Latest rejection: Preparedness action not found.")).toBeInTheDocument();
-    expect(screen.getByText("Latest pre-validation rejection: Rejected before sync persistence during pii_minimization.")).toBeInTheDocument();
+    expect(screen.getByText("Latest upload rejection: Rejected before sync persistence during pii_minimization.")).toBeInTheDocument();
   }, 20000);
 
   it("lets map selection drive the selected ward actions and registry view", () => {
@@ -522,7 +525,7 @@ describe("ChvsPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Select Got Kachola" }));
 
-    expect(screen.getByText("Registry filtered to Got Kachola from the ward coverage view.")).toBeInTheDocument();
+    expect(screen.getByText("Directory filtered to Got Kachola from the ward coverage view.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Request coverage" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Assign CHV" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "View related alerts" })).toHaveAttribute("href", "/alerts?ward_id=13");

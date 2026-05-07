@@ -41,8 +41,11 @@ from .models import (
     FacilityForecast,
     FacilityForecastRun,
     FacilityReadinessEscalation,
+    FacilityReadinessIngestionRun,
     FacilityReadinessReview,
     FacilityReadinessReviewEvent,
+    FacilityReadinessSnapshot,
+    FacilityReadinessSource,
     FacilityReadinessUpdateRequest,
     FeatureDataset,
     FeatureDatasetRow,
@@ -79,6 +82,12 @@ from .models import (
     RiskScore,
     SensitiveExportDownloadAudit,
     SensitiveExportRequest,
+    SourceDataConnectorRun,
+    SourceDataFeedModeOverride,
+    SourceDataUploadArtifact,
+    SourceDataUploadBatch,
+    SourceDataUploadEvent,
+    SourceDataValidationIssue,
     SurveillanceIngestionRun,
     SurveillanceLabelWindow,
     SurveillanceRecord,
@@ -486,6 +495,162 @@ class InteroperabilityRunErrorAdmin(admin.ModelAdmin):
     list_filter = ("severity", "error_code", "created_at")
     readonly_fields = ("public_id", "created_at")
     autocomplete_fields = ("run", "item")
+
+
+class SourceDataUploadArtifactInline(admin.TabularInline):
+    model = SourceDataUploadArtifact
+    extra = 0
+    readonly_fields = (
+        "original_filename",
+        "content_type",
+        "size_bytes",
+        "sha256",
+        "storage_backend",
+        "storage_path",
+        "retention_expires_at",
+        "redaction_state",
+        "created_at",
+    )
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+class SourceDataValidationIssueInline(admin.TabularInline):
+    model = SourceDataValidationIssue
+    extra = 0
+    readonly_fields = ("row_number", "severity", "code", "column_name", "message", "safe_context", "created_at")
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+class SourceDataUploadEventInline(admin.TabularInline):
+    model = SourceDataUploadEvent
+    extra = 0
+    readonly_fields = ("actor", "event_type", "event_at", "ip_address_hash", "user_agent_hash", "metadata")
+    autocomplete_fields = ("actor",)
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(SourceDataUploadBatch)
+class SourceDataUploadBatchAdmin(admin.ModelAdmin):
+    list_display = (
+        "public_id",
+        "feed_key",
+        "source_name",
+        "status",
+        "validation_status",
+        "import_status",
+        "approval_status",
+        "created_by",
+        "created_at",
+    )
+    search_fields = ("public_id", "feed_key", "source_name", "source_ref", "domain_ingestion_run_type")
+    list_filter = (
+        "feed_key",
+        "domain",
+        "source_type",
+        "status",
+        "validation_status",
+        "import_status",
+        "approval_status",
+        "created_at",
+    )
+    autocomplete_fields = (
+        "duplicate_of",
+        "replaces_upload",
+        "approval_requested_by",
+        "approved_by",
+        "created_by",
+        "confirmed_by",
+        "surveillance_ingestion_run",
+        "population_exposure_ingestion_run",
+    )
+    readonly_fields = ("public_id", "created_at", "updated_at")
+    inlines = (SourceDataUploadArtifactInline, SourceDataValidationIssueInline, SourceDataUploadEventInline)
+
+
+@admin.register(SourceDataUploadArtifact)
+class SourceDataUploadArtifactAdmin(admin.ModelAdmin):
+    list_display = ("original_filename", "upload_batch", "size_bytes", "storage_backend", "redaction_state", "created_at")
+    search_fields = ("original_filename", "sha256", "storage_path", "upload_batch__public_id")
+    list_filter = ("storage_backend", "redaction_state", "created_at", "retention_expires_at")
+    autocomplete_fields = ("upload_batch",)
+    readonly_fields = ("created_at",)
+
+
+@admin.register(SourceDataValidationIssue)
+class SourceDataValidationIssueAdmin(admin.ModelAdmin):
+    list_display = ("upload_batch", "severity", "code", "row_number", "column_name", "created_at")
+    search_fields = ("upload_batch__public_id", "code", "column_name", "message")
+    list_filter = ("severity", "code", "created_at")
+    autocomplete_fields = ("upload_batch",)
+    readonly_fields = ("created_at",)
+
+
+@admin.register(SourceDataUploadEvent)
+class SourceDataUploadEventAdmin(admin.ModelAdmin):
+    list_display = ("upload_batch", "event_type", "actor", "event_at")
+    search_fields = ("upload_batch__public_id", "event_type", "actor__username")
+    list_filter = ("event_type", "event_at")
+    autocomplete_fields = ("upload_batch", "actor")
+    readonly_fields = ("event_at", "ip_address_hash", "user_agent_hash")
+
+
+@admin.register(SourceDataConnectorRun)
+class SourceDataConnectorRunAdmin(admin.ModelAdmin):
+    list_display = ("connector_key", "target_feed_key", "status", "fetched_record_count", "requested_by", "started_at")
+    search_fields = ("connector_key", "target_feed_key", "source_name", "source_ref", "upload_batch__public_id")
+    list_filter = ("connector_key", "target_feed_key", "status", "feed_mode", "started_at")
+    autocomplete_fields = ("upload_batch", "requested_by")
+    readonly_fields = ("started_at", "completed_at")
+
+
+@admin.register(SourceDataFeedModeOverride)
+class SourceDataFeedModeOverrideAdmin(admin.ModelAdmin):
+    list_display = ("feed_key", "feed_mode", "csv_upload_enabled", "authoritative_connector_key", "updated_by", "updated_at")
+    search_fields = ("feed_key", "authoritative_connector_key", "reason")
+    list_filter = ("feed_mode", "csv_upload_enabled", "created_at", "updated_at")
+    autocomplete_fields = ("updated_by",)
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(FacilityReadinessSource)
+class FacilityReadinessSourceAdmin(admin.ModelAdmin):
+    list_display = ("source_name", "source_type", "source_timestamp", "reporting_period_start", "reporting_period_end", "is_active")
+    search_fields = ("source_name", "source_ref", "operator_note")
+    list_filter = ("source_type", "is_active", "reporting_period_start", "created_at")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(FacilityReadinessIngestionRun)
+class FacilityReadinessIngestionRunAdmin(admin.ModelAdmin):
+    list_display = ("source_name", "status", "source_type", "records_seen", "records_loaded", "records_rejected", "started_at")
+    search_fields = ("source_name", "source_ref", "input_ref", "error_summary")
+    list_filter = ("status", "source_type", "execution_mode", "started_at")
+    autocomplete_fields = ("source",)
+    readonly_fields = ("started_at", "completed_at")
+
+
+@admin.register(FacilityReadinessSnapshot)
+class FacilityReadinessSnapshotAdmin(admin.ModelAdmin):
+    list_display = ("facility", "ward", "reported_at", "readiness_state", "freshness_state", "source_kind")
+    search_fields = ("facility__name", "facility__facility_code", "ward__name", "ward__ward_code", "source_name", "source_ref")
+    list_filter = ("readiness_state", "freshness_state", "source_kind", "reported_at")
+    autocomplete_fields = ("facility", "ward", "ingestion_run", "source")
+    readonly_fields = ("created_at",)
 
 
 class FacilityReadinessReviewEventInline(admin.TabularInline):

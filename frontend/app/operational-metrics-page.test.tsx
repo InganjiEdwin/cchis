@@ -160,13 +160,35 @@ describe("OperationalMetricsPage", () => {
     });
   });
 
-  it("surfaces interoperability coverage as an operational KPI contract panel", () => {
+  it("shows one calm no-data message instead of a wall of missing metric cards", () => {
     render(<OperationalMetricsPage />);
 
-    expect(screen.getByText("Interoperability Contracts")).toBeInTheDocument();
+    expect(screen.getByText(/Operational Performance/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "No reporting data is available for this period yet." })).toBeInTheDocument();
+    expect(screen.getByText(/measures are configured, but no operational results have been recorded/i)).toBeInTheDocument();
+    expect(screen.queryByText("No value")).not.toBeInTheDocument();
+    expect(screen.queryByText("Missing")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Performance At A Glance" })).not.toBeInTheDocument();
+  });
+
+  it("surfaces data-sharing coverage after reporting data exists", () => {
+    const dashboard = buildOperationalDashboard();
+    dashboard.summary.snapshot_count = 1;
+    dashboard.summary.latest_snapshot_date = "2026-05-04";
+    mockUseOperationalMetricsQuery.mockReturnValue({
+      data: dashboard,
+      isPending: false,
+      isFetching: false,
+      error: null,
+      refetch: mockRefetch,
+    });
+
+    render(<OperationalMetricsPage />);
+
+    expect(screen.getByText("Data Sharing Setup")).toBeInTheDocument();
     expect(screen.getByText("75.0%")).toBeInTheDocument();
-    expect(screen.getByText("Data-element mapping missing for required field")).toBeInTheDocument();
-    expect(screen.getByText(/Aggregate Report Export/)).toBeInTheDocument();
-    expect(screen.getByText("Latest Interoperability Run Not Clean")).toBeInTheDocument();
+    expect(screen.getByText("Required data link is missing")).toBeInTheDocument();
+    expect(screen.getByText(/Report update/)).toBeInTheDocument();
+    expect(screen.getByText("Latest data-sharing update needs review")).toBeInTheDocument();
   });
 });

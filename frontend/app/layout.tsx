@@ -3,6 +3,7 @@ import localFont from "next/font/local";
 
 import "./globals.css";
 import { AuthProvider } from "@/components/auth-provider";
+import { CookieNotice } from "@/components/cookie-notice";
 import { QueryProvider } from "@/components/query-provider";
 import { fetchServerSession, sanitizeSessionResponse } from "@/lib/server-session";
 
@@ -95,6 +96,10 @@ export const metadata: Metadata = {
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const initialSession = sanitizeSessionResponse(await fetchServerSession());
+  const cookieNoticeVersion = [
+    process.env.NEXT_PUBLIC_COOKIE_NOTICE_VERSION,
+    process.env.CURRENT_COOKIE_NOTICE_VERSION,
+  ].map((version) => version?.trim()).find(Boolean) ?? "cookies-2026-05";
 
   return (
     <html lang="en" suppressHydrationWarning>
@@ -118,7 +123,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           }}
         />
         <QueryProvider>
-          <AuthProvider initialSession={initialSession}>{children}</AuthProvider>
+          <AuthProvider initialSession={initialSession}>
+            {children}
+            <CookieNotice version={cookieNoticeVersion} />
+          </AuthProvider>
         </QueryProvider>
       </body>
     </html>

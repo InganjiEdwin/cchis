@@ -3,7 +3,7 @@ import "server-only";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
-import { getApiBaseUrl, type SessionResponse } from "@/lib/auth";
+import { getApiBaseUrl, requiresPolicyAcceptance, type SessionResponse } from "@/lib/auth";
 
 type ServerApiRequestInit = Omit<RequestInit, "headers"> & {
   cookieHeader?: string;
@@ -67,8 +67,7 @@ async function resolveCookieHeader(explicitCookieHeader?: string) {
   return cookieStore.toString();
 }
 
-export async function fetchBackendResponse(path: string, init: ServerApiRequestInit = {}): Promise<Response> {
-  const cookieHeader = await resolveCookieHeader(init.cookieHeader);
+function buildBackendHeaders(init: ServerApiRequestInit, cookieHeader: string) {
   const headers = new Headers(init.headers);
 
   if (!headers.has("Content-Type") && init.body && !isFormDataBody(init.body)) {
@@ -78,6 +77,13 @@ export async function fetchBackendResponse(path: string, init: ServerApiRequestI
   if (cookieHeader && !headers.has("Cookie")) {
     headers.set("Cookie", cookieHeader);
   }
+
+  return headers;
+}
+
+export async function fetchBackendResponse(path: string, init: ServerApiRequestInit = {}): Promise<Response> {
+  const cookieHeader = await resolveCookieHeader(init.cookieHeader);
+  const headers = buildBackendHeaders(init, cookieHeader);
 
   return fetch(`${getApiBaseUrl()}${path}`, {
     ...init,
@@ -114,7 +120,26 @@ async function fetchBackendSession(cookieHeader: string): Promise<SessionRespons
   }
 }
 
-export async function fetchBackendJson<T>(path: string, init: ServerApiRequestInit = {}): Promise<T> {
+function isPolicyAcceptanceBypassPath(path: string, method: string) {
+  const normalizedMethod = method.toUpperCase();
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const exactAllowedPaths = new Set([
+    "/auth/session/",
+    "/auth/policy-acceptance/",
+    "/auth/logout/",
+    "/auth/verify-2fa/",
+    "/auth/2fa/setup/",
+    "/auth/2fa/setup/confirm/",
+  ]);
+
+  if (exactAllowedPaths.has(normalizedPath)) {
+    return true;
+  }
+
+  return normalizedMethod === "GET" && normalizedPath === "/auth/me/";
+}
+
+export async function fetchBackendAuthorizedResponse(path: string, init: ServerApiRequestInit = {}): Promise<Response> {
   const cookieHeader = await resolveCookieHeader(init.cookieHeader);
   const session = await fetchBackendSession(cookieHeader);
 
@@ -122,19 +147,26 @@ export async function fetchBackendJson<T>(path: string, init: ServerApiRequestIn
     throw new ServerApiError(401, "Authentication required.");
   }
 
-  const headers = new Headers(init.headers);
-
-  if (!headers.has("Content-Type") && init.body && !isFormDataBody(init.body)) {
-    headers.set("Content-Type", "application/json");
+  if (
+    session.user &&
+    requiresPolicyAcceptance(session.user) &&
+    !isPolicyAcceptanceBypassPath(path, init.method ?? "GET")
+  ) {
+    throw new ServerApiError(403, "Policy acceptance is required before using this API.");
   }
 
+  const headers = buildBackendHeaders(init, cookieHeader);
   headers.set("Authorization", `Bearer ${session.access}`);
 
-  const response = await fetch(`${getApiBaseUrl()}${path}`, {
+  return fetch(`${getApiBaseUrl()}${path}`, {
     ...init,
     headers,
     cache: "no-store",
   });
+}
+
+export async function fetchBackendJson<T>(path: string, init: ServerApiRequestInit = {}): Promise<T> {
+  const response = await fetchBackendAuthorizedResponse(path, init);
 
   if (!response.ok) {
     let detail = "Unable to load server-side dashboard data.";

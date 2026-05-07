@@ -228,7 +228,7 @@ CORS_ALLOWED_ORIGINS = [
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "accounts.authentication.PolicyAwareJWTAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
@@ -360,6 +360,17 @@ AUTH_REFRESH_COOKIE_SECURE = config(
 )
 AUTH_REFRESH_COOKIE_HTTPONLY = config("AUTH_REFRESH_COOKIE_HTTPONLY", cast=bool, default=True)
 AUTH_REFRESH_COOKIE_SAMESITE = config("AUTH_REFRESH_COOKIE_SAMESITE", default="Lax").strip() or "Lax"
+CURRENT_TERMS_VERSION = (
+    config("CURRENT_TERMS_VERSION", default="terms-2026-05").strip() or "terms-2026-05"
+)
+CURRENT_PRIVACY_VERSION = (
+    config("CURRENT_PRIVACY_VERSION", default="privacy-2026-05").strip() or "privacy-2026-05"
+)
+CURRENT_COOKIE_NOTICE_VERSION = (
+    config("CURRENT_COOKIE_NOTICE_VERSION", default="cookies-2026-05").strip()
+    or "cookies-2026-05"
+)
+POLICY_ACCEPTANCE_REQUIRED = config("POLICY_ACCEPTANCE_REQUIRED", cast=bool, default=True)
 PRE_AUTH_TOKEN_LIFETIME_MINUTES = config(
     "PRE_AUTH_TOKEN_LIFETIME_MINUTES",
     cast=int,

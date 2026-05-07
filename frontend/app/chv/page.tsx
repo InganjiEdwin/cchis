@@ -32,7 +32,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import { PublicCard, PublicScreen } from "@/components/ui/public-shell";
-import type { CurrentUser, ThemePreference } from "@/lib/auth";
+import { requiresPolicyAcceptance, type CurrentUser, type ThemePreference } from "@/lib/auth";
 import {
   CHV_LANGUAGE_OPTIONS,
   chvTranslate,
@@ -74,6 +74,7 @@ import {
   type ChvOfflineUploadType,
 } from "@/lib/chv-offline-store";
 import { cn } from "@/lib/cn";
+import { buildPolicyReviewRoute } from "@/lib/navigation";
 import { canUseChvOffline } from "@/lib/roles";
 
 type ChvView = "tasks" | "triage" | "guidance" | "sync" | "profile";
@@ -1487,6 +1488,11 @@ export default function ChvOfflinePage() {
 
     if (!canUseChvOffline(currentUser.role)) {
       router.replace("/unauthorized");
+      return;
+    }
+
+    if (requiresPolicyAcceptance(currentUser)) {
+      router.replace(buildPolicyReviewRoute("/chv"));
     }
   }, [currentUser, isAuthenticated, isHydrating, router]);
 
@@ -1503,7 +1509,12 @@ export default function ChvOfflinePage() {
     );
   }
 
-  if (!isAuthenticated || !currentUser || !canUseChvOffline(currentUser.role)) {
+  if (
+    !isAuthenticated ||
+    !currentUser ||
+    !canUseChvOffline(currentUser.role) ||
+    requiresPolicyAcceptance(currentUser)
+  ) {
     return null;
   }
 

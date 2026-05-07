@@ -7,7 +7,20 @@ from rest_framework.test import APITestCase
 
 from accounts.models import User
 
-from .models import IngestionRun, SourceDataUploadBatch, SurveillanceIngestionRun, SurveillanceSource
+from .models import (
+    ExposureFeatureRecord,
+    IngestionRun,
+    PopulationBaselineRecord,
+    PopulationExposureFreshness,
+    PopulationExposureIngestionRun,
+    PopulationExposureSource,
+    PopulationExposureSourceKind,
+    PopulationExposureTruth,
+    SourceDataUploadBatch,
+    SurveillanceIngestionRun,
+    SurveillanceSource,
+    Ward,
+)
 
 
 class SourceDataPhaseFourFreshnessOverviewTests(APITestCase):
@@ -115,3 +128,85 @@ class SourceDataPhaseFourFreshnessOverviewTests(APITestCase):
         self.assertEqual(weekly["status"], "current")
         self.assertEqual(weekly["truth_state"], "csv_backed")
         self.assertEqual(weekly["source_path"], "csv_upload")
+
+    def test_population_freshness_ignores_retired_seeded_records(self):
+        source_timestamp = timezone.now() - timedelta(days=2)
+        ward = Ward.objects.create(name="Alpha", county="Migori", ward_code="MIG-WARD-001")
+        seeded_source = PopulationExposureSource.objects.create(
+            source_name="seed",
+            source_type=PopulationExposureSource.SOURCE_TYPE_POPULATION_BASELINE,
+            source_timestamp=source_timestamp,
+        )
+        seeded_run = PopulationExposureIngestionRun.objects.create(
+            source=seeded_source,
+            status=PopulationExposureIngestionRun.STATUS_SUCCESS,
+            source_name="seed",
+            source_type=PopulationExposureSource.SOURCE_TYPE_POPULATION_BASELINE,
+            source_timestamp=source_timestamp,
+            completed_at=timezone.now(),
+        )
+        PopulationBaselineRecord.objects.create(
+            ward=ward,
+            ingestion_run=seeded_run,
+            source=seeded_source,
+            recorded_at=source_timestamp,
+            population_total=100,
+            truth_class=PopulationExposureTruth.SEEDED_DEMO,
+            source_name="seed",
+            source_kind=PopulationExposureSourceKind.SEEDED,
+            freshness_state=PopulationExposureFreshness.REPLACED_BY_NEW_RELEASE,
+        )
+        worldpop_source = PopulationExposureSource.objects.create(
+            source_name="WorldPop R2025A constrained 100m Migori ward aggregate",
+            source_type=PopulationExposureSource.SOURCE_TYPE_GRIDDED_POPULATION,
+            source_timestamp=source_timestamp,
+            release_version="WorldPop test",
+            source_ref="worldpop:test",
+        )
+        worldpop_run = PopulationExposureIngestionRun.objects.create(
+            source=worldpop_source,
+            status=PopulationExposureIngestionRun.STATUS_SUCCESS,
+            source_name=worldpop_source.source_name,
+            source_type=PopulationExposureSource.SOURCE_TYPE_GRIDDED_POPULATION,
+            source_timestamp=source_timestamp,
+            release_version="WorldPop test",
+            source_ref="worldpop:test",
+            completed_at=timezone.now(),
+        )
+        PopulationBaselineRecord.objects.create(
+            ward=ward,
+            ingestion_run=worldpop_run,
+            source=worldpop_source,
+            recorded_at=source_timestamp,
+            population_total=1000,
+            truth_class=PopulationExposureTruth.SPATIALLY_AGGREGATED_SOURCE,
+            source_name=worldpop_source.source_name,
+            source_kind=PopulationExposureSourceKind.LIVE,
+            freshness_state=PopulationExposureFreshness.FRESH,
+            release_version="WorldPop test",
+            source_ref="worldpop:test",
+        )
+        ExposureFeatureRecord.objects.create(
+            ward=ward,
+            ingestion_run=worldpop_run,
+            source=worldpop_source,
+            recorded_at=source_timestamp,
+            exposure_type=ExposureFeatureRecord.EXPOSURE_POPULATION_DENSITY,
+            exposure_value=123.4,
+            truth_class=PopulationExposureTruth.SPATIALLY_AGGREGATED_SOURCE,
+            source_name=worldpop_source.source_name,
+            source_kind=PopulationExposureSourceKind.LIVE,
+            freshness_state=PopulationExposureFreshness.FRESH,
+            release_version="WorldPop test",
+            source_ref="worldpop:test",
+        )
+
+        self.client.force_authenticate(self.analyst)
+        response = self.client.get(reverse("source-data-freshness"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        feed_sources = {item["feed_key"]: item for item in response.data["sources"] if item["feed_key"]}
+        self.assertEqual(feed_sources["population_baseline"]["truth_state"], "missing")
+        self.assertEqual(feed_sources["population_baseline"]["record_count"], 0)
+        self.assertEqual(feed_sources["gridded_population"]["truth_state"], "csv_backed")
+        self.assertEqual(feed_sources["gridded_population"]["record_count"], 1)

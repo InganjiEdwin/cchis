@@ -36,6 +36,22 @@ function buildChvUser(overrides: Partial<CurrentUser> = {}): CurrentUser {
   };
 }
 
+const missingPolicyAcceptance = {
+  required: true,
+  is_current: false,
+  terms_version: "terms-2026-05",
+  privacy_version: "privacy-2026-05",
+  cookie_notice_version: "cookies-2026-05",
+  accepted_terms_version: null,
+  accepted_privacy_version: null,
+  accepted_cookie_notice_version: null,
+  missing_documents: ["TERMS", "PRIVACY", "COOKIE_NOTICE"],
+  terms_url: "/terms",
+  privacy_url: "/privacy",
+  cookie_notice_url: "/privacy#cookies",
+} satisfies CurrentUser["policy_acceptance"];
+
+
 function setOnline(value: boolean) {
   Object.defineProperty(window.navigator, "onLine", {
     value,
@@ -300,6 +316,15 @@ describe("ChvOfflinePage", () => {
     expect(screen.getAllByText("Pending").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: /sync now/i })).toBeDisabled();
     expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it("routes CHVs with missing policy acceptance to policy review before offline work", async () => {
+    renderChvPage(buildChvUser({ policy_acceptance: missingPolicyAcceptance }));
+
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith("/policy-review?returnTo=%2Fchv");
+    });
+    expect(screen.queryByRole("heading", { name: "CHV follow-up" })).not.toBeInTheDocument();
   });
 
   it("marks local governed content unavailable without claiming an English health fallback", async () => {

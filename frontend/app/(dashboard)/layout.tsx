@@ -1,6 +1,9 @@
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { ProtectedShell } from "@/components/protected-shell";
+import { requiresPolicyAcceptance } from "@/lib/auth";
+import { buildPolicyReviewRoute } from "@/lib/navigation";
 import { fetchServerSession } from "@/lib/server-session";
 import { isDashboardRole } from "@/lib/roles";
 
@@ -13,6 +16,11 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
   if (!isDashboardRole(session.user.role)) {
     redirect("/unauthorized");
+  }
+
+  if (requiresPolicyAcceptance(session.user)) {
+    const headerList = await headers();
+    redirect(buildPolicyReviewRoute(headerList.get("x-cchis-current-path")));
   }
 
   return <ProtectedShell>{children}</ProtectedShell>;

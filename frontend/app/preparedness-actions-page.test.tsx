@@ -80,6 +80,21 @@ function buildPreparednessAction(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function buildQueryResult({ count, results = [] }: { count: number; results?: Array<ReturnType<typeof buildPreparednessAction>> }) {
+  return {
+    data: {
+      count,
+      next: null,
+      previous: null,
+      results,
+    },
+    isPending: false,
+    isFetching: false,
+    error: null,
+    refetch: vi.fn(),
+  };
+}
+
 vi.mock("@/components/auth-provider", () => ({
   useAuth: () => mockUseAuth(),
 }));
@@ -114,11 +129,9 @@ describe("PreparednessActionsPage", () => {
         role: "ADMIN",
       },
     });
-    mockUsePreparednessActionsQuery.mockReturnValue({
-      data: {
+    mockUsePreparednessActionsQuery.mockReturnValue(
+      buildQueryResult({
         count: 2,
-        next: null,
-        previous: null,
         results: [
           buildPreparednessAction(),
           buildPreparednessAction({
@@ -138,12 +151,8 @@ describe("PreparednessActionsPage", () => {
             due_at: "2026-05-04T09:00:00Z",
           }),
         ],
-      },
-      isPending: false,
-      isFetching: false,
-      error: null,
-      refetch: vi.fn(),
-    });
+      }),
+    );
     mockUseUpdatePreparednessActionMutation.mockReturnValue({
       mutateAsync: vi.fn().mockResolvedValue(buildPreparednessAction({ status: "COMPLETED" })),
       isPending: false,
@@ -161,6 +170,38 @@ describe("PreparednessActionsPage", () => {
     expect(screen.getByText("Achieng CHV")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Overdue" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Blocked" })).toBeInTheDocument();
+  });
+
+  it("shows ledger counts from the full scope instead of the selected table filter", () => {
+    mockUsePreparednessActionsQuery.mockImplementation(
+      ({ filters }: { filters: { page_size?: number; status?: string; overdue?: boolean; statuses?: string[] } }) => {
+        if (filters.page_size === 200) {
+          return buildQueryResult({ count: 0, results: [] });
+        }
+        if (filters.status === "COMPLETED") {
+          return buildQueryResult({ count: 4 });
+        }
+        if (filters.status === "BLOCKED") {
+          return buildQueryResult({ count: 1 });
+        }
+        if (filters.overdue === true) {
+          return buildQueryResult({ count: 2 });
+        }
+        if (filters.statuses?.length) {
+          return buildQueryResult({ count: 0 });
+        }
+        return buildQueryResult({ count: 7 });
+      },
+    );
+
+    render(<PreparednessActionsPage />);
+
+    expect(screen.getByLabelText("Total preparedness action count")).toHaveTextContent("7");
+    expect(screen.getByLabelText("Active preparedness action count")).toHaveTextContent("0");
+    expect(screen.getByLabelText("Overdue preparedness action count")).toHaveTextContent("2");
+    expect(screen.getByLabelText("Blocked preparedness action count")).toHaveTextContent("1");
+    expect(screen.getByLabelText("Completed preparedness action count")).toHaveTextContent("4");
+    expect(screen.getByText("No preparedness actions match this view.")).toBeInTheDocument();
   });
 
   it("passes ward, facility, and CHV scope filters from the route", () => {
@@ -273,11 +314,9 @@ describe("PreparednessActionsPage", () => {
 
   it("allows queued actions to be assigned to an owner team", async () => {
     const mutateAsync = vi.fn().mockResolvedValue(buildPreparednessAction({ status: "ASSIGNED" }));
-    mockUsePreparednessActionsQuery.mockReturnValue({
-      data: {
+    mockUsePreparednessActionsQuery.mockReturnValue(
+      buildQueryResult({
         count: 1,
-        next: null,
-        previous: null,
         results: [
           buildPreparednessAction({
             status: "QUEUED",
@@ -287,12 +326,8 @@ describe("PreparednessActionsPage", () => {
             is_overdue: false,
           }),
         ],
-      },
-      isPending: false,
-      isFetching: false,
-      error: null,
-      refetch: vi.fn(),
-    });
+      }),
+    );
     mockUseUpdatePreparednessActionMutation.mockReturnValue({
       mutateAsync,
       isPending: false,

@@ -3,7 +3,7 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
 from django.utils import timezone
 
-from .models import AccessRequest, AuthAuditEvent, User
+from .models import AccessRequest, AuthAuditEvent, User, UserPolicyAcceptance
 from .services import send_access_request_decision
 from .two_factor import generate_totp_secret
 from .views import with_access_request_review_signals
@@ -89,6 +89,36 @@ class AuthAuditEventAdmin(admin.ModelAdmin):
         "metadata",
         "created_at",
     )
+
+
+@admin.register(UserPolicyAcceptance)
+class UserPolicyAcceptanceAdmin(admin.ModelAdmin):
+    list_display = (
+        "user",
+        "document_type",
+        "version",
+        "acceptance_context",
+        "ip_address",
+        "accepted_at",
+    )
+    list_filter = ("document_type", "version", "acceptance_context", "accepted_at")
+    search_fields = ("user__username", "user__email", "version", "ip_address", "user_agent")
+    readonly_fields = (
+        "user",
+        "document_type",
+        "version",
+        "accepted_at",
+        "ip_address",
+        "user_agent",
+        "acceptance_context",
+        "metadata",
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(AccessRequest)

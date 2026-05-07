@@ -6,11 +6,15 @@ import { ProtectedShell } from "@/components/protected-shell";
 
 const mockReplace = vi.fn();
 const mockUseAuth = vi.fn();
+const mockUsePathname = vi.fn();
+const mockUseSearchParams = vi.fn();
 
 vi.mock("next/navigation", () => ({
+  usePathname: () => mockUsePathname(),
   useRouter: () => ({
     replace: mockReplace,
   }),
+  useSearchParams: () => mockUseSearchParams(),
 }));
 
 vi.mock("next/link", () => ({
@@ -34,6 +38,8 @@ describe("ProtectedShell", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.sessionStorage.clear();
+    mockUsePathname.mockReturnValue("/overview");
+    mockUseSearchParams.mockReturnValue(new URLSearchParams(""));
   });
 
   it("shows the restoring state only while hydrating", () => {
@@ -86,6 +92,35 @@ describe("ProtectedShell", () => {
     expect(screen.getByText("Sidebar mock")).toBeInTheDocument();
     expect(screen.getByText("Footer mock")).toBeInTheDocument();
     expect(screen.getByText("Body")).toBeInTheDocument();
+  });
+
+  it("routes accepted-missing dashboard users to policy review with the current path", () => {
+    mockUsePathname.mockReturnValue("/wards");
+    mockUseSearchParams.mockReturnValue(new URLSearchParams("q=nyatike&page=2"));
+    mockUseAuth.mockReturnValue({
+      currentUser: {
+        id: 1,
+        username: "admin",
+        email: "admin@example.com",
+        full_name: "Admin User",
+        phone_number: null,
+        role: "ADMIN",
+        theme_preference: "LIGHT",
+        ward: null,
+        ward_name: null,
+        is_active: true,
+      },
+      isAuthenticated: true,
+      isHydrating: false,
+      requiresPolicyAcceptance: true,
+    });
+
+    const { container } = render(
+      React.createElement(ProtectedShell, null, React.createElement("div", null, "Body")),
+    );
+
+    expect(container).toBeEmptyDOMElement();
+    expect(mockReplace).toHaveBeenCalledWith("/policy-review?returnTo=%2Fwards%3Fq%3Dnyatike%26page%3D2");
   });
 
   it("shows a one-time dashboard notice after recovery-code login leaves few codes", () => {

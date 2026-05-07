@@ -2,7 +2,7 @@
 
 import { ShieldAlert, X } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { useAuth } from "@/components/auth-provider";
@@ -15,6 +15,7 @@ import {
   readRecoveryCodeLoginNotice,
   type RecoveryCodeLoginNotice,
 } from "@/lib/auth";
+import { buildPolicyReviewRoute } from "@/lib/navigation";
 import { isDashboardRole } from "@/lib/roles";
 
 function RecoveryCodeLoginNoticeBanner() {
@@ -68,8 +69,12 @@ function RecoveryCodeLoginNoticeBanner() {
 
 export function ProtectedShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const { currentUser, isAuthenticated, isHydrating } = useAuth();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const { currentUser, isAuthenticated, isHydrating, requiresPolicyAcceptance } = useAuth();
   const isDashboardUser = currentUser ? isDashboardRole(currentUser.role) : false;
+  const search = searchParams.toString();
+  const currentPath = search ? `${pathname}?${search}` : pathname;
 
   useEffect(() => {
     if (isHydrating) {
@@ -83,8 +88,13 @@ export function ProtectedShell({ children }: { children: React.ReactNode }) {
 
     if (!currentUser || !isDashboardRole(currentUser.role)) {
       router.replace("/unauthorized");
+      return;
     }
-  }, [currentUser, isAuthenticated, isHydrating, router]);
+
+    if (requiresPolicyAcceptance) {
+      router.replace(buildPolicyReviewRoute(currentPath));
+    }
+  }, [currentPath, currentUser, isAuthenticated, isHydrating, requiresPolicyAcceptance, router]);
 
   if (isHydrating) {
     return (
@@ -106,7 +116,7 @@ export function ProtectedShell({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!isAuthenticated || !currentUser || !isDashboardUser) {
+  if (!isAuthenticated || !currentUser || !isDashboardUser || requiresPolicyAcceptance) {
     return null;
   }
 

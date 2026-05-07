@@ -183,7 +183,7 @@ class SourceDataPhaseSixFacilityReadinessSnapshotTests(APITestCase):
     def test_unknown_readiness_columns_are_blocked_as_unapproved_operational_fields(self):
         csv_text = self.readiness_csv().replace(
             "source_kind,source_ref",
-            "source_kind,source_ref,facility_contact_phone",
+            "source_kind,source_ref,facility_generator_status",
         ).replace(
             "facility_report,readiness-checklist:row-1",
             "facility_report,readiness-checklist:row-1,not-persisted",

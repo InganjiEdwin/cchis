@@ -27,6 +27,7 @@ This runbook covers Phase 8 pilot hardening for the source-data operations surfa
 ## Operations Health
 
 - Monitor `/source-data/operations/` for upload counts, validation failures, import failures, duplicate attempts, stale feeds, stuck tasks, and worker heartbeat state.
+- Task staleness and alert lookback are controlled by `SOURCE_DATA_TASK_STALE_MINUTES`, `SOURCE_DATA_OPERATIONS_ALERT_LOOKBACK_HOURS`, and `SOURCE_DATA_FAILED_IMPORT_ALERT_THRESHOLD`.
 - Investigate any `repeated_failed_imports`, `overdue_critical_feeds`, or `stuck_source_data_tasks` alert before queueing large imports.
 - If worker heartbeat is stale, check Celery workers and scheduler before asking operators to retry.
 

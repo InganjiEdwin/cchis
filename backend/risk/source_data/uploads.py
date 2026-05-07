@@ -12,6 +12,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from risk.models import SourceDataUploadArtifact, SourceDataUploadBatch
+from risk.privacy_minimization import PrivacyMinimizationViolation, ensure_pii_safe_text
 from risk.source_data.features import FEATURE_FACILITY_READINESS_IMPORT, facility_readiness_snapshot_import_enabled
 from risk.source_data.registry import source_data_feed_definition
 
@@ -24,6 +25,13 @@ CANCELLABLE_UPLOAD_STATUSES = {
     SourceDataUploadBatch.STATUS_READY_FOR_CONFIRMATION,
     SourceDataUploadBatch.STATUS_IMPORT_FAILED,
 }
+PII_SAFE_UPLOAD_METADATA_FIELDS = (
+    "source_name",
+    "source_ref",
+    "release_version",
+    "replacement_reason",
+    "operator_note",
+)
 
 
 def safe_upload_filename(filename: str) -> str:
@@ -52,6 +60,16 @@ def _write_uploaded_file(uploaded_file: UploadedFile, destination: Path) -> tupl
     return size, sha256.hexdigest()
 
 
+def _assert_upload_metadata_is_pii_safe(metadata: dict[str, Any]) -> None:
+    for field_name in PII_SAFE_UPLOAD_METADATA_FIELDS:
+        if field_name not in metadata:
+            continue
+        try:
+            ensure_pii_safe_text(metadata.get(field_name) or "", location=f"source_data_upload.{field_name}")
+        except PrivacyMinimizationViolation as error:
+            raise ValueError(str(error)) from error
+
+
 @transaction.atomic
 def create_source_data_upload_batch(
     *,
@@ -61,6 +79,7 @@ def create_source_data_upload_batch(
 ) -> SourceDataUploadBatch:
     feed_key = str(metadata["feed_key"])
     definition = source_data_feed_definition(feed_key)
+    _assert_upload_metadata_is_pii_safe(metadata)
     if definition.feed_key == "facility_readiness_snapshot" and not facility_readiness_snapshot_import_enabled():
         raise ValueError(f"Facility readiness snapshot imports are disabled by {FEATURE_FACILITY_READINESS_IMPORT}.")
     replaces_upload = metadata.get("replaces_upload")

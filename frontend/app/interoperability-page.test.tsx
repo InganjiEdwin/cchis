@@ -300,46 +300,52 @@ describe("InteroperabilityPage", () => {
     });
   });
 
-  it("shows contract health, run errors, exchange inventory, and connector boundaries", () => {
+  it("shows data connection readiness, location matching, transfer review, and plain-language actions", () => {
     render(<InteroperabilityPage />);
 
-    expect(screen.getByText(/Interoperability \| CSV-first mappings/)).toBeInTheDocument();
+    expect(screen.getByText(/Data Connections \| Safely receive files, match locations, and preview data before sharing/i)).toBeInTheDocument();
+    expect(screen.getByText("Needs attention")).toBeInTheDocument();
+    expect(screen.getAllByText("Location matching").length).toBeGreaterThan(0);
     expect(screen.getByText("Active mapping to inactive ward/facility")).toBeInTheDocument();
-    expect(screen.getByText("Recent Mapping Records")).toBeInTheDocument();
-    expect(screen.getByText("OU-001 -> North Kamagambo")).toBeInTheDocument();
+    expect(screen.getByText("Recent location matches")).toBeInTheDocument();
+    expect(screen.getByText(/External ID OU-001/)).toBeInTheDocument();
     expect(screen.getByText("1 unmapped row requires operator review.")).toBeInTheDocument();
     expect(screen.getByText("Internal ward was not found.")).toBeInTheDocument();
-    expect(screen.getByText("Run Detail")).toBeInTheDocument();
-    expect(screen.getByText("Dry-Run Preview")).toBeInTheDocument();
-    expect(screen.getByText("Unmapped Record Review")).toBeInTheDocument();
+    expect(screen.getByText("Transfer review")).toBeInTheDocument();
+    expect(screen.getByText("Check result")).toBeInTheDocument();
+    expect(screen.getByText("Rows needing review")).toBeInTheDocument();
     expect(screen.getAllByText("OU-404").length).toBeGreaterThan(0);
     expect(screen.getAllByText("MISSING-CODE").length).toBeGreaterThan(0);
-    expect(screen.getByText("Resolve Unmapped Rows")).toBeInTheDocument();
-    expect(screen.getByText("DHIS2 organisation unit mapping")).toBeInTheDocument();
-    expect(screen.getByText("Authentication Failed")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Template CSV" })).toHaveAttribute(
+    expect(screen.getByText("Fix rows that could not be matched")).toBeInTheDocument();
+    expect(screen.getByText("Advanced: available data files")).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "Download template" })[0]).toHaveAttribute(
       "href",
       "/api/dashboard/interoperability/csv-templates/ward_org_unit_mapping_import",
     );
-    expect(screen.getAllByRole("link", { name: "Errors CSV" })[0]).toHaveAttribute(
+    expect(screen.getAllByRole("link", { name: "Download rows to fix" })[0]).toHaveAttribute(
       "href",
       "/api/dashboard/interoperability/runs/run-failed/errors.csv",
     );
+
+    expect(screen.queryByText("Connector Boundary")).not.toBeInTheDocument();
+    expect(screen.queryByText("CSV Dry-Run")).not.toBeInTheDocument();
+    expect(screen.queryByText("Contract Errors")).not.toBeInTheDocument();
   });
 
   it("submits CSV dry-runs and risk export previews through mutations", async () => {
     render(<InteroperabilityPage />);
 
-    fireEvent.change(screen.getByLabelText("Mapping version label"), {
+    fireEvent.change(screen.getByLabelText("Matching set name"), {
       target: { value: "dhis2-v2" },
     });
-    fireEvent.change(screen.getByLabelText("Org unit mapping CSV"), {
+    fireEvent.click(screen.getByRole("button", { name: "Paste CSV instead" }));
+    fireEvent.change(screen.getByLabelText("Location matching CSV"), {
       target: {
         value:
           "external_identifier,external_display_name,internal_object_type,internal_object_public_id,internal_object_code,mapping_confidence,status\nOU-002,Got Kachola,WARD,ward-2,KE-WARD-1262,0.97,ACTIVE\n",
       },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Dry-run" }));
+    fireEvent.click(screen.getByRole("button", { name: "Check file" }));
 
     await waitFor(() => {
       expect(mockImport).toHaveBeenCalledWith(
@@ -352,7 +358,7 @@ describe("InteroperabilityPage", () => {
       );
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Export preview" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview sharing" }));
 
     await waitFor(() => {
       expect(mockExportPreview).toHaveBeenCalledWith({
@@ -387,20 +393,21 @@ describe("InteroperabilityPage", () => {
     mockImport.mockResolvedValueOnce(cleanRun).mockResolvedValueOnce(completedRun);
     render(<InteroperabilityPage />);
 
-    fireEvent.change(screen.getByLabelText("Org unit mapping CSV"), {
+    fireEvent.click(screen.getByRole("button", { name: "Paste CSV instead" }));
+    fireEvent.change(screen.getByLabelText("Location matching CSV"), {
       target: {
         value:
           "external_identifier,external_display_name,internal_object_type,internal_object_public_id,internal_object_code,mapping_confidence,status\nOU-002,Got Kachola,WARD,ward-2,KE-WARD-1262,0.97,ACTIVE\n",
       },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Dry-run" }));
+    fireEvent.click(screen.getByRole("button", { name: "Check file" }));
 
     await waitFor(() => {
       expect(mockImport).toHaveBeenCalledWith(expect.objectContaining({ confirm: false }));
     });
 
-    fireEvent.click(screen.getByLabelText("Confirm import"));
-    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    fireEvent.click(screen.getByLabelText("Save approved matches"));
+    fireEvent.click(screen.getByRole("button", { name: "Save approved matches" }));
 
     await waitFor(() => {
       expect(mockImport).toHaveBeenLastCalledWith(
@@ -415,7 +422,7 @@ describe("InteroperabilityPage", () => {
   it("links failed runs to retry operations", async () => {
     render(<InteroperabilityPage />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
 
     await waitFor(() => {
       expect(mockRetry).toHaveBeenCalledWith("run-failed");
@@ -430,7 +437,7 @@ describe("InteroperabilityPage", () => {
     await waitFor(() => {
       expect(mockFetchRunDetail).toHaveBeenCalledWith("run-completed");
     });
-    expect(screen.getByText("No review errors on this run.")).toBeInTheDocument();
-    expect(screen.getByText("100.0% coverage")).toBeInTheDocument();
+    expect(screen.getByText("No rows need review for this transfer.")).toBeInTheDocument();
+    expect(screen.getByText("100.0% matched")).toBeInTheDocument();
   });
 });

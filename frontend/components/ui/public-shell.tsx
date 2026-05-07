@@ -173,15 +173,17 @@ export function PublicFooter() {
 
 export function BrandLockup({
   image = false,
-  title = "CCHIS",
+  title = "CHIS",
   subtitle,
+  className,
 }: {
   image?: boolean;
   title?: string;
   subtitle?: string;
+  className?: string;
 }) {
   return (
-    <div className="mb-5 flex flex-col items-center gap-2.5 text-center md:mb-6 md:gap-3">
+    <div className={cn("mb-5 flex flex-col items-center gap-2.5 text-center md:mb-6 md:gap-3", className)}>
       {image ? (
         <div className="w-full max-w-[320px] md:max-w-[360px]">
           <Image
@@ -195,10 +197,15 @@ export function BrandLockup({
         </div>
       ) : (
         <div className="flex items-center gap-2.5">
-          <span className="inline-flex size-10 items-center justify-center rounded-2xl bg-[var(--totp-brand-mark-surface)] text-white shadow-[var(--totp-brand-mark-shadow)]">
-            <span className="text-base font-bold">C</span>
-          </span>
-          <span className="text-2xl font-semibold tracking-tight text-[var(--totp-brand-ink)]">{title}</span>
+          <Image
+            src="/brand/chis-brief-colored.svg"
+            alt=""
+            width={44}
+            height={44}
+            priority
+            className="size-11 shrink-0"
+          />
+          <span className="text-3xl font-semibold tracking-tight text-[var(--totp-brand-ink)]">{title}</span>
         </div>
       )}
       {subtitle ? (

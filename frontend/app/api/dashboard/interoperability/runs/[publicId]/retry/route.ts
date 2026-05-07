@@ -24,6 +24,6 @@ export async function POST(
     if (error instanceof ServerApiError) {
       return NextResponse.json({ detail: error.message }, { status: error.status });
     }
-    return NextResponse.json({ detail: "Unable to retry interoperability run." }, { status: 500 });
+    return NextResponse.json({ detail: "Unable to try the transfer again." }, { status: 500 });
   }
 }

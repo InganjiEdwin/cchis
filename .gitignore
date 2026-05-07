@@ -6,14 +6,17 @@ __pycache__/
 *.pyc
 db.sqlite3
 repomix-output.*
+backend/risk/data/source_cache/
 node_modules/
 .next/
 /docs/*
 !/docs/
 !/docs/CCHIS_DATA_SOURCE_FEEDS.md
+!/docs/MIGORI_KNBS_WORLDPOP_INGESTION_PLAN.md
 !/docs/SOURCE_DATA_API_CONNECTORS.md
 !/docs/SOURCE_DATA_OPS_PHASE0_ALIGNMENT.md
 !/docs/SOURCE_DATA_OPS_SURFACE_IMPLEMENTATION_PLAN.md
 !/docs/SOURCE_DATA_PRODUCTION_RUNBOOK.md
 !/docs/SOURCE_DATA_VALIDATION_ERROR_CODES.md
+!/docs/WARD_DETAIL_UX_REDESIGN_IMPLEMENTATION_PLAN.md
 frontend/.npm-cache/

@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
 import {
+  acceptPoliciesViaBff,
   beginTwoFactorEnrollment as beginTwoFactorEnrollmentRequest,
   beginTwoFactorEnrollmentViaBff,
   confirmTwoFactorEnrollment as confirmTwoFactorEnrollmentRequest,
@@ -15,15 +16,17 @@ import {
   persistCurrentUser,
   persistEnrollmentToken,
   persistPreAuthToken,
-  readCurrentUser,
   readEnrollmentToken,
   readPreAuthToken,
+  requiresPolicyAcceptance as userRequiresPolicyAcceptance,
   updateAppearanceViaBff,
   updateProfileViaBff,
   verifyTwoFactor as verifyTwoFactorRequest,
   type CurrentUser,
   type ConfirmTwoFactorEnrollmentResponse,
   type LoginPayload,
+  type PolicyAcceptancePayload,
+  type PolicyAcceptanceState,
   type ThemePreference,
   type SessionResponse,
   type UpdateProfilePayload,
@@ -47,6 +50,7 @@ type AuthContextValue = {
   pendingEnrollment: PendingEnrollmentState | null;
   isHydrating: boolean;
   isAuthenticated: boolean;
+  requiresPolicyAcceptance: boolean;
   login: (payload: LoginPayload) => Promise<CurrentUser | null>;
   verifyTwoFactor: (code: string) => Promise<VerifyTwoFactorResponse>;
   beginTwoFactorEnrollment: () => Promise<{
@@ -59,6 +63,7 @@ type AuthContextValue = {
   }>;
   updateAppearance: (themePreference: ThemePreference) => Promise<CurrentUser>;
   updateProfile: (payload: UpdateProfilePayload) => Promise<CurrentUser>;
+  acceptPolicies: (payload: PolicyAcceptancePayload) => Promise<PolicyAcceptanceState>;
   confirmTwoFactorEnrollment: (code: string) => Promise<ConfirmTwoFactorEnrollmentResponse>;
   clearPendingEnrollment: () => void;
   clearPendingTwoFactor: () => void;
@@ -86,9 +91,7 @@ export function AuthProvider({
     if (initialSession?.authenticated && initialSession.user) {
       return normalizeCurrentUser(initialSession.user);
     }
-    if (typeof window !== "undefined") {
-      return readCurrentUser();
-    }
+    // Role and identity must come from a server-verified session, not editable browser storage.
     return null;
   });
   const [pendingTwoFactor, setPendingTwoFactor] = useState<PendingTwoFactorState | null>(() => {
@@ -203,6 +206,7 @@ export function AuthProvider({
       pendingTwoFactor,
       isHydrating,
       isAuthenticated: !!currentUser,
+      requiresPolicyAcceptance: userRequiresPolicyAcceptance(currentUser),
       async login(payload: LoginPayload) {
         const response = await loginRequest(payload);
 
@@ -324,6 +328,31 @@ export function AuthProvider({
           session_source: null,
         } satisfies SessionResponse);
         return user;
+      },
+      async acceptPolicies(payload: PolicyAcceptancePayload) {
+        const policyAcceptance = await acceptPoliciesViaBff(payload);
+
+        if (currentUser) {
+          const user = normalizeCurrentUser({
+            ...currentUser,
+            policy_acceptance: policyAcceptance,
+          });
+          setCurrentUser(user);
+          persistCurrentUser(user);
+          queryClient.setQueryData(queryKeys.auth.me(), {
+            authenticated: true,
+            user,
+            access: null,
+            session_source: null,
+          } satisfies SessionResponse);
+        }
+
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: queryKeys.auth.me() }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.auth.policyAcceptance() }),
+        ]);
+
+        return policyAcceptance;
       },
       async confirmTwoFactorEnrollment(code: string) {
         const token = pendingEnrollment?.tempToken;

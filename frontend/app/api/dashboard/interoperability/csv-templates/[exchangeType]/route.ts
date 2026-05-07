@@ -33,6 +33,6 @@ export async function GET(
     if (error instanceof ServerApiError) {
       return NextResponse.json({ detail: error.message }, { status: error.status });
     }
-    return NextResponse.json({ detail: "Unable to download interoperability CSV template." }, { status: 500 });
+    return NextResponse.json({ detail: "Unable to download the data file template." }, { status: 500 });
   }
 }

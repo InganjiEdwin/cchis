@@ -16,6 +16,6 @@ export async function GET(request: Request) {
     if (error instanceof ServerApiError) {
       return NextResponse.json({ detail: error.message }, { status: error.status });
     }
-    return NextResponse.json({ detail: "Unable to load interoperability dashboard." }, { status: 500 });
+    return NextResponse.json({ detail: "Unable to load data connections." }, { status: 500 });
   }
 }

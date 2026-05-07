@@ -25,6 +25,7 @@ from risk.models import (
 from risk.population_exposure_audit import build_population_exposure_pipeline_audit
 from risk.population_exposure_features import build_population_exposure_feature_dataset
 from risk.population_exposure_ingestion import (
+    inspect_population_exposure_csv,
     replay_population_exposure_ingestion_run,
     run_population_exposure_csv_ingestion,
 )
@@ -232,6 +233,45 @@ class PopulationExposurePipelineAuditTestCase(TestCase):
         self.assertEqual(source_lineage["status"], "warning")
         self.assertIn("missing_exposure_aggregation_method", source_lineage["gaps"])
         self.assertEqual(source_lineage["evidence"]["missing_aggregation_method_count"], 1)
+
+    def test_gridded_population_value_is_not_imported_as_density(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".csv") as csv_file:
+            csv_file.write(
+                "ward_id,population_total,gridded_population_value,truth_class,source_kind,freshness_state,source_ref\n"
+            )
+            csv_file.write(
+                f"{self.ward.id},13200,13200.49,spatially_aggregated_source,live,fresh,worldpop-test.tif\n"
+            )
+            csv_file.flush()
+
+            run = run_population_exposure_csv_ingestion(
+                file_path=csv_file.name,
+                source_name="WorldPop gridded population audit",
+                source_type=PopulationExposureSource.SOURCE_TYPE_GRIDDED_POPULATION,
+                source_timestamp=timezone.now(),
+                release_version="WorldPop audit release",
+                source_ref="worldpop-test.tif",
+            )
+
+        self.assertEqual(run.status, PopulationExposureIngestionRun.STATUS_SUCCESS)
+        self.assertEqual(PopulationBaselineRecord.objects.filter(ingestion_run=run).count(), 1)
+        self.assertEqual(ExposureFeatureRecord.objects.filter(ingestion_run=run).count(), 0)
+        self.assertEqual(run.results["canonical_summary"]["exposure_feature_records"], 0)
+
+    def test_gridded_population_value_alone_is_not_a_valid_canonical_measure(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".csv") as csv_file:
+            csv_file.write("ward_id,gridded_population_value,source_ref\n")
+            csv_file.write(f"{self.ward.id},13200.49,worldpop-test.tif\n")
+            csv_file.flush()
+
+            inspection = inspect_population_exposure_csv(
+                csv_file.name,
+                source_type=PopulationExposureSource.SOURCE_TYPE_GRIDDED_POPULATION,
+            )
+
+        self.assertEqual(inspection["records_seen"], 1)
+        self.assertEqual(inspection["records_rejected"], 1)
+        self.assertEqual(inspection["rejected_rows"][0]["reason"], "missing_required_column_group")
 
     def test_release_replacement_marks_old_records_and_current_snapshot_excludes_them(self):
         source, old_run, source_kind = self._source_and_run(source_name="audit-replacement-source")

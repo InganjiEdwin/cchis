@@ -235,6 +235,40 @@ function getDecisionStatusLabel(alertStatus: string, lifecycleStatus?: "active" 
   return "Action in progress";
 }
 
+function getNextActionReasonLabel(alertStatus: string, fallback?: string) {
+  if (alertStatus === "RETRY_PENDING") return "Retry pending";
+  if (alertStatus === "FAILED") return "Delivery failed";
+  if (alertStatus === "DELIVERED") return "Delivery complete";
+  return fallback || "Review needed";
+}
+
+function getNextActionAvailabilityLabel(isBlocked: boolean | undefined) {
+  return isBlocked ? "SMS not available here" : "Ready in linked workflow";
+}
+
+function getNextActionSummary({
+  alertStatus,
+  isBlocked,
+  hasLiveCoverageRequest,
+}: {
+  alertStatus: string;
+  isBlocked: boolean | undefined;
+  hasLiveCoverageRequest: boolean;
+}) {
+  if (alertStatus === "RETRY_PENDING" && isBlocked) {
+    return hasLiveCoverageRequest
+      ? "Delivery retry is still pending. Continue in the ward workflow and use the linked CHV request for field follow-up."
+      : "Delivery retry is still pending. Continue in the ward workflow to decide whether follow-up is needed.";
+  }
+  if (alertStatus === "FAILED") {
+    return "Delivery failed. Use the linked workflow to decide whether escalation or field follow-up is needed.";
+  }
+  if (alertStatus === "DELIVERED") {
+    return "Delivery is recorded. Review the ward workflow only if new risk or field evidence changes the situation.";
+  }
+  return "Use the linked workflow to continue the safest next step for this alert.";
+}
+
 function getTimelineStateLabel(tone: "primary" | "progress" | "success" | "danger" | "warning" | "neutral") {
   if (tone === "success") {
     return { label: "Completed", tone: "success" as const };
@@ -314,6 +348,20 @@ export default function AlertDetailPage() {
   const coverageRequestPendingLabel = liveCoverageRequest
     ? "Opening CHV coverage request..."
     : "Preparing CHV coverage request...";
+  const nextActionSummary = alert
+    ? getNextActionSummary({
+        alertStatus: alert.status,
+        isBlocked: recommendedNextAction?.blocked,
+        hasLiveCoverageRequest: Boolean(liveCoverageRequest),
+      })
+    : "Use the linked workflow to continue alert review.";
+  const nextActionFacts = alert
+    ? [
+        ["Why now", getNextActionReasonLabel(alert.status, lifecycle?.status_label)],
+        ["Can this page send it?", getNextActionAvailabilityLabel(recommendedNextAction?.blocked)],
+        ["Continue through", liveCoverageRequest ? "Linked CHV request" : "Ward workflow"],
+      ]
+    : [];
 
   async function handleAlertReportExport() {
     if (!alert) {
@@ -456,23 +504,60 @@ export default function AlertDetailPage() {
         <>
           <Card className="rounded-[2rem] border-[color:var(--warning)]/20 bg-[color-mix(in_srgb,var(--warning)_6%,var(--panel))] px-5 py-5 sm:px-6">
             <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-              <div className="space-y-3">
-                <span className="inline-flex items-center gap-2 rounded-full border border-[color:var(--warning)]/25 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-[color:var(--warning)]">
-                  <AlertTriangle className="size-3.5" aria-hidden="true" />
-                  Next action
-                </span>
-                <div className="space-y-2">
-                  <h2 className="text-[clamp(1.55rem,1.2rem+1vw,2rem)] font-semibold leading-tight text-panel-strong">
-                    {recommendedNextAction?.label ?? "Continue alert review"}
-                  </h2>
-                  <p className="max-w-3xl text-sm leading-6 text-panel-copy">
-                    Reason: {recommendedNextAction?.detail ?? "Use the linked ward workflow to continue review."}
-                  </p>
-                  <p className="text-sm text-panel-muted">
-                    {recommendedNextAction?.blocked_reason ??
-                      "This page surfaces the next step, but execution continues through the linked ward and alerts workflow."}
-                  </p>
+              <div className="max-w-4xl space-y-4">
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="inline-flex items-center gap-2 rounded-full border border-[color:var(--warning)]/25 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-[color:var(--warning)]">
+                      <AlertTriangle className="size-3.5" aria-hidden="true" />
+                      Next action
+                    </span>
+                    {recommendedNextAction?.blocked ? (
+                      <StatusBadge tone="warning" className="rounded-full px-2.5 py-1 tracking-[0.12em]">
+                        Handoff required
+                      </StatusBadge>
+                    ) : null}
+                  </div>
+                  <div className="space-y-2">
+                    <h2 className="text-[clamp(1.55rem,1.2rem+1vw,2rem)] font-semibold leading-tight text-panel-strong">
+                      {recommendedNextAction?.label ?? "Continue alert review"}
+                    </h2>
+                    <p className="max-w-3xl text-sm leading-6 text-panel-copy">{nextActionSummary}</p>
+                  </div>
                 </div>
+
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {nextActionFacts.map(([label, value]) => (
+                    <div
+                      key={label}
+                      className="rounded-xl border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_14%,transparent)] px-3 py-3"
+                    >
+                      <p className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-panel-subtle">{label}</p>
+                      <p className="mt-1 text-sm font-semibold text-panel-strong">{value}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <details className="group max-w-3xl rounded-xl border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_10%,transparent)] px-4 py-3">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-panel-copy">
+                    <span>Why this action?</span>
+                    <ChevronRight className="size-4 shrink-0 transition group-open:rotate-90" aria-hidden="true" />
+                  </summary>
+                  <div className="mt-3 grid gap-3 text-sm leading-6 text-panel-muted md:grid-cols-2">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-panel-subtle">Reason</p>
+                      <p className="mt-1 text-panel-copy">
+                        {recommendedNextAction?.detail ?? "Use the linked ward workflow to continue review."}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-panel-subtle">Limit</p>
+                      <p className="mt-1 text-panel-copy">
+                        {recommendedNextAction?.blocked_reason ??
+                          "This page surfaces the next step, but execution continues through the linked ward and alerts workflow."}
+                      </p>
+                    </div>
+                  </div>
+                </details>
               </div>
 
               <div className="flex shrink-0 flex-col gap-3 lg:items-end">
@@ -534,11 +619,13 @@ export default function AlertDetailPage() {
                   </Button>
                 ) : null}
                 {canRequestCoverage && liveCoverageRequest ? (
-                  <span className="text-xs text-panel-muted">
-                    A live CHV coverage request already exists for this ward, so this alert links to that request.
+                  <span className="inline-flex rounded-full border border-[var(--dashboard-table-line)] px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-panel-muted">
+                    CHV request already linked
                   </span>
                 ) : null}
-                <span className="text-xs text-panel-muted">Other actions stay locked on this page until workflow handoff is available.</span>
+                <span className="max-w-xs text-right text-xs leading-5 text-panel-muted">
+                  Other actions unlock after workflow handoff.
+                </span>
               </div>
             </div>
           </Card>

@@ -18,8 +18,8 @@ import {
   PublicScreen,
   PublicShell,
 } from "@/components/ui/public-shell";
-import { readEnrollmentToken } from "@/lib/auth";
-import { getDefaultRoute } from "@/lib/navigation";
+import { readEnrollmentToken, requiresPolicyAcceptance } from "@/lib/auth";
+import { buildPolicyReviewRoute, getDefaultRoute } from "@/lib/navigation";
 
 const LOGIN_FAILURE_THRESHOLD = 3;
 const LOGIN_LOCAL_COOLDOWN_MS = 10_000;
@@ -43,6 +43,7 @@ export default function LoginPage() {
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [cooldownUntil, setCooldownUntil] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [isTurnstileScriptReady, setIsTurnstileScriptReady] = useState(false);
   const turnstileContainerRef = useRef<HTMLDivElement | null>(null);
   const turnstileWidgetRenderedRef = useRef(false);
 
@@ -81,7 +82,13 @@ export default function LoginPage() {
       }
     ).turnstile;
 
-    if (!shouldShowTurnstile || !turnstile || !turnstileContainerRef.current || turnstileWidgetRenderedRef.current) {
+    if (
+      !shouldShowTurnstile ||
+      !isTurnstileScriptReady ||
+      !turnstile ||
+      !turnstileContainerRef.current ||
+      turnstileWidgetRenderedRef.current
+    ) {
       return;
     }
 
@@ -98,7 +105,7 @@ export default function LoginPage() {
       },
     });
     turnstileWidgetRenderedRef.current = true;
-  }, [shouldShowTurnstile, turnstileSiteKey]);
+  }, [isTurnstileScriptReady, shouldShowTurnstile, turnstileSiteKey]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -137,7 +144,7 @@ export default function LoginPage() {
         return;
       }
 
-      router.replace(nextRoute);
+      router.replace(requiresPolicyAcceptance(user) ? buildPolicyReviewRoute(nextRoute) : nextRoute);
     } catch (submissionError) {
       const nextFailedAttempts = failedAttempts + 1;
       setFailedAttempts(nextFailedAttempts);
@@ -180,8 +187,12 @@ export default function LoginPage() {
 
   return (
     <PublicScreen>
-      {isLoginTurnstileAvailable ? (
-        <Script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" strategy="afterInteractive" />
+      {shouldShowTurnstile ? (
+        <Script
+          src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
+          strategy="afterInteractive"
+          onReady={() => setIsTurnstileScriptReady(true)}
+        />
       ) : null}
       <PublicGlow side="left" />
       <PublicGlow side="right" />
@@ -248,6 +259,23 @@ export default function LoginPage() {
                   ? "Signing in..."
                   : "Access System"}
             </Button>
+
+            <div aria-label="Cookie and policy disclosure" className="border-t border-panel-table-wrap pt-3 text-[11px] leading-5 text-[var(--login-helper)]">
+              <p>
+                CHIS uses essential cookies for sign-in and security. By accessing the system, you may be asked to accept the current Terms and Privacy Policy.
+              </p>
+              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                <Link href="/privacy#cookies" className="font-semibold text-[var(--login-link)] transition hover:text-[var(--login-link-hover)]">
+                  Cookie notice
+                </Link>
+                <Link href="/privacy" className="font-semibold text-[var(--login-link)] transition hover:text-[var(--login-link-hover)]">
+                  Privacy Policy
+                </Link>
+                <Link href="/terms" className="font-semibold text-[var(--login-link)] transition hover:text-[var(--login-link-hover)]">
+                  Terms of Service
+                </Link>
+              </div>
+            </div>
           </form>
 
           <div className="mt-4 flex items-center justify-between gap-3 text-sm">

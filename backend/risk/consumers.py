@@ -9,6 +9,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 
 from accounts.models import User
+from accounts.services import build_policy_acceptance_status
 
 from .notifications import (
     notification_group_name,
@@ -91,6 +92,10 @@ class DashboardNotificationConsumer(AsyncJsonWebsocketConsumer):
 
         user = jwt_authenticator.get_user(validated_token)
         if not user.is_active or user.role not in ALLOWED_DASHBOARD_ROLES:
+            return None
+
+        policy_acceptance = build_policy_acceptance_status(user)
+        if policy_acceptance["required"] and not policy_acceptance["is_current"]:
             return None
 
         return user

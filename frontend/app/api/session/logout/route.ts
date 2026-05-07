@@ -1,18 +1,28 @@
 import { NextResponse } from "next/server";
 
-import { ServerApiError, fetchBackendJson } from "@/lib/server-api";
+import { applyBackendSetCookie, fetchBackendAuthorizedResponse, ServerApiError } from "@/lib/server-api";
 
 export async function POST(request: Request) {
   const cookieHeader = request.headers.get("cookie") ?? "";
 
   try {
-    await fetchBackendJson<void>("/auth/logout/", {
+    const backendResponse = await fetchBackendAuthorizedResponse("/auth/logout/", {
       method: "POST",
       body: JSON.stringify({}),
       cookieHeader,
     });
 
-    return new NextResponse(null, { status: 204 });
+    if (!backendResponse.ok) {
+      const data = (await backendResponse.json().catch(() => ({
+        detail: "Unable to end the current session.",
+      }))) as Record<string, unknown>;
+      return applyBackendSetCookie(
+        NextResponse.json(data, { status: backendResponse.status }),
+        backendResponse,
+      );
+    }
+
+    return applyBackendSetCookie(new NextResponse(null, { status: 204 }), backendResponse);
   } catch (error) {
     if (error instanceof ServerApiError) {
       return NextResponse.json({ detail: error.message }, { status: error.status });

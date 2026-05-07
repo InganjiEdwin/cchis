@@ -4,6 +4,7 @@ type QueryFilters = Record<string, QueryFilterValue>;
 export const queryKeys = {
   auth: {
     me: () => ["auth", "me"] as const,
+    policyAcceptance: () => ["auth", "policy-acceptance"] as const,
     activity: (filters?: QueryFilters) =>
       ["auth", "activity", filters ?? {}] as const,
     recoveryCodes: () => ["auth", "recovery-codes"] as const,

@@ -735,7 +735,7 @@ export default function ChvsPage() {
     : canRequestCoverageFromSelectedWard
       ? "No active CHVs are visible here, so coverage follow-up should start with a real request."
       : selectedWardCoverage?.label === "Low"
-        ? "Coverage is below the visible threshold for this ward's current risk."
+        ? "Coverage is below the rule used for this ward's current risk."
         : "Coverage is present, so monitor activity and review alerts before changing staffing.";
   const selectedCoverageRequest = useMemo(
     () =>
@@ -763,18 +763,73 @@ export default function ChvsPage() {
   }, [alerts, selectedWardId]);
   const operationalInsights = [
     coverageSummary.gap > 0
-      ? `${coverageSummary.gap} ward${coverageSummary.gap === 1 ? "" : "s"} have no active CHV coverage in visible records.`
-      : "No visible wards are completely uncovered by active CHVs.",
+      ? `${coverageSummary.gap} ward${coverageSummary.gap === 1 ? "" : "s"} need CHV coverage review because no active coverage is currently visible.`
+      : "No ward in the current view is completely without active CHV coverage.",
     delayedOrOfflineCount > 0
-      ? `${delayedOrOfflineCount} CHV${delayedOrOfflineCount === 1 ? "" : "s"} show delayed sync or offline status in the current view.`
-      : "No visible CHVs are currently flagged for delayed sync or offline status.",
+      ? `${delayedOrOfflineCount} CHV${delayedOrOfflineCount === 1 ? "" : "s"} need sync follow-up because they are delayed or offline.`
+      : "No CHVs in this view are delayed or offline.",
     highUrgencyCases > 0
-      ? `${highUrgencyCases} triage session${highUrgencyCases === 1 ? "" : "s"} were recorded in the last 24 hours.`
-      : "No triage sessions were recorded in the visible scope during the last 24 hours.",
+      ? `${highUrgencyCases} triage session${highUrgencyCases === 1 ? "" : "s"} were recorded in the last 24 hours; review wards where activity and risk overlap.`
+      : "No triage sessions were recorded in this view during the last 24 hours.",
     offlineMetrics
-      ? `${offlineMetrics.pending_uploads.toLocaleString()} pending offline upload${offlineMetrics.pending_uploads === 1 ? "" : "s"}, ${offlineMetrics.failed_syncs_24h.toLocaleString()} failed sync${offlineMetrics.failed_syncs_24h === 1 ? "" : "s"}, and ${offlineMetrics.pre_validation_rejections_24h.toLocaleString()} pre-validation reject${offlineMetrics.pre_validation_rejections_24h === 1 ? "" : "s"} were recorded in the monitoring window.`
-      : "Offline sync monitoring is not available for the visible scope yet.",
+      ? `${offlineMetrics.pending_uploads.toLocaleString()} offline upload${offlineMetrics.pending_uploads === 1 ? "" : "s"} still need to land, with ${offlineMetrics.failed_syncs_24h.toLocaleString()} failed sync${offlineMetrics.failed_syncs_24h === 1 ? "" : "s"} and ${offlineMetrics.pre_validation_rejections_24h.toLocaleString()} rejected before upload.`
+      : "Offline sync monitoring is not available for this view yet.",
   ];
+  const liveCoverageRequestCount = coverageRequests.filter((requestRecord) =>
+    isLiveCoverageRequestStatus(requestRecord.status),
+  ).length;
+  const syncIssueCount = delayedOrOfflineCount + offlineAuditIssueCount;
+  const hasRegistryFilters = Boolean(search.trim()) || selectedWard !== "ALL" || quickFilter !== "ALL" || focusFilter !== "ALL";
+  const registryStart = registryRows.length ? (clampedPage - 1) * ROWS_PER_PAGE + 1 : 0;
+  const registryEnd = Math.min(clampedPage * ROWS_PER_PAGE, registryRows.length);
+  const attentionItems = [
+    {
+      label: "Ward coverage",
+      value: isLoading ? "..." : coverageSummary.gap.toLocaleString(),
+      title: coverageSummary.gap
+        ? `${coverageSummary.gap} ward${coverageSummary.gap === 1 ? "" : "s"} need coverage review`
+        : "Coverage is stable in this view",
+      detail: coverageSummary.gap
+        ? "Start with the ward map and open a coverage request where the gap is confirmed."
+        : "Keep monitoring high-risk wards and recent alert activity.",
+      tone: coverageSummary.gap ? "danger" : "success",
+      href: "#ward-coverage",
+    },
+    {
+      label: "CHV sync",
+      value: isLoading ? "..." : delayedOrOfflineCount.toLocaleString(),
+      title: delayedOrOfflineCount
+        ? `${delayedOrOfflineCount} CHV${delayedOrOfflineCount === 1 ? "" : "s"} delayed or offline`
+        : "No delayed or offline CHVs",
+      detail: delayedOrOfflineCount
+        ? "Review the CHV directory and sync health panel before assigning follow-up."
+        : "Current CHV records are not showing sync delays.",
+      tone: delayedOrOfflineCount ? "warning" : "success",
+      href: "#chv-registry",
+    },
+    {
+      label: "Coverage requests",
+      value: isLoading ? "..." : liveCoverageRequestCount.toLocaleString(),
+      title: liveCoverageRequestCount
+        ? `${liveCoverageRequestCount} live coverage request${liveCoverageRequestCount === 1 ? "" : "s"}`
+        : "No live coverage requests",
+      detail: liveCoverageRequestCount
+        ? "Track open, approved, or in-progress requests from the selected ward panel."
+        : "New requests appear after a ward coverage gap is confirmed.",
+      tone: liveCoverageRequestCount ? "info" : "default",
+      href: "#ward-coverage",
+    },
+    {
+      label: "Sync issues",
+      value: isLoading ? "..." : syncIssueCount.toLocaleString(),
+      title: syncIssueCount ? "Sync issues need review" : "No sync issues flagged",
+      detail: syncIssueCount
+        ? "Check device status, failed syncs, and rejected uploads before using the data operationally."
+        : "No delayed CHVs or audit warnings are visible in this view.",
+      tone: syncIssueCount ? "warning" : "success",
+      href: "#sync-health",
+    },
+  ] as const;
 
   useEffect(() => {
     if (!selectedMapWard) {
@@ -819,8 +874,8 @@ export default function ChvsPage() {
   return (
     <div className="space-y-6">
       <DashboardTopbar
-        title="Community Health Volunteers"
-        subtitle="CHV activity summaries, sync status, and ward-linked engagement data"
+        title="CHV Coverage & Field Readiness"
+        subtitle="Monitor ward CHV coverage, offline sync health, and follow-up actions across Migori County"
         lastUpdatedLabel={lastUpdatedLabel}
         lastUpdatedTone={freshness.isStale ? "stale" : "default"}
       />
@@ -837,20 +892,57 @@ export default function ChvsPage() {
         ) : null}
         {requestFeedback ? <StatusBanner tone="success">{requestFeedback}</StatusBanner> : null}
 
+        <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <span className="text-xs font-semibold uppercase tracking-[0.2em] text-panel-subtle">
+                Needs attention
+              </span>
+              <h2 className="mt-2 text-2xl font-semibold text-panel-strong">What should be reviewed first?</h2>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-panel-muted">
+                These cues are derived from the current ward, CHV, alert, and sync records so operators can decide where to follow up next.
+              </p>
+            </div>
+            <StatusBadge tone="info" className="w-fit">Current view</StatusBadge>
+          </div>
+
+          <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {attentionItems.map((item) => (
+              <a
+                key={item.label}
+                href={item.href}
+                className="group rounded-[1.4rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-icon-button-surface)_74%,transparent)] px-4 py-4 transition hover:border-[var(--dashboard-icon-button-border)]"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-panel-subtle">
+                    {item.label}
+                  </span>
+                  <StatusBadge tone={item.tone}>{item.value}</StatusBadge>
+                </div>
+                <strong className="mt-3 block text-base leading-6 text-panel-strong">{item.title}</strong>
+                <p className="mt-2 text-sm leading-6 text-panel-muted">{item.detail}</p>
+                <span className="mt-3 inline-flex text-xs font-semibold text-brand transition group-hover:text-panel-strong">
+                  Review
+                </span>
+              </a>
+            ))}
+          </div>
+        </Card>
+
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <Card className="rounded-[2rem] px-5 py-5">
-            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Visible CHVs</span>
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">CHVs in view</span>
             <div className="mt-3 text-4xl font-semibold leading-none text-panel-strong">{totalVisibleLabel}</div>
-            <p className="mt-4 text-sm text-panel-muted">Visible in the selected ward filter</p>
+            <p className="mt-4 text-sm text-panel-muted">Matches the current ward, search, and status filters</p>
           </Card>
 
           <Card className="rounded-[2rem] px-5 py-5">
-            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Active today</span>
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">Active CHVs</span>
             <div className="mt-3 flex items-end gap-2">
               <strong className="text-4xl font-semibold leading-none text-panel-strong">{activeVisibleLabel}</strong>
               <span className="pb-1 text-sm font-medium text-panel-muted">/ {totalVisibleLabel}</span>
             </div>
-            <p className="mt-4 text-sm text-panel-muted">CHVs marked active in the current visible scope</p>
+            <p className="mt-4 text-sm text-panel-muted">Backend status in the current view</p>
           </Card>
 
           <Card className="rounded-[2rem] px-5 py-5">
@@ -861,23 +953,23 @@ export default function ChvsPage() {
                 {coverageSummary.gap > 0 ? "Needs action" : "Stable"}
               </StatusBadge>
             </div>
-            <p className="mt-4 text-sm text-panel-muted">Wards with no active CHV coverage in the visible map scope</p>
+            <p className="mt-4 text-sm text-panel-muted">Wards needing coverage review in this map scope</p>
           </Card>
 
           <Card className="rounded-[2rem] px-5 py-5">
             <span className="text-xs font-semibold uppercase tracking-[0.18em] text-panel-subtle">
-              Recorded triage sessions (24h)
+              Triage sessions (24h)
             </span>
             <div className="mt-3 text-4xl font-semibold leading-none text-panel-strong">{casesVisibleLabel}</div>
-            <p className="mt-4 text-sm text-panel-muted">{highPriorityReferrals.toLocaleString()} referrals in high-risk wards (calculated)</p>
+            <p className="mt-4 text-sm text-panel-muted">{highPriorityReferrals.toLocaleString()} referrals in high-risk wards, derived from CHV records</p>
           </Card>
         </section>
 
-        <section className="grid gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(22rem,0.95fr)]">
+        <section id="sync-health" className="grid gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(22rem,0.95fr)]">
           <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <h2 className="text-2xl font-semibold text-panel-strong">Offline Sync Health</h2>
+                <h2 className="text-2xl font-semibold text-panel-strong">Field Sync Health</h2>
                 <p className="mt-2 text-sm text-panel-muted">
                   Device activity, queued uploads, conflicts, and ward-level sync freshness
                 </p>
@@ -944,7 +1036,7 @@ export default function ChvsPage() {
                 </strong>
               </div>
               <div className="rounded-[1.25rem] border border-panel-table-wrap px-4 py-3 text-sm">
-                <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-panel-subtle">Pre-validation rejects</span>
+                <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-panel-subtle">Rejected before upload</span>
                 <strong className="mt-2 block text-xl text-panel-strong">
                   {offlineMetrics ? offlineMetrics.pre_validation_rejections_24h.toLocaleString() : "..."}
                 </strong>
@@ -967,7 +1059,7 @@ export default function ChvsPage() {
                     <div>
                       <strong className="text-sm text-panel-strong">{row.ward_name}</strong>
                       <p className="mt-1 text-xs text-panel-muted">
-                        {row.active_device_count}/{row.registered_device_count} active devices, {row.pending_upload_count} pending uploads, {row.pre_validation_rejection_count_24h} pre-validation rejects
+                        {row.active_device_count}/{row.registered_device_count} active devices, {row.pending_upload_count} pending uploads, {row.pre_validation_rejection_count_24h} rejected before upload
                       </p>
                     </div>
                     <StatusBadge tone={syncTone(row.sync_health)}>{toSyncHealthLabel(row.sync_health)}</StatusBadge>
@@ -975,7 +1067,7 @@ export default function ChvsPage() {
                 ))
               ) : (
                 <div className="rounded-[1.25rem] border border-dashed border-panel-table-wrap px-4 py-4 text-sm text-panel-muted">
-                  No ward sync health rows are available for this scope.
+                  No ward sync health rows are available for this view yet.
                 </div>
               )}
             </div>
@@ -984,9 +1076,9 @@ export default function ChvsPage() {
           <Card className="rounded-[2rem] px-5 py-5 sm:px-6">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h2 className="text-2xl font-semibold text-panel-strong">Offline Sync Audit</h2>
+                <h2 className="text-2xl font-semibold text-panel-strong">Sync Issues & Rejections</h2>
                 <p className="mt-2 text-sm text-panel-muted">
-                  Accepted and rejected submissions grouped by assignment, bundle, and linkage checks
+                  Upload acceptance, rejection, assignment, bundle, and linkage checks
                 </p>
               </div>
               <StatusBadge tone={offlineAuditIssueCount ? "warning" : "success"}>
@@ -1016,13 +1108,13 @@ export default function ChvsPage() {
                 ))
               ) : (
                 <div className="rounded-[1.25rem] border border-dashed border-panel-table-wrap px-4 py-4 text-sm text-panel-muted">
-                  No audit checks are available for this scope.
+                  No sync issues have been recorded for this view yet.
                 </div>
               )}
             </div>
 
             <div className="mt-5 rounded-[1.25rem] border border-panel-table-wrap bg-panel px-4 py-4">
-              <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Latest backend decision</span>
+              <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Latest sync outcome</span>
               {recentSyncDecisions[0] ? (
                 <div className="mt-3 space-y-2">
                   <div className="flex items-center justify-between gap-3">
@@ -1039,7 +1131,7 @@ export default function ChvsPage() {
                   ) : null}
                 </div>
               ) : (
-                <p className="mt-3 text-sm text-panel-muted">No sync decisions have been recorded for this scope.</p>
+                <p className="mt-3 text-sm text-panel-muted">No sync outcomes have been recorded for this view yet.</p>
               )}
               {latestPreValidationRejection ? (
                 <div className="mt-4 rounded-[1rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-icon-button-surface)_72%,transparent)] px-3 py-3">
@@ -1050,7 +1142,7 @@ export default function ChvsPage() {
                     <StatusBadge tone="danger">PRE-VALIDATION</StatusBadge>
                   </div>
                   <p className="mt-2 text-xs leading-5 text-panel-muted">
-                    Latest pre-validation rejection: {latestPreValidationRejection.safe_error_summary}
+                    Latest upload rejection: {latestPreValidationRejection.safe_error_summary}
                   </p>
                   {latestPreValidationRejection.field_paths.length ? (
                     <p className="mt-1 text-xs leading-5 text-panel-subtle">
@@ -1064,14 +1156,14 @@ export default function ChvsPage() {
         </section>
 
         <section className="space-y-5">
-          <Card className="overflow-hidden rounded-[2rem] p-5 sm:p-6">
+          <Card id="ward-coverage" className="overflow-hidden rounded-[2rem] p-5 sm:p-6">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h2 className="text-[clamp(1.6rem,1rem+1vw,2.35rem)] font-semibold leading-tight text-panel-strong">
-                  CHV Ward Coverage
+                  Ward Coverage
                 </h2>
                 <p className="mt-2 text-sm text-panel-muted">
-                  Coverage-first Migori ward surface showing where CHV presence is good, low, or missing
+                  Migori wards colored by whether CHV coverage is good, low, missing, or not yet available
                 </p>
                 {wardMap ? (
                   <p className="mt-2 text-xs text-panel-subtle">
@@ -1352,9 +1444,9 @@ export default function ChvsPage() {
 
           <div className="grid gap-5 xl:grid-cols-2">
             <Card className="rounded-[2rem] px-5 py-5">
-              <h2 className="text-2xl font-semibold text-panel-strong">Operational Insights</h2>
+              <h2 className="text-2xl font-semibold text-panel-strong">Recommended Next Steps</h2>
               <p className="mt-3 text-sm text-panel-muted">
-                Coverage gaps, sync delays, and field activity below are derived from visible records and meant to guide follow-up.
+                Coverage gaps, sync delays, and recent field activity translated into operator-friendly follow-up cues.
               </p>
 
               <div className="mt-5 space-y-3">
@@ -1393,13 +1485,13 @@ export default function ChvsPage() {
                 >
                   <ShieldAlert className="size-4" aria-hidden="true" />
                 </span>
-                <h3 className="text-xl font-semibold text-panel-strong">Coverage Summary</h3>
+                <h3 className="text-xl font-semibold text-panel-strong">Ward Coverage Summary</h3>
               </div>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <div className="rounded-[1.25rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-icon-button-surface)_74%,transparent)] px-4 py-3">
                   <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Current view</span>
                   <p className="mt-2 text-xs leading-5 text-panel-muted">
-                    Gap = 0 active CHVs, or only 1 active CHV in a high-risk ward. Low = below the visible risk threshold.
+                    Gap means no active CHV coverage, or only 1 active CHV in a high-risk ward. Low means coverage is below the rule for the ward's risk.
                   </p>
                   <div className="mt-3 space-y-2 text-sm text-panel-copy">
                     <div className="flex items-center justify-between gap-3">
@@ -1407,11 +1499,11 @@ export default function ChvsPage() {
                       <strong className="text-[color:var(--danger)]">{coverageSummary.gap}</strong>
                     </div>
                     <div className="flex items-center justify-between gap-3">
-                      <span>Below visible threshold</span>
+                      <span>Below coverage rule</span>
                       <strong className="text-[color:var(--warning)]">{coverageSummary.low}</strong>
                     </div>
                     <div className="flex items-center justify-between gap-3">
-                      <span>Meets visible threshold</span>
+                      <span>Meets coverage rule</span>
                       <strong className="text-[color:var(--success)]">{coverageSummary.good}</strong>
                     </div>
                     <div className="flex items-center justify-between gap-3">
@@ -1443,7 +1535,7 @@ export default function ChvsPage() {
                 </div>
               </div>
               <p className="mt-5 text-sm text-panel-muted">
-                Use the selected ward panel and CHV registry below to review the specific volunteers linked to the highest-priority gaps.
+                Use the selected ward panel and CHV directory below to review volunteers linked to the highest-priority gaps.
               </p>
             </Card>
           </div>
@@ -1453,71 +1545,94 @@ export default function ChvsPage() {
           <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div>
               <h2 className="text-[clamp(1.6rem,1rem+1vw,2.3rem)] font-semibold leading-tight text-panel-strong">
-                CHV Personnel Registry
+                CHV Directory
               </h2>
-              <p className="mt-2 text-sm text-panel-muted">Recorded CHV identity, sync, alert, and ward-linked status fields</p>
+              <p className="mt-2 text-sm text-panel-muted">Find a volunteer, check recent sync status, and open the linked ward context.</p>
               {selectedWard !== "ALL" && selectedWardName ? (
                 <p className="mt-2 text-xs font-medium text-brand">
-                  Registry filtered to {selectedWardName} from the ward coverage view.
+                  Directory filtered to {selectedWardName} from the ward coverage view.
                 </p>
               ) : null}
             </div>
 
-            <div className="flex min-w-0 flex-1 flex-col gap-4 xl:max-w-3xl xl:flex-row xl:flex-wrap xl:justify-end">
-              <InputShell
-                className="min-w-0 flex-[1.2]"
-                icon={<Search className="size-4" aria-hidden="true" />}
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search by name..."
-                aria-label="Search by name"
-              />
-
-              <label className="flex min-w-[12rem] flex-col">
-                <span className="relative flex h-11 items-center rounded-pill border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 shadow-sm">
-                  <select
-                    value={selectedWard}
-                    onChange={(event) => setSelectedWard(event.target.value as SelectedWardFilter)}
-                    aria-label="Ward filter"
-                    className="h-full w-full appearance-none bg-transparent pr-8 text-sm text-panel-strong outline-none"
-                  >
-                    {wardsForFilter.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </span>
-              </label>
-
-              <Button variant="secondary" size="icon" className="size-11" aria-label="More filters">
-                <Filter className="size-4" aria-hidden="true" />
-              </Button>
-            </div>
+            <StatusBadge tone={hasRegistryFilters ? "info" : "default"} className="w-fit">
+              {hasRegistryFilters ? "Filtered" : "All CHVs"}
+            </StatusBadge>
           </div>
 
-          <div className="mt-5 flex flex-wrap gap-2">
-            {[
-              { value: "ALL", label: "All" },
-              { value: "ACTIVE", label: "Active" },
-              { value: "IDLE", label: "Idle" },
-              { value: "OFFLINE", label: "Offline" },
-              { value: "HIGH_RISK", label: "High-risk wards" },
-            ].map((filterOption) => (
-              <button
-                key={filterOption.value}
-                type="button"
-                className={cn(
-                  "inline-flex h-10 items-center justify-center rounded-pill border px-4 text-sm font-semibold transition",
-                  quickFilter === filterOption.value
-                    ? "border-brand bg-brand text-white shadow-[var(--login-submit-shadow)]"
-                    : "border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] text-panel-copy hover:border-[var(--dashboard-icon-button-border)] hover:text-panel-strong",
-                )}
-                onClick={() => setQuickFilter(filterOption.value as QuickFilter)}
-              >
-                {filterOption.label}
-              </button>
-            ))}
+          <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(13rem,17rem)_auto]">
+            <InputShell
+              icon={<Search className="size-4" aria-hidden="true" />}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search name, phone, or ward"
+              aria-label="Search CHVs by name, phone, or ward"
+            />
+
+            <label className="flex min-w-0 flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Ward</span>
+              <span className="relative flex h-11 items-center rounded-pill border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 shadow-sm">
+                <select
+                  value={selectedWard}
+                  onChange={(event) => setSelectedWard(event.target.value as SelectedWardFilter)}
+                  aria-label="Ward filter"
+                  className="h-full w-full appearance-none bg-transparent pr-8 text-sm text-panel-strong outline-none"
+                >
+                  {wardsForFilter.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            </label>
+
+            <Button
+              variant="secondary"
+              className="h-11 rounded-pill px-4 text-sm lg:self-end"
+              disabled={!hasRegistryFilters}
+              onClick={() => {
+                setSearch("");
+                setSelectedWard("ALL");
+                setQuickFilter("ALL");
+                setFocusFilter("ALL");
+              }}
+            >
+              Clear filters
+            </Button>
+          </div>
+
+          <div className="mt-4 rounded-[1.5rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-icon-button-surface)_70%,transparent)] px-4 py-4">
+            <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-panel-subtle">
+              <Filter className="size-4" aria-hidden="true" />
+              <span>Status and risk filters</span>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {[
+                { value: "ALL", label: "All" },
+                { value: "ACTIVE", label: "Active" },
+                { value: "IDLE", label: "Idle" },
+                { value: "OFFLINE", label: "Offline" },
+                { value: "HIGH_RISK", label: "High-risk wards" },
+              ].map((filterOption) => (
+                <button
+                  key={filterOption.value}
+                  type="button"
+                  className={cn(
+                    "inline-flex h-10 items-center justify-center rounded-pill border px-4 text-sm font-semibold transition",
+                    quickFilter === filterOption.value
+                      ? "border-brand bg-brand text-white shadow-[var(--login-submit-shadow)]"
+                      : "border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] text-panel-copy hover:border-[var(--dashboard-icon-button-border)] hover:text-panel-strong",
+                  )}
+                  onClick={() => setQuickFilter(filterOption.value as QuickFilter)}
+                >
+                  {filterOption.label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-3 text-xs leading-5 text-panel-muted">
+              Active means the backend marks the CHV as currently active. Idle means registered with no recent activity. Offline means no usable recent sync is visible.
+            </p>
           </div>
 
           <div className="mt-6 overflow-hidden rounded-[1.5rem] border border-panel-table-wrap">
@@ -1525,15 +1640,15 @@ export default function ChvsPage() {
               <table className="min-w-full divide-y divide-panel-table-wrap text-sm">
                 <thead className="bg-[color-mix(in_srgb,var(--dashboard-table-line)_30%,transparent)]">
                   <tr className="text-left">
-              {[
-                  "Volunteer name",
-                  "Ward",
-                  "Status",
-                  "Ward alerts (Total/Delivered)",
-                  "Sync health",
-                  "Last sync",
-                  "Ward risk",
-                      "Record",
+                    {[
+                      "Volunteer name",
+                      "Ward",
+                      "Status",
+                      "Alerts sent / delivered",
+                      "Sync status",
+                      "Last sync",
+                      "Ward risk",
+                      "Actions",
                     ].map((label) => (
                       <th
                         key={label}
@@ -1625,7 +1740,7 @@ export default function ChvsPage() {
                   ) : (
                     <tr>
                       <td colSpan={8} className="px-5 py-10 text-center text-sm text-panel-muted">
-                        No CHVs match the selected filters.
+                        No CHVs match this view. Try clearing filters or selecting another ward.
                       </td>
                     </tr>
                   )}
@@ -1636,7 +1751,7 @@ export default function ChvsPage() {
 
           <div className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <span className="text-sm text-panel-muted">
-              Showing {pagedRows.length} of {registryRows.length || 0} volunteers
+              Showing {registryStart}-{registryEnd} of {registryRows.length || 0} CHVs
             </span>
             {totalPages > 1 ? (
               <div className="flex items-center gap-2">

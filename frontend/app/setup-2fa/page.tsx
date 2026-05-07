@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, CheckCircle2, Copy, Download, KeyRound, Printer, Shield, ShieldAlert, Smartphone } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Copy, Download, KeyRound, Printer, ShieldAlert, Smartphone } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
@@ -10,12 +10,13 @@ import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import {
   PublicAlert,
+  BrandLockup,
   PublicFooter,
   PublicScreen,
   PublicShell,
 } from "@/components/ui/public-shell";
-import { getDefaultRoute } from "@/lib/navigation";
-import type { CurrentUser } from "@/lib/auth";
+import { buildPolicyReviewRoute, getDefaultRoute } from "@/lib/navigation";
+import { requiresPolicyAcceptance, type CurrentUser } from "@/lib/auth";
 
 type SetupState = {
   manual_entry_key: string;
@@ -115,7 +116,7 @@ export default function SetupTwoFactorPage() {
       setCopyMessage(null);
 
       if (codes.length === 0) {
-        router.replace(nextRoute);
+        router.replace(requiresPolicyAcceptance(user) ? buildPolicyReviewRoute(nextRoute) : nextRoute);
       }
     } catch (submissionError) {
       const message =
@@ -189,18 +190,14 @@ export default function SetupTwoFactorPage() {
       return;
     }
 
-    router.replace(getDefaultRoute(user.role));
+    const nextRoute = getDefaultRoute(user.role);
+    router.replace(requiresPolicyAcceptance(user) ? buildPolicyReviewRoute(nextRoute) : nextRoute);
   }
 
   return (
     <PublicScreen className="bg-[var(--totp-background)] text-[var(--totp-ink)]">
       <PublicShell narrow className="justify-center">
-        <div className="mb-8 flex items-center gap-3">
-          <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[var(--totp-brand-mark-surface)] text-white shadow-[var(--totp-brand-mark-shadow)]">
-            <Shield className="size-5" aria-hidden="true" />
-          </span>
-          <span className="text-3xl font-semibold tracking-tight text-[var(--totp-brand-ink)]">CCHIS</span>
-        </div>
+        <BrandLockup className="mb-8 md:mb-8" />
 
         <div className="w-full max-w-[720px] rounded-[2rem] border border-[var(--totp-card-border)] bg-[var(--totp-card-surface)] p-6 shadow-[var(--totp-card-shadow)] backdrop-blur md:p-8">
           <div className="mb-6 flex items-start gap-4">

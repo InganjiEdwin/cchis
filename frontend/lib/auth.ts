@@ -13,6 +13,34 @@ export type ProfileCapabilities = {
   mode: "auth_contract_backed_profile";
 };
 
+export type PolicyDocumentType = "TERMS" | "PRIVACY" | "COOKIE_NOTICE";
+export type PolicyAcceptanceContext = "first_sign_in" | "version_update" | "manual_review";
+
+export type PolicyAcceptanceState = {
+  required: boolean;
+  is_current: boolean;
+  terms_version: string;
+  privacy_version: string;
+  cookie_notice_version: string;
+  accepted_terms_version: string | null;
+  accepted_privacy_version: string | null;
+  accepted_cookie_notice_version: string | null;
+  missing_documents: PolicyDocumentType[];
+  terms_url: string;
+  privacy_url: string;
+  cookie_notice_url: string;
+};
+
+export type PolicyAcceptancePayload = {
+  accepted_terms: boolean;
+  accepted_privacy: boolean;
+  accepted_cookie_notice: boolean;
+  terms_version: string;
+  privacy_version: string;
+  cookie_notice_version: string;
+  acceptance_context?: PolicyAcceptanceContext;
+};
+
 export type CurrentUser = {
   id: number;
   username: string;
@@ -31,6 +59,7 @@ export type CurrentUser = {
   account_created_at?: string;
   last_login_at?: string | null;
   profile_capabilities?: ProfileCapabilities;
+  policy_acceptance?: PolicyAcceptanceState;
 };
 
 export function buildDefaultProfileCapabilities(
@@ -62,6 +91,10 @@ export function normalizeCurrentUser(user: CurrentUser): CurrentUser {
     ...user,
     profile_capabilities: buildDefaultProfileCapabilities(user),
   };
+}
+
+export function requiresPolicyAcceptance(user: CurrentUser | null) {
+  return Boolean(user?.policy_acceptance?.required && !user.policy_acceptance.is_current);
 }
 
 export type LoginSuccessResponse = {
@@ -544,6 +577,17 @@ export async function login(payload: LoginPayload) {
 
 export async function fetchSession() {
   return requestBff<SessionResponse>("/api/session", { method: "GET" });
+}
+
+export async function fetchPolicyAcceptanceViaBff() {
+  return requestBff<PolicyAcceptanceState>("/api/session/policy-acceptance", { method: "GET" });
+}
+
+export async function acceptPoliciesViaBff(payload: PolicyAcceptancePayload) {
+  return requestBff<PolicyAcceptanceState>("/api/session/policy-acceptance", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function updateAppearanceViaBff(themePreference: ThemePreference) {

@@ -1052,6 +1052,17 @@ Verification evidence after remediation:
 - Docker-backed phase auditor: 75 checks passing across Phase 0 through Phase 10, with 0 open gaps.
 - Frontend source-data page tests and TypeScript check passing.
 
+## 2026-05-05 Second Cold Re-Audit Closure
+
+A fresh third-party-style pass found additional gaps that the artifact-level auditor did not prove:
+
+- CSV rows with more cells than headers could hide trailing values from the source-data safety scan. Validation now preserves unnamed trailing cells under synthetic diagnostic columns, rejects the row shape, and still scans those cells for PII and formula injection.
+- PII header detection was too exact. Composite headers such as `patient_phone_number`, `client_name`, and `national_id` are now rejected while approved operational labels such as `facility_name` remain allowed.
+- Connector refresh options could bypass the normal upload metadata PII guard. Connector options now use the same PII-safe mapping validation, and the upload service enforces metadata text safety as a second line of defense.
+- The plan says Django admin remains available for superuser inspection and emergency debugging, but source-data and readiness source models were not registered. Admin inspection views now cover upload batches, artifacts, validation issues, upload events, connector runs, feed-mode overrides, readiness sources, readiness ingestion runs, and readiness snapshots.
+- The source-feed matrix still described readiness source-file ETL and dashboard source-data intake as gaps. The matrix now reflects the implemented operator path.
+- The phase auditor now checks for these controls so future closure claims cannot pass on module presence alone.
+
 ## Suggested Implementation Order
 
 1. Feed registry and template downloads.

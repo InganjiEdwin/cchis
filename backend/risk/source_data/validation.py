@@ -33,8 +33,11 @@ from risk.surveillance_ingestion import inspect_surveillance_csv
 MAX_VALIDATION_SAMPLE_ROWS = 50
 MAX_REJECTED_ROW_DIAGNOSTICS = 100
 MAX_FORMULA_INJECTION_ISSUES = 100
+MAX_ROW_SHAPE_ISSUES = 100
 CSV_CONTENT_TYPES = {"text/csv", "application/csv", "application/vnd.ms-excel"}
 SNIFF_SAMPLE_BYTES = 4096
+EXTRA_COLUMN_RESTKEY = "__extra_columns__"
+EXTRA_COLUMN_PREFIX = "__extra_column_"
 PII_HEADER_NAMES = {
     "address",
     "caregiver_name",
@@ -57,6 +60,39 @@ PII_HEADER_NAMES = {
     "phone_number",
     "precise_location",
 }
+PII_SAFE_NAME_HEADERS = {
+    "county_name",
+    "facility_name",
+    "source_name",
+    "sub_county_name",
+    "ward_name",
+}
+PII_HEADER_TOKEN_PATTERNS = (
+    ("patient", "name"),
+    ("client", "name"),
+    ("caregiver", "name"),
+    ("mother", "name"),
+    ("father", "name"),
+    ("child", "name"),
+    ("household", "name"),
+    ("household", "head", "name"),
+    ("person", "name"),
+    ("patient", "id"),
+    ("client", "id"),
+    ("person", "id"),
+    ("national", "id"),
+    ("government", "id"),
+    ("passport",),
+    ("birth", "certificate"),
+    ("date", "birth"),
+    ("birth", "date"),
+    ("phone",),
+    ("mobile",),
+    ("msisdn",),
+    ("email",),
+    ("address",),
+    ("gps",),
+)
 PHONE_RE = re.compile(r"(?:\+?254|0)?7\d{8}\b")
 NATIONAL_ID_RE = re.compile(r"\b\d{7,9}\b")
 EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
@@ -246,6 +282,11 @@ SOURCE_DATA_VALIDATION_ERROR_CATALOG: dict[str, dict[str, str]] = {
         "operator_message": "CSV file must include at least one data row.",
         "remediation": "Keep the header row and add source-data rows before uploading.",
     },
+    "row_has_extra_columns": {
+        "severity": "error",
+        "operator_message": "A CSV row has more cells than the header row defines.",
+        "remediation": "Download the template and remove trailing cells or extra delimiters from the row.",
+    },
     "pii_email_value_detected": {
         "severity": "error",
         "operator_message": "Sampled value looks like an email address.",
@@ -347,6 +388,21 @@ def normalize_header(value: str | None) -> str:
     return "_".join((value or "").strip().lower().replace("-", "_").split())
 
 
+def _header_looks_like_pii(header: str) -> bool:
+    if header in PII_HEADER_NAMES:
+        return True
+    if header in PII_SAFE_NAME_HEADERS:
+        return False
+    tokens = tuple(token for token in header.split("_") if token)
+    token_set = set(tokens)
+    for pattern in PII_HEADER_TOKEN_PATTERNS:
+        if all(token in token_set for token in pattern):
+            if pattern == ("phone",) and header in {"facility_phone", "source_phone"}:
+                continue
+            return True
+    return False
+
+
 def _issue(
     *,
     severity: str,
@@ -370,7 +426,7 @@ def _read_csv_headers_and_rows(path: Path) -> tuple[list[str], list[dict[str, st
     issues: list[dict[str, Any]] = []
     try:
         with path.open("r", encoding="utf-8-sig", newline="") as csv_file:
-            reader = csv.DictReader(csv_file)
+            reader = csv.DictReader(csv_file, restkey=EXTRA_COLUMN_RESTKEY)
             if reader.fieldnames is None:
                 return [], [], [
                     _issue(
@@ -381,7 +437,15 @@ def _read_csv_headers_and_rows(path: Path) -> tuple[list[str], list[dict[str, st
                 ]
             headers = [normalize_header(header) for header in reader.fieldnames]
             rows = [
-                {normalize_header(key): value for key, value in row.items() if key is not None}
+                {
+                    normalize_header(key): value
+                    for key, value in row.items()
+                    if key is not None and key != EXTRA_COLUMN_RESTKEY
+                }
+                | {
+                    f"{EXTRA_COLUMN_PREFIX}{index}": value
+                    for index, value in enumerate(row.get(EXTRA_COLUMN_RESTKEY) or (), start=1)
+                }
                 for row in reader
             ]
             return headers, rows, issues
@@ -408,10 +472,12 @@ def _sample_rows(rows: list[dict[str, str]]) -> list[tuple[int, dict[str, str]]]
     first_rows = indexed_rows[:25]
     if len(indexed_rows) <= 25:
         return first_rows
+    last_rows = indexed_rows[-10:]
     random_source = random.Random(len(indexed_rows))
-    remaining = indexed_rows[25:]
-    random_rows = random_source.sample(remaining, min(25, len(remaining)))
-    combined = {row_number: row for row_number, row in [*first_rows, *random_rows]}
+    last_row_numbers = {row_number for row_number, _ in last_rows}
+    remaining = [(row_number, row) for row_number, row in indexed_rows[25:] if row_number not in last_row_numbers]
+    random_rows = random_source.sample(remaining, min(15, len(remaining)))
+    combined = {row_number: row for row_number, row in [*first_rows, *last_rows, *random_rows]}
     return sorted(combined.items())
 
 
@@ -493,6 +559,21 @@ def _file_level_issues(
                 message=f"CSV header '{header}' appears more than once.",
             )
         )
+    for row_number, row in enumerate(rows, start=2):
+        extra_columns = [column for column in row if column.startswith(EXTRA_COLUMN_PREFIX)]
+        if not extra_columns:
+            continue
+        issues.append(
+            _issue(
+                severity=SourceDataValidationIssue.SEVERITY_ERROR,
+                code="row_has_extra_columns",
+                row_number=row_number,
+                message="CSV row has more cells than the header row defines.",
+                safe_context={"extra_cell_count": len(extra_columns)},
+            )
+        )
+        if len(issues) >= MAX_ROW_SHAPE_ISSUES:
+            break
     if not rows:
         issues.append(
             _issue(
@@ -537,7 +618,7 @@ def _formula_injection_issues(rows: list[dict[str, str]]) -> list[dict[str, Any]
 def _pii_and_formula_issues(headers: list[str], rows: list[dict[str, str]]) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     for header in headers:
-        if header in PII_HEADER_NAMES:
+        if _header_looks_like_pii(header):
             issues.append(
                 _issue(
                     severity=SourceDataValidationIssue.SEVERITY_ERROR,

@@ -109,7 +109,7 @@ function buildFeedTypes(): SourceDataFeedTypesResponse {
         adapter_notes: "Weekly aggregate with explicit reporting period.",
         scheduled_supported: true,
         required_any_columns: [["ward_code"]],
-        accepted_columns: ["ward_code", "reporting_period_start", "reporting_period_end", "suspected_cases"],
+        accepted_columns: ["ward_code", "ward_name", "reporting_period_start", "reporting_period_end", "suspected_cases"],
         template_url: "/source-data/templates/surveillance_weekly_aggregate/",
         requires_new_ingestion_path: false,
         default_reporting_granularity: "week",
@@ -130,7 +130,7 @@ function buildFeedTypes(): SourceDataFeedTypesResponse {
         adapter_notes: "Canonical readiness CSV path.",
         scheduled_supported: false,
         required_any_columns: [["facility_code"], ["ward_code"]],
-        accepted_columns: ["facility_code", "ward_code", "reported_at"],
+        accepted_columns: ["facility_code", "ward_code", "ward_name", "reported_at"],
         template_url: "/source-data/templates/facility_readiness_snapshot/",
         requires_new_ingestion_path: false,
         default_reporting_granularity: "",
@@ -370,20 +370,30 @@ describe("SourceDataPage", () => {
     });
   });
 
-  it("renders source-data feed cards with template download links", () => {
+  it("renders a data-readiness workspace with template download links", () => {
     render(<SourceDataPage />);
 
-    expect(screen.getByText("Source Data | Versioned CSV feed contracts and source intake templates")).toBeInTheDocument();
-    expect(screen.getByText("Source Freshness")).toBeInTheDocument();
-    expect(screen.getByText("Source Gaps")).toBeInTheDocument();
-    expect(screen.getByText("Production Health")).toBeInTheDocument();
-    expect(screen.getByText("Worker Current")).toBeInTheDocument();
-    expect(screen.getByText("Rainfall forecast")).toBeInTheDocument();
+    expect(screen.getByText("Data Readiness | Check which data is up to date, upload new files, and safely add them to the dashboard")).toBeInTheDocument();
+    expect(screen.getByText("What Needs Attention")).toBeInTheDocument();
+    expect(screen.getByText("Add Data Safely")).toBeInTheDocument();
+    expect(screen.getByText("System Readiness")).toBeInTheDocument();
+    expect(screen.getByText("Ready for uploads")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /overview/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /review update/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /templates/i })).toBeInTheDocument();
+    expect(screen.queryByText("Weekly surveillance aggregate")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /templates/i }));
+
     expect(screen.getAllByText("Weekly surveillance aggregate").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Facility readiness snapshot").length).toBeGreaterThan(0);
+    expect(screen.getByText("The downloaded file already lists all 40 Migori wards. Fill the blank cells for each ward.")).toBeInTheDocument();
+    expect(screen.getByText("Ward name sits beside ward code so the file is easier to check before upload.")).toBeInTheDocument();
     expect(screen.queryByText("New Path")).not.toBeInTheDocument();
+    expect(screen.queryByText("Production Health")).not.toBeInTheDocument();
+    expect(screen.queryByText("Worker Current")).not.toBeInTheDocument();
 
-    const links = screen.getAllByRole("link", { name: /template/i });
+    const links = screen.getAllByRole("link", { name: /download template/i });
     const hrefs = links.map((link) => link.getAttribute("href"));
     expect(hrefs).toContain("/api/dashboard/source-data/templates/surveillance_weekly_aggregate");
     expect(hrefs).toContain("/api/dashboard/source-data/templates/facility_readiness_snapshot");
@@ -403,14 +413,19 @@ describe("SourceDataPage", () => {
     });
 
     render(<SourceDataPage />);
+    fireEvent.click(screen.getByRole("tab", { name: /review update/i }));
 
-    expect(screen.getByText("Downstream Actions")).toBeInTheDocument();
-    expect(screen.getByText("Scheduled scoring 06:00")).toBeInTheDocument();
-    expect(screen.getByText("No SMS")).toBeInTheDocument();
-    expect(screen.getByText("No model promotion")).toBeInTheDocument();
-    expect(screen.getByText("Regenerate surveillance labels")).toBeInTheDocument();
+    expect(screen.getByText("Dashboard use")).toBeInTheDocument();
+    expect(screen.getByText("This file is already used by the dashboard.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /use this file on dashboard/i })).not.toBeInTheDocument();
+    expect(screen.queryByText("Reason for cancelling")).not.toBeInTheDocument();
+    expect(screen.getByText("Related dashboard updates")).toBeInTheDocument();
+    expect(screen.getByText("Daily refresh 06:00")).toBeInTheDocument();
+    expect(screen.getByText("No messages sent")).toBeInTheDocument();
+    expect(screen.getByText("No risk score changes")).toBeInTheDocument();
+    expect(screen.getByText("Refresh surveillance summaries")).toBeInTheDocument();
     expect(screen.getByText("Recommended")).toBeInTheDocument();
-    expect(screen.getByText(/Uses only canonical surveillance records/)).toBeInTheDocument();
+    expect(screen.getByText(/Updates the related surveillance view/)).toBeInTheDocument();
   });
 
   it("runs downstream actions with sourceCutoffTimestampForUpload instead of browser time", () => {
@@ -427,7 +442,8 @@ describe("SourceDataPage", () => {
     });
 
     render(<SourceDataPage />);
-    fireEvent.click(screen.getByRole("button", { name: /run/i }));
+    fireEvent.click(screen.getByRole("tab", { name: /review update/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^update$/i }));
 
     expect(dashboardMocks.runSourceDataDownstreamActionViaBff).toHaveBeenCalledWith(
       upload.public_id,
@@ -469,23 +485,25 @@ describe("SourceDataPage", () => {
     });
 
     render(<SourceDataPage />);
+    fireEvent.click(screen.getByRole("tab", { name: /review update/i }));
 
-    expect(screen.getByText("Readiness Coverage")).toBeInTheDocument();
+    expect(screen.getByText("Facility Coverage")).toBeInTheDocument();
     expect(screen.getByText("85% facilities")).toBeInTheDocument();
-    expect(screen.getByText("Stale Reports")).toBeInTheDocument();
+    expect(screen.getByText("Old reports")).toBeInTheDocument();
     expect(screen.getByText("Disruptions")).toBeInTheDocument();
   });
 
   it("validates required fields and rejected files before upload", () => {
     render(<SourceDataPage />);
 
-    fireEvent.click(screen.getByRole("button", { name: /create upload/i }));
+    fireEvent.click(screen.getAllByRole("button", { name: /add data/i })[0]);
+    fireEvent.click(screen.getByRole("button", { name: /upload file/i }));
 
-    expect(screen.getByText("Enter the source system or county workbook name.")).toBeInTheDocument();
-    expect(screen.getByText("Choose when this source extract was generated.")).toBeInTheDocument();
-    expect(screen.getByText("Choose a CSV file exported from the template.")).toBeInTheDocument();
+    expect(screen.getByText("Enter where this file came from.")).toBeInTheDocument();
+    expect(screen.getByText("Choose the file date and time.")).toBeInTheDocument();
+    expect(screen.getByText("Choose a file saved from the template.")).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText(/CSV file/i), {
+    fireEvent.change(screen.getByLabelText(/file/i, { selector: "input[type='file']" }), {
       target: {
         files: [
           new File(["not,csv"], "weekly.xlsx", {
@@ -494,9 +512,9 @@ describe("SourceDataPage", () => {
         ],
       },
     });
-    fireEvent.click(screen.getByRole("button", { name: /create upload/i }));
+    fireEvent.click(screen.getByRole("button", { name: /upload file/i }));
 
-    expect(screen.getByText("Choose a .csv file. Export Excel workbooks as CSV before upload.")).toBeInTheDocument();
+    expect(screen.getByText("Choose a .csv file. Save Excel workbooks as CSV before upload.")).toBeInTheDocument();
     expect(mockMutationRecords.every((record) => record.mutate.mock.calls.length === 0)).toBe(true);
   });
 
@@ -514,8 +532,9 @@ describe("SourceDataPage", () => {
     });
     render(<SourceDataPage />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Use Last Metadata" }));
-    expect(screen.getByLabelText("Source name")).toHaveValue("Migori DHIS2 weekly export");
+    fireEvent.click(screen.getAllByRole("button", { name: /add data/i })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Use last details" }));
+    expect(screen.getByLabelText("Where did this file come from?")).toHaveValue("Migori DHIS2 weekly export");
 
     const csvFile = new File(
       [
@@ -525,8 +544,8 @@ describe("SourceDataPage", () => {
       "weekly.csv",
       { type: "text/csv" },
     );
-    fireEvent.change(screen.getByLabelText(/CSV file/i), { target: { files: [csvFile] } });
-    fireEvent.click(screen.getByRole("button", { name: /create upload/i }));
+    fireEvent.change(screen.getByLabelText(/file/i, { selector: "input[type='file']" }), { target: { files: [csvFile] } });
+    fireEvent.click(screen.getByRole("button", { name: /upload file/i }));
 
     const uploadMutationCall = mockMutationRecords
       .flatMap((record) => record.mutate.mock.calls)
@@ -565,11 +584,12 @@ describe("SourceDataPage", () => {
     });
 
     render(<SourceDataPage />);
+    fireEvent.click(screen.getByRole("tab", { name: /review update/i }));
 
     expect(screen.getByText("Import failed because a referenced ward is missing.")).toBeInTheDocument();
     expect(screen.getAllByText("Failed").length).toBeGreaterThan(0);
-    expect(screen.getByLabelText("Source-data upload progress")).toBeInTheDocument();
-    expect(screen.getByText("Cancel reason")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /cancel upload/i })).toBeDisabled();
+    expect(screen.getByLabelText("Data update progress")).toBeInTheDocument();
+    expect(screen.getByText("Reason for cancelling")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /cancel update/i })).toBeDisabled();
   });
 });

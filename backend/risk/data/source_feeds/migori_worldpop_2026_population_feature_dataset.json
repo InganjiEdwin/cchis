@@ -1,0 +1,138 @@
+{
+  "coverage": {
+    "exposure_record_counts_by_type": {
+      "population_density": 40
+    },
+    "ward_count": 40,
+    "wards_with_any_exposure": 40,
+    "wards_with_catchment_population": 0,
+    "wards_with_population_baseline": 40
+  },
+  "dataset": {
+    "created_at": "2026-05-05T19:46:58.708522+00:00",
+    "dataset_kind": "INFERENCE",
+    "dataset_ref": "population-exposure-population-exposure-v1-month-5-d6761b2c",
+    "feature_keys": [
+      "population_total",
+      "population_under_five",
+      "household_count_proxy",
+      "population_density",
+      "settlement_concentration",
+      "floodplain_exposure",
+      "water_body_proximity",
+      "wash_vulnerability",
+      "exposed_population_proxy",
+      "catchment_population_estimate",
+      "catchment_under_five_estimate"
+    ],
+    "id": 20,
+    "month": 5,
+    "row_count": 40,
+    "schema_version": "population-exposure-v1",
+    "source_kind": "LIVE"
+  },
+  "generated_at": "2026-05-05T21:34:46.339038+00:00",
+  "lineage": {
+    "release_version_filter": "WorldPop G2_CN_POP_R25A_100m KEN 2026 v1",
+    "snapshot_as_of": "2026-05-05T00:00:00+03:00",
+    "source_lineage": {
+      "aggregation_methods": [
+        "ward_sum_from_worldpop_100m_grid_pixel_centers"
+      ],
+      "freshness_state_counts": {
+        "fresh": 80
+      },
+      "non_current_record_count": 0,
+      "polygon_sha256_values": [
+        "5554c913ff082f7cc2536c772a9190ca81d3b1a7370d872800ff540ce40f6997"
+      ],
+      "record_count": 80,
+      "release_versions": [
+        "WorldPop G2_CN_POP_R25A_100m KEN 2026 v1"
+      ],
+      "replaced_record_count": 0,
+      "replacement_not_activated_record_count": 0,
+      "replay_diagnostic_record_count": 0,
+      "source_kind_counts": {
+        "live": 80
+      },
+      "source_names": [
+        "WorldPop R2025A constrained 100m Migori ward aggregate"
+      ],
+      "source_refs": [
+        "https://data.worldpop.org/GIS/Population/Global_2015_2030/R2025A/2026/KEN/v1/100m/constrained/ken_pop_2026_CN_100m_R2025A_v1.tif"
+      ],
+      "spatial_resolutions": [
+        "100m"
+      ],
+      "truth_class_counts": {
+        "spatially_aggregated_source": 80
+      }
+    }
+  },
+  "passed": true,
+  "phase": "migori_knbs_worldpop_phase_5_feature_dataset",
+  "phase1_summary_path": "/app/risk/data/source_feeds/migori_worldpop_2026_population_summary.json",
+  "phase5_gates": {
+    "coverage_ward_count_expected": true,
+    "dataset_row_count_expected": true,
+    "dataset_source_kind_live": true,
+    "no_seeded_lineage": true,
+    "persisted_row_count_expected": true,
+    "persisted_rows_scoped_to_county": true,
+    "phase1_csv_rows_available": true,
+    "phase1_summary_passed": true,
+    "population_baseline_coverage_expected": true,
+    "population_density_coverage_expected": true,
+    "population_total_matches_phase1": true,
+    "reconciliation_passed": true,
+    "reconciliation_population_total_matches_dataset": true,
+    "reconciliation_release_version_matches": true,
+    "reconciliation_source_ref_matches_phase1": true,
+    "release_filter_matches": true,
+    "row_lineage_polygon_hash_matches_phase1": true,
+    "row_lineage_release_matches": true,
+    "row_lineage_source_ref_matches": true,
+    "row_population_densities_match_phase1": true,
+    "row_population_density_complete": true,
+    "row_population_total_complete": true,
+    "row_population_totals_match_phase1": true,
+    "row_ward_codes_match_phase1": true,
+    "schema_version_expected": true,
+    "source_lineage_all_fresh": true,
+    "source_lineage_all_live": true,
+    "source_lineage_all_spatially_aggregated": true,
+    "source_lineage_polygon_hash_matches_phase1": true,
+    "source_lineage_release_matches": true,
+    "source_lineage_source_ref_matches": true
+  },
+  "reconciliation_summary_path": "/app/risk/data/source_feeds/migori_knbs_worldpop_2026_reconciliation.json",
+  "rows": {
+    "persisted_row_count": 40,
+    "phase1_row_value_comparison": {
+      "dataset_row_count_with_ward_codes": 40,
+      "density_mismatch_count": 0,
+      "density_mismatches": [],
+      "density_tolerance": 0.0005,
+      "expected_csv_row_count": 40,
+      "missing_dataset_ward_codes": [],
+      "population_mismatch_count": 0,
+      "population_mismatches": [],
+      "unexpected_dataset_ward_codes": []
+    },
+    "population_density_max": 3276.919,
+    "population_density_min": 76.734,
+    "population_total_sum": 1345269,
+    "row_count_by_county": [
+      {
+        "count": 40,
+        "ward__county": "Migori"
+      }
+    ],
+    "rows_with_matching_polygon_hash_lineage": 40,
+    "rows_with_matching_release_lineage": 40,
+    "rows_with_matching_source_ref_lineage": 40,
+    "rows_with_population_density": 40,
+    "rows_with_population_total": 40
+  }
+}

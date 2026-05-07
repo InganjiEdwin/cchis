@@ -43,6 +43,9 @@ class SourceDataConnectorDefinition:
     required_settings: tuple[str, ...]
     canonical_csv_url_setting: str
     notes: str
+    fixture_filenames: tuple[str, ...] = ()
+    default_release_version_setting: str = ""
+    default_source_ref_setting: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -55,6 +58,9 @@ class SourceDataConnectorDefinition:
             "required_settings": list(self.required_settings),
             "canonical_csv_url_setting": self.canonical_csv_url_setting,
             "notes": self.notes,
+            "fixture_filenames": list(self.fixture_filenames),
+            "default_release_version_setting": self.default_release_version_setting,
+            "default_source_ref_setting": self.default_source_ref_setting,
         }
 
 
@@ -94,16 +100,22 @@ SOURCE_DATA_CONNECTORS: tuple[SourceDataConnectorDefinition, ...] = (
     SourceDataConnectorDefinition(
         connector_key="worldpop_knbs_population",
         label="WorldPop/KNBS processed population refresh",
-        target_feed_key="population_baseline",
+        target_feed_key="gridded_population",
         feed_mode=SourceDataFeedModeOverride.MODE_API,
-        source_name="WorldPop/KNBS processed source",
+        source_name="WorldPop R2025A constrained 100m Migori ward aggregate",
         source_ref_prefix="worldpop-knbs",
         required_settings=(
             "SOURCE_DATA_WORLDPOP_KNBS_SOURCE_URL",
             "SOURCE_DATA_WORLDPOP_KNBS_RELEASE_VERSION",
         ),
         canonical_csv_url_setting="SOURCE_DATA_WORLDPOP_KNBS_CANONICAL_CSV_URL",
-        notes="Processed population release acquisition; raw credentials stay in runtime configuration.",
+        notes=(
+            "Processed WorldPop release reconciled against KNBS and aggregated into CCHIS ward geometry; "
+            "CSV fallback remains available for corrections."
+        ),
+        fixture_filenames=("migori_worldpop_2026_population.csv",),
+        default_release_version_setting="SOURCE_DATA_WORLDPOP_KNBS_RELEASE_VERSION",
+        default_source_ref_setting="SOURCE_DATA_WORLDPOP_KNBS_SOURCE_URL",
     ),
     SourceDataConnectorDefinition(
         connector_key="osm_overpass_settlement",
@@ -149,12 +161,17 @@ def source_data_connector_definition(connector_key: str) -> SourceDataConnectorD
     raise KeyError(connector_key)
 
 
-def _connector_fixture_path(connector_key: str) -> Path | None:
+def _connector_fixture_path(definition: SourceDataConnectorDefinition) -> Path | None:
     fixture_dir = str(getattr(settings, "SOURCE_DATA_CONNECTOR_FIXTURE_DIR", "") or "").strip()
     if not fixture_dir:
         return None
-    path = Path(fixture_dir) / f"{connector_key}.csv"
-    return path if path.exists() else None
+    fixture_root = Path(fixture_dir)
+    candidate_names = (f"{definition.connector_key}.csv", *definition.fixture_filenames)
+    for filename in candidate_names:
+        path = fixture_root / filename
+        if path.exists():
+            return path
+    return None
 
 
 def _configured_settings(definition: SourceDataConnectorDefinition) -> dict[str, bool]:
@@ -168,7 +185,7 @@ def _canonical_url_configured(definition: SourceDataConnectorDefinition) -> bool
 def _connector_is_configured(definition: SourceDataConnectorDefinition) -> bool:
     if not source_data_api_connectors_enabled():
         return False
-    if _connector_fixture_path(definition.connector_key):
+    if _connector_fixture_path(definition):
         return True
     return all(_configured_settings(definition).values()) and _canonical_url_configured(definition)
 
@@ -179,7 +196,7 @@ def _count_csv_records(csv_payload: str) -> int:
 
 
 def _fetch_connector_csv(definition: SourceDataConnectorDefinition) -> tuple[str, dict[str, Any]]:
-    fixture_path = _connector_fixture_path(definition.connector_key)
+    fixture_path = _connector_fixture_path(definition)
     if fixture_path:
         return fixture_path.read_text(encoding="utf-8"), {
             "transport": "fixture_csv",
@@ -213,12 +230,18 @@ def _default_connector_metadata(
 ) -> dict[str, Any]:
     options = options or {}
     today = now.date()
+    release_version = options.get("release_version")
+    if not release_version and definition.default_release_version_setting:
+        release_version = getattr(settings, definition.default_release_version_setting, "")
+    source_ref = options.get("source_ref")
+    if not source_ref and definition.default_source_ref_setting:
+        source_ref = getattr(settings, definition.default_source_ref_setting, "")
     metadata: dict[str, Any] = {
         "feed_key": definition.target_feed_key,
         "source_name": options.get("source_name") or definition.source_name,
         "source_timestamp": options.get("source_timestamp") or now,
-        "source_ref": options.get("source_ref") or f"{definition.source_ref_prefix}:{today.isoformat()}",
-        "release_version": options.get("release_version") or getattr(settings, "SOURCE_DATA_WORLDPOP_KNBS_RELEASE_VERSION", ""),
+        "source_ref": source_ref or f"{definition.source_ref_prefix}:{today.isoformat()}",
+        "release_version": release_version or "",
         "operator_note": "Source-data connector refresh; CSV remains fallback/correction path.",
     }
     if definition.target_feed_key in {
@@ -355,7 +378,7 @@ def run_source_data_connector_refresh(
         safe_metadata={
             "required_settings_present": _configured_settings(definition),
             "canonical_csv_url_configured": _canonical_url_configured(definition),
-            "fixture_configured": bool(_connector_fixture_path(definition.connector_key)),
+            "fixture_configured": bool(_connector_fixture_path(definition)),
             "credential_values_exposed": False,
         },
     )

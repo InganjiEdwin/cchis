@@ -102,10 +102,16 @@ POPULATION_EXPOSURE_ADAPTERS: dict[str, PopulationExposureAdapterSpec] = {
         adapter_key="gridded_population_csv",
         required_any_columns=(
             WARD_KEY_COLUMNS | GEOMETRY_KEY_COLUMNS,
-            _columns("population_total", "population_density", "gridded_population_value", "population"),
+            _columns("population_total", "total_population", "population_density", "population"),
         ),
         accepted_columns=BASE_ACCEPTED_COLUMNS
-        | _columns("population_total", "population_density", "population_density_proxy", "gridded_population_value"),
+        | _columns(
+            "population_total",
+            "total_population",
+            "population_density",
+            "population_density_proxy",
+            "gridded_population_value",
+        ),
         scheduled_supported=True,
         notes="File-backed gridded population extract after external download or aggregation.",
     ),
@@ -489,7 +495,7 @@ def _population_total_for_row(row: dict[str, Any]) -> int | None:
 
 
 EXPOSURE_FIELD_MAP: tuple[tuple[str, tuple[str, ...]], ...] = (
-    (ExposureFeatureRecord.EXPOSURE_POPULATION_DENSITY, ("population_density", "population_density_proxy", "gridded_population_value")),
+    (ExposureFeatureRecord.EXPOSURE_POPULATION_DENSITY, ("population_density", "population_density_proxy")),
     (ExposureFeatureRecord.EXPOSURE_SETTLEMENT_CONCENTRATION, ("settlement_concentration", "settlement_concentration_proxy", "built_up_area", "settlement_count")),
     (ExposureFeatureRecord.EXPOSURE_FLOODPLAIN_EXPOSURE, ("floodplain_exposure", "flood_exposure", "flood_risk")),
     (ExposureFeatureRecord.EXPOSURE_WATER_BODY_PROXIMITY, ("water_body_proximity", "distance_to_water", "water_body_distance")),

@@ -137,6 +137,66 @@ class SourceDataPhaseTwoUploadDryValidationTests(APITestCase):
         )
         self.assertEqual(SurveillanceIngestionRun.objects.count(), 0)
 
+    def test_dry_validation_rejects_composite_pii_headers_before_domain_validation(self):
+        pii_header_csv = "\n".join(
+            [
+                "ward_code,reporting_period_start,reporting_period_end,suspected_cases,confirmed_cases,patient_phone_number",
+                "MIG-WARD-001,2026-04-27,2026-05-03,3,1,",
+            ]
+        )
+        upload_response = self.create_upload(csv_text=pii_header_csv, filename="weekly-pii-header.csv")
+
+        validate_response = self.client.post(
+            reverse("source-data-upload-validate", kwargs={"public_id": upload_response.data["public_id"]}),
+            {},
+            format="json",
+        )
+
+        self.assertEqual(validate_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(validate_response.data["status"], SourceDataUploadBatch.STATUS_VALIDATION_FAILED)
+        self.assertTrue(
+            SourceDataValidationIssue.objects.filter(
+                upload_batch__public_id=upload_response.data["public_id"],
+                code="pii_header_detected",
+                column_name="patient_phone_number",
+            ).exists()
+        )
+        self.assertEqual(SurveillanceIngestionRun.objects.count(), 0)
+
+    def test_dry_validation_scans_trailing_cells_not_named_by_headers(self):
+        csv_with_trailing_pii_cell = "\n".join(
+            [
+                "ward_code,reporting_period_start,reporting_period_end,suspected_cases,confirmed_cases,source_ref",
+                "MIG-WARD-001,2026-04-27,2026-05-03,3,1,dhis2-weekly-export:row-1,+254712345678",
+            ]
+        )
+        upload_response = self.create_upload(csv_text=csv_with_trailing_pii_cell, filename="weekly-extra-cell.csv")
+
+        validate_response = self.client.post(
+            reverse("source-data-upload-validate", kwargs={"public_id": upload_response.data["public_id"]}),
+            {},
+            format="json",
+        )
+
+        self.assertEqual(validate_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(validate_response.data["status"], SourceDataUploadBatch.STATUS_VALIDATION_FAILED)
+        self.assertTrue(
+            SourceDataValidationIssue.objects.filter(
+                upload_batch__public_id=upload_response.data["public_id"],
+                code="row_has_extra_columns",
+                row_number=2,
+            ).exists()
+        )
+        self.assertTrue(
+            SourceDataValidationIssue.objects.filter(
+                upload_batch__public_id=upload_response.data["public_id"],
+                code="pii_phone_value_detected",
+                row_number=2,
+                column_name="__extra_column_1",
+            ).exists()
+        )
+        self.assertEqual(SurveillanceIngestionRun.objects.count(), 0)
+
     def test_duplicate_metadata_and_errors_csv_are_available_as_diagnostics(self):
         first_response = self.create_upload(csv_text=self.valid_weekly_csv(confirmed_cases=1), filename="weekly-1.csv")
         second_response = self.create_upload(csv_text=self.valid_weekly_csv(confirmed_cases=2), filename="weekly-2.csv")

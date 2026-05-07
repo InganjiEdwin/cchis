@@ -10,7 +10,7 @@ from rest_framework.test import APITestCase
 
 from accounts.models import User
 
-from .models import SourceDataConnectorRun, SourceDataFeedModeOverride, SourceDataUploadBatch, Ward
+from .models import PopulationExposureSource, SourceDataConnectorRun, SourceDataFeedModeOverride, SourceDataUploadBatch, Ward
 from .source_data.connectors import source_data_csv_upload_enabled
 
 
@@ -58,6 +58,20 @@ class SourceDataPhaseNineConnectorIntegrationTests(APITestCase):
             ]
         )
 
+    def worldpop_csv(self) -> str:
+        return "\n".join(
+            [
+                "ward_code,ward_name,population_total,population_density,gridded_population_value,aggregation_method,spatial_resolution,unit,truth_class,source_kind,freshness_state,source_ref,notes",
+                (
+                    "MIG-WARD-001,North Kamagambo,24500,412.5,24500,"
+                    "ward_sum_from_worldpop_100m_grid_pixel_centers,100m,people_per_km2,"
+                    "spatially_aggregated_source,live,fresh,"
+                    "https://data.worldpop.org/GIS/Population/Global_2015_2030/R2025A/2026/KEN/v1/100m/constrained/ken_pop_2026_CN_100m_R2025A_v1.tif,"
+                    "WorldPop test; polygon_sha256=5554c913ff082f7cc2536c772a9190ca81d3b1a7370d872800ff540ce40f6997; pixel-center aggregation."
+                ),
+            ]
+        )
+
     def write_connector_fixture(self, connector_key: str, payload: str):
         Path(self.fixture_root.name, f"{connector_key}.csv").write_text(payload, encoding="utf-8")
 
@@ -91,6 +105,21 @@ class SourceDataPhaseNineConnectorIntegrationTests(APITestCase):
         self.assertFalse(connector_status["credential_values_exposed"])
         self.assertNotIn("password", str(connector_status).lower().replace("source_data_dhis2_password", ""))
 
+    def test_worldpop_connector_targets_gridded_population_feed(self):
+        self.client.force_authenticate(self.analyst)
+
+        response = self.client.get(reverse("source-data-feed-types"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        gridded_feed = next(item for item in response.data["feeds"] if item["feed_key"] == "gridded_population")
+        population_feed = next(item for item in response.data["feeds"] if item["feed_key"] == "population_baseline")
+        self.assertEqual(gridded_feed["connector_status"]["connector_key"], "worldpop_knbs_population")
+        self.assertEqual(gridded_feed["connector_status"]["required_settings"], [
+            "SOURCE_DATA_WORLDPOP_KNBS_SOURCE_URL",
+            "SOURCE_DATA_WORLDPOP_KNBS_RELEASE_VERSION",
+        ])
+        self.assertEqual(population_feed["connector_status"]["connector_key"], "")
+
     def test_connector_refresh_creates_validated_upload_with_same_canonical_checks(self):
         self.write_connector_fixture("dhis2_surveillance_weekly", self.weekly_csv())
         self.client.force_authenticate(self.supervisor)
@@ -115,6 +144,36 @@ class SourceDataPhaseNineConnectorIntegrationTests(APITestCase):
         self.assertEqual(upload.validation_status, SourceDataUploadBatch.VALIDATION_PASSED)
         self.assertEqual(upload.metadata["source_data_connector"]["connector_key"], "dhis2_surveillance_weekly")
 
+    def test_worldpop_connector_refresh_uses_generated_migori_fixture_alias(self):
+        self.write_connector_fixture("migori_worldpop_2026_population", self.worldpop_csv())
+        self.client.force_authenticate(self.supervisor)
+
+        with self.settings(
+            SOURCE_DATA_WORLDPOP_KNBS_SOURCE_URL=(
+                "https://data.worldpop.org/GIS/Population/Global_2015_2030/R2025A/2026/KEN/v1/100m/constrained/"
+                "ken_pop_2026_CN_100m_R2025A_v1.tif"
+            ),
+            SOURCE_DATA_WORLDPOP_KNBS_RELEASE_VERSION="WorldPop G2_CN_POP_R25A_100m KEN 2026 v1",
+        ):
+            response = self.client.post(
+                reverse("source-data-connector-refresh", kwargs={"connector_key": "worldpop_knbs_population"}),
+                {"options": {"source_timestamp": "2025-09-01T00:00:00Z"}},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], SourceDataConnectorRun.STATUS_SUCCESS)
+        self.assertEqual(response.data["target_feed_key"], "gridded_population")
+        self.assertEqual(response.data["fetched_record_count"], 1)
+        self.assertEqual(response.data["safe_metadata"]["fixture_filename"], "migori_worldpop_2026_population.csv")
+        upload = SourceDataUploadBatch.objects.get(public_id=response.data["upload_batch_public_id"])
+        self.assertEqual(upload.feed_key, "gridded_population")
+        self.assertEqual(upload.source_type, PopulationExposureSource.SOURCE_TYPE_GRIDDED_POPULATION)
+        self.assertEqual(upload.validation_status, SourceDataUploadBatch.VALIDATION_PASSED)
+        self.assertEqual(upload.row_count, 1)
+        self.assertEqual(upload.accepted_count, 1)
+        self.assertEqual(upload.metadata["source_data_connector"]["connector_key"], "worldpop_knbs_population")
+
     def test_connector_failure_is_audited_and_uses_validation_diagnostics(self):
         self.write_connector_fixture("dhis2_surveillance_weekly", self.weekly_csv(notes="call +254712345678"))
         self.client.force_authenticate(self.supervisor)
@@ -132,6 +191,26 @@ class SourceDataPhaseNineConnectorIntegrationTests(APITestCase):
         upload = SourceDataUploadBatch.objects.get(public_id=response.data["upload_batch_public_id"])
         self.assertEqual(upload.validation_status, SourceDataUploadBatch.VALIDATION_FAILED)
         self.assertTrue(upload.validation_issues.filter(code="pii_phone_value_detected").exists())
+
+    def test_connector_refresh_options_use_same_pii_safe_metadata_guard(self):
+        self.write_connector_fixture("dhis2_surveillance_weekly", self.weekly_csv())
+        self.client.force_authenticate(self.supervisor)
+
+        response = self.client.post(
+            reverse("source-data-connector-refresh", kwargs={"connector_key": "dhis2_surveillance_weekly"}),
+            {
+                "options": {
+                    "source_name": "Patient name Jane Doe",
+                    "reporting_period_start": "2026-04-27",
+                    "reporting_period_end": "2026-05-03",
+                }
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("direct identifiers", str(response.data).lower())
+        self.assertEqual(SourceDataUploadBatch.objects.count(), 0)
 
     def test_admin_can_disable_csv_when_api_connector_is_authoritative(self):
         self.write_connector_fixture("dhis2_surveillance_weekly", self.weekly_csv())

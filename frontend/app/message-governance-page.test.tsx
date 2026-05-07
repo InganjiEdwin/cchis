@@ -748,33 +748,43 @@ describe("MessageGovernancePage", () => {
     });
   });
 
-  it("renders template review, delivery outcomes, and USSD analytics", async () => {
+  it("renders communication review, clear attention copy, and grouped details", async () => {
     render(React.createElement(MessageGovernancePage));
 
-    expect(screen.getByText(/Message Governance \| Templates, public-health copy approval/i)).toBeInTheDocument();
-    expect(screen.getByText("Language Coverage Matrix")).toBeInTheDocument();
-    expect(screen.getByText("Missing Translation Dashboard")).toBeInTheDocument();
-    expect(screen.getByText("Missing Dholuo variant before rollout.")).toBeInTheDocument();
-    expect(screen.getByText("Localization Rollout")).toBeInTheDocument();
-    expect(screen.getByText("Strict audit pass")).toBeInTheDocument();
-    expect(screen.getByText("Template List")).toBeInTheDocument();
+    expect(screen.getByText(/Communication Review \| Review the messages people receive/i)).toBeInTheDocument();
+    expect(screen.getByText("1 item needs review before rollout")).toBeInTheDocument();
+    expect(screen.getAllByText("The Dholuo message is missing. Add it before rollout.").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Needs Attention").length).toBeGreaterThan(0);
+    expect(screen.getByText("Language Rollout")).toBeInTheDocument();
+    expect(screen.getAllByText("Ready").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: /messages/i }));
+
+    expect(screen.getAllByText("Messages").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Household prevention").length).toBeGreaterThan(0);
-    await screen.findByText("Side-by-Side Language Preview");
+    await screen.findByText("Message Text");
     expect(screen.getAllByText("Use treated water in Kanyasa.").length).toBeGreaterThan(0);
     expect(screen.getByText("Tumia maji salama Kanyasa.")).toBeInTheDocument();
-    expect(screen.getAllByText("Placeholder parity").length).toBeGreaterThan(0);
-    expect(screen.getByText("Audience Preview")).toBeInTheDocument();
-    expect(screen.getByText("Attribution")).toBeInTheDocument();
-    expect(screen.getByText("Version History")).toBeInTheDocument();
-    expect(screen.getByText("v2")).toBeInTheDocument();
-    expect(screen.getByText("Delivery Outcome Summary")).toBeInTheDocument();
-    expect(screen.getByText("Communication Reach")).toBeInTheDocument();
-    expect(screen.getByText("Opt-Out Monitoring")).toBeInTheDocument();
-    expect(screen.getByText("Template Usage by Version")).toBeInTheDocument();
-    expect(screen.getByText("USSD Session Analytics")).toBeInTheDocument();
-    expect(screen.getByText("USSD Route Tree Preview")).toBeInTheDocument();
-    expect(screen.getByText("Offline Guidance Preview")).toBeInTheDocument();
-    expect(screen.getByText("USSD Menu Versions")).toBeInTheDocument();
+    expect(screen.getAllByText("Message fields").length).toBeGreaterThan(0);
+    expect(screen.getByText("Who Will Receive It")).toBeInTheDocument();
+    expect(screen.getByText("Review Trail")).toBeInTheDocument();
+    expect(screen.getByText("Past Versions")).toBeInTheDocument();
+    expect(screen.getByText("Version 2")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /languages/i }));
+    expect(screen.getByText("Language Readiness")).toBeInTheDocument();
+    expect(screen.getByText("CHV Guide Preview")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /sending results/i }));
+    expect(screen.getAllByText("Sending Results").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Reach").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Stopped Messages").length).toBeGreaterThan(0);
+    expect(screen.getByText("Message Use")).toBeInTheDocument();
+    expect(screen.getByText("Phone Menu Use")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /phone menus/i }));
+    expect(screen.getByText("Phone Menu Preview")).toBeInTheDocument();
+    expect(screen.getByText("Phone Menu Updates")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /reject/i }).length).toBeGreaterThan(0);
     expect(mockUseMessageTemplateDetailQuery).toHaveBeenCalledWith("template-pending");
   });
@@ -782,7 +792,9 @@ describe("MessageGovernancePage", () => {
   it("submits admin approval through the mutation contract", async () => {
     render(React.createElement(MessageGovernancePage));
 
-    await screen.findByText("Side-by-Side Language Preview");
+    fireEvent.click(screen.getByRole("button", { name: /messages/i }));
+
+    await screen.findByText("Message Text");
     fireEvent.change(screen.getByPlaceholderText("Review note"), {
       target: { value: "Approved by county health promotion." },
     });
@@ -803,7 +815,9 @@ describe("MessageGovernancePage", () => {
   it("submits USSD menu review actions through the mutation contract", async () => {
     render(React.createElement(MessageGovernancePage));
 
-    await screen.findByText("USSD Menu Versions");
+    fireEvent.click(screen.getByRole("button", { name: /phone menus/i }));
+
+    await screen.findByText("Phone Menu Updates");
     fireEvent.click(screen.getAllByRole("button", { name: /reject/i }).at(-1) as HTMLElement);
 
     await waitFor(() => {
@@ -811,7 +825,7 @@ describe("MessageGovernancePage", () => {
         publicId: "ussd-menu-1",
         payload: {
           action: "reject",
-          reason: "Reviewed from the message governance dashboard.",
+          reason: "Reviewed from the communication review page.",
         },
       });
     });

@@ -4,13 +4,19 @@ import csv
 import hashlib
 from dataclasses import dataclass
 from io import StringIO
+from pathlib import Path
 from typing import Any
 
+from risk.models import Ward
 from risk.source_data.registry import source_data_feed_definition, source_data_feed_definitions
 
 
 SOURCE_DATA_TEMPLATE_SCHEMA_VERSION = "source-data-csv-template-v1"
 SOURCE_DATA_TEMPLATE_DOWNLOAD_EVENT = "SOURCE_DATA_TEMPLATE_DOWNLOAD"
+MIGORI_COUNTY_NAME = "Migori"
+MIGORI_WARD_REFERENCE_CSV = Path(__file__).resolve().parents[1] / "data" / "kenya_counties_wards.csv"
+WARD_PREFILL_DEFAULT_COLUMNS = frozenset({"aggregation_method", "reporting_granularity", "spatial_resolution", "unit"})
+FACILITY_LEVEL_COLUMNS = frozenset({"facility_code", "facility_id", "facility_name", "assigned_ward_ids"})
 
 
 @dataclass(frozen=True)
@@ -27,6 +33,7 @@ SOURCE_DATA_CSV_TEMPLATES: dict[str, SourceDataTemplateDefinition] = {
         filename="surveillance_weekly_aggregate_template.csv",
         columns=(
             "ward_code",
+            "ward_name",
             "reporting_period_start",
             "reporting_period_end",
             "suspected_cases",
@@ -36,7 +43,8 @@ SOURCE_DATA_CSV_TEMPLATES: dict[str, SourceDataTemplateDefinition] = {
             "source_ref",
         ),
         example_row={
-            "ward_code": "MIG-WARD-001",
+            "ward_code": "KE-WARD-1261",
+            "ward_name": "North Kamagambo",
             "reporting_period_start": "2026-04-27",
             "reporting_period_end": "2026-05-03",
             "suspected_cases": "3",
@@ -51,6 +59,7 @@ SOURCE_DATA_CSV_TEMPLATES: dict[str, SourceDataTemplateDefinition] = {
         filename="surveillance_daily_aggregate_template.csv",
         columns=(
             "ward_code",
+            "ward_name",
             "reporting_period_start",
             "reporting_period_end",
             "suspected_cases",
@@ -60,7 +69,8 @@ SOURCE_DATA_CSV_TEMPLATES: dict[str, SourceDataTemplateDefinition] = {
             "source_ref",
         ),
         example_row={
-            "ward_code": "MIG-WARD-001",
+            "ward_code": "KE-WARD-1261",
+            "ward_name": "North Kamagambo",
             "reporting_period_start": "2026-05-05",
             "reporting_period_end": "2026-05-05",
             "suspected_cases": "1",
@@ -75,6 +85,7 @@ SOURCE_DATA_CSV_TEMPLATES: dict[str, SourceDataTemplateDefinition] = {
         filename="surveillance_backfill_template.csv",
         columns=(
             "ward_code",
+            "ward_name",
             "reporting_period_start",
             "reporting_period_end",
             "suspected_cases",
@@ -84,7 +95,8 @@ SOURCE_DATA_CSV_TEMPLATES: dict[str, SourceDataTemplateDefinition] = {
             "source_ref",
         ),
         example_row={
-            "ward_code": "MIG-WARD-001",
+            "ward_code": "KE-WARD-1261",
+            "ward_name": "North Kamagambo",
             "reporting_period_start": "2026-02-02",
             "reporting_period_end": "2026-02-08",
             "suspected_cases": "2",
@@ -99,6 +111,7 @@ SOURCE_DATA_CSV_TEMPLATES: dict[str, SourceDataTemplateDefinition] = {
         filename="population_baseline_template.csv",
         columns=(
             "ward_code",
+            "ward_name",
             "population_total",
             "population_under_five",
             "household_count_proxy",
@@ -106,7 +119,8 @@ SOURCE_DATA_CSV_TEMPLATES: dict[str, SourceDataTemplateDefinition] = {
             "source_ref",
         ),
         example_row={
-            "ward_code": "MIG-WARD-001",
+            "ward_code": "KE-WARD-1261",
+            "ward_name": "North Kamagambo",
             "population_total": "24500",
             "population_under_five": "3600",
             "household_count_proxy": "5200",
@@ -119,6 +133,7 @@ SOURCE_DATA_CSV_TEMPLATES: dict[str, SourceDataTemplateDefinition] = {
         filename="gridded_population_template.csv",
         columns=(
             "ward_code",
+            "ward_name",
             "population_density",
             "gridded_population_value",
             "aggregation_method",
@@ -127,7 +142,8 @@ SOURCE_DATA_CSV_TEMPLATES: dict[str, SourceDataTemplateDefinition] = {
             "source_ref",
         ),
         example_row={
-            "ward_code": "MIG-WARD-001",
+            "ward_code": "KE-WARD-1261",
+            "ward_name": "North Kamagambo",
             "population_density": "412.5",
             "gridded_population_value": "24500",
             "aggregation_method": "ward_sum_from_grid",
@@ -141,6 +157,7 @@ SOURCE_DATA_CSV_TEMPLATES: dict[str, SourceDataTemplateDefinition] = {
         filename="settlement_layer_template.csv",
         columns=(
             "ward_code",
+            "ward_name",
             "settlement_concentration",
             "built_up_area",
             "aggregation_method",
@@ -148,7 +165,8 @@ SOURCE_DATA_CSV_TEMPLATES: dict[str, SourceDataTemplateDefinition] = {
             "source_ref",
         ),
         example_row={
-            "ward_code": "MIG-WARD-001",
+            "ward_code": "KE-WARD-1261",
+            "ward_name": "North Kamagambo",
             "settlement_concentration": "0.62",
             "built_up_area": "14.3",
             "aggregation_method": "ward_mean",
@@ -161,6 +179,7 @@ SOURCE_DATA_CSV_TEMPLATES: dict[str, SourceDataTemplateDefinition] = {
         filename="wash_vulnerability_layer_template.csv",
         columns=(
             "ward_code",
+            "ward_name",
             "wash_vulnerability",
             "sanitation_vulnerability",
             "water_access_vulnerability",
@@ -170,7 +189,8 @@ SOURCE_DATA_CSV_TEMPLATES: dict[str, SourceDataTemplateDefinition] = {
             "source_ref",
         ),
         example_row={
-            "ward_code": "MIG-WARD-001",
+            "ward_code": "KE-WARD-1261",
+            "ward_name": "North Kamagambo",
             "wash_vulnerability": "0.71",
             "sanitation_vulnerability": "0.64",
             "water_access_vulnerability": "0.77",
@@ -185,6 +205,7 @@ SOURCE_DATA_CSV_TEMPLATES: dict[str, SourceDataTemplateDefinition] = {
         filename="water_body_distance_layer_template.csv",
         columns=(
             "ward_code",
+            "ward_name",
             "water_body_distance",
             "distance_to_water",
             "water_body_proximity",
@@ -193,7 +214,8 @@ SOURCE_DATA_CSV_TEMPLATES: dict[str, SourceDataTemplateDefinition] = {
             "source_ref",
         ),
         example_row={
-            "ward_code": "MIG-WARD-001",
+            "ward_code": "KE-WARD-1261",
+            "ward_name": "North Kamagambo",
             "water_body_distance": "1.8",
             "distance_to_water": "1.8",
             "water_body_proximity": "0.56",
@@ -207,6 +229,7 @@ SOURCE_DATA_CSV_TEMPLATES: dict[str, SourceDataTemplateDefinition] = {
         filename="flood_exposure_layer_template.csv",
         columns=(
             "ward_code",
+            "ward_name",
             "floodplain_exposure",
             "flood_exposure",
             "flood_risk",
@@ -216,7 +239,8 @@ SOURCE_DATA_CSV_TEMPLATES: dict[str, SourceDataTemplateDefinition] = {
             "source_ref",
         ),
         example_row={
-            "ward_code": "MIG-WARD-001",
+            "ward_code": "KE-WARD-1261",
+            "ward_name": "North Kamagambo",
             "floodplain_exposure": "0.34",
             "flood_exposure": "0.41",
             "flood_risk": "0.39",
@@ -255,6 +279,7 @@ SOURCE_DATA_CSV_TEMPLATES: dict[str, SourceDataTemplateDefinition] = {
             "facility_code",
             "facility_name",
             "ward_code",
+            "ward_name",
             "reported_at",
             "ors_sachets_available",
             "iv_fluids_available",
@@ -271,7 +296,8 @@ SOURCE_DATA_CSV_TEMPLATES: dict[str, SourceDataTemplateDefinition] = {
         example_row={
             "facility_code": "FAC-MIG-001",
             "facility_name": "Got Kachola Dispensary",
-            "ward_code": "MIG-WARD-001",
+            "ward_code": "KE-WARD-1261",
+            "ward_name": "North Kamagambo",
             "reported_at": "2026-05-05T08:00:00+03:00",
             "ors_sachets_available": "120",
             "iv_fluids_available": "36",
@@ -347,6 +373,73 @@ def validate_source_data_template_contract() -> list[str]:
     return errors
 
 
+def _migori_ward_rows_from_database() -> list[dict[str, str]]:
+    wards = list(
+        Ward.objects.filter(county__iexact=MIGORI_COUNTY_NAME, is_active=True)
+        .exclude(ward_code="")
+        .order_by("ward_code", "name")
+        .values("ward_code", "name")
+    )
+    if len(wards) < 40:
+        return []
+    return [
+        {
+            "ward_code": str(ward["ward_code"]),
+            "ward_name": str(ward["name"]),
+        }
+        for ward in wards
+    ]
+
+
+def _migori_ward_rows_from_reference_csv() -> list[dict[str, str]]:
+    if not MIGORI_WARD_REFERENCE_CSV.exists():
+        return []
+
+    rows: list[dict[str, str]] = []
+    with MIGORI_WARD_REFERENCE_CSV.open("r", encoding="utf-8-sig", newline="") as reference_file:
+        reader = csv.DictReader(reference_file)
+        for row in reader:
+            county_name = row.get("COUNTY NAME", "").strip().title()
+            if county_name != MIGORI_COUNTY_NAME:
+                continue
+            ward_id = int(row["WARD ID"])
+            rows.append(
+                {
+                    "ward_code": f"KE-WARD-{ward_id:04d}",
+                    "ward_name": row["WARD NAME"].strip().title(),
+                }
+            )
+    return rows
+
+
+def _migori_ward_rows() -> list[dict[str, str]]:
+    return _migori_ward_rows_from_database() or _migori_ward_rows_from_reference_csv()
+
+
+def _should_prefill_migori_wards(template: SourceDataTemplateDefinition) -> bool:
+    columns = set(template.columns)
+    return "ward_code" in columns and "ward_name" in columns and not columns.intersection(FACILITY_LEVEL_COLUMNS)
+
+
+def _template_rows(template: SourceDataTemplateDefinition) -> list[dict[str, str]]:
+    if not _should_prefill_migori_wards(template):
+        return [{column: template.example_row.get(column, "") for column in template.columns}]
+
+    ward_rows = _migori_ward_rows()
+    if not ward_rows:
+        return [{column: template.example_row.get(column, "") for column in template.columns}]
+
+    rows: list[dict[str, str]] = []
+    for ward in ward_rows:
+        row = {column: "" for column in template.columns}
+        row["ward_code"] = ward["ward_code"]
+        row["ward_name"] = ward["ward_name"]
+        for column in WARD_PREFILL_DEFAULT_COLUMNS.intersection(template.columns):
+            row[column] = template.example_row.get(column, "")
+        rows.append(row)
+    return rows
+
+
 def build_source_data_csv_template_file(feed_key: str) -> dict[str, str | int | list[str] | dict[str, str]]:
     try:
         template = source_data_template_definition(feed_key)
@@ -356,7 +449,8 @@ def build_source_data_csv_template_file(feed_key: str) -> dict[str, str | int | 
     buffer = StringIO()
     writer = csv.DictWriter(buffer, fieldnames=list(template.columns))
     writer.writeheader()
-    writer.writerow({column: template.example_row.get(column, "") for column in template.columns})
+    rows = _template_rows(template)
+    writer.writerows(rows)
     payload = buffer.getvalue()
     return {
         "schema_version": SOURCE_DATA_TEMPLATE_SCHEMA_VERSION,
@@ -365,7 +459,7 @@ def build_source_data_csv_template_file(feed_key: str) -> dict[str, str | int | 
         "feed_key": feed_key,
         "columns": list(template.columns),
         "example_row": dict(template.example_row),
-        "row_count": 1,
+        "row_count": len(rows),
         "payload": payload,
         "payload_sha256": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
     }

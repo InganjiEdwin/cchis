@@ -15,7 +15,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from risk.models import Ward
 
 from .audit import get_client_ip
-from .models import AccessRequest, AuthAuditEvent
+from .models import AccessRequest, AuthAuditEvent, UserPolicyAcceptance
+from .services import build_policy_acceptance_status, get_current_policy_versions
 from .two_factor import (
     build_totp_provisioning_uri,
     create_pre_auth_token,
@@ -56,6 +57,7 @@ class UserSerializer(serializers.ModelSerializer):
     account_created_at = serializers.DateTimeField(source="date_joined", read_only=True)
     last_login_at = serializers.DateTimeField(source="last_login", read_only=True, allow_null=True)
     profile_capabilities = serializers.SerializerMethodField()
+    policy_acceptance = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -77,6 +79,7 @@ class UserSerializer(serializers.ModelSerializer):
             "account_created_at",
             "last_login_at",
             "profile_capabilities",
+            "policy_acceptance",
         ]
 
     def get_scope_type(self, obj):
@@ -108,6 +111,51 @@ class UserSerializer(serializers.ModelSerializer):
             "identity_update_mode": "totp_step_up" if can_update_identity else "admin_managed",
             "mode": "auth_contract_backed_profile",
         }
+
+    def get_policy_acceptance(self, obj):
+        return build_policy_acceptance_status(obj)
+
+
+class PolicyAcceptanceSerializer(serializers.Serializer):
+    accepted_terms = serializers.BooleanField()
+    accepted_privacy = serializers.BooleanField()
+    accepted_cookie_notice = serializers.BooleanField()
+    terms_version = serializers.CharField(max_length=64)
+    privacy_version = serializers.CharField(max_length=64)
+    cookie_notice_version = serializers.CharField(max_length=64)
+    acceptance_context = serializers.ChoiceField(
+        choices=[choice[0] for choice in UserPolicyAcceptance.ACCEPTANCE_CONTEXT_CHOICES],
+        required=False,
+    )
+
+    def validate(self, attrs):
+        errors = {}
+        required_acknowledgements = {
+            "accepted_terms": "Accept the current Terms of Service to continue.",
+            "accepted_privacy": "Acknowledge the current Privacy Policy to continue.",
+            "accepted_cookie_notice": "Acknowledge the current Cookie Notice to continue.",
+        }
+
+        for field, message in required_acknowledgements.items():
+            if attrs.get(field) is not True:
+                errors[field] = message
+
+        current_versions = get_current_policy_versions()
+        version_checks = {
+            "terms_version": current_versions["terms_version"],
+            "privacy_version": current_versions["privacy_version"],
+            "cookie_notice_version": current_versions["cookie_notice_version"],
+        }
+        for field, current_version in version_checks.items():
+            if attrs.get(field) != current_version:
+                errors[field] = (
+                    "This policy version is no longer current. Refresh and review the latest version."
+                )
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        return attrs
 
 
 class UserAppearanceSerializer(serializers.ModelSerializer):
@@ -680,6 +728,14 @@ class OwnAuthActivityEventSerializer(serializers.ModelSerializer):
         AuthAuditEvent.EVENT_2FA_RECOVERY_CODES_LOW: (
             "Recovery codes low",
             "Your account has few unused recovery codes remaining.",
+        ),
+        AuthAuditEvent.EVENT_POLICY_ACCEPTANCE_REQUIRED: (
+            "Policy review required",
+            "Your account was asked to review the current CHIS policies.",
+        ),
+        AuthAuditEvent.EVENT_POLICY_ACCEPTED: (
+            "Policies accepted",
+            "Your account accepted the current CHIS Terms, Privacy Policy, and Cookie Notice.",
         ),
         AuthAuditEvent.EVENT_USER_CREATED: (
             "Account created",

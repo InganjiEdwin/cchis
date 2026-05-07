@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime
@@ -116,11 +117,38 @@ def _source_kind_for_records(records: list) -> str:
     return FeatureDataset.SOURCE_KIND_HYBRID
 
 
+def _record_polygon_hash(record) -> str:
+    notes = getattr(record, "notes", "") or ""
+    if not notes:
+        raw_payload = getattr(record, "raw_payload", {}) or {}
+        notes = str((raw_payload.get("row") or {}).get("notes") or "")
+    match = re.search(r"polygon_sha256=([0-9a-f]{64})", notes)
+    return match.group(1) if match else ""
+
+
 def _source_lineage(records: list) -> dict:
     return {
         "record_count": len(records),
         "source_names": sorted({record.source_name for record in records if record.source_name}),
         "release_versions": sorted({record.release_version for record in records if record.release_version}),
+        "source_refs": sorted({record.source_ref for record in records if getattr(record, "source_ref", "")}),
+        "aggregation_methods": sorted(
+            {
+                getattr(record, "aggregation_method", "")
+                for record in records
+                if getattr(record, "aggregation_method", "")
+            }
+        ),
+        "spatial_resolutions": sorted(
+            {
+                getattr(record, "spatial_resolution", "")
+                for record in records
+                if getattr(record, "spatial_resolution", "")
+            }
+        ),
+        "polygon_sha256_values": sorted(
+            {polygon_hash for record in records if (polygon_hash := _record_polygon_hash(record))}
+        ),
         "truth_class_counts": dict(Counter(record.truth_class for record in records if record.truth_class)),
         "source_kind_counts": dict(Counter(record.source_kind for record in records if record.source_kind)),
         "freshness_state_counts": dict(Counter(record.freshness_state for record in records if record.freshness_state)),

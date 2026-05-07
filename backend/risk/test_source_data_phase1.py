@@ -1,3 +1,6 @@
+import csv
+from io import StringIO
+
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -52,6 +55,42 @@ class SourceDataPhaseOneRegistryTemplateTests(APITestCase):
             self.assertTrue(response.data["filename"].endswith("_template.csv"))
             self.assertIn("payload_sha256", response.data)
             self.assertIn("\n", response.data["payload"])
+
+    def test_ward_templates_prefill_migori_ward_names_and_codes(self):
+        self.client.force_authenticate(self.admin)
+
+        response = self.client.get(
+            reverse("source-data-template-file", kwargs={"feed_key": "surveillance_weekly_aggregate"})
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["row_count"], 40)
+        reader = csv.DictReader(StringIO(response.data["payload"]))
+        rows = list(reader)
+        self.assertEqual(reader.fieldnames[:2], ["ward_code", "ward_name"])
+        self.assertEqual(len(rows), 40)
+        self.assertIn(
+            {"ward_code": "KE-WARD-1261", "ward_name": "North Kamagambo"},
+            [{"ward_code": row["ward_code"], "ward_name": row["ward_name"]} for row in rows],
+        )
+        self.assertIn(
+            {"ward_code": "KE-WARD-1300", "ward_name": "Nyabasi West"},
+            [{"ward_code": row["ward_code"], "ward_name": row["ward_name"]} for row in rows],
+        )
+
+    def test_facility_templates_show_ward_name_without_creating_fake_facility_rows(self):
+        self.client.force_authenticate(self.admin)
+
+        response = self.client.get(
+            reverse("source-data-template-file", kwargs={"feed_key": "facility_readiness_snapshot"})
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["row_count"], 1)
+        reader = csv.DictReader(StringIO(response.data["payload"]))
+        row = next(reader)
+        self.assertIn("ward_name", reader.fieldnames)
+        self.assertEqual(row["ward_name"], "North Kamagambo")
 
     def test_unsupported_template_feed_key_returns_safe_404(self):
         self.client.force_authenticate(self.admin)

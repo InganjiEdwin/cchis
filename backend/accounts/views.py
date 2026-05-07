@@ -23,7 +23,10 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from .audit import get_client_ip, record_auth_event
 from .models import AccessRequest, AuthAuditEvent, PasswordResetToken
 from .services import (
+    build_policy_acceptance_status,
     create_password_reset_token,
+    create_current_policy_acceptances,
+    infer_policy_acceptance_context,
     send_access_request_acknowledgement,
     send_access_request_decision,
     send_password_reset_email,
@@ -37,6 +40,7 @@ from .serializers import (
     ConfirmTwoFactorEnrollmentSerializer,
     OwnAuthActivityQuerySerializer,
     OwnAuthActivityEventSerializer,
+    PolicyAcceptanceSerializer,
     RegenerateTwoFactorRecoveryCodesSerializer,
     RegisterSerializer,
     AuthAuditEventSerializer,
@@ -136,6 +140,29 @@ def build_session_response(*, authenticated: bool, user=None, access_token: str 
         "session_source": session_source,
     }
     return Response(payload, status=status.HTTP_200_OK)
+
+
+def build_policy_acceptance_audit_metadata(
+    policy_status: dict,
+    *,
+    acceptance_context: str,
+    missing_documents: list[str] | None = None,
+    created_documents: list[str] | None = None,
+) -> dict:
+    metadata = {
+        "terms_version": policy_status["terms_version"],
+        "privacy_version": policy_status["privacy_version"],
+        "cookie_notice_version": policy_status["cookie_notice_version"],
+        "acceptance_context": acceptance_context,
+        "missing_documents": list(
+            missing_documents
+            if missing_documents is not None
+            else policy_status["missing_documents"]
+        ),
+    }
+    if created_documents is not None:
+        metadata["created_documents"] = list(created_documents)
+    return metadata
 
 
 def build_login_attempt_key(request, username: str) -> str:
@@ -617,6 +644,61 @@ class MeAPIView(APIView):
 
         serializer.save()
         return Response(UserSerializer(request.user).data, status=status.HTTP_200_OK)
+
+
+class PolicyAcceptanceAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_scope = "auth_write"
+
+    def get(self, request):
+        policy_status = build_policy_acceptance_status(request.user)
+        if policy_status["required"] and not policy_status["is_current"]:
+            record_auth_event(
+                request=request,
+                event_type=AuthAuditEvent.EVENT_POLICY_ACCEPTANCE_REQUIRED,
+                status=AuthAuditEvent.STATUS_SUCCESS,
+                actor=request.user,
+                target_user=request.user,
+                metadata=build_policy_acceptance_audit_metadata(
+                    policy_status,
+                    acceptance_context=infer_policy_acceptance_context(request.user),
+                ),
+            )
+        return Response(policy_status, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        serializer = PolicyAcceptanceSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        previous_policy_status = build_policy_acceptance_status(request.user)
+        acceptance_context = serializer.validated_data.get(
+            "acceptance_context"
+        ) or infer_policy_acceptance_context(request.user)
+        created_acceptances = create_current_policy_acceptances(
+            request.user,
+            request=request,
+            acceptance_context=acceptance_context,
+            metadata={
+                "accepted_via": "auth_policy_acceptance_endpoint",
+            },
+        )
+        updated_policy_status = build_policy_acceptance_status(request.user)
+        record_auth_event(
+            request=request,
+            event_type=AuthAuditEvent.EVENT_POLICY_ACCEPTED,
+            status=AuthAuditEvent.STATUS_SUCCESS,
+            actor=request.user,
+            target_user=request.user,
+            metadata=build_policy_acceptance_audit_metadata(
+                previous_policy_status,
+                acceptance_context=acceptance_context,
+                missing_documents=previous_policy_status["missing_documents"],
+                created_documents=[
+                    acceptance.document_type for acceptance in created_acceptances
+                ],
+            ),
+        )
+        return Response(updated_policy_status, status=status.HTTP_200_OK)
 
 
 class VerifyProfileIdentityTwoFactorAPIView(APIView):

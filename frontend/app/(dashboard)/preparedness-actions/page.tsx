@@ -43,6 +43,7 @@ import {
 
 type QueueFilter = "ALL" | "ACTIVE" | "OVERDUE" | "BLOCKED" | "COMPLETED" | "MINE" | "UNASSIGNED";
 type BadgeTone = "default" | "success" | "warning" | "danger" | "info";
+type CountQuery = ReturnType<typeof usePreparednessActionsQuery>;
 
 const ACTIVE_STATUSES = new Set<PreparednessActionStatus>([
   "DRAFT",
@@ -87,6 +88,9 @@ const FILTER_LABELS: Record<QueueFilter, string> = {
   MINE: "Mine",
   UNASSIGNED: "Unassigned",
 };
+
+const STATUS_FILTERS: QueueFilter[] = ["ALL", "ACTIVE", "OVERDUE", "BLOCKED", "COMPLETED"];
+const OWNERSHIP_FILTERS: QueueFilter[] = ["MINE", "UNASSIGNED"];
 
 function toTitleCase(value: string) {
   return value
@@ -222,18 +226,12 @@ function sortActions(left: PreparednessActionRecord, right: PreparednessActionRe
   return leftDue - rightDue;
 }
 
-function actionSummary(actions: PreparednessActionRecord[]) {
-  return actions.reduce(
-    (summary, action) => {
-      summary.total += 1;
-      if (ACTIVE_STATUSES.has(action.status)) summary.active += 1;
-      if (action.is_overdue) summary.overdue += 1;
-      if (action.status === "BLOCKED") summary.blocked += 1;
-      if (action.status === "COMPLETED") summary.completed += 1;
-      return summary;
-    },
-    { total: 0, active: 0, overdue: 0, blocked: 0, completed: 0 },
-  );
+function countFromQuery(query: CountQuery) {
+  return query.data?.count ?? null;
+}
+
+function formatCount(value: number | null) {
+  return value === null ? "..." : String(value);
 }
 
 function ActionDetailDrawer({
@@ -501,28 +499,84 @@ export default function PreparednessActionsPage() {
     facilityId ? `facility ${facilityId}` : null,
     chvId ? `CHV ${chvId}` : null,
   ].filter(Boolean);
-  const actionQueryFilters = useMemo<FetchPreparednessActionsParams>(
+  const scopedFilters = useMemo(
     () => ({
-      page_size: 200,
       ward_id: wardId ?? undefined,
       facility_id: facilityId ?? undefined,
       chv_id: chvId ?? undefined,
+    }),
+    [chvId, facilityId, wardId],
+  );
+  const countQueryBase = useMemo<FetchPreparednessActionsParams>(
+    () => ({
+      ...scopedFilters,
+      page_size: 1,
+    }),
+    [scopedFilters],
+  );
+  const totalCountQuery = usePreparednessActionsQuery({
+    filters: {
+      ...countQueryBase,
+      ordering: "due_at",
+    },
+    enabled: Boolean(currentUser),
+  });
+  const activeCountQuery = usePreparednessActionsQuery({
+    filters: {
+      ...countQueryBase,
+      statuses: [...ACTIVE_STATUSES],
+      ordering: "due_at",
+    },
+    enabled: Boolean(currentUser),
+  });
+  const overdueCountQuery = usePreparednessActionsQuery({
+    filters: {
+      ...countQueryBase,
+      overdue: true,
+      ordering: "due_at",
+    },
+    enabled: Boolean(currentUser),
+  });
+  const blockedCountQuery = usePreparednessActionsQuery({
+    filters: {
+      ...countQueryBase,
+      status: "BLOCKED",
+      ordering: "due_at",
+    },
+    enabled: Boolean(currentUser),
+  });
+  const completedCountQuery = usePreparednessActionsQuery({
+    filters: {
+      ...countQueryBase,
+      status: "COMPLETED",
+      ordering: "-updated_at",
+    },
+    enabled: Boolean(currentUser),
+  });
+  const actionQueryFilters = useMemo<FetchPreparednessActionsParams>(
+    () => ({
+      page_size: 200,
+      ...scopedFilters,
       ...getBackendFiltersForQueueFilter(queueFilter),
     }),
-    [chvId, facilityId, queueFilter, wardId],
+    [queueFilter, scopedFilters],
   );
   const actionsQuery = usePreparednessActionsQuery({
     filters: actionQueryFilters,
     enabled: Boolean(currentUser),
   });
   const actions = actionsQuery.data?.results ?? [];
-  const summary = actionSummary(actions);
-  const summaryCards: Array<{ label: string; value: number; icon: LucideIcon; tone: BadgeTone }> = [
-    { label: "Total", value: summary.total, icon: ClipboardList, tone: "info" },
-    { label: "Active", value: summary.active, icon: Play, tone: "warning" },
-    { label: "Overdue", value: summary.overdue, icon: Clock3, tone: summary.overdue ? "danger" : "default" },
-    { label: "Blocked", value: summary.blocked, icon: Ban, tone: summary.blocked ? "danger" : "default" },
-    { label: "Completed", value: summary.completed, icon: CheckCircle2, tone: "success" },
+  const totalVisibleCount = countFromQuery(totalCountQuery);
+  const activeCount = countFromQuery(activeCountQuery);
+  const overdueCount = countFromQuery(overdueCountQuery);
+  const blockedCount = countFromQuery(blockedCountQuery);
+  const completedCount = countFromQuery(completedCountQuery);
+  const summaryCards: Array<{ label: string; value: number | null; icon: LucideIcon; tone: BadgeTone }> = [
+    { label: "Total", value: totalVisibleCount, icon: ClipboardList, tone: "info" },
+    { label: "Active", value: activeCount, icon: Play, tone: "warning" },
+    { label: "Overdue", value: overdueCount, icon: Clock3, tone: (overdueCount ?? 0) > 0 ? "danger" : "default" },
+    { label: "Blocked", value: blockedCount, icon: Ban, tone: (blockedCount ?? 0) > 0 ? "danger" : "default" },
+    { label: "Completed", value: completedCount, icon: CheckCircle2, tone: "success" },
   ];
 
   const filteredActions = useMemo(
@@ -556,9 +610,16 @@ export default function PreparednessActionsPage() {
             : "Preparedness tasks across visible wards"
         }
         lastUpdatedLabel={actionsQuery.isFetching ? "Refreshing..." : formatTimestamp(latestUpdatedAt)}
-        lastUpdatedTone={summary.overdue > 0 || summary.blocked > 0 ? "stale" : "default"}
+        lastUpdatedTone={(overdueCount ?? 0) > 0 || (blockedCount ?? 0) > 0 ? "stale" : "default"}
         onRefresh={() => {
-          void actionsQuery.refetch();
+          void Promise.all([
+            totalCountQuery.refetch(),
+            activeCountQuery.refetch(),
+            overdueCountQuery.refetch(),
+            blockedCountQuery.refetch(),
+            completedCountQuery.refetch(),
+            actionsQuery.refetch(),
+          ]);
         }}
       />
 
@@ -581,46 +642,76 @@ export default function PreparednessActionsPage() {
                   {label}
                 </StatusBadge>
               </div>
-              <p className="mt-5 text-3xl font-semibold tracking-[-0.05em] text-panel-strong">{String(value)}</p>
+              <p className="mt-5 text-3xl font-semibold tracking-[-0.05em] text-panel-strong" aria-label={`${label} preparedness action count`}>
+                {formatCount(value)}
+              </p>
             </Card>
           );
         })}
       </section>
 
       <Card className="space-y-5 p-5 md:p-6">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-          <div className="flex items-center gap-3">
+        <div className="space-y-4">
+          <div className="flex items-start gap-3">
             <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--brand)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--brand)_20%,transparent)]">
               <ShieldCheck className="size-5" aria-hidden="true" />
             </span>
-            <div>
-              <h1 className="text-2xl font-semibold tracking-[-0.04em] text-panel-strong">Preparedness task ledger</h1>
-              <p className="text-sm text-panel-muted">{filteredActions.length} visible actions</p>
+            <div className="min-w-0">
+              <h1 className="text-2xl font-semibold tracking-[-0.04em] text-panel-strong">
+                Preparedness task ledger
+              </h1>
+              <p className="mt-1 text-sm text-panel-muted">
+                {filteredActions.length} shown in {FILTER_LABELS[queueFilter].toLowerCase()} view
+                {totalVisibleCount !== null ? ` · ${totalVisibleCount} total in scope` : ""}
+              </p>
             </div>
           </div>
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="grid gap-3 border-y border-[var(--dashboard-table-line)] py-4 xl:grid-cols-[minmax(18rem,24rem)_minmax(0,1fr)] xl:items-start">
             <InputShell
-              className="sm:w-72"
+              className="w-full"
               icon={<Search className="size-4" aria-hidden="true" />}
               placeholder="Search ward, task, owner"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               aria-label="Search action queue"
             />
-            <div className="flex flex-wrap gap-2" aria-label="Action queue filters">
-              {(Object.keys(FILTER_LABELS) as QueueFilter[]).map((filter) => (
-                <Button
-                  key={filter}
-                  variant={queueFilter === filter ? "primary" : "secondary"}
-                  size="sm"
-                  className="gap-1.5"
-                  onClick={() => setQueueFilter(filter)}
-                >
-                  {filter === "OVERDUE" || filter === "BLOCKED" ? <Filter className="size-3.5" aria-hidden="true" /> : null}
-                  {FILTER_LABELS[filter]}
-                </Button>
-              ))}
+
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Status</p>
+                <div className="flex flex-wrap gap-2" aria-label="Action status filters">
+                  {STATUS_FILTERS.map((filter) => (
+                    <Button
+                      key={filter}
+                      variant={queueFilter === filter ? "primary" : "secondary"}
+                      size="sm"
+                      className="gap-1.5"
+                      onClick={() => setQueueFilter(filter)}
+                    >
+                      {filter === "OVERDUE" || filter === "BLOCKED" ? <Filter className="size-3.5" aria-hidden="true" /> : null}
+                      {FILTER_LABELS[filter]}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Owner</p>
+                <div className="flex flex-wrap gap-2" aria-label="Action owner filters">
+                  {OWNERSHIP_FILTERS.map((filter) => (
+                    <Button
+                      key={filter}
+                      variant={queueFilter === filter ? "primary" : "secondary"}
+                      size="sm"
+                      className="gap-1.5"
+                      onClick={() => setQueueFilter(filter)}
+                    >
+                      {FILTER_LABELS[filter]}
+                    </Button>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -692,8 +783,16 @@ export default function PreparednessActionsPage() {
             </div>
           ) : (
             <div className="px-4 py-10 text-center">
-              <p className="font-semibold text-panel-strong">No preparedness actions match this view.</p>
-              <p className="mt-1 text-sm text-panel-muted">Try a different status filter or search term.</p>
+              <p className="font-semibold text-panel-strong">
+                {totalVisibleCount === 0
+                  ? "No response tasks have been created yet."
+                  : "No preparedness actions match this view."}
+              </p>
+              <p className="mt-1 text-sm text-panel-muted">
+                {totalVisibleCount === 0
+                  ? "Tasks appear here when alerts, facility reviews, CHV coverage requests, or manual workflows create preparedness actions."
+                  : "Try a different status filter or search term."}
+              </p>
             </div>
           )}
         </div>

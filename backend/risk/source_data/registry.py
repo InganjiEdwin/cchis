@@ -144,6 +144,7 @@ def _definition_from_readiness_decision(decision: SourceDataFeedDecision) -> Sou
             "source_ref",
             "staff_on_duty",
             "stockout_notes",
+            "ward_name",
             "ward_code",
             "zinc_available",
         ),

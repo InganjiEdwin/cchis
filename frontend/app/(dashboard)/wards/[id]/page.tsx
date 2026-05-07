@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
-import { useMemo } from "react";
+import { useId, useMemo, useState } from "react";
 
 import { useAuth } from "@/components/auth-provider";
 import { DashboardTopbar } from "@/components/dashboard-topbar";
@@ -36,6 +36,23 @@ import { cn } from "@/lib/cn";
 import type { AlertRecord, ClimateEvidence, PreparednessActionRecord, RiskScoreRecord, WardIntelligenceDriverItem, WardOperationalEvidenceTone, WardPredictionOutcomeClassification, WardSpatialEvidence } from "@/lib/dashboard";
 import { canTriggerAlerts } from "@/lib/roles";
 import { type WardDetailState, useWardDetailQuery } from "@/queries/use-ward-detail-query";
+
+import {
+  LoadingBlocks,
+  WardActionRail,
+  WardCockpitHeader,
+  WardDetailDisclosure,
+  WardDetailTabs,
+  WardMetricStrip,
+  type WardDetailTabId,
+} from "./ward-detail-sections";
+
+const WARD_DETAIL_TABS: Array<{ id: WardDetailTabId; label: string }> = [
+  { id: "situation", label: "Situation" },
+  { id: "response", label: "Response" },
+  { id: "evidence", label: "Evidence" },
+  { id: "history", label: "History" },
+];
 
 function normalizeRiskScore(score: number | null) {
   if (typeof score !== "number" || !Number.isFinite(score)) {
@@ -93,6 +110,30 @@ function formatRiskLevel(riskLevel: WardDetailState["riskLevel"]) {
     default:
       return "Unknown risk";
   }
+}
+
+function formatRiskBadgeLabel(riskLevel: WardDetailState["riskLevel"], isStale: boolean) {
+  const label = formatRiskLevel(riskLevel);
+  if (!isStale || riskLevel === "UNKNOWN") return label;
+  return `Last known ${label.toLowerCase()}`;
+}
+
+function getRiskBadgeTooltip(detail: WardDetailState | null | undefined) {
+  if (!detail) return "This will show the ward's risk level once the ward record finishes loading.";
+
+  const riskLabel = formatRiskLevel(detail.riskLevel).toLowerCase();
+  const stalePrefix = detail.freshness.is_stale ? "The last saved ward record showed" : "The latest ward record shows";
+
+  if (detail.riskLevel === "HIGH") {
+    return `${stalePrefix} ${riskLabel}. This means the ward needs close attention and the response history should be checked before taking the next step.`;
+  }
+  if (detail.riskLevel === "MEDIUM") {
+    return `${stalePrefix} ${riskLabel}. This means the ward should stay on watch, especially if new alerts or field reports arrive.`;
+  }
+  if (detail.riskLevel === "LOW") {
+    return `${stalePrefix} ${riskLabel}. This means routine monitoring is enough unless new risk signals appear.`;
+  }
+  return "The ward risk level is not clear from the available record, so use the evidence sections before making a decision.";
 }
 
 function toTitleCase(value: string) {
@@ -258,6 +299,36 @@ function formatTriggerState(triggerState: WardDetailState["triggerState"]) {
   return toTitleCase(triggerState);
 }
 
+function formatTriggerBadgeLabel(triggerState: WardDetailState["triggerState"], isStale: boolean) {
+  if (triggerState === "RESOLVED") return isStale ? "Last response resolved" : "Response resolved";
+  if (triggerState === "NONE") return isStale ? "Last known no active trigger" : "No active trigger";
+  const label = formatTriggerState(triggerState);
+  return isStale ? `Last known ${label.toLowerCase()}` : label;
+}
+
+function getTriggerBadgeTooltip(detail: WardDetailState | null | undefined) {
+  if (!detail) return "This will show whether there is active response work for this ward once the record finishes loading.";
+
+  const stalePrefix = detail.freshness.is_stale ? "In the last saved ward record," : "Right now,";
+
+  if (detail.triggerState === "RESOLVED") {
+    return `${stalePrefix} the response workflow is closed. Keep routine monitoring in place and reopen action only if conditions change.`;
+  }
+  if (detail.triggerState === "NONE") {
+    return `${stalePrefix} there is no active trigger for this ward. Continue monitoring unless new risk signals appear.`;
+  }
+  if (detail.triggerState === "REVIEW_PENDING") {
+    return `${stalePrefix} the ward needs someone to review the alert or trigger state before deciding the next action.`;
+  }
+  if (detail.triggerState === "ACTION_IN_PROGRESS") {
+    return `${stalePrefix} response work is already underway. Check the Response tab for follow-through and open tasks.`;
+  }
+  if (detail.triggerState === "TRIGGER_ACTIVE") {
+    return `${stalePrefix} an active trigger is open. Review the alert history and response actions before changing course.`;
+  }
+  return `${stalePrefix} the ward response state is ${formatTriggerState(detail.triggerState).toLowerCase()}. Check the Response tab for what has already happened.`;
+}
+
 function getRecommendedActionState(detail: WardDetailState) {
   const hasRecentAlerts = detail.relatedAlerts.length > 0 || (detail.workflow?.active_alert_count ?? 0) > 0;
   if (detail.triggerState === "NONE") {
@@ -305,6 +376,121 @@ function getDecisionCheckpointCopy(detail: WardDetailState | null) {
 
 function getFreshnessTone(isStale: boolean) {
   return isStale ? ("warning" as const) : ("success" as const);
+}
+
+type StatusTone = "danger" | "warning" | "success" | "default";
+
+type CockpitBadge = {
+  id: string;
+  label: string;
+  tone: StatusTone;
+  tooltip: string;
+};
+
+function isWarningTone(tone: StatusTone) {
+  return tone === "danger" || tone === "warning";
+}
+
+function getStatusTonePriority(tone: StatusTone) {
+  if (tone === "danger") return 3;
+  if (tone === "warning") return 2;
+  if (tone === "success") return 1;
+  return 0;
+}
+
+function getFreshnessBadgeTooltip(isStale: boolean) {
+  return isStale
+    ? "This ward has not been refreshed within the expected update window. Treat the page as useful background until a newer update is available."
+    : "This ward was refreshed within the expected update window, so the page can be treated as the current operating view.";
+}
+
+function getClimateBadgeTooltip({
+  fallbackUsed,
+  isCovered,
+  label,
+  missingLeadDays,
+}: {
+  fallbackUsed?: boolean;
+  isCovered?: boolean;
+  label: string;
+  missingLeadDays: number[];
+}) {
+  if (fallbackUsed) {
+    return "The weather signal is coming from a backup source. Use it as helpful context, but do not treat it as a complete forecast picture.";
+  }
+  if (missingLeadDays.length > 0 || !isCovered) {
+    return "The weather signal does not fully cover the forecast period shown here. Use it as a caution flag and check the Evidence tab for detail.";
+  }
+  return `${label} means the weather signal covers the expected forecast period for this ward view.`;
+}
+
+function getTrustCaveatTooltip(id: string, label: string) {
+  if (id === "model") {
+    return `${label} describes how ready the model evidence is for this ward view. Check the Evidence tab before relying on it alone.`;
+  }
+  if (id === "source") {
+    return `${label} flags a caution about one of the inputs behind this ward view. Check the Evidence tab for the source detail.`;
+  }
+  return `${label} is a data quality note for this ward view. Check the Evidence tab for more context.`;
+}
+
+function CockpitBadgeWithTooltip({ badge }: { badge: CockpitBadge }) {
+  const tooltipId = useId();
+  const [isHovering, setIsHovering] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
+  const [isPinned, setIsPinned] = useState(false);
+  const isVisible = isHovering || isFocused || isPinned;
+
+  return (
+    <span className="relative inline-flex">
+      <button
+        type="button"
+        aria-describedby={tooltipId}
+        aria-expanded={isVisible}
+        className="inline-flex cursor-help rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--panel)]"
+        onBlur={() => {
+          setIsFocused(false);
+          setIsPinned(false);
+        }}
+        onClick={() => {
+          setIsPinned((current) => !current);
+        }}
+        onFocus={() => {
+          setIsFocused(true);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            setIsPinned(false);
+            setIsFocused(false);
+            event.currentTarget.blur();
+          }
+        }}
+        onMouseEnter={() => {
+          setIsHovering(true);
+        }}
+        onMouseLeave={() => {
+          setIsHovering(false);
+        }}
+      >
+        <StatusBadge
+          tone={badge.tone}
+          className="max-w-full whitespace-normal rounded-full px-2.5 py-1.5 text-center text-[0.68rem] leading-3 tracking-[0.12em] sm:text-xs"
+        >
+          {badge.label}
+        </StatusBadge>
+      </button>
+      <span
+        id={tooltipId}
+        role="tooltip"
+        className={cn(
+          "pointer-events-none absolute left-0 top-full z-40 mt-2 w-[min(18rem,calc(100vw-3rem))] rounded-lg border border-[var(--dashboard-table-line)] bg-panel px-3 py-2 text-left text-xs font-medium normal-case leading-5 tracking-normal text-panel-copy shadow-panel transition duration-150 sm:left-1/2 sm:-translate-x-1/2",
+          isVisible ? "visible translate-y-0 opacity-100" : "invisible -translate-y-1 opacity-0",
+        )}
+      >
+        {badge.tooltip}
+      </span>
+    </span>
+  );
 }
 
 function getAlertTone(alert: AlertRecord) {
@@ -395,10 +581,28 @@ function getSpatialEvidenceHeadline(spatial: WardSpatialEvidence | null) {
   return `${spatial.summary.neighbor_count} mapped neighbor${spatial.summary.neighbor_count === 1 ? "" : "s"}`;
 }
 
+function formatAlertChannel(channel: string | null | undefined) {
+  if (!channel) return "unknown channel";
+  const normalized = channel.toUpperCase();
+  if (normalized === "SMS" || normalized === "EMAIL") return normalized;
+  return toTitleCase(channel);
+}
+
 function getAlertSummary(alert: AlertRecord) {
+  const channel = formatAlertChannel(alert.channel);
+  const status = alert.status.toUpperCase();
+  const deliveryState =
+    status === "DELIVERED"
+      ? `Delivered via ${channel}`
+      : status === "QUEUED"
+        ? `Queued for ${channel}`
+        : status === "FAILED"
+          ? `Failed via ${channel}`
+          : status === "RETRY_PENDING"
+            ? `Retry pending via ${channel}`
+            : `${toTitleCase(alert.status)} via ${channel}`;
   const parts = [
-    `Via ${toTitleCase(alert.channel)}`,
-    toTitleCase(alert.status),
+    deliveryState,
   ];
 
   if (typeof alert.risk_score === "number") {
@@ -408,20 +612,11 @@ function getAlertSummary(alert: AlertRecord) {
   return parts.join(" • ");
 }
 
-function LoadingBlocks({ count = 3, className = "h-16 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" }) {
-  return (
-    <div className="space-y-3" aria-hidden="true">
-      {Array.from({ length: count }, (_, index) => (
-        <div key={index} className={className} />
-      ))}
-    </div>
-  );
-}
-
 export default function WardDetailPage() {
   const params = useParams<{ id: string }>();
   const searchParams = useSearchParams();
   const { currentUser } = useAuth();
+  const [activeTab, setActiveTab] = useState<WardDetailTabId>("situation");
   const wardId = useMemo(() => Number(params.id), [params.id]);
   const returnTo = useMemo(() => getSafeReturnTo(searchParams.get("returnTo")), [searchParams]);
   const wardDetailQuery = useWardDetailQuery({
@@ -491,6 +686,93 @@ export default function WardDetailPage() {
     () => getPreparednessActionSummary(preparednessActions),
     [preparednessActions],
   );
+  const climateCoverageTone = getClimateCoverageTone(climateSource, climateMissingLeadDays);
+  const sourceTrustCaveatBadge = operationalEvidence?.source_badges.find((badge) =>
+    isWarningTone(getEvidenceTone(badge.tone)),
+  );
+  const strongestTrustCaveat = [
+    forecastHorizon && isWarningTone(climateCoverageTone)
+      ? {
+          id: "climate",
+          label: getClimateHorizonBadgeLabel(climateSource, forecastHorizon.max_days),
+          tone: climateCoverageTone,
+          tooltip: getClimateBadgeTooltip({
+            fallbackUsed: climateSource?.fallback_static_rainfall_used,
+            isCovered: climateSource?.claimed_lead_time_climate_coverage_sufficient,
+            label: getClimateHorizonBadgeLabel(climateSource, forecastHorizon.max_days),
+            missingLeadDays: climateMissingLeadDays,
+          }),
+        }
+      : null,
+    modelReadiness && isWarningTone(getEvidenceTone(modelReadiness.tone))
+      ? {
+          id: "model",
+          label: modelReadiness.label,
+          tone: getEvidenceTone(modelReadiness.tone),
+          tooltip: getTrustCaveatTooltip("model", modelReadiness.label),
+        }
+      : null,
+    sourceTrustCaveatBadge
+      ? {
+          id: "source",
+          label: sourceTrustCaveatBadge.value,
+          tone: getEvidenceTone(sourceTrustCaveatBadge.tone),
+          tooltip: getTrustCaveatTooltip("source", sourceTrustCaveatBadge.value),
+        }
+      : null,
+  ]
+    .filter((item): item is CockpitBadge => Boolean(item))
+    .sort((left, right) => getStatusTonePriority(right.tone) - getStatusTonePriority(left.tone))[0] ?? null;
+  const cockpitOperationalBadges = isLoading
+    ? []
+    : [
+        {
+          id: "risk",
+          label: formatRiskBadgeLabel(detail?.riskLevel ?? "UNKNOWN", detail?.freshness.is_stale ?? true),
+          tone: getRiskBadgeTone(detail?.riskLevel ?? "UNKNOWN"),
+          tooltip: getRiskBadgeTooltip(detail),
+        },
+        {
+          id: "trigger",
+          label: formatTriggerBadgeLabel(detail?.triggerState ?? "NONE", detail?.freshness.is_stale ?? true),
+          tone: getTriggerTone(detail?.triggerState ?? "NONE"),
+          tooltip: getTriggerBadgeTooltip(detail),
+        },
+      ];
+  const cockpitDataQualityBadges = isLoading
+    ? []
+    : [
+        {
+          id: "freshness",
+          label: detail?.freshness.is_stale ? "Stale data" : "Fresh data",
+          tone: getFreshnessTone(detail?.freshness.is_stale ?? true),
+          tooltip: getFreshnessBadgeTooltip(detail?.freshness.is_stale ?? true),
+        },
+        ...(strongestTrustCaveat ? [strongestTrustCaveat] : []),
+      ];
+  const sourceConfidenceBadge =
+    operationalEvidence?.source_badges.find((badge) => badge.id === "source_confidence") ??
+    operationalEvidence?.source_badges[1] ??
+    null;
+  const cockpitTrustItems = [
+    modelReadiness ? `Model: ${modelReadiness.label}` : null,
+    forecastHorizon ? `Climate: ${getClimateHorizonBadgeLabel(climateSource, forecastHorizon.max_days)}` : null,
+    sourceConfidenceBadge ? `${sourceConfidenceBadge.value} confidence` : null,
+  ].filter((item): item is string => Boolean(item));
+  const cockpitActionNudge = detail
+    ? shouldShowTriggerPanelPrimary
+      ? null
+      : canTriggerFromPage
+        ? "Review alert history first."
+        : "Read-only trigger access."
+    : null;
+  const actionRailOperatingNote = detail
+    ? shouldShowTriggerPanelPrimary
+      ? "Trigger review and alert handling continue in dedicated workflows after this checkpoint."
+      : canTriggerFromPage
+        ? "Review alert history first. Open trigger flow only if conditions change."
+        : "Recommendation is visible, but this role cannot start or review trigger work from this page."
+    : null;
 
   if (!currentUser) {
     return null;
@@ -499,8 +781,8 @@ export default function WardDetailPage() {
   return (
     <div className="space-y-6">
       <DashboardTopbar
-        title="Ward Detail"
-        subtitle={detail ? `${detail.county} County ward decision console` : "Migori County ward decision console"}
+        title="Ward Decision"
+        subtitle={detail ? `${detail.county} County ward operating view` : "Migori County ward operating view"}
         lastUpdatedLabel={topbarTimestampLabel}
         lastUpdatedTone={isStale ? "stale" : "default"}
         onRefresh={() => {
@@ -509,13 +791,13 @@ export default function WardDetailPage() {
       />
 
       {error ? (
-        <div className="rounded-2xl border border-[color-mix(in_srgb,var(--danger)_20%,white)] bg-[color-mix(in_srgb,var(--danger)_10%,white)] px-4 py-3 text-sm font-medium text-[color:var(--danger)]">
+        <div className="rounded-lg border border-[color-mix(in_srgb,var(--danger)_20%,white)] bg-[color-mix(in_srgb,var(--danger)_10%,white)] p-4 text-sm font-medium text-[color:var(--danger)]">
           <AlertTriangle className="mr-2 inline-flex size-4" aria-hidden="true" />
           {error}
         </div>
       ) : null}
 
-      <Card className="space-y-6 overflow-hidden p-6 md:p-7">
+      <WardCockpitHeader>
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-4">
             <Link
@@ -526,64 +808,26 @@ export default function WardDetailPage() {
               Back to wards
             </Link>
 
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-center gap-3">
-                <h1 className="text-[clamp(2rem,1.2rem+1vw,3rem)] font-semibold tracking-[-0.05em] text-panel-strong">
-                  {isLoading ? "Loading ward detail..." : detail?.wardName ?? "Ward detail"}
-                </h1>
-                {!isLoading ? (
-                  <>
-                    <StatusBadge
-                      tone={getRiskBadgeTone(detail?.riskLevel ?? "UNKNOWN")}
-                      className="rounded-full px-3 py-1.5 tracking-[0.14em]"
-                    >
-                      {formatRiskLevel(detail?.riskLevel ?? "UNKNOWN")}
-                    </StatusBadge>
-                    <StatusBadge
-                      tone={getTriggerTone(detail?.triggerState ?? "NONE")}
-                      className="rounded-full px-3 py-1.5 tracking-[0.14em]"
-                    >
-                      {formatTriggerState(detail?.triggerState ?? "NONE")}
-                    </StatusBadge>
-                    <StatusBadge
-                      tone={getFreshnessTone(detail?.freshness.is_stale ?? true)}
-                      className="rounded-full px-3 py-1.5 tracking-[0.14em]"
-                    >
-                      {detail?.freshness.is_stale ? "Stale data" : "Fresh data"}
-                    </StatusBadge>
-                    {modelReadiness ? (
-                      <StatusBadge
-                        tone={getEvidenceTone(modelReadiness.tone)}
-                        className="rounded-full px-3 py-1.5 tracking-[0.14em]"
-                      >
-                        {modelReadiness.label}
-                      </StatusBadge>
-                    ) : null}
-                    {forecastHorizon ? (
-                      <StatusBadge
-                        tone={getClimateCoverageTone(climateSource, climateMissingLeadDays)}
-                        className="rounded-full px-3 py-1.5 tracking-[0.14em]"
-                      >
-                        {getClimateHorizonBadgeLabel(climateSource, forecastHorizon.max_days)}
-                      </StatusBadge>
-                    ) : null}
-                    {operationalEvidence?.source_badges?.[1] ? (
-                      <StatusBadge
-                        tone={getEvidenceTone(operationalEvidence.source_badges[1].tone)}
-                        className="rounded-full px-3 py-1.5 tracking-[0.14em]"
-                      >
-                        {operationalEvidence.source_badges[1].value} confidence
-                      </StatusBadge>
-                    ) : null}
-                    {preparednessActionSummary.active > 0 ? (
-                      <StatusBadge
-                        tone={preparednessActionSummary.overdue || preparednessActionSummary.blocked ? "danger" : "warning"}
-                        className="rounded-full px-3 py-1.5 tracking-[0.14em]"
-                      >
-                        {preparednessActionSummary.active} active actions
-                      </StatusBadge>
-                    ) : null}
-                  </>
+            <div className="space-y-4">
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <h1 className="text-3xl font-semibold leading-tight text-panel-strong md:text-4xl">
+                    {isLoading ? "Loading ward detail..." : detail?.wardName ?? "Ward detail"}
+                  </h1>
+                  {!isLoading
+                    ? cockpitOperationalBadges.map((badge) => (
+                        <CockpitBadgeWithTooltip key={badge.id} badge={badge} />
+                      ))
+                    : null}
+                </div>
+
+                {!isLoading && cockpitDataQualityBadges.length ? (
+                  <div className="flex flex-wrap items-center gap-2.5" aria-label="Ward data quality">
+                    <span className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-panel-subtle sm:text-xs">Data quality</span>
+                    {cockpitDataQualityBadges.map((badge) => (
+                      <CockpitBadgeWithTooltip key={badge.id} badge={badge} />
+                    ))}
+                  </div>
                 ) : null}
               </div>
 
@@ -596,24 +840,28 @@ export default function WardDetailPage() {
               </p>
 
               <div className="max-w-3xl space-y-2">
-                <p className="text-lg font-semibold tracking-[-0.02em] text-panel-strong">
+                <p className="text-lg font-semibold text-panel-strong">
                   {isLoading ? "Loading decision summary..." : decisionCheckpointCopy.headline}
                 </p>
-                <p className="text-sm leading-6 text-panel-muted">
+                <p className="max-w-2xl text-sm leading-6 text-panel-muted max-[640px]:hidden">
                   {isLoading ? "Checking current trigger state, alert activity, and freshness." : decisionCheckpointCopy.why}
                 </p>
-                {!isLoading ? <p className="text-xs font-medium uppercase tracking-[0.16em] text-panel-subtle">{decisionCheckpointCopy.context}</p> : null}
+                {!isLoading ? (
+                  <p className="text-xs font-medium uppercase tracking-[0.16em] text-panel-subtle max-[640px]:hidden">
+                    {decisionCheckpointCopy.context}
+                  </p>
+                ) : null}
               </div>
             </div>
           </div>
 
-          <div className="w-full max-w-md space-y-3 lg:pl-6">
+          <div className="w-full max-w-md space-y-4 lg:pl-6">
             {detail ? (
               shouldShowTriggerPanelPrimary ? (
                 <TriggerAlertPanel
                   buttonLabel={primaryTriggerButtonLabel}
                   closeLabel={primaryTriggerCloseLabel}
-                  buttonClassName="inline-flex h-12 w-full items-center justify-center gap-2 rounded-pill bg-[var(--login-submit-start)] px-5 text-base font-semibold text-white shadow-[var(--login-submit-shadow)] transition hover:bg-[var(--login-submit-end)] hover:shadow-[var(--login-submit-shadow-hover)]"
+                  buttonClassName="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-pill bg-[var(--login-submit-start)] px-6 py-3 text-center text-base font-semibold leading-5 text-white shadow-[var(--login-submit-shadow)] transition hover:bg-[var(--login-submit-end)] hover:shadow-[var(--login-submit-shadow-hover)]"
                   fixedWard={{
                     id: detail.wardId,
                     name: detail.wardName,
@@ -626,22 +874,18 @@ export default function WardDetailPage() {
                   }}
                 />
               ) : (
-                <div className="flex items-start gap-2 rounded-[1.25rem] border border-[color-mix(in_srgb,var(--warning)_18%,white)] bg-[color-mix(in_srgb,var(--warning)_8%,white)] px-4 py-3 text-sm font-medium text-[color:var(--warning)] dark:border-[color-mix(in_srgb,var(--warning)_24%,var(--panel-border))] dark:bg-[color-mix(in_srgb,var(--warning)_14%,var(--panel))] dark:text-[color-mix(in_srgb,var(--warning)_78%,white)]">
+                <div className="flex items-start gap-2 rounded-lg border border-[color-mix(in_srgb,var(--warning)_18%,white)] bg-[color-mix(in_srgb,var(--warning)_8%,white)] p-4 text-sm font-medium text-[color:var(--warning)] dark:border-[color-mix(in_srgb,var(--warning)_24%,var(--panel-border))] dark:bg-[color-mix(in_srgb,var(--warning)_14%,var(--panel))] dark:text-[color-mix(in_srgb,var(--warning)_78%,white)]">
                   <AlertTriangle className="mt-0.5 inline-flex size-4 shrink-0" aria-hidden="true" />
-                  <span>
-                    {canTriggerFromPage
-                      ? "Current next step: review alert history. Open trigger flow only if conditions change."
-                      : "Recommended action is visible, but this role cannot start or review trigger work from this page."}
-                  </span>
+                  <span>{cockpitActionNudge}</span>
                 </div>
               )
             ) : null}
 
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-2">
               <Link
                 href="/alerts"
                 className={cn(
-                  "inline-flex h-11 w-full items-center justify-center gap-2 whitespace-nowrap rounded-pill px-5 text-sm font-semibold transition sm:col-span-2",
+                  "inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-pill px-6 py-3 text-center text-sm font-semibold leading-5 transition sm:col-span-2",
                   shouldShowAlertHistoryPrimary
                     ? "bg-[var(--login-submit-start)] text-white shadow-[var(--login-submit-shadow)] hover:bg-[var(--login-submit-end)] hover:shadow-[var(--login-submit-shadow-hover)]"
                     : "border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] text-panel-strong hover:bg-[color-mix(in_srgb,var(--dashboard-table-line)_34%,transparent)]",
@@ -655,7 +899,7 @@ export default function WardDetailPage() {
                 <TriggerAlertPanel
                   buttonLabel="Open trigger flow"
                   closeLabel="Close trigger flow"
-                  buttonClassName="inline-flex h-11 w-full items-center justify-center gap-2 rounded-pill border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-5 text-sm font-semibold text-panel-strong transition hover:bg-[color-mix(in_srgb,var(--dashboard-table-line)_34%,transparent)]"
+                  buttonClassName="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-pill border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-6 py-3 text-center text-sm font-semibold leading-5 text-panel-strong transition hover:bg-[color-mix(in_srgb,var(--dashboard-table-line)_34%,transparent)]"
                   fixedWard={{
                     id: detail.wardId,
                     name: detail.wardName,
@@ -670,40 +914,45 @@ export default function WardDetailPage() {
               ) : null}
             </div>
 
-            <p className="text-xs leading-5 text-panel-muted">
-              Trigger review and alert handling may continue in dedicated flows. This page keeps the next truthful step visible without implying all execution completes here.
-            </p>
+            {cockpitTrustItems.length > 0 ? (
+              <div className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_14%,transparent)] p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Trust</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {cockpitTrustItems.map((item) => (
+                    <span
+                      key={item}
+                      className="inline-flex max-w-full rounded-full bg-[color-mix(in_srgb,var(--dashboard-table-line)_28%,transparent)] px-3 py-2 text-xs font-semibold leading-4 text-panel-copy"
+                    >
+                      {item}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {[
-            ["Risk score", isLoading ? "Loading..." : formatRiskScore(detail?.riskScore ?? null)],
-            ["Expected cases", isLoading ? "Loading..." : detail ? String(detail.predictedCases) : "Unavailable"],
-            ["Forecast horizon", isLoading ? "Loading..." : forecastHorizon?.display_value ?? "7 to 14 days"],
-            ["Model readiness", isLoading ? "Loading..." : modelReadiness?.label ?? "Unavailable"],
-            ["Last alert", isLoading ? "Loading..." : detail?.lastAlertAt ? formatRelativeMinutes(detail.lastAlertAt) : "No recent alerts"],
-            ["Latest record", isLoading ? "Loading..." : formatOperationalTime(detail?.updatedAt ?? null)],
-          ].map(([label, value]) => (
-            <div
-              key={label}
-              className="rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_20%,transparent)] px-4 py-4"
-            >
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">{label}</p>
-              <p className="mt-2 text-lg font-semibold text-panel-strong">{value}</p>
-            </div>
-          ))}
-        </div>
-      </Card>
+        <WardMetricStrip
+          metrics={[
+            { label: "Risk score", value: isLoading ? "Loading..." : formatRiskScore(detail?.riskScore ?? null) },
+            { label: "Expected cases", value: isLoading ? "Loading..." : detail ? String(detail.predictedCases) : "Unavailable" },
+            { label: "Last alert", value: isLoading ? "Loading..." : detail?.lastAlertAt ? formatRelativeMinutes(detail.lastAlertAt) : "No recent alerts" },
+            { label: "Latest record", value: isLoading ? "Loading..." : formatOperationalTime(detail?.updatedAt ?? null) },
+          ]}
+        />
+      </WardCockpitHeader>
 
-      <Card className="space-y-5 p-6">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div className="flex items-center gap-3">
-            <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+      <WardDetailTabs activeTab={activeTab} tabs={WARD_DETAIL_TABS} onSelectTab={setActiveTab} />
+
+      {activeTab === "evidence" ? (
+      <Card className="space-y-6 p-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex items-center gap-4">
+            <span className="inline-flex size-11 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
               <Radio className="size-5" aria-hidden="true" />
             </span>
             <div className="space-y-1">
-              <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Forecast horizon and evidence</h3>
+              <h3 className="text-xl font-semibold text-panel-strong">Forecast horizon and evidence</h3>
               <p className="text-sm text-panel-muted">Current lead-time window, source quality, and model readiness for this ward.</p>
             </div>
           </div>
@@ -715,17 +964,17 @@ export default function WardDetailPage() {
         </div>
 
         {isLoading ? (
-          <LoadingBlocks count={3} className="h-12 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
+          <LoadingBlocks count={3} className="h-12 rounded-lg bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
         ) : operationalEvidence ? (
           <div className="grid gap-4 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.35fr)]">
-            <div className="rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-4">
-              <div className="flex items-start gap-3">
+            <div className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-4">
+              <div className="flex items-start gap-4">
                 <span className="inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--brand)_10%,white)] text-brand">
                   <Activity className="size-4" aria-hidden="true" />
                 </span>
                 <div className="space-y-2">
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Forecast horizon</p>
-                  <p className="text-2xl font-semibold tracking-[-0.03em] text-panel-strong">
+                  <p className="text-2xl font-semibold text-panel-strong">
                     {forecastHorizon?.display_value ?? "7 to 14 days"}
                   </p>
                   <p className="text-sm leading-6 text-panel-muted">
@@ -739,48 +988,46 @@ export default function WardDetailPage() {
               </div>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-3">
               {operationalEvidence.source_badges.map((badge) => (
                 <div
                   key={badge.id}
-                  className="rounded-[1.35rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4"
+                  className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4"
                 >
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">{badge.label}</p>
-                    <StatusBadge tone={getEvidenceTone(badge.tone)} className="rounded-full px-2 py-0.5 tracking-[0.12em]">
+                    <StatusBadge
+                      tone={getEvidenceTone(badge.tone)}
+                      className="max-w-full whitespace-normal rounded-full px-2 py-0.5 text-center leading-4 tracking-[0.12em]"
+                    >
                       {badge.value}
                     </StatusBadge>
                   </div>
-                  <p className="mt-3 text-sm leading-6 text-panel-copy">{badge.detail}</p>
+                  <p className="mt-4 text-sm leading-6 text-panel-copy">{badge.detail}</p>
                 </div>
               ))}
             </div>
 
-            <div className="rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_14%,transparent)] px-4 py-4 lg:col-span-2">
-              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Climate source truth</p>
-                  <p className="mt-2 text-lg font-semibold text-panel-strong">{climateSourceLabel}</p>
-                  <p className="mt-1 text-sm leading-6 text-panel-muted">
-                    {climateSource?.source_provider || "Source provider unavailable"}
-                  </p>
-                </div>
-                <StatusBadge
-                  tone={getClimateCoverageTone(climateSource, climateMissingLeadDays)}
-                  className="w-max rounded-full px-3 py-1 tracking-[0.14em]"
-                >
-                  {climateSource?.climate_coverage_status ? toTitleCase(climateSource.climate_coverage_status) : "Coverage unavailable"}
-                </StatusBadge>
-              </div>
-
-              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <WardDetailDisclosure
+              title="Climate source truth"
+              summary={
+                climateMissingLeadDays.length > 0
+                  ? `${climateSourceLabel}; missing lead days: ${formatLeadDays(climateMissingLeadDays)}.`
+                  : `${climateSourceLabel}; ${climateSource?.source_provider || "source provider unavailable"}.`
+              }
+              badge={climateSource?.climate_coverage_status ? toTitleCase(climateSource.climate_coverage_status) : "Coverage unavailable"}
+              badgeTone={getClimateCoverageTone(climateSource, climateMissingLeadDays)}
+              className="lg:col-span-2"
+            >
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 {[
+                  ["Provider", climateSource?.source_provider || "Source provider unavailable"],
                   ["Issue time", formatOperationalTime(climateSource?.issue_time ?? null)],
                   ["Valid dates", formatClimateValidRange(climateSource)],
                   ["Coverage", `${climateSource?.forecast_coverage_days ?? 0}/${climateSource?.claimed_forecast_horizon_days ?? forecastHorizon?.max_days ?? 14} days`],
                   ["Missing lead days", formatLeadDays(climateMissingLeadDays)],
                 ].map(([label, value]) => (
-                  <div key={label} className="rounded-[1.15rem] border border-[var(--dashboard-table-line)] px-3 py-3">
+                  <div key={label} className="rounded-lg border border-[var(--dashboard-table-line)] p-4">
                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">{label}</p>
                     <p className="mt-2 text-sm font-semibold text-panel-strong">{value}</p>
                   </div>
@@ -788,7 +1035,7 @@ export default function WardDetailPage() {
               </div>
 
               {climateSource?.fallback_static_rainfall_used ? (
-                <div className="mt-4 flex items-start gap-2 rounded-[1.15rem] border border-[color-mix(in_srgb,var(--warning)_20%,var(--dashboard-table-line))] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] px-3 py-3">
+                <div className="mt-4 flex items-start gap-2 rounded-lg border border-[color-mix(in_srgb,var(--warning)_20%,var(--dashboard-table-line))] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] p-4">
                   <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[color:var(--warning)]" aria-hidden="true" />
                   <p className="text-sm leading-6 text-panel-copy">
                     Fallback static rainfall is present and must not be treated as live forecast evidence.
@@ -797,20 +1044,24 @@ export default function WardDetailPage() {
               ) : null}
 
               {climateMissingLeadDays.length > 0 ? (
-                <div className="mt-4 flex items-start gap-2 rounded-[1.15rem] border border-[color-mix(in_srgb,var(--warning)_20%,var(--dashboard-table-line))] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] px-3 py-3">
+                <div className="mt-4 flex items-start gap-2 rounded-lg border border-[color-mix(in_srgb,var(--warning)_20%,var(--dashboard-table-line))] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] p-4">
                   <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[color:var(--warning)]" aria-hidden="true" />
                   <p className="text-sm leading-6 text-panel-copy">
                     Missing forecast lead days: {formatLeadDays(climateMissingLeadDays)}.
                   </p>
                 </div>
               ) : null}
-            </div>
+            </WardDetailDisclosure>
 
-            <div className="rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_14%,transparent)] px-4 py-4 lg:col-span-2">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Model readiness evidence</p>
-              <p className="mt-2 text-sm leading-6 text-panel-copy">{modelReadiness?.detail ?? "No model-readiness evidence is available."}</p>
+            <WardDetailDisclosure
+              title="Model readiness evidence"
+              summary={modelReadiness?.detail ?? "No model-readiness evidence is available."}
+              badge={modelReadiness?.label ?? "No evidence"}
+              badgeTone={modelReadiness ? getEvidenceTone(modelReadiness.tone) : "default"}
+              className="lg:col-span-2"
+            >
               {modelReadiness?.evidence.length ? (
-                <div className="mt-3 flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2">
                   {modelReadiness.evidence.slice(0, 5).map((item) => (
                     <span
                       key={item}
@@ -820,27 +1071,31 @@ export default function WardDetailPage() {
                     </span>
                   ))}
                 </div>
-              ) : null}
-            </div>
+              ) : (
+                <p className="text-sm text-panel-muted">No model-readiness evidence is available.</p>
+              )}
+            </WardDetailDisclosure>
           </div>
         ) : (
-          <div className="rounded-[1.5rem] border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+          <div className="rounded-lg border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
             <p className="text-sm font-semibold text-panel-strong">Operational evidence is not available yet.</p>
             <p className="mt-1 text-sm text-panel-muted">Ward risk state is visible, but source confidence and outcome evidence are not linked for this record.</p>
           </div>
         )}
       </Card>
+      ) : null}
 
       <section className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.9fr)]">
         <div className="space-y-6">
-          <Card className="space-y-5 p-6">
+          {activeTab === "situation" ? (
+          <Card className="space-y-6 p-6">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-              <div className="flex items-center gap-3">
-                <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--warning)_12%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]">
+              <div className="flex items-center gap-4">
+                <span className="inline-flex size-11 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--warning)_12%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]">
                   <ShieldAlert className="size-5" aria-hidden="true" />
                 </span>
                 <div className="space-y-1">
-                  <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">
+                  <h3 className="text-xl font-semibold text-panel-strong">
                     {hasLowSignalState ? "Risk signals & trend" : "Risk explanation"}
                   </h3>
                   <p className="text-sm text-panel-muted">
@@ -866,7 +1121,7 @@ export default function WardDetailPage() {
             {isLoading ? (
               <LoadingBlocks count={3} />
             ) : hasLowSignalState ? (
-              <div className="rounded-[1.5rem] border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+              <div className="rounded-lg border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
                 <p className="text-sm font-semibold text-panel-strong">No active signals or trends detected.</p>
                 <p className="mt-1 text-sm text-panel-muted">This ward is currently under routine monitoring.</p>
                 <p className="mt-1 text-sm text-panel-muted">
@@ -874,11 +1129,11 @@ export default function WardDetailPage() {
                 </p>
               </div>
             ) : drivers.length > 0 ? (
-              <div className="space-y-3">
+              <div className="space-y-4">
                 {drivers.map((driver) => (
                   <article
                     key={driver.text}
-                    className="flex items-center gap-3 rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_28%,transparent)] px-4 py-4"
+                    className="flex items-center gap-4 rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_28%,transparent)] px-4 py-4"
                   >
                     <span
                       className={cn(
@@ -908,7 +1163,7 @@ export default function WardDetailPage() {
                 ))}
               </div>
             ) : (
-              <div className="rounded-[1.5rem] border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+              <div className="rounded-lg border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
                 <p className="text-sm font-semibold text-panel-strong">No active risk drivers recorded.</p>
                 <p className="mt-1 text-sm text-panel-muted">
                   Driver summaries will appear when model runs include explainable signals.
@@ -919,25 +1174,26 @@ export default function WardDetailPage() {
               </div>
             )}
           </Card>
+          ) : null}
 
-          {!hasLowSignalState ? (
-            <Card className="space-y-5 p-6">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                <div className="flex items-center gap-3">
-                  <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+          {activeTab === "history" && !hasLowSignalState ? (
+            <Card className="space-y-6 p-6">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div className="flex items-center gap-4">
+                  <span className="inline-flex size-11 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
                     <Waves className="size-5" aria-hidden="true" />
                   </span>
                   <div className="space-y-1">
-                    <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Risk history</h3>
+                    <h3 className="text-xl font-semibold text-panel-strong">Risk history</h3>
                     <p className="text-sm text-panel-muted">Compact record of recent ward runs.</p>
                   </div>
                 </div>
               </div>
 
               {isLoading ? (
-                <LoadingBlocks count={4} className="h-14 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
+                <LoadingBlocks count={4} className="h-14 rounded-lg bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
               ) : detail && detail.riskHistory.length > 0 ? (
-                <div className="overflow-hidden rounded-[1.5rem] border border-[var(--dashboard-table-line)]">
+                <div className="overflow-hidden rounded-lg border border-[var(--dashboard-table-line)]">
                   <div className="overflow-x-auto">
                     <table className="min-w-full border-collapse text-left">
                       <thead>
@@ -945,7 +1201,7 @@ export default function WardDetailPage() {
                           {["Date/time", "Risk score", "Status", "Trend"].map((label) => (
                             <th
                               key={label}
-                              className="border-b border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_30%,transparent)] px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted"
+                              className="border-b border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_30%,transparent)] p-4 text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted"
                             >
                               {label}
                             </th>
@@ -1000,7 +1256,7 @@ export default function WardDetailPage() {
                   </div>
                 </div>
               ) : (
-                <div className="rounded-[1.5rem] border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+                <div className="rounded-lg border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
                   <p className="text-sm font-semibold text-panel-strong">No risk trend available yet</p>
                   <p className="mt-1 text-sm text-panel-muted">Risk history will appear after multiple model runs.</p>
                 </div>
@@ -1008,14 +1264,15 @@ export default function WardDetailPage() {
             </Card>
           ) : null}
 
-          <Card className="space-y-5 p-6">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-              <div className="flex items-center gap-3">
-                <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+          {activeTab === "evidence" ? (
+          <Card className="space-y-6 p-6">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div className="flex items-center gap-4">
+                <span className="inline-flex size-11 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
                   <BarChart3 className="size-5" aria-hidden="true" />
                 </span>
                 <div className="space-y-1">
-                  <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Prediction outcomes</h3>
+                  <h3 className="text-xl font-semibold text-panel-strong">Prediction outcomes</h3>
                   <p className="text-sm text-panel-muted">Recent predictions compared with observed surveillance label windows.</p>
                 </div>
               </div>
@@ -1030,10 +1287,10 @@ export default function WardDetailPage() {
             </div>
 
             {isLoading ? (
-              <LoadingBlocks count={4} className="h-14 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
+              <LoadingBlocks count={4} className="h-14 rounded-lg bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
             ) : outcomeEvaluation ? (
               <div className="space-y-4">
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
                   {[
                     ["Evaluated", outcomeEvaluation.evaluated_count],
                     ["Hits", outcomeEvaluation.hit_count],
@@ -1043,7 +1300,7 @@ export default function WardDetailPage() {
                   ].map(([label, value]) => (
                     <div
                       key={label}
-                      className="rounded-[1.25rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-3"
+                      className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] p-4"
                     >
                       <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">{label}</p>
                       <p className="mt-2 text-xl font-semibold text-panel-strong">{value}</p>
@@ -1052,15 +1309,15 @@ export default function WardDetailPage() {
                 </div>
 
                 {predictionLabelHistory.length > 0 ? (
-                  <div className="overflow-hidden rounded-[1.5rem] border border-[var(--dashboard-table-line)]">
+                  <div className="overflow-hidden rounded-lg border border-[var(--dashboard-table-line)]">
                     <div className="overflow-x-auto">
-                      <table className="min-w-full border-collapse text-left">
+                      <table className="min-w-full table-fixed border-collapse text-left">
                         <thead>
                           <tr>
                             {["Prediction", "Forecast window", "Predicted", "Observed", "Outcome"].map((label) => (
                               <th
                                 key={label}
-                                className="border-b border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_30%,transparent)] px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted"
+                                className="border-b border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_30%,transparent)] p-4 text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted"
                               >
                                 {label}
                               </th>
@@ -1083,7 +1340,10 @@ export default function WardDetailPage() {
                                 {toTitleCase(row.observed_label)}
                               </td>
                               <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm last:border-b-0">
-                                <StatusBadge tone={getOutcomeTone(row.classification)} className="rounded-full px-3 py-1 tracking-[0.14em]">
+                                <StatusBadge
+                                  tone={getOutcomeTone(row.classification)}
+                                  className="max-w-full whitespace-normal rounded-full px-3 py-1 text-center leading-4 tracking-[0.14em]"
+                                >
                                   {formatOutcomeClassification(row.classification)}
                                 </StatusBadge>
                               </td>
@@ -1094,22 +1354,22 @@ export default function WardDetailPage() {
                     </div>
                   </div>
                 ) : (
-                  <div className="rounded-[1.5rem] border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+                  <div className="rounded-lg border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
                     <p className="text-sm font-semibold text-panel-strong">No prediction outcome history yet</p>
                     <p className="mt-1 text-sm text-panel-muted">Outcome rows appear when predictions can be matched to future surveillance label windows.</p>
                   </div>
                 )}
 
                 {falseMissedReview?.items.length ? (
-                  <div className="space-y-3">
+                  <div className="space-y-4">
                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">False-alert and missed-outbreak review workflow</p>
                     {falseMissedReview.items.slice(0, 3).map((item) => (
                       <div
                         key={`${item.classification}-${item.risk_score_id}`}
-                        className="rounded-[1.25rem] border border-[color-mix(in_srgb,var(--warning)_20%,var(--dashboard-table-line))] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] px-4 py-3"
+                        className="rounded-lg border border-[color-mix(in_srgb,var(--warning)_20%,var(--dashboard-table-line))] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] p-4"
                       >
                         <div className="flex flex-wrap items-center gap-2">
-                          <StatusBadge tone="warning" className="rounded-full px-3 py-1 tracking-[0.14em]">
+                          <StatusBadge tone="warning" className="max-w-full whitespace-normal rounded-full px-3 py-1 text-center leading-4 tracking-[0.14em]">
                             {formatOutcomeClassification(item.classification)}
                           </StatusBadge>
                           <span className="text-sm font-semibold text-panel-strong">{item.label_window_ref || "No label ref"}</span>
@@ -1123,21 +1383,23 @@ export default function WardDetailPage() {
                 )}
               </div>
             ) : (
-              <div className="rounded-[1.5rem] border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+              <div className="rounded-lg border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
                 <p className="text-sm font-semibold text-panel-strong">Outcome evaluation is not available yet.</p>
                 <p className="mt-1 text-sm text-panel-muted">Users can still review current risk and alert state while label-linked evaluation is pending.</p>
               </div>
             )}
           </Card>
+          ) : null}
 
-          <Card className="space-y-5 p-6">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-              <div className="flex items-center gap-3">
-                <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+          {activeTab === "evidence" ? (
+          <Card className="space-y-6 p-6">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div className="flex items-center gap-4">
+                <span className="inline-flex size-11 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
                   <Activity className="size-5" aria-hidden="true" />
                 </span>
                 <div className="space-y-1">
-                  <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Outcome feedback loop</h3>
+                  <h3 className="text-xl font-semibold text-panel-strong">Outcome feedback loop</h3>
                   <p className="text-sm text-panel-muted">Model outcome separated from downstream response execution.</p>
                 </div>
               </div>
@@ -1152,10 +1414,10 @@ export default function WardDetailPage() {
             </div>
 
             {isLoading ? (
-              <LoadingBlocks count={4} className="h-14 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
+              <LoadingBlocks count={4} className="h-14 rounded-lg bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
             ) : outcomeFeedback ? (
-              <div className="space-y-5">
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="space-y-6">
+                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                   {[
                     ["Model quality", formatFeedbackState(outcomeFeedback.model_quality_state)],
                     ["Response quality", formatFeedbackState(outcomeFeedback.response_quality_state)],
@@ -1164,7 +1426,7 @@ export default function WardDetailPage() {
                   ].map(([label, value]) => (
                     <div
                       key={label}
-                      className="rounded-[1.25rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-3"
+                      className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] p-4"
                     >
                       <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">{label}</p>
                       <p className="mt-2 text-sm font-semibold text-panel-strong">{value}</p>
@@ -1172,14 +1434,14 @@ export default function WardDetailPage() {
                   ))}
                 </div>
 
-                <div className="rounded-[1.25rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_12%,transparent)] px-4 py-3">
+                <div className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_12%,transparent)] p-4">
                   <p className="text-sm leading-6 text-panel-copy">{outcomeFeedback.accountability_note}</p>
                   <p className="mt-2 text-sm leading-6 text-panel-muted">{outcomeFeedback.observed_outcome.detail}</p>
                 </div>
 
                 {outcomeFeedback.preparedness_action_evidence ? (
-                  <div className="space-y-4 rounded-[1.25rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_12%,transparent)] px-4 py-4">
-                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                  <div className="space-y-4 rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_12%,transparent)] px-4 py-4">
+                    <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                       <div>
                         <p className="text-sm font-semibold text-panel-strong">Preparedness action outcome history</p>
                         <p className="mt-1 text-sm text-panel-muted">
@@ -1193,14 +1455,14 @@ export default function WardDetailPage() {
                       ) : null}
                     </div>
 
-                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                       {[
                         ["Actions", String(outcomeFeedback.preparedness_action_evidence.summary.total_count)],
                         ["Completed", String(outcomeFeedback.preparedness_action_evidence.summary.completed_count)],
                         ["Overdue", String(outcomeFeedback.preparedness_action_evidence.summary.overdue_count)],
                         ["First completion", formatHours(outcomeFeedback.preparedness_action_evidence.response_time_measurements.hours_to_first_completion)],
                       ].map(([label, value]) => (
-                        <div key={label} className="rounded-[1rem] border border-[var(--dashboard-table-line)] px-3 py-3">
+                        <div key={label} className="rounded-lg border border-[var(--dashboard-table-line)] p-4">
                           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">{label}</p>
                           <p className="mt-2 text-sm font-semibold text-panel-strong">{value}</p>
                         </div>
@@ -1208,11 +1470,11 @@ export default function WardDetailPage() {
                     </div>
 
                     {outcomeFeedback.preparedness_action_evidence.action_history.length ? (
-                      <div className="space-y-3">
+                      <div className="space-y-4">
                         {outcomeFeedback.preparedness_action_evidence.action_history.slice(0, 4).map((action) => (
                           <div
                             key={action.public_id}
-                            className="rounded-[1rem] border border-[var(--dashboard-table-line)] px-3 py-3"
+                            className="rounded-lg border border-[var(--dashboard-table-line)] p-4"
                           >
                             <div className="flex flex-wrap items-center gap-2">
                               <StatusBadge
@@ -1235,7 +1497,7 @@ export default function WardDetailPage() {
                     )}
 
                     {outcomeFeedback.preparedness_action_evidence.false_alert_review_context.review_required ? (
-                      <div className="rounded-[1rem] border border-[color-mix(in_srgb,var(--warning)_20%,var(--dashboard-table-line))] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] px-3 py-3">
+                      <div className="rounded-lg border border-[color-mix(in_srgb,var(--warning)_20%,var(--dashboard-table-line))] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] p-4">
                         <p className="text-sm font-semibold text-panel-strong">False-alert context</p>
                         <p className="mt-1 text-sm text-panel-copy">
                           {outcomeFeedback.preparedness_action_evidence.false_alert_review_context.detail}
@@ -1245,30 +1507,37 @@ export default function WardDetailPage() {
                   </div>
                 ) : null}
 
-                <div className="grid gap-3 lg:grid-cols-3">
-                  {outcomeFeedback.steps.map((step) => (
-                    <div
-                      key={step.key}
-                      className="rounded-[1.25rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_14%,transparent)] px-4 py-3"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-sm font-semibold text-panel-strong">{step.label}</p>
-                        <StatusBadge tone={getEvidenceTone(step.tone)} className="rounded-full px-3 py-1 tracking-[0.14em]">
-                          {formatFeedbackState(step.status)}
-                        </StatusBadge>
+                <WardDetailDisclosure
+                  title="Response pathway detail"
+                  summary={`${outcomeFeedback.summary.recorded_step_count}/${outcomeFeedback.summary.step_count} steps recorded; ${outcomeFeedback.summary.downstream_failure_count} downstream gap${outcomeFeedback.summary.downstream_failure_count === 1 ? "" : "s"}.`}
+                  badge={`${outcomeFeedback.summary.recorded_step_count}/${outcomeFeedback.summary.step_count} recorded`}
+                  badgeTone={outcomeFeedback.summary.downstream_failure_count > 0 ? "danger" : outcomeFeedback.summary.in_progress_step_count > 0 ? "warning" : "success"}
+                >
+                  <div className="grid gap-4 lg:grid-cols-3">
+                    {outcomeFeedback.steps.map((step) => (
+                      <div
+                        key={step.key}
+                        className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_14%,transparent)] p-4"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-sm font-semibold text-panel-strong">{step.label}</p>
+                          <StatusBadge tone={getEvidenceTone(step.tone)} className="rounded-full px-3 py-1 tracking-[0.14em]">
+                            {formatFeedbackState(step.status)}
+                          </StatusBadge>
+                        </div>
+                        <p className="mt-2 text-sm leading-6 text-panel-muted">{step.detail}</p>
                       </div>
-                      <p className="mt-2 text-sm leading-6 text-panel-muted">{step.detail}</p>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                </WardDetailDisclosure>
 
                 {outcomeFeedback.review_items.length ? (
-                  <div className="space-y-3">
+                  <div className="space-y-4">
                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Attribution review</p>
                     {outcomeFeedback.review_items.map((item) => (
                       <div
                         key={`${item.category}-${item.title}`}
-                        className="rounded-[1.25rem] border border-[color-mix(in_srgb,var(--warning)_20%,var(--dashboard-table-line))] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] px-4 py-3"
+                        className="rounded-lg border border-[color-mix(in_srgb,var(--warning)_20%,var(--dashboard-table-line))] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] p-4"
                       >
                         <div className="flex flex-wrap items-center gap-2">
                           <StatusBadge tone={item.severity === "high" ? "danger" : "warning"} className="rounded-full px-3 py-1 tracking-[0.14em]">
@@ -1285,21 +1554,310 @@ export default function WardDetailPage() {
                 )}
               </div>
             ) : (
-              <div className="rounded-[1.5rem] border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+              <div className="rounded-lg border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
                 <p className="text-sm font-semibold text-panel-strong">Outcome feedback is not available yet.</p>
                 <p className="mt-1 text-sm text-panel-muted">Alert-to-action attribution appears when ward evidence includes response and observed outcome records.</p>
               </div>
             )}
           </Card>
+          ) : null}
 
-          <section className="grid gap-6 lg:grid-cols-2">
-            <Card className="space-y-5 p-6">
-              <div className="flex items-start gap-3">
-                <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+          {activeTab === "response" ? (
+          <Card className="space-y-6 p-6">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div className="flex items-center gap-4">
+                <span className="inline-flex size-11 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+                  <ClipboardCheck className="size-5" aria-hidden="true" />
+                </span>
+                <div className="space-y-1">
+                  <h3 className="text-xl font-semibold text-panel-strong">Response execution</h3>
+                  <p className="text-sm text-panel-muted">Alert handling, preparedness work, and CHV follow-through for this ward.</p>
+                </div>
+              </div>
+              {outcomeFeedback ? (
+                <StatusBadge
+                  tone={outcomeFeedback.summary.downstream_failure_count > 0 ? "danger" : outcomeFeedback.summary.review_item_count > 0 ? "warning" : "success"}
+                  className="w-max rounded-full px-3 py-1 tracking-[0.14em]"
+                >
+                  {formatFeedbackState(outcomeFeedback.response_quality_state)}
+                </StatusBadge>
+              ) : null}
+            </div>
+
+            {isLoading ? (
+              <LoadingBlocks count={4} />
+            ) : (
+              <div className="space-y-6">
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                  {[
+                    ["Alert records", detail ? String(detail.relatedAlerts.length) : "0"],
+                    ["Active actions", String(preparednessActionSummary.active)],
+                    ["Overdue actions", String(preparednessActionSummary.overdue)],
+                    ["Active CHV requests", chvActionStatus ? String(chvActionStatus.summary.active_request_count) : "0"],
+                  ].map(([label, value]) => (
+                    <div
+                      key={label}
+                      className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] p-4"
+                    >
+                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">{label}</p>
+                      <p className="mt-2 text-lg font-semibold text-panel-strong">{value}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <section className="space-y-4">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <h4 className="text-base font-semibold text-panel-strong">Recent alerts</h4>
+                      <p className="mt-1 text-sm text-panel-muted">Ward-linked delivery activity and interpretation context.</p>
+                    </div>
+                    <Link
+                      href="/alerts"
+                      className="inline-flex items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--login-link-hover)]"
+                    >
+                      View full alert history
+                      <ChevronRight className="size-4" aria-hidden="true" />
+                    </Link>
+                  </div>
+
+                  {detail && detail.relatedAlerts.length > 0 ? (
+                    <div className="grid gap-4 xl:grid-cols-2">
+                      {detail.relatedAlerts.slice(0, 4).map((alert) => (
+                        <article
+                          key={alert.id}
+                          className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] p-4"
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <strong className="text-sm font-semibold text-panel-strong">
+                              {`${detail.riskLevel === "UNKNOWN" ? "Ward-linked" : formatRiskLevel(detail.riskLevel)} alert`} · {formatRelativeMinutes(alert.created_at)}
+                            </strong>
+                            <StatusBadge tone={getAlertTone(alert)} className="rounded-full px-3 py-1 tracking-[0.14em]">
+                              {alert.status}
+                            </StatusBadge>
+                          </div>
+                          <p className="mt-2 text-sm text-panel-copy">{getAlertSummary(alert)}</p>
+                          <details className="mt-2 text-sm text-panel-muted">
+                            <summary className="cursor-pointer list-none font-medium text-panel-copy">View alert details</summary>
+                            <div className="mt-2 space-y-1">
+                              <p>
+                                Risk score: {typeof alert.risk_score === "number" ? `${Math.round(normalizeRiskScore(alert.risk_score))}/100` : "Unavailable"}
+                              </p>
+                              <p>Alert message: {getAlertHeadline(alert)}</p>
+                            </div>
+                          </details>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+                      <p className="text-sm font-semibold text-panel-strong">No recent alerts for this ward</p>
+                      <p className="mt-1 text-sm text-panel-muted">
+                        {detail?.primaryCtaKind === "OPEN_TRIGGER_FLOW" || detail?.primaryCtaKind === "REVIEW_TRIGGER"
+                          ? canTriggerAlerts(currentUser.role)
+                            ? detail.primaryCtaKind === "REVIEW_TRIGGER"
+                              ? "Review trigger if guided follow-up is still needed."
+                              : "Open trigger flow if a guided response is still needed."
+                            : "Review alert history or coordinate with an authorized operator if a guided response is still needed."
+                          : "Review full alert history if you need older ward-linked alert activity."}
+                      </p>
+                    </div>
+                  )}
+                </section>
+
+                <section className="space-y-4">
+                  <div>
+                    <h4 className="text-base font-semibold text-panel-strong">Preparedness actions</h4>
+                    <p className="mt-1 text-sm text-panel-muted">Ward-linked response tasks and lifecycle state.</p>
+                  </div>
+
+                  {preparednessActions.length ? (
+                    <div className="space-y-4">
+                      <div className="grid gap-4 sm:grid-cols-4">
+                        {[
+                          ["Active", String(preparednessActionSummary.active)],
+                          ["Overdue", String(preparednessActionSummary.overdue)],
+                          ["Blocked", String(preparednessActionSummary.blocked)],
+                          ["Completed", String(preparednessActionSummary.completed)],
+                        ].map(([label, value]) => (
+                          <div
+                            key={label}
+                            className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] p-4"
+                          >
+                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">{label}</p>
+                            <p className="mt-2 text-sm font-semibold text-panel-strong">{value}</p>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="grid gap-4 xl:grid-cols-2">
+                        {preparednessActions.slice(0, 4).map((action) => (
+                          <article
+                            key={action.public_id}
+                            className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] p-4"
+                          >
+                            <div className="flex flex-wrap items-center gap-2">
+                              <StatusBadge
+                                tone={getPreparednessActionTone(action)}
+                                className="rounded-full px-3 py-1 tracking-[0.14em]"
+                              >
+                                {toTitleCase(action.status)}
+                              </StatusBadge>
+                              <span className="text-sm font-semibold text-panel-strong">
+                                {PREPAREDNESS_ACTION_TYPE_LABELS[action.action_type]}
+                              </span>
+                            </div>
+                            <p className="mt-2 text-sm leading-6 text-panel-copy">
+                              Owner: {action.assigned_to_username || action.assigned_to_team || "Unassigned"}
+                            </p>
+                            <p className="text-sm leading-6 text-panel-muted">
+                              Due: {formatOperationalTime(action.due_at)}
+                            </p>
+                            {action.events.length ? (
+                              <WardDetailDisclosure
+                                title="Latest lifecycle events"
+                                summary={`${action.events.length} event${action.events.length === 1 ? "" : "s"} recorded; latest ${toTitleCase(action.events[action.events.length - 1]?.event_type ?? "event")}.`}
+                                badge={`${action.events.length} event${action.events.length === 1 ? "" : "s"}`}
+                                className="mt-4"
+                                bodyClassName="pt-3"
+                              >
+                                <ol className="mt-2 space-y-2">
+                                  {action.events.slice().reverse().slice(0, 2).map((event) => (
+                                    <li key={event.public_id} className="flex gap-2 text-sm">
+                                      <span className="mt-2 size-1.5 shrink-0 rounded-full bg-brand" aria-hidden="true" />
+                                      <span className="min-w-0">
+                                        <span className="font-semibold text-panel-strong">{toTitleCase(event.event_type)}</span>
+                                        <span className="text-panel-muted">
+                                          {" "}
+                                          {formatOperationalTime(event.created_at)}
+                                        </span>
+                                        {event.detail ? <span className="block text-panel-copy">{event.detail}</span> : null}
+                                      </span>
+                                    </li>
+                                  ))}
+                                </ol>
+                              </WardDetailDisclosure>
+                            ) : null}
+                          </article>
+                        ))}
+                      </div>
+
+                      <Link
+                        href={`/preparedness-actions?ward_id=${detail?.wardId ?? wardId}`}
+                        className="inline-flex items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--login-link-hover)]"
+                      >
+                        Open ward action queue
+                        <ChevronRight className="size-4" aria-hidden="true" />
+                      </Link>
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+                      <p className="text-sm font-semibold text-panel-strong">No preparedness actions linked yet</p>
+                      <p className="mt-1 text-sm text-panel-muted">Response work will appear here when alert, CHV, or facility workflows create ledger tasks.</p>
+                    </div>
+                  )}
+                </section>
+
+                <section className="space-y-4">
+                  <div>
+                    <h4 className="text-base font-semibold text-panel-strong">CHV action status</h4>
+                    <p className="mt-1 text-sm text-panel-muted">Field follow-through linked back to alert records.</p>
+                  </div>
+
+                  {chvActionStatus ? (
+                    <div className="space-y-4">
+                      <div className="grid gap-4 sm:grid-cols-3">
+                        {[
+                          ["Latest status", toTitleCase(chvActionStatus.summary.latest_status)],
+                          ["Active requests", String(chvActionStatus.summary.active_request_count)],
+                          ["Linked alerts", String(chvActionStatus.summary.linked_alert_count)],
+                        ].map(([label, value]) => (
+                          <div
+                            key={label}
+                            className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] p-4"
+                          >
+                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">{label}</p>
+                            <p className="mt-2 text-sm font-semibold text-panel-strong">{value}</p>
+                          </div>
+                        ))}
+                      </div>
+
+                      {chvActionStatus.requests.length ? (
+                        <div className="grid gap-4 xl:grid-cols-2">
+                          {chvActionStatus.requests.slice(0, 3).map((request) => (
+                            <article
+                              key={request.public_id}
+                              className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] p-4"
+                            >
+                              <div className="flex flex-wrap items-center gap-2">
+                                <StatusBadge
+                                  tone={request.status === "RESOLVED" ? "success" : request.status === "CANCELLED" || request.status === "REJECTED" ? "danger" : "warning"}
+                                  className="rounded-full px-3 py-1 tracking-[0.14em]"
+                                >
+                                  {request.status}
+                                </StatusBadge>
+                                <span className="text-sm font-semibold text-panel-strong">{request.priority} priority</span>
+                              </div>
+                              <p className="mt-2 text-sm leading-6 text-panel-copy">
+                                Assignments: {request.assignment_counts.active} active, {request.assignment_counts.completed} completed.
+                              </p>
+                              <p className="text-sm leading-6 text-panel-muted">
+                                Linked alerts: {request.linked_alert_public_ids.length ? request.linked_alert_public_ids.join(", ") : "None linked"}
+                              </p>
+                            </article>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="rounded-lg border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+                          <p className="text-sm font-semibold text-panel-strong">No CHV action request linked yet</p>
+                          <p className="mt-1 text-sm text-panel-muted">Create or link a CHV coverage request after alert review when field follow-up is needed.</p>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-panel-muted">No CHV action evidence is available for this ward.</p>
+                  )}
+                </section>
+
+                {outcomeFeedback?.review_items.length ? (
+                  <WardDetailDisclosure
+                    title="Response gaps"
+                    summary={`${outcomeFeedback.review_items.length} review item${outcomeFeedback.review_items.length === 1 ? "" : "s"} need attention before response can be considered closed.`}
+                    badge={`${outcomeFeedback.review_items.length} gap${outcomeFeedback.review_items.length === 1 ? "" : "s"}`}
+                    badgeTone={outcomeFeedback.summary.downstream_failure_count > 0 ? "danger" : "warning"}
+                  >
+                    <div className="space-y-3">
+                      {outcomeFeedback.review_items.map((item) => (
+                        <div
+                          key={`${item.category}-${item.title}`}
+                          className="rounded-lg border border-[color-mix(in_srgb,var(--warning)_20%,var(--dashboard-table-line))] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] p-4"
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <StatusBadge tone={item.severity === "high" ? "danger" : "warning"} className="rounded-full px-3 py-1 tracking-[0.14em]">
+                              {formatFeedbackState(item.category)}
+                            </StatusBadge>
+                            <span className="text-sm font-semibold text-panel-strong">{item.title}</span>
+                          </div>
+                          <p className="mt-2 text-sm leading-6 text-panel-copy">{item.detail}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </WardDetailDisclosure>
+                ) : null}
+              </div>
+            )}
+          </Card>
+          ) : null}
+
+          {activeTab === "history" || activeTab === "situation" ? (
+          <section className="grid gap-6">
+            {activeTab === "history" ? (
+            <Card className="space-y-6 p-6">
+              <div className="flex items-start gap-4">
+                <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
                   <MapPinned className="size-5" aria-hidden="true" />
                 </span>
                 <div className="space-y-1">
-                  <h3 className="pt-1 text-xl font-semibold tracking-[-0.03em] text-panel-strong">Ward context</h3>
+                  <h3 className="pt-1 text-xl font-semibold text-panel-strong">Ward context</h3>
                   <p className="text-sm text-panel-muted">Operational context for this ward record.</p>
                 </div>
               </div>
@@ -1329,10 +1887,12 @@ export default function WardDetailPage() {
                 <p className="text-sm text-panel-muted">No ward detail is available for this route.</p>
               )}
             </Card>
+            ) : null}
 
-            <Card className="space-y-5 p-5">
-              <div className="flex items-start gap-3">
-                <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+            {activeTab === "situation" ? (
+            <Card className="space-y-6 p-6">
+              <div className="flex items-start gap-4">
+                <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
                   <MapPinned className="size-5" aria-hidden="true" />
                 </span>
                 <div className="space-y-1">
@@ -1342,10 +1902,10 @@ export default function WardDetailPage() {
               </div>
 
               {isLoading ? (
-                <LoadingBlocks count={3} className="h-12 rounded-[1.25rem] bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
+                <LoadingBlocks count={3} className="h-12 rounded-lg bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
               ) : spatialEvidence ? (
                 <div className="space-y-4">
-                  <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="grid gap-4 sm:grid-cols-2">
                     {[
                       ["Neighboring high-risk wards", String(spatialSummary?.high_risk_neighbor_count ?? 0)],
                       ["Neighboring outbreak labels", String(spatialSummary?.active_outbreak_neighbor_count ?? 0)],
@@ -1354,7 +1914,7 @@ export default function WardDetailPage() {
                     ].map(([label, value]) => (
                       <div
                         key={label}
-                        className="rounded-[1.15rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-3 py-3"
+                        className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] p-4"
                       >
                         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">{label}</p>
                         <p className="mt-2 text-sm font-semibold text-panel-strong">{value}</p>
@@ -1362,13 +1922,13 @@ export default function WardDetailPage() {
                     ))}
                   </div>
 
-                  <div className="overflow-hidden rounded-[1.5rem] border border-panel-table-wrap bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--brand)_10%,transparent),transparent_35%),radial-gradient(circle_at_bottom_right,color-mix(in_srgb,var(--warning)_10%,transparent),transparent_32%),linear-gradient(135deg,color-mix(in_srgb,var(--panel)_92%,white),var(--panel))] p-3">
-                    <div className="flex h-full min-h-[15rem] flex-col gap-3 rounded-[1.1rem] border border-panel-table-wrap bg-panel/80 p-3">
-                      <div className="flex items-center justify-between gap-3 text-xs uppercase tracking-[0.18em] text-panel-subtle">
+                  <div className="overflow-hidden rounded-lg border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_12%,transparent)] p-2">
+                    <div className="flex flex-col gap-4 rounded-lg border border-panel-table-wrap bg-panel p-4">
+                      <div className="flex items-center justify-between gap-4 text-xs uppercase tracking-[0.18em] text-panel-subtle">
                         <span>Spatial graph</span>
                         <span>{spatialMapFeatures.length ? `${spatialMapFeatures.length} mapped wards` : "No geometry"}</span>
                       </div>
-                      <div className="min-h-[13.75rem] rounded-[1rem] border border-panel-table-wrap bg-white/60 p-2 dark:bg-panel/70">
+                      <div className="h-64 overflow-hidden rounded-lg border border-panel-table-wrap bg-white/60 p-2 dark:bg-panel/70">
                         {spatialMapFeatures.length ? (
                           <MigoriWardMap
                             features={spatialMapFeatures}
@@ -1399,85 +1959,110 @@ export default function WardDetailPage() {
                     </div>
                   </div>
 
-                  <div className="space-y-3">
-                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Spillover signals</p>
-                    {spatialEvidence.neighbors.length ? (
-                      spatialEvidence.neighbors.slice(0, 4).map((neighbor) => (
-                        <div
-                          key={neighbor.ward_id}
-                          className="rounded-[1.15rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_14%,transparent)] px-3 py-3"
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <span className="text-sm font-semibold text-panel-strong">{neighbor.ward_name}</span>
-                            <div className="flex flex-wrap items-center gap-2">
-                              {neighbor.is_approximate_relationship ? (
-                                <StatusBadge tone="warning" className="rounded-full px-3 py-1 tracking-[0.14em]">
-                                  Approximate link
+                  <WardDetailDisclosure
+                    title="Spillover signals"
+                    summary={
+                      spatialEvidence.neighbors.length
+                        ? `${spatialSummary?.high_risk_neighbor_count ?? 0} high-risk neighboring ward${(spatialSummary?.high_risk_neighbor_count ?? 0) === 1 ? "" : "s"}; ${spatialSummary?.active_outbreak_neighbor_count ?? 0} outbreak-labeled neighbor${(spatialSummary?.active_outbreak_neighbor_count ?? 0) === 1 ? "" : "s"}.`
+                        : "No generated neighbor relationships are available for this ward."
+                    }
+                    badge={
+                      (spatialSummary?.high_risk_neighbor_count ?? 0) > 0
+                        ? "High-risk neighbors"
+                        : spatialEvidence.neighbors.some((neighbor) => neighbor.is_approximate_relationship)
+                          ? "Approximate links"
+                          : `${spatialEvidence.neighbors.length} neighbor${spatialEvidence.neighbors.length === 1 ? "" : "s"}`
+                    }
+                    badgeTone={
+                      (spatialSummary?.high_risk_neighbor_count ?? 0) > 0
+                        ? "danger"
+                        : spatialEvidence.neighbors.some((neighbor) => neighbor.is_approximate_relationship)
+                          ? "warning"
+                          : "default"
+                    }
+                  >
+                    <div className="space-y-4">
+                      {spatialEvidence.neighbors.length ? (
+                        spatialEvidence.neighbors.slice(0, 4).map((neighbor) => (
+                          <div
+                            key={neighbor.ward_id}
+                            className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_14%,transparent)] p-4"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className="text-sm font-semibold text-panel-strong">{neighbor.ward_name}</span>
+                              <div className="flex flex-wrap items-center gap-2">
+                                {neighbor.is_approximate_relationship ? (
+                                  <StatusBadge tone="warning" className="rounded-full px-3 py-1 tracking-[0.14em]">
+                                    Approximate link
+                                  </StatusBadge>
+                                ) : null}
+                                <StatusBadge tone={getRiskBadgeTone(neighbor.risk_level ?? "UNKNOWN")} className="rounded-full px-3 py-1 tracking-[0.14em]">
+                                  {neighbor.risk_level ?? "UNKNOWN"}
                                 </StatusBadge>
-                              ) : null}
-                              <StatusBadge tone={getRiskBadgeTone(neighbor.risk_level ?? "UNKNOWN")} className="rounded-full px-3 py-1 tracking-[0.14em]">
-                                {neighbor.risk_level ?? "UNKNOWN"}
+                              </div>
+                            </div>
+                            <p className="mt-2 text-sm leading-6 text-panel-muted">
+                              {neighbor.relationship_labels.join(", ") || "Relationship"} · Risk {formatRiskScore(neighbor.risk_score)} · Distance {formatSpatialDistance(neighbor.distance, neighbor.distance_unit)}
+                            </p>
+                            {neighbor.approximation_notice ? (
+                              <p className="mt-1 text-sm leading-6 text-panel-muted">{neighbor.approximation_notice}</p>
+                            ) : null}
+                            {neighbor.active_outbreak_label || neighbor.surveillance_record_count_28d > 0 ? (
+                              <p className="mt-1 text-sm leading-6 text-panel-copy">
+                                {neighbor.active_outbreak_label ? "Active outbreak label" : "Surveillance signal"} · {neighbor.suspected_cases_28d} suspected in 28 days · trend {neighbor.suspected_case_trend_14d_delta >= 0 ? "+" : ""}{neighbor.suspected_case_trend_14d_delta}
+                              </p>
+                            ) : null}
+                          </div>
+                        ))
+                      ) : (
+                        <p className="rounded-lg border border-dashed border-[var(--dashboard-table-line)] p-4 text-sm text-panel-muted">
+                          No generated neighbor relationships are available for this ward.
+                        </p>
+                      )}
+                    </div>
+                  </WardDetailDisclosure>
+
+                  <WardDetailDisclosure
+                    title="Catchment pressure"
+                    summary={
+                      spatialEvidence.facility_catchments.length
+                        ? `${spatialEvidence.facility_catchments.length} catchment record${spatialEvidence.facility_catchments.length === 1 ? "" : "s"}; max pressure ${spatialSummary?.max_catchment_pressure_score == null ? "unavailable" : `${spatialSummary.max_catchment_pressure_score}/100`}.`
+                        : "No facility catchment records cover this ward yet."
+                    }
+                    badge={spatialSummary?.approximate_catchment_count ? "Approximate" : `${spatialEvidence.facility_catchments.length} record${spatialEvidence.facility_catchments.length === 1 ? "" : "s"}`}
+                    badgeTone={spatialSummary?.approximate_catchment_count ? "warning" : "default"}
+                  >
+                    <div className="space-y-4">
+                      {spatialEvidence.facility_catchments.length ? (
+                        spatialEvidence.facility_catchments.slice(0, 3).map((catchment) => (
+                          <div
+                            key={catchment.catchment_id}
+                            className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_14%,transparent)] p-4"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className="text-sm font-semibold text-panel-strong">{catchment.facility_name}</span>
+                              <StatusBadge
+                                tone={getSpatialReadinessTone(catchment.projected_pressure_score)}
+                                className="rounded-full px-3 py-1 tracking-[0.14em]"
+                              >
+                                {catchment.projected_pressure_score == null ? "No forecast" : `${catchment.projected_pressure_score}/100`}
                               </StatusBadge>
                             </div>
-                          </div>
-                          <p className="mt-2 text-sm leading-6 text-panel-muted">
-                            {neighbor.relationship_labels.join(", ") || "Relationship"} · Risk {formatRiskScore(neighbor.risk_score)} · Distance {formatSpatialDistance(neighbor.distance, neighbor.distance_unit)}
-                          </p>
-                          {neighbor.approximation_notice ? (
-                            <p className="mt-1 text-sm leading-6 text-panel-muted">{neighbor.approximation_notice}</p>
-                          ) : null}
-                          {neighbor.active_outbreak_label || neighbor.surveillance_record_count_28d > 0 ? (
-                            <p className="mt-1 text-sm leading-6 text-panel-copy">
-                              {neighbor.active_outbreak_label ? "Active outbreak label" : "Surveillance signal"} · {neighbor.suspected_cases_28d} suspected in 28 days · trend {neighbor.suspected_case_trend_14d_delta >= 0 ? "+" : ""}{neighbor.suspected_case_trend_14d_delta}
+                            <p className="mt-2 text-sm leading-6 text-panel-muted">
+                              {catchment.catchment_method_label} · {catchment.covered_ward_names.length} covered ward{catchment.covered_ward_names.length === 1 ? "" : "s"} · {catchment.projected_readiness_label}
                             </p>
-                          ) : null}
-                        </div>
-                      ))
-                    ) : (
-                      <p className="rounded-[1.15rem] border border-dashed border-[var(--dashboard-table-line)] px-3 py-3 text-sm text-panel-muted">
-                        No generated neighbor relationships are available for this ward.
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Catchment pressure</p>
-                      {spatialSummary?.approximate_catchment_count ? (
-                        <StatusBadge tone="warning" className="rounded-full px-3 py-1 tracking-[0.14em]">
-                          Approximate
-                        </StatusBadge>
-                      ) : null}
-                    </div>
-                    {spatialEvidence.facility_catchments.length ? (
-                      spatialEvidence.facility_catchments.slice(0, 3).map((catchment) => (
-                        <div
-                          key={catchment.catchment_id}
-                          className="rounded-[1.15rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_14%,transparent)] px-3 py-3"
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <span className="text-sm font-semibold text-panel-strong">{catchment.facility_name}</span>
-                            <StatusBadge
-                              tone={getSpatialReadinessTone(catchment.projected_pressure_score)}
-                              className="rounded-full px-3 py-1 tracking-[0.14em]"
-                            >
-                              {catchment.projected_pressure_score == null ? "No forecast" : `${catchment.projected_pressure_score}/100`}
-                            </StatusBadge>
                           </div>
-                          <p className="mt-2 text-sm leading-6 text-panel-muted">
-                            {catchment.catchment_method_label} · {catchment.covered_ward_names.length} covered ward{catchment.covered_ward_names.length === 1 ? "" : "s"} · {catchment.projected_readiness_label}
-                          </p>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="rounded-[1.15rem] border border-dashed border-[var(--dashboard-table-line)] px-3 py-3 text-sm text-panel-muted">
-                        No facility catchment records cover this ward yet.
-                      </p>
-                    )}
-                  </div>
+                        ))
+                      ) : (
+                        <p className="rounded-lg border border-dashed border-[var(--dashboard-table-line)] p-4 text-sm text-panel-muted">
+                          No facility catchment records cover this ward yet.
+                        </p>
+                      )}
+                    </div>
+                  </WardDetailDisclosure>
 
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div className="rounded-[1.15rem] border border-[var(--dashboard-table-line)] px-3 py-3">
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="rounded-lg border border-[var(--dashboard-table-line)] p-4">
                       <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Nearest facility</p>
                       <p className="mt-2 text-sm font-semibold text-panel-strong">
                         {spatialEvidence.nearest_facility?.facility_name ?? "Unavailable"}
@@ -1486,7 +2071,7 @@ export default function WardDetailPage() {
                         {formatSpatialDistance(spatialEvidence.nearest_facility?.distance, spatialEvidence.nearest_facility?.distance_unit)}
                       </p>
                     </div>
-                    <div className="rounded-[1.15rem] border border-[var(--dashboard-table-line)] px-3 py-3">
+                    <div className="rounded-lg border border-[var(--dashboard-table-line)] p-4">
                       <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Water proximity</p>
                       <p className="mt-2 text-sm font-semibold text-panel-strong">
                         {spatialEvidence.water_proximity.source_available ? formatSpatialPercent(spatialEvidence.water_proximity.value) : "Unavailable"}
@@ -1496,37 +2081,46 @@ export default function WardDetailPage() {
                   </div>
 
                   {spatialEvidence.caveats.length ? (
-                    <div className="space-y-2">
-                      {spatialEvidence.caveats.map((caveat) => (
-                        <div
-                          key={caveat}
-                          className="flex items-start gap-2 rounded-[1.15rem] border border-[color-mix(in_srgb,var(--warning)_20%,var(--dashboard-table-line))] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] px-3 py-3"
-                        >
-                          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[color:var(--warning)]" aria-hidden="true" />
-                          <p className="text-sm leading-6 text-panel-copy">{caveat}</p>
-                        </div>
-                      ))}
-                    </div>
+                    <WardDetailDisclosure
+                      title="Spatial caveats"
+                      summary={`${spatialEvidence.caveats.length} caveat${spatialEvidence.caveats.length === 1 ? "" : "s"} require review before using spatial signals as operational truth.`}
+                      badge={`${spatialEvidence.caveats.length} caveat${spatialEvidence.caveats.length === 1 ? "" : "s"}`}
+                      badgeTone="warning"
+                    >
+                      <div className="space-y-2">
+                        {spatialEvidence.caveats.map((caveat) => (
+                          <div
+                            key={caveat}
+                            className="flex items-start gap-2 rounded-lg border border-[color-mix(in_srgb,var(--warning)_20%,var(--dashboard-table-line))] bg-[color-mix(in_srgb,var(--warning)_8%,var(--panel))] p-4"
+                          >
+                            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[color:var(--warning)]" aria-hidden="true" />
+                            <p className="text-sm leading-6 text-panel-copy">{caveat}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </WardDetailDisclosure>
                   ) : null}
                 </div>
               ) : (
-                <div className="rounded-[1.5rem] border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+                <div className="rounded-lg border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
                   <p className="text-sm font-semibold text-panel-strong">Spatial evidence is not available yet.</p>
                   <p className="mt-1 text-sm text-panel-muted">Spatial context will appear once relationship and catchment records exist for this ward.</p>
                 </div>
               )}
             </Card>
+            ) : null}
           </section>
+          ) : null}
         </div>
 
-        <aside className="space-y-6">
-          <Card className="space-y-5 p-6">
-            <div className="flex items-center gap-3">
-              <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+        <WardActionRail>
+          <Card className="space-y-6 p-6">
+            <div className="flex items-center gap-4">
+              <span className="inline-flex size-11 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
                 <Zap className="size-5" aria-hidden="true" />
               </span>
               <div className="space-y-1">
-                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Recommended action</h3>
+                <h3 className="text-xl font-semibold text-panel-strong">Recommended action</h3>
                 <p className="text-sm text-panel-muted">The next truthful operator step for this ward.</p>
               </div>
             </div>
@@ -1535,23 +2129,30 @@ export default function WardDetailPage() {
               <LoadingBlocks count={3} />
             ) : detail ? (
               <div className="space-y-4">
-                <div className="rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_20%,transparent)] px-4 py-4">
+                <div className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_20%,transparent)] px-4 py-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Primary action</p>
                   <p className="mt-2 text-base font-semibold text-panel-strong">
                     {recommendedActionState?.primaryAction}
                   </p>
                 </div>
 
-                <div className="rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+                <div className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Why</p>
                   <p className="mt-2 text-sm leading-6 text-panel-copy">{recommendedActionState?.why}</p>
                 </div>
 
-                <div className="rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+                {actionRailOperatingNote ? (
+                  <div className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_14%,transparent)] px-4 py-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Operating note</p>
+                    <p className="mt-2 text-sm leading-6 text-panel-copy">{actionRailOperatingNote}</p>
+                  </div>
+                ) : null}
+
+                <div className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Next steps</p>
-                  <div className="mt-3 space-y-3">
+                  <div className="mt-4 space-y-4">
                     {recommendedActionState?.nextSteps.map((step, index) => (
-                      <div key={step} className="flex items-start gap-3">
+                      <div key={step} className="flex items-start gap-4">
                         <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--brand)_10%,white)] text-xs font-semibold text-brand">
                           {index + 1}
                         </span>
@@ -1562,19 +2163,19 @@ export default function WardDetailPage() {
                 </div>
 
                 {detail.workflow?.expected_operational_effect ? (
-                  <div className="rounded-[1.5rem] border border-[color-mix(in_srgb,var(--success)_18%,var(--dashboard-table-line))] bg-[color-mix(in_srgb,var(--success)_8%,var(--panel))] px-4 py-4">
+                  <div className="rounded-lg border border-[color-mix(in_srgb,var(--success)_18%,var(--dashboard-table-line))] bg-[color-mix(in_srgb,var(--success)_8%,var(--panel))] px-4 py-4">
                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Expected effect</p>
                     <p className="mt-2 text-sm leading-6 text-panel-copy">{detail.workflow.expected_operational_effect}</p>
                   </div>
                 ) : null}
 
                 {recommendations.length > 0 ? (
-                  <div className="space-y-3">
+                  <div className="space-y-4">
                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Supporting checks</p>
                     {recommendations.map((recommendation) => (
                       <div
                         key={recommendation.text}
-                        className="flex items-start gap-3 rounded-[1.25rem] border border-[var(--dashboard-table-line)] px-4 py-3"
+                        className="flex items-start gap-4 rounded-lg border border-[var(--dashboard-table-line)] p-4"
                       >
                         <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-brand" aria-hidden="true" />
                         <p className="text-sm text-panel-copy">{recommendation.text}</p>
@@ -1588,13 +2189,14 @@ export default function WardDetailPage() {
             )}
           </Card>
 
-          <Card className="space-y-5 p-6">
-            <div className="flex items-center gap-3">
-              <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--warning)_12%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]">
+          {activeTab === "evidence" ? (
+          <Card className="space-y-6 p-6">
+            <div className="flex items-center gap-4">
+              <span className="inline-flex size-11 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--warning)_12%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]">
                 <ClipboardCheck className="size-5" aria-hidden="true" />
               </span>
               <div className="space-y-1">
-                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Alert candidate review</h3>
+                <h3 className="text-xl font-semibold text-panel-strong">Alert candidate review</h3>
                 <p className="text-sm text-panel-muted">Decision-policy state before response work is created or repeated.</p>
               </div>
             </div>
@@ -1603,7 +2205,7 @@ export default function WardDetailPage() {
               <LoadingBlocks count={3} />
             ) : alertCandidateReview ? (
               <div className="space-y-4">
-                <div className="rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-4">
+                <div className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-4">
                   <div className="flex flex-wrap items-center gap-2">
                     <StatusBadge
                       tone={alertCandidateReview.review_state === "routine_monitoring" ? "success" : "warning"}
@@ -1617,7 +2219,7 @@ export default function WardDetailPage() {
                       </span>
                     ) : null}
                   </div>
-                  <dl className="mt-4 grid gap-3">
+                  <dl className="mt-4 grid gap-4">
                     {[
                       ["Decision", toTitleCase(alertCandidateReview.alert_decision || "routine_monitoring")],
                       ["Automatic alert", alertCandidateReview.automatic_alert_allowed ? "Allowed by policy" : "Blocked or manual review only"],
@@ -1631,7 +2233,7 @@ export default function WardDetailPage() {
                   </dl>
                 </div>
 
-                <div className="rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_14%,transparent)] px-4 py-4">
+                <div className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_14%,transparent)] px-4 py-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Recommended review action</p>
                   <p className="mt-2 text-sm leading-6 text-panel-copy">{alertCandidateReview.recommended_action}</p>
                 </div>
@@ -1640,7 +2242,7 @@ export default function WardDetailPage() {
                   <div className="space-y-2">
                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Policy blockers</p>
                     {alertCandidateReview.automatic_alert_blockers.map((blocker) => (
-                      <div key={blocker} className="flex items-start gap-2 rounded-[1.1rem] border border-[var(--dashboard-table-line)] px-3 py-2">
+                      <div key={blocker} className="flex items-start gap-2 rounded-lg border border-[var(--dashboard-table-line)] px-3 py-2">
                         <Eye className="mt-0.5 size-4 shrink-0 text-[color:var(--warning)]" aria-hidden="true" />
                         <p className="text-sm text-panel-copy">{toTitleCase(blocker)}</p>
                       </div>
@@ -1652,14 +2254,16 @@ export default function WardDetailPage() {
               <p className="text-sm text-panel-muted">No alert candidate review evidence is available for this ward.</p>
             )}
           </Card>
+          ) : null}
 
-          <Card className="space-y-5 p-6">
-            <div className="flex items-center gap-3">
-              <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+          {activeTab === "history" ? (
+          <Card className="space-y-6 p-6">
+            <div className="flex items-center gap-4">
+              <span className="inline-flex size-11 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
                 <Bell className="size-5" aria-hidden="true" />
               </span>
               <div className="space-y-1">
-                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Recent alerts</h3>
+                <h3 className="text-xl font-semibold text-panel-strong">Recent alerts</h3>
                 <p className="text-sm text-panel-muted">Recent ward-linked alert activity with interpretation context.</p>
               </div>
             </div>
@@ -1668,11 +2272,11 @@ export default function WardDetailPage() {
               <LoadingBlocks count={3} />
             ) : detail && detail.relatedAlerts.length > 0 ? (
               <>
-                <div className="space-y-3">
+                <div className="space-y-4">
                 {detail.relatedAlerts.slice(0, 4).map((alert) => (
                   <article
                     key={alert.id}
-                    className="rounded-[1.35rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_28%,transparent)] px-4 py-4"
+                    className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_28%,transparent)] px-4 py-4"
                   >
                     <div className="space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
@@ -1683,7 +2287,7 @@ export default function WardDetailPage() {
                           {alert.status}
                         </StatusBadge>
                       </div>
-                      <p className="text-sm text-panel-copy">Delivered ({toTitleCase(alert.channel)})</p>
+                      <p className="text-sm text-panel-copy">{getAlertSummary(alert)}</p>
                       <p className="text-sm text-panel-copy">
                         Predicted: {typeof detail.predictedCases === "number" ? detail.predictedCases : "Unavailable"} cases
                       </p>
@@ -1709,7 +2313,7 @@ export default function WardDetailPage() {
                 </Link>
               </>
             ) : (
-              <div className="rounded-[1.5rem] border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+              <div className="rounded-lg border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
                 <p className="text-sm font-semibold text-panel-strong">No recent alerts for this ward</p>
                 <p className="mt-1 text-sm text-panel-muted">
                   {detail?.primaryCtaKind === "OPEN_TRIGGER_FLOW" || detail?.primaryCtaKind === "REVIEW_TRIGGER"
@@ -1723,179 +2327,16 @@ export default function WardDetailPage() {
               </div>
             )}
           </Card>
+          ) : null}
 
-          <Card className="space-y-5 p-6">
-            <div className="flex items-center gap-3">
-              <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
-                <ClipboardCheck className="size-5" aria-hidden="true" />
-              </span>
-              <div className="space-y-1">
-                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Preparedness actions</h3>
-                <p className="text-sm text-panel-muted">Ward-linked response tasks and lifecycle state.</p>
-              </div>
-            </div>
-
-            {isLoading ? (
-              <LoadingBlocks count={3} />
-            ) : preparednessActions.length ? (
-              <div className="space-y-4">
-                <div className="grid gap-3 sm:grid-cols-4 xl:grid-cols-2">
-                  {[
-                    ["Active", String(preparednessActionSummary.active)],
-                    ["Overdue", String(preparednessActionSummary.overdue)],
-                    ["Blocked", String(preparednessActionSummary.blocked)],
-                    ["Completed", String(preparednessActionSummary.completed)],
-                  ].map(([label, value]) => (
-                    <div
-                      key={label}
-                      className="rounded-[1.25rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-3"
-                    >
-                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">{label}</p>
-                      <p className="mt-2 text-sm font-semibold text-panel-strong">{value}</p>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="space-y-3">
-                  {preparednessActions.slice(0, 4).map((action) => (
-                    <article
-                      key={action.public_id}
-                      className="rounded-[1.35rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-4"
-                    >
-                      <div className="flex flex-wrap items-center gap-2">
-                        <StatusBadge
-                          tone={getPreparednessActionTone(action)}
-                          className="rounded-full px-3 py-1 tracking-[0.14em]"
-                        >
-                          {toTitleCase(action.status)}
-                        </StatusBadge>
-                        <span className="text-sm font-semibold text-panel-strong">
-                          {PREPAREDNESS_ACTION_TYPE_LABELS[action.action_type]}
-                        </span>
-                      </div>
-                      <p className="mt-2 text-sm leading-6 text-panel-copy">
-                        Owner: {action.assigned_to_username || action.assigned_to_team || "Unassigned"}
-                      </p>
-                      <p className="text-sm leading-6 text-panel-muted">
-                        Due: {formatOperationalTime(action.due_at)}
-                      </p>
-                      {action.events.length ? (
-                        <div className="mt-3 border-t border-[var(--dashboard-table-line)] pt-3">
-                          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">
-                            Latest lifecycle events
-                          </p>
-                          <ol className="mt-2 space-y-2">
-                            {action.events.slice().reverse().slice(0, 2).map((event) => (
-                              <li key={event.public_id} className="flex gap-2 text-sm">
-                                <span className="mt-2 size-1.5 shrink-0 rounded-full bg-brand" aria-hidden="true" />
-                                <span className="min-w-0">
-                                  <span className="font-semibold text-panel-strong">{toTitleCase(event.event_type)}</span>
-                                  <span className="text-panel-muted">
-                                    {" "}
-                                    {formatOperationalTime(event.created_at)}
-                                  </span>
-                                  {event.detail ? <span className="block text-panel-copy">{event.detail}</span> : null}
-                                </span>
-                              </li>
-                            ))}
-                          </ol>
-                        </div>
-                      ) : null}
-                    </article>
-                  ))}
-                </div>
-
-                <Link
-                  href={`/preparedness-actions?ward_id=${detail?.wardId ?? wardId}`}
-                  className="inline-flex items-center gap-2 text-sm font-semibold text-brand transition hover:text-[var(--login-link-hover)]"
-                >
-                  Open ward action queue
-                  <ChevronRight className="size-4" aria-hidden="true" />
-                </Link>
-              </div>
-            ) : (
-              <div className="rounded-[1.5rem] border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
-                <p className="text-sm font-semibold text-panel-strong">No preparedness actions linked yet</p>
-                <p className="mt-1 text-sm text-panel-muted">Response work will appear here when alert, CHV, or facility workflows create ledger tasks.</p>
-              </div>
-            )}
-          </Card>
-
-          <Card className="space-y-5 p-6">
-            <div className="flex items-center gap-3">
-              <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
-                <UsersRound className="size-5" aria-hidden="true" />
-              </span>
-              <div className="space-y-1">
-                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">CHV action status</h3>
-                <p className="text-sm text-panel-muted">Field follow-through linked back to alert records.</p>
-              </div>
-            </div>
-
-            {isLoading ? (
-              <LoadingBlocks count={3} />
-            ) : chvActionStatus ? (
-              <div className="space-y-4">
-                <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-                  {[
-                    ["Latest status", toTitleCase(chvActionStatus.summary.latest_status)],
-                    ["Active requests", String(chvActionStatus.summary.active_request_count)],
-                    ["Linked alerts", String(chvActionStatus.summary.linked_alert_count)],
-                  ].map(([label, value]) => (
-                    <div
-                      key={label}
-                      className="rounded-[1.25rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-3"
-                    >
-                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">{label}</p>
-                      <p className="mt-2 text-sm font-semibold text-panel-strong">{value}</p>
-                    </div>
-                  ))}
-                </div>
-
-                {chvActionStatus.requests.length ? (
-                  <div className="space-y-3">
-                    {chvActionStatus.requests.slice(0, 3).map((request) => (
-                      <article
-                        key={request.public_id}
-                        className="rounded-[1.35rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-4"
-                      >
-                        <div className="flex flex-wrap items-center gap-2">
-                          <StatusBadge
-                            tone={request.status === "RESOLVED" ? "success" : request.status === "CANCELLED" || request.status === "REJECTED" ? "danger" : "warning"}
-                            className="rounded-full px-3 py-1 tracking-[0.14em]"
-                          >
-                            {request.status}
-                          </StatusBadge>
-                          <span className="text-sm font-semibold text-panel-strong">{request.priority} priority</span>
-                        </div>
-                        <p className="mt-2 text-sm leading-6 text-panel-copy">
-                          Assignments: {request.assignment_counts.active} active, {request.assignment_counts.completed} completed.
-                        </p>
-                        <p className="text-sm leading-6 text-panel-muted">
-                          Linked alerts: {request.linked_alert_public_ids.length ? request.linked_alert_public_ids.join(", ") : "None linked"}
-                        </p>
-                      </article>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="rounded-[1.5rem] border border-dashed border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
-                    <p className="text-sm font-semibold text-panel-strong">No CHV action request linked yet</p>
-                    <p className="mt-1 text-sm text-panel-muted">Create or link a CHV coverage request after alert review when field follow-up is needed.</p>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <p className="text-sm text-panel-muted">No CHV action evidence is available for this ward.</p>
-            )}
-          </Card>
-
-          <Card className={cn("space-y-5 p-6", hasLowSignalState && "xl:sticky xl:top-24")}>
-            <div className="flex items-center gap-3">
-              <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+          {activeTab === "history" ? (
+          <Card className="space-y-6 p-6">
+            <div className="flex items-center gap-4">
+              <span className="inline-flex size-11 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
                 <Clock3 className="size-5" aria-hidden="true" />
               </span>
               <div className="space-y-1">
-                <h3 className="text-xl font-semibold tracking-[-0.03em] text-panel-strong">Data status</h3>
+                <h3 className="text-xl font-semibold text-panel-strong">Data status</h3>
                 <p className="text-sm text-panel-muted">Compact freshness status with optional detail.</p>
               </div>
             </div>
@@ -1903,7 +2344,7 @@ export default function WardDetailPage() {
             {isLoading ? (
               <LoadingBlocks count={3} className="h-4 rounded-full bg-[color-mix(in_srgb,var(--dashboard-table-line)_55%,transparent)]" />
             ) : detail ? (
-              <details className="group rounded-[1.5rem] border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
+              <details className="group rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)] px-4 py-4">
                 <summary className="flex cursor-pointer list-none items-start justify-between gap-4">
                   <div className="space-y-1">
                     <p className="text-sm font-semibold text-panel-strong">
@@ -1948,7 +2389,8 @@ export default function WardDetailPage() {
               <p className="text-sm text-panel-muted">No freshness diagnostics are available for this ward.</p>
             )}
           </Card>
-        </aside>
+          ) : null}
+        </WardActionRail>
       </section>
     </div>
   );

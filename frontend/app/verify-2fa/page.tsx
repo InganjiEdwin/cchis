@@ -1,15 +1,15 @@
 "use client";
 
-import { ArrowLeft, CircleAlert, KeyRound, Shield, ShieldAlert } from "lucide-react";
+import { ArrowLeft, CircleAlert, KeyRound, ShieldAlert } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ClipboardEvent, FormEvent, useEffect, useRef, useState } from "react";
 
 import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
-import { PublicAlert, PublicFooter, PublicGlow, PublicScreen, PublicShell } from "@/components/ui/public-shell";
-import { persistRecoveryCodeLoginNotice } from "@/lib/auth";
-import { getDefaultRoute } from "@/lib/navigation";
+import { BrandLockup, PublicAlert, PublicFooter, PublicGlow, PublicScreen, PublicShell } from "@/components/ui/public-shell";
+import { persistRecoveryCodeLoginNotice, requiresPolicyAcceptance } from "@/lib/auth";
+import { buildPolicyReviewRoute, getDefaultRoute } from "@/lib/navigation";
 
 type VerificationMode = "totp" | "recovery";
 const RECOVERY_CODE_NORMALIZED_LENGTH = 17;
@@ -91,7 +91,7 @@ export default function VerifyTwoFactorPage() {
         persistRecoveryCodeLoginNotice(verification.recovery_codes_remaining);
       }
 
-      router.replace(nextRoute);
+      router.replace(requiresPolicyAcceptance(user) ? buildPolicyReviewRoute(nextRoute) : nextRoute);
     } catch (submissionError) {
       const message =
         submissionError instanceof Error ? submissionError.message : "Invalid or expired code. Please try again.";
@@ -149,12 +149,7 @@ export default function VerifyTwoFactorPage() {
       <PublicGlow side="left" />
       <PublicGlow side="right" />
       <PublicShell narrow className="justify-center">
-        <div className="mb-8 flex items-center gap-3">
-          <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[var(--totp-brand-mark-surface)] text-white shadow-[var(--totp-brand-mark-shadow)]">
-            <Shield className="size-5" aria-hidden="true" />
-          </span>
-          <span className="text-3xl font-semibold tracking-tight text-[var(--totp-brand-ink)]">CCHIS</span>
-        </div>
+        <BrandLockup className="mb-8 md:mb-8" />
 
         <div className="w-full max-w-[440px] rounded-[2rem] border border-[var(--totp-card-border)] bg-[var(--totp-card-surface)] p-6 shadow-[var(--totp-card-shadow)] backdrop-blur md:p-8">
           <div className="mb-6">

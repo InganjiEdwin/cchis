@@ -20,6 +20,6 @@ export async function GET(
     if (error instanceof ServerApiError) {
       return NextResponse.json({ detail: error.message }, { status: error.status });
     }
-    return NextResponse.json({ detail: "Unable to load interoperability run detail." }, { status: 500 });
+    return NextResponse.json({ detail: "Unable to load transfer review." }, { status: 500 });
   }
 }

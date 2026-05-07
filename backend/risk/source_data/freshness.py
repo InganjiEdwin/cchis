@@ -21,6 +21,7 @@ from risk.models import (
     IngestionRun,
     ModelRun,
     PopulationBaselineRecord,
+    PopulationExposureFreshness,
     PopulationExposureIngestionRun,
     PopulationExposureTruth,
     SourceDataUploadBatch,
@@ -66,6 +67,11 @@ CADENCE_DAYS = {
     "setup_then_facility_or_catchment_change": 180,
     "weekly_routine_daily_during_alerts": 7,
     "daily_after_source_updates": 1,
+}
+NON_CURRENT_POPULATION_EXPOSURE_FRESHNESS_STATES = {
+    PopulationExposureFreshness.REPLACED_BY_NEW_RELEASE,
+    PopulationExposureFreshness.REPLAY_DIAGNOSTIC,
+    PopulationExposureFreshness.REPLACEMENT_NOT_ACTIVATED,
 }
 
 
@@ -201,10 +207,22 @@ def _feed_record_count(definition: SourceDataFeedDefinition) -> int:
         return SurveillanceRecord.objects.filter(source__source_type=definition.source_type).count()
     if definition.ingestion_family == INGESTION_FAMILY_POPULATION_EXPOSURE:
         if definition.source_type == "population_baseline":
-            return PopulationBaselineRecord.objects.count()
+            return (
+                PopulationBaselineRecord.objects.filter(source__source_type=definition.source_type)
+                .exclude(freshness_state__in=NON_CURRENT_POPULATION_EXPOSURE_FRESHNESS_STATES)
+                .count()
+            )
         if definition.source_type == "catchment_mapping":
-            return CatchmentPopulationRecord.objects.count()
-        return ExposureFeatureRecord.objects.filter(source__source_type=definition.source_type).count()
+            return (
+                CatchmentPopulationRecord.objects.filter(source__source_type=definition.source_type)
+                .exclude(freshness_state__in=NON_CURRENT_POPULATION_EXPOSURE_FRESHNESS_STATES)
+                .count()
+            )
+        return (
+            ExposureFeatureRecord.objects.filter(source__source_type=definition.source_type)
+            .exclude(freshness_state__in=NON_CURRENT_POPULATION_EXPOSURE_FRESHNESS_STATES)
+            .count()
+        )
     if definition.ingestion_family == INGESTION_FAMILY_FACILITY_READINESS:
         return FacilityReadinessSnapshot.objects.count()
     return 0
@@ -235,16 +253,17 @@ def _truth_state_for_feed(definition: SourceDataFeedDefinition, upload: SourceDa
             return TRUTH_CSV_BACKED
     if definition.ingestion_family == INGESTION_FAMILY_POPULATION_EXPOSURE:
         if definition.source_type == "population_baseline":
-            records = PopulationBaselineRecord.objects.all()
+            records = PopulationBaselineRecord.objects.filter(source__source_type=definition.source_type)
         elif definition.source_type == "catchment_mapping":
-            records = CatchmentPopulationRecord.objects.all()
+            records = CatchmentPopulationRecord.objects.filter(source__source_type=definition.source_type)
         else:
             records = ExposureFeatureRecord.objects.filter(source__source_type=definition.source_type)
+        records = records.exclude(freshness_state__in=NON_CURRENT_POPULATION_EXPOSURE_FRESHNESS_STATES)
         if records.filter(truth_class=PopulationExposureTruth.SEEDED_DEMO).exists():
             return TRUTH_DEMO_BACKED
         if records.filter(truth_class=PopulationExposureTruth.DERIVED_EXPOSURE_PROXY).exists():
             return TRUTH_PROXY
-        if run or records.exists():
+        if records.exists():
             return TRUTH_CSV_BACKED
     return TRUTH_MISSING
 
@@ -275,13 +294,28 @@ def _feed_freshness(definition: SourceDataFeedDefinition) -> FreshnessSource:
             latest_record = SurveillanceRecord.objects.filter(source__source_type=definition.source_type).order_by("-created_at").first()
             last_source_timestamp = latest_record.created_at if latest_record else None
         elif definition.source_type == "population_baseline":
-            latest_record = PopulationBaselineRecord.objects.order_by("-recorded_at", "-created_at").first()
+            latest_record = (
+                PopulationBaselineRecord.objects.filter(source__source_type=definition.source_type)
+                .exclude(freshness_state__in=NON_CURRENT_POPULATION_EXPOSURE_FRESHNESS_STATES)
+                .order_by("-recorded_at", "-created_at")
+                .first()
+            )
             last_source_timestamp = latest_record.recorded_at if latest_record else None
         elif definition.source_type == "catchment_mapping":
-            latest_record = CatchmentPopulationRecord.objects.order_by("-recorded_at", "-created_at").first()
+            latest_record = (
+                CatchmentPopulationRecord.objects.filter(source__source_type=definition.source_type)
+                .exclude(freshness_state__in=NON_CURRENT_POPULATION_EXPOSURE_FRESHNESS_STATES)
+                .order_by("-recorded_at", "-created_at")
+                .first()
+            )
             last_source_timestamp = latest_record.recorded_at if latest_record else None
         elif definition.ingestion_family == INGESTION_FAMILY_POPULATION_EXPOSURE:
-            latest_record = ExposureFeatureRecord.objects.filter(source__source_type=definition.source_type).order_by("-recorded_at", "-created_at").first()
+            latest_record = (
+                ExposureFeatureRecord.objects.filter(source__source_type=definition.source_type)
+                .exclude(freshness_state__in=NON_CURRENT_POPULATION_EXPOSURE_FRESHNESS_STATES)
+                .order_by("-recorded_at", "-created_at")
+                .first()
+            )
             last_source_timestamp = latest_record.recorded_at if latest_record else None
         elif definition.ingestion_family == INGESTION_FAMILY_FACILITY_READINESS:
             latest_record = FacilityReadinessSnapshot.objects.order_by("-reported_at", "-created_at").first()

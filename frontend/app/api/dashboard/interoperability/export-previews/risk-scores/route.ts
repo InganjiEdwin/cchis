@@ -21,6 +21,6 @@ export async function POST(request: Request) {
     if (error instanceof ServerApiError) {
       return NextResponse.json({ detail: error.message }, { status: error.status });
     }
-    return NextResponse.json({ detail: "Unable to create interoperability export preview." }, { status: 500 });
+    return NextResponse.json({ detail: "Unable to preview data sharing." }, { status: 500 });
   }
 }

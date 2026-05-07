@@ -35,6 +35,7 @@ FACILITY_READINESS_ACCEPTED_COLUMNS = frozenset(
         "facility_code",
         "facility_name",
         "ward_code",
+        "ward_name",
         "reported_at",
         "ors_sachets_available",
         "iv_fluids_available",

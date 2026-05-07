@@ -151,42 +151,41 @@ describe("SystemPage", () => {
     vi.useRealTimers();
   });
 
-  it("renders the System Status layout with explicit control contracts", () => {
+  it("renders the Operations Readiness layout with plain operator language", () => {
     renderSystemPage(buildSystemSnapshot());
 
-    expect(screen.getByText(/System Status \| System status and explicit control contracts/i)).toBeInTheDocument();
-    expect(screen.getByText("System controls")).toBeInTheDocument();
-    expect(screen.getByText("Observed Activity")).toBeInTheDocument();
-    expect(screen.getByText("Latest record summaries")).toBeInTheDocument();
+    expect(screen.getByText(/Operations Readiness \| Check whether dashboard information is current and safe to use/i)).toBeInTheDocument();
+    expect(screen.getByText("Are updates current?")).toBeInTheDocument();
+    expect(screen.getByText("Recent activity")).toBeInTheDocument();
+    expect(screen.getByText("Activity log")).toBeInTheDocument();
+    expect(screen.getByText("Safe actions")).toBeInTheDocument();
 
     expect(screen.queryByText("Pipeline Summary")).not.toBeInTheDocument();
     expect(screen.queryByText("Unavailable Controls")).not.toBeInTheDocument();
     expect(screen.queryByText("Retry jobs unavailable")).not.toBeInTheDocument();
     expect(screen.queryByText("Manual risk scoring unavailable")).not.toBeInTheDocument();
     expect(screen.queryByText("Alert pause unavailable")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /refresh visible records/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /retry background jobs/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /run risk scoring/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /pause alert delivery/i })).toBeInTheDocument();
-    expect(screen.queryByText("Refresh view")).not.toBeInTheDocument();
-    expect(screen.queryByText("Background-processing retry controls.")).not.toBeInTheDocument();
-    expect(screen.queryByText("Manual risk-scoring controls.")).not.toBeInTheDocument();
-    expect(screen.queryByText("Alert delivery pause controls.")).not.toBeInTheDocument();
-    expect(screen.getByText("Control contracts are wired to backend endpoints.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /refresh status/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /send waiting alerts/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /update ward risk/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /pause outgoing sms/i })).toBeInTheDocument();
+    expect(screen.queryByText(/control contracts/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/backend endpoints/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/visible records/i)).not.toBeInTheDocument();
   });
 
-  it("wires system control buttons to BFF contracts", async () => {
+  it("wires safe action buttons to the existing service calls", async () => {
     renderSystemPage(buildSystemSnapshot());
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /retry background jobs/i }));
+      fireEvent.click(screen.getByRole("button", { name: /send waiting alerts/i }));
     });
     expect(dashboardMocks.retrySystemBackgroundJobsViaBff).toHaveBeenCalledWith({ limit: 25 });
     await flushControlAction();
-    expect(screen.getByText("1 alert delivery retry tasks were queued.")).toBeInTheDocument();
+    expect(screen.getByText("1 waiting alert is being sent again.")).toBeInTheDocument();
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /run risk scoring/i }));
+      fireEvent.click(screen.getByRole("button", { name: /update ward risk/i }));
     });
     expect(dashboardMocks.runManualRiskScoringViaBff).toHaveBeenCalledWith({
       month: 4,
@@ -194,21 +193,21 @@ describe("SystemPage", () => {
       send_sms: false,
     });
     await flushControlAction();
-    expect(screen.getByText("Manual risk scoring was queued as task risk-task.")).toBeInTheDocument();
+    expect(screen.getByText("Ward risk is being updated. No SMS alerts will be sent from this action.")).toBeInTheDocument();
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /pause alert delivery/i }));
+      fireEvent.click(screen.getByRole("button", { name: /pause outgoing sms/i }));
     });
     expect(dashboardMocks.setAlertDeliveryPauseViaBff).toHaveBeenCalledWith({
       paused: true,
       duration_minutes: 60,
-      reason: "Paused from system page.",
+      reason: "Paused from operations readiness page.",
     });
     await flushControlAction();
     expect(mockRefetch).toHaveBeenCalledTimes(3);
   });
 
-  it("renders missing timestamps as neutral data-incomplete copy with low-confidence qualifiers", () => {
+  it("renders missing updates as neutral readiness copy", () => {
     renderSystemPage(
       buildSystemSnapshot({
         wardsWithFreshRisk: 0,
@@ -219,14 +218,15 @@ describe("SystemPage", () => {
       }),
     );
 
-    expect(screen.getByText("Data incomplete")).toBeInTheDocument();
-    expect(screen.getAllByText("No visible timestamp available").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("No visible timestamp").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("No last visible timestamp").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Low confidence: no visible timestamp").length).toBeGreaterThan(0);
+    expect(screen.getByText("Some information is missing")).toBeInTheDocument();
+    expect(screen.getAllByText("No update received yet").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Missing").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Update not received yet").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/visible timestamp/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/low confidence/i)).not.toBeInTheDocument();
   });
 
-  it("renders stale visible data as older visible data without using danger copy", () => {
+  it("renders delayed updates without using danger copy", () => {
     renderSystemPage(
       buildSystemSnapshot({
         latestRiskTimestamp: "2026-04-26T09:00:00Z",
@@ -237,14 +237,15 @@ describe("SystemPage", () => {
       }),
     );
 
-    expect(screen.getByText("Stale data")).toBeInTheDocument();
-    expect(screen.getAllByText("Older visible data").length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Last visible: 4d ago/i).length).toBeGreaterThan(0);
-    expect(screen.queryByText("Visible delivery failure")).not.toBeInTheDocument();
-    expect(screen.queryByText("Delivery failure")).not.toBeInTheDocument();
+    expect(screen.getByText("Updates are delayed")).toBeInTheDocument();
+    expect(screen.getAllByText("Delayed").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Last update: 4d ago/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Review now")).not.toBeInTheDocument();
+    expect(screen.queryByText("Stale data")).not.toBeInTheDocument();
+    expect(screen.queryByText("Older visible data")).not.toBeInTheDocument();
   });
 
-  it("renders failed alert records as a real degraded danger state", () => {
+  it("renders failed alerts as a real attention state", () => {
     renderSystemPage(
       buildSystemSnapshot({
         failedAlerts: 1,
@@ -252,15 +253,16 @@ describe("SystemPage", () => {
       }),
     );
 
-    expect(screen.getByText("Degraded")).toBeInTheDocument();
-    expect(screen.getByText("1 failed delivery records")).toBeInTheDocument();
-    expect(screen.getByText("Delivery failure")).toBeInTheDocument();
-    expect(screen.getByText("Visible delivery failure")).toBeInTheDocument();
-    expect(screen.getByText("ERROR")).toBeInTheDocument();
-    expect(screen.getByText("1 alert deliveries are recorded as failed in visible records.")).toBeInTheDocument();
+    expect(screen.getAllByText("Needs attention").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("1 alert did not send").length).toBeGreaterThan(0);
+    expect(screen.getByText("Review now")).toBeInTheDocument();
+    expect(screen.getByText("Review")).toBeInTheDocument();
+    expect(screen.getByText("1 alert did not send. Review alert sending before relying on this status.")).toBeInTheDocument();
+    expect(screen.queryByText("Degraded")).not.toBeInTheDocument();
+    expect(screen.queryByText("ERROR")).not.toBeInTheDocument();
   });
 
-  it("does not report OK when visible alert backlog needs review", () => {
+  it("does not report ready when alerts are waiting to send", () => {
     renderSystemPage(
       buildSystemSnapshot({
         latestRiskTimestamp: "2026-04-30T11:55:00Z",
@@ -273,12 +275,12 @@ describe("SystemPage", () => {
       }),
     );
 
-    expect(screen.getByText("Review needed")).toBeInTheDocument();
-    expect(screen.getByText(/queued or retry-pending items/i)).toBeInTheDocument();
-    expect(screen.queryByText("OK")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Needs attention").length).toBeGreaterThan(0);
+    expect(screen.getByText(/Some alerts are waiting to send/i)).toBeInTheDocument();
+    expect(screen.queryByText("Ready")).not.toBeInTheDocument();
   });
 
-  it("does not hide alert backlog when the page is also data incomplete", () => {
+  it("does not hide waiting alerts when the page is also missing updates", () => {
     renderSystemPage(
       buildSystemSnapshot({
         latestRiskTimestamp: null,
@@ -289,8 +291,8 @@ describe("SystemPage", () => {
       }),
     );
 
-    expect(screen.getByText("Data incomplete")).toBeInTheDocument();
-    expect(screen.getByText(/queued or retry-pending items/i)).toBeInTheDocument();
-    expect(screen.queryByText("OK")).not.toBeInTheDocument();
+    expect(screen.getByText("Some information is missing")).toBeInTheDocument();
+    expect(screen.getByText(/some alerts are waiting to send/i)).toBeInTheDocument();
+    expect(screen.queryByText("Ready")).not.toBeInTheDocument();
   });
 });

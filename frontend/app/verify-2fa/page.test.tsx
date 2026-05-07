@@ -27,6 +27,7 @@ vi.mock("@/components/auth-provider", () => ({
 }));
 
 vi.mock("@/lib/navigation", () => ({
+  buildPolicyReviewRoute: (returnTo: string) => `/policy-review?returnTo=${encodeURIComponent(returnTo)}`,
   getDefaultRoute: (...args: unknown[]) => mockGetDefaultRoute(...args),
 }));
 
@@ -115,5 +116,36 @@ describe("VerifyTwoFactorPage", () => {
     expect(window.sessionStorage.getItem("cchis.recovery_code_login_notice")).toContain('"remaining_count":1');
     expect(window.sessionStorage.getItem("cchis.recovery_code_login_notice")).not.toContain(recoveryCode);
     expect(mockReplace).toHaveBeenCalledWith("/overview");
+  });
+
+  it("routes verified users with missing policy acceptance to policy review", async () => {
+    const user = userEvent.setup();
+    mockVerifyTwoFactor.mockResolvedValue(
+      buildVerifyResponse({
+        user: buildUser({
+          policy_acceptance: {
+            required: true,
+            is_current: false,
+            terms_version: "terms-2026-05",
+            privacy_version: "privacy-2026-05",
+            cookie_notice_version: "cookies-2026-05",
+            accepted_terms_version: null,
+            accepted_privacy_version: null,
+            accepted_cookie_notice_version: null,
+            missing_documents: ["TERMS", "PRIVACY", "COOKIE_NOTICE"],
+            terms_url: "/terms",
+            privacy_url: "/privacy",
+            cookie_notice_url: "/privacy#cookies",
+          },
+        }),
+      }),
+    );
+    renderVerifyPage();
+
+    await user.type(screen.getByLabelText("Authenticator or recovery code"), "123456");
+
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith("/policy-review?returnTo=%2Foverview");
+    });
   });
 });

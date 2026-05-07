@@ -32,6 +32,6 @@ export async function GET(
     if (error instanceof ServerApiError) {
       return NextResponse.json({ detail: error.message }, { status: error.status });
     }
-    return NextResponse.json({ detail: "Unable to download interoperability run errors." }, { status: 500 });
+    return NextResponse.json({ detail: "Unable to download rows to fix." }, { status: 500 });
   }
 }

@@ -27,6 +27,21 @@ Examples:
 - `SOURCE_DATA_DHIS2_CANONICAL_CSV_URL`
 
 For tests and deployment rehearsals, `SOURCE_DATA_CONNECTOR_FIXTURE_DIR` may point at canonical CSV fixtures named `<connector_key>.csv`.
+The `worldpop_knbs_population` connector also accepts the generated Migori pilot
+fixture name `migori_worldpop_2026_population.csv` so the Phase 1 canonical CSV
+can be replayed without copying it.
+
+WorldPop/KNBS connector settings:
+
+- `SOURCE_DATA_WORLDPOP_KNBS_SOURCE_URL`
+- `SOURCE_DATA_WORLDPOP_KNBS_RELEASE_VERSION`
+- `SOURCE_DATA_WORLDPOP_KNBS_CANONICAL_CSV_URL`
+
+For the Migori pilot, `worldpop_knbs_population` targets the
+`gridded_population` feed because the canonical CSV contains both
+`population_total` and `population_density` fields generated from the WorldPop
+raster aggregation. KNBS remains the reconciliation anchor rather than the
+direct imported source.
 
 Scheduled connector refreshes are controlled by:
 
@@ -42,6 +57,11 @@ The default schedule includes `dhis2_surveillance_weekly`. Unconfigured connecto
 Feeds expose a mode of `api`, `csv`, `manual`, `fallback`, or `demo`.
 
 Admins can mark a connector as authoritative and disable routine CSV upload for that feed. CSV can be re-enabled as fallback when source gaps, corrections, or recovery require it.
+
+Population/exposure freshness is feed-scoped. Current counts and truth states
+exclude non-current records such as `replaced_by_new_release`,
+`replay_diagnostic`, and `replacement_not_activated`, so retired seeded rows do
+not keep a feed marked as demo-backed after a source-backed replacement lands.
 
 ## Audit And Failure Reporting
 
