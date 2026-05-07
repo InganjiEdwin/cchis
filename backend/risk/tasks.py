@@ -447,6 +447,7 @@ def run_risk_model_task(
     alert_algorithm: str | None = None,
     execution_context: str = "scheduled_task",
     run_purpose: str = "live_scoring",
+    include_seeded_training_labels: bool = False,
 ) -> int:
     if month is None:
         month = timezone.now().month
@@ -463,6 +464,7 @@ def run_risk_model_task(
         alert_algorithm=alert_algorithm,
         execution_context=execution_context,
         run_purpose=run_purpose,
+        include_seeded_training_labels=include_seeded_training_labels,
     )
     logger.info(
         "run_risk_model_task_completed",

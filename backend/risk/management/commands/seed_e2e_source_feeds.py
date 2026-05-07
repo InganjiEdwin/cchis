@@ -5,19 +5,23 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
+from django.conf import settings
 from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
 from risk.models import (
+    Alert,
     ExposureFeatureRecord,
     PopulationExposureIngestionRun,
     PopulationExposureSource,
     PopulationExposureSourceKind,
     PopulationExposureTruth,
+    RiskScore,
     SurveillanceFreshnessState,
     SurveillanceIngestionRun,
     SurveillanceOutbreakLabel,
+    SurveillanceRecord,
     SurveillanceSource,
     SurveillanceSourceKind,
     SurveillanceTruthLevel,
@@ -73,6 +77,14 @@ class Command(BaseCommand):
             action="store_true",
             help="After downstream builds, run the non-production risk scoring command without sending alerts.",
         )
+        parser.add_argument(
+            "--simulate-alerts",
+            action="store_true",
+            help=(
+                "After scoring, materialize dashboard-only simulation alerts for alert-candidate "
+                "risk scores. This never sends SMS and is blocked in staging/production."
+            ),
+        )
 
     def handle(self, *args, **options):
         as_of = self._parse_as_of(options["as_of"])
@@ -96,11 +108,19 @@ class Command(BaseCommand):
         surveillance_path = output_dir / f"surveillance_seed_e2e_{as_of.isoformat()}.csv"
 
         population_rows = self._write_population_exposure_csv(population_path, profiles, as_of)
+        surveillance_source_ref = str(surveillance_path)
+        supersedes_source_ref = (
+            surveillance_source_ref
+            if SurveillanceRecord.objects.filter(source_ref=surveillance_source_ref).exists()
+            else ""
+        )
         first_period_start, last_period_end, surveillance_rows = self._write_surveillance_csv(
             surveillance_path,
             profiles,
             as_of=as_of,
             weeks=weeks,
+            source_ref=surveillance_source_ref,
+            supersedes_source_ref=supersedes_source_ref,
         )
 
         self.stdout.write(
@@ -115,6 +135,10 @@ class Command(BaseCommand):
 
         if not options["ingest"] and (options["build_downstream"] or options["score"]):
             raise CommandError("--build-downstream and --score require --ingest.")
+        if options["simulate_alerts"] and not options["score"]:
+            raise CommandError("--simulate-alerts requires --score.")
+        if options["simulate_alerts"] and settings.CCHIS_ENVIRONMENT in {"staging", "production"}:
+            raise CommandError("--simulate-alerts is blocked in staging and production environments.")
 
         if options["ingest"]:
             source_timestamp = self._aware_datetime(as_of)
@@ -176,12 +200,21 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS("Built downstream e2e feature and label datasets."))
 
         if options["score"]:
+            model_version = f"lr-seed-e2e-{as_of.strftime('%Y%m%d')}"
             call_command(
                 "run_risk_model",
                 month=as_of.month,
-                model_version=f"lr-seed-e2e-{as_of.strftime('%Y%m%d')}",
+                model_version=model_version,
                 algorithm="logistic_regression",
+                include_seeded_training_labels=True,
             )
+            if options["simulate_alerts"]:
+                alert_count = self._simulate_dashboard_alerts(model_version=model_version)
+                self.stdout.write(
+                    self.style.SUCCESS(
+                        f"Materialized dashboard-only e2e simulation alerts. alerts_created={alert_count}"
+                    )
+                )
 
     def _parse_as_of(self, value: str) -> date:
         if not value:
@@ -292,12 +325,16 @@ class Command(BaseCommand):
         *,
         as_of: date,
         weeks: int,
+        source_ref: str,
+        supersedes_source_ref: str = "",
     ) -> tuple[date, date, int]:
         fieldnames = [
             "ward_id",
             "ward_name",
             "reporting_period_start",
             "reporting_period_end",
+            "source_ref",
+            "supersedes_record_ref",
             "suspected_cholera_count",
             "confirmed_cholera_count",
             "diarrheal_count",
@@ -324,6 +361,8 @@ class Command(BaseCommand):
                         "ward_name": profile.ward.name,
                         "reporting_period_start": period_start.isoformat(),
                         "reporting_period_end": period_end.isoformat(),
+                        "source_ref": source_ref,
+                        "supersedes_record_ref": supersedes_source_ref,
                         "suspected_cholera_count": suspected,
                         "confirmed_cholera_count": confirmed,
                         "diarrheal_count": diarrheal,
@@ -362,3 +401,97 @@ class Command(BaseCommand):
         if confirmed >= 1 or suspected >= 4 or diarrheal >= 14:
             return SurveillanceOutbreakLabel.WATCH
         return SurveillanceOutbreakLabel.NONE
+
+    def _simulate_dashboard_alerts(self, *, model_version: str) -> int:
+        from risk.services import MESSAGE_AUDIENCE_GOVERNANCE_SCHEMA_VERSION, sync_alert_workflow_for_ward
+
+        now = timezone.now()
+        risk_scores = list(
+            RiskScore.objects.select_related("ward", "model_run")
+            .filter(model_version=model_version)
+            .order_by("-score", "ward__name")
+        )
+        selected_scores = [
+            risk_score
+            for risk_score in risk_scores
+            if (risk_score.decision_policy or {}).get("alert_candidate")
+        ]
+        simulation_trigger_mode = "decision_policy_alert_candidate"
+        if not selected_scores and risk_scores:
+            selected_scores = risk_scores[:1]
+            simulation_trigger_mode = "top_ranked_threshold_probe"
+
+        created_count = 0
+        for risk_score in selected_scores:
+            decision_policy = risk_score.decision_policy or {}
+            metadata = risk_score.model_run.metadata if risk_score.model_run_id else {}
+            external_id = f"seed-e2e-sim-alert:{model_version}:{risk_score.id}"
+            if Alert.objects.filter(external_id=external_id).exists():
+                continue
+
+            score_percent = round(float(risk_score.score or 0) * 100)
+            message = (
+                f"CCHIS e2e simulation: {risk_score.ward.name} is {risk_score.risk_level} "
+                f"at {score_percent}% model score with {risk_score.predicted_cases} predicted cases. "
+                "Review CHV follow-up, safe-water messaging, and ORS readiness."
+            )
+            Alert.objects.create(
+                ward=risk_score.ward,
+                risk_score=risk_score,
+                channel=Alert.CHANNEL_DASHBOARD,
+                recipient="dashboard:e2e-simulation",
+                message=message,
+                status=Alert.STATUS_DELIVERED,
+                delivery_backend="internal-dashboard-e2e-simulation",
+                attempt_count=1,
+                max_attempts=1,
+                last_attempted_at=now,
+                sent_at=now,
+                external_id=external_id,
+                guided_request_metadata={
+                    "simulation": True,
+                    "simulation_type": "seed_e2e_dashboard_alert",
+                    "source_command": "seed_e2e_source_feeds",
+                    "simulation_trigger_mode": simulation_trigger_mode,
+                    "model_version": model_version,
+                    "risk_score_id": risk_score.id,
+                    "model_run_id": risk_score.model_run_id,
+                    "production_alert_guardrails": {
+                        "model_run_alert_eligible": metadata.get("alert_eligible"),
+                        "promotion_state": metadata.get("promotion_state"),
+                        "automatic_alert_allowed": decision_policy.get("automatic_alert_allowed"),
+                        "automatic_alert_blockers": decision_policy.get("automatic_alert_blockers", []),
+                        "note": (
+                            "This dashboard alert is a local e2e simulation artifact. "
+                            "It does not mark seeded data as production alert-eligible."
+                        ),
+                    },
+                    "decision_policy": decision_policy,
+                },
+                governance_metadata={
+                    "schema_version": MESSAGE_AUDIENCE_GOVERNANCE_SCHEMA_VERSION,
+                    "workflow": "seed_e2e_dashboard_alert_simulation",
+                    "audience_decision": {
+                        "allowed": True,
+                        "decision": "dashboard_only_simulation_delivery_allowed",
+                        "reason": "local e2e simulation without SMS delivery",
+                    },
+                    "audience_scope": {
+                        "scope_kind": "internal_dashboard",
+                        "scope_allowed": True,
+                        "target_ward_id": risk_score.ward_id,
+                    },
+                    "simulation": True,
+                },
+            )
+            sync_alert_workflow_for_ward(
+                risk_score.ward,
+                event_metadata={
+                    "simulation": True,
+                    "source_command": "seed_e2e_source_feeds",
+                    "model_version": model_version,
+                    "risk_score_id": risk_score.id,
+                },
+            )
+            created_count += 1
+        return created_count

@@ -1,0 +1,281 @@
+ward_id,ward_name,population_total,population_under_five,households,exposure_type,exposure_value,unit,truth_class,source_kind,freshness_state,aggregation_method,spatial_resolution,source_ref,notes
+1572,Bukira Centrl/Ikerege,5346,738,1215,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1572,Bukira Centrl/Ikerege,,,,population_density,196.9,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1572,Bukira Centrl/Ikerege,,,,settlement_concentration,0.315,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1572,Bukira Centrl/Ikerege,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1572,Bukira Centrl/Ikerege,,,,water_body_proximity,0.279,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1572,Bukira Centrl/Ikerege,,,,wash_vulnerability,0.309,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1572,Bukira Centrl/Ikerege,,,,exposed_population_proxy,145.0,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1571,Bukira East,5556,767,1263,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1571,Bukira East,,,,population_density,199.4,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1571,Bukira East,,,,settlement_concentration,0.34,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1571,Bukira East,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1571,Bukira East,,,,water_body_proximity,0.299,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1571,Bukira East,,,,wash_vulnerability,0.274,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1571,Bukira East,,,,exposed_population_proxy,133.6,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1540,Central Kamagambo,7053,1002,1603,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1540,Central Kamagambo,,,,population_density,304.2,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1540,Central Kamagambo,,,,settlement_concentration,0.385,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1540,Central Kamagambo,,,,floodplain_exposure,0.331,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1540,Central Kamagambo,,,,water_body_proximity,0.428,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1540,Central Kamagambo,,,,wash_vulnerability,0.412,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1540,Central Kamagambo,,,,exposed_population_proxy,404.0,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1561,Central Kanyamkago,6132,849,1394,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1561,Central Kanyamkago,,,,population_density,216.8,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1561,Central Kanyamkago,,,,settlement_concentration,0.326,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1561,Central Kanyamkago,,,,floodplain_exposure,0.224,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1561,Central Kanyamkago,,,,water_body_proximity,0.272,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1561,Central Kanyamkago,,,,wash_vulnerability,0.287,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1561,Central Kanyamkago,,,,exposed_population_proxy,165.6,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1547,Central Sakwa,6186,854,1406,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1547,Central Sakwa,,,,population_density,206.9,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1547,Central Sakwa,,,,settlement_concentration,0.34,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1547,Central Sakwa,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1547,Central Sakwa,,,,water_body_proximity,0.279,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1547,Central Sakwa,,,,wash_vulnerability,0.309,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1547,Central Sakwa,,,,exposed_population_proxy,167.8,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1541,East Kamagambo,7137,1002,1622,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1541,East Kamagambo,,,,population_density,268.3,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1541,East Kamagambo,,,,settlement_concentration,0.345,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1541,East Kamagambo,,,,floodplain_exposure,0.279,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1541,East Kamagambo,,,,water_body_proximity,0.362,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1541,East Kamagambo,,,,wash_vulnerability,0.333,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1541,East Kamagambo,,,,exposed_population_proxy,278.5,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1564,East Kanyamkago,6606,912,1501,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1564,East Kanyamkago,,,,population_density,211.9,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1564,East Kanyamkago,,,,settlement_concentration,0.315,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1564,East Kanyamkago,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1564,East Kanyamkago,,,,water_body_proximity,0.319,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1564,East Kanyamkago,,,,wash_vulnerability,0.309,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1564,East Kanyamkago,,,,exposed_population_proxy,179.2,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1549,God Jope,6816,941,1549,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1549,God Jope,,,,population_density,214.4,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1549,God Jope,,,,settlement_concentration,0.34,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1549,God Jope,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1549,God Jope,,,,water_body_proximity,0.259,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1549,God Jope,,,,wash_vulnerability,0.274,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1549,God Jope,,,,exposed_population_proxy,163.9,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1579,Gokeharaka/Getambwega,7182,995,1632,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1579,Gokeharaka/Getambwega,,,,population_density,229.3,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1579,Gokeharaka/Getambwega,,,,settlement_concentration,0.301,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1579,Gokeharaka/Getambwega,,,,floodplain_exposure,0.224,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1579,Gokeharaka/Getambwega,,,,water_body_proximity,0.292,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1579,Gokeharaka/Getambwega,,,,wash_vulnerability,0.322,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1579,Gokeharaka/Getambwega,,,,exposed_population_proxy,217.6,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+4,Got Kachola,7704,1075,1751,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+4,Got Kachola,,,,population_density,256.6,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+4,Got Kachola,,,,settlement_concentration,0.349,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+4,Got Kachola,,,,floodplain_exposure,0.253,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+4,Got Kachola,,,,water_body_proximity,0.339,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+4,Got Kachola,,,,wash_vulnerability,0.312,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+4,Got Kachola,,,,exposed_population_proxy,255.4,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1573,Isibania,7446,1028,1692,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1573,Isibania,,,,population_density,221.9,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1573,Isibania,,,,settlement_concentration,0.34,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1573,Isibania,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1573,Isibania,,,,water_body_proximity,0.319,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1573,Isibania,,,,wash_vulnerability,0.309,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1573,Isibania,,,,exposed_population_proxy,202.0,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1565,Kachien'G,7656,1057,1740,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1565,Kachien'G,,,,population_density,224.4,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1565,Kachien'G,,,,settlement_concentration,0.29,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1565,Kachien'G,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1565,Kachien'G,,,,water_body_proximity,0.259,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1565,Kachien'G,,,,wash_vulnerability,0.274,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1565,Kachien'G,,,,exposed_population_proxy,184.1,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1552,Kakrao,7866,1086,1788,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1552,Kakrao,,,,population_density,226.9,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1552,Kakrao,,,,settlement_concentration,0.315,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1552,Kakrao,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1552,Kakrao,,,,water_body_proximity,0.279,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1552,Kakrao,,,,wash_vulnerability,0.309,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1552,Kakrao,,,,exposed_population_proxy,213.4,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1568,Kaler,8232,1140,1871,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1568,Kaler,,,,population_density,241.8,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1568,Kaler,,,,settlement_concentration,0.351,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1568,Kaler,,,,floodplain_exposure,0.224,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1568,Kaler,,,,water_body_proximity,0.312,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1568,Kaler,,,,wash_vulnerability,0.287,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1568,Kaler,,,,exposed_population_proxy,222.3,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1566,Kanyasa,8286,1143,1883,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1566,Kanyasa,,,,population_density,231.9,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1566,Kanyasa,,,,settlement_concentration,0.29,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1566,Kanyasa,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1566,Kanyasa,,,,water_body_proximity,0.319,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1566,Kanyasa,,,,wash_vulnerability,0.309,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1566,Kanyasa,,,,exposed_population_proxy,224.7,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1553,Kwa,8496,1172,1931,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1553,Kwa,,,,population_density,234.4,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1553,Kwa,,,,settlement_concentration,0.315,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1553,Kwa,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1553,Kwa,,,,water_body_proximity,0.259,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1553,Kwa,,,,wash_vulnerability,0.274,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1553,Kwa,,,,exposed_population_proxy,204.3,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1567,Macalder/Kanyarwanda,9720,1373,2209,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1567,Macalder/Kanyarwanda,,,,population_density,317.5,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1567,Macalder/Kanyarwanda,,,,settlement_concentration,0.415,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1567,Macalder/Kanyarwanda,,,,floodplain_exposure,0.305,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1567,Macalder/Kanyarwanda,,,,water_body_proximity,0.365,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1567,Macalder/Kanyarwanda,,,,wash_vulnerability,0.39,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1567,Macalder/Kanyarwanda,,,,exposed_population_proxy,485.6,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1574,Makerero,8916,1230,2026,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1574,Makerero,,,,population_density,239.4,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1574,Makerero,,,,settlement_concentration,0.29,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1574,Makerero,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1574,Makerero,,,,water_body_proximity,0.299,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1574,Makerero,,,,wash_vulnerability,0.274,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1574,Makerero,,,,exposed_population_proxy,214.4,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1575,Masaba,9282,1286,2110,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1575,Masaba,,,,population_density,254.3,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1575,Masaba,,,,settlement_concentration,0.326,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1575,Masaba,,,,floodplain_exposure,0.224,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1575,Masaba,,,,water_body_proximity,0.332,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1575,Masaba,,,,wash_vulnerability,0.322,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1575,Masaba,,,,exposed_population_proxy,281.2,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1569,Muhuru,9336,1288,2122,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1569,Muhuru,,,,population_density,244.4,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1569,Muhuru,,,,settlement_concentration,0.34,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1569,Muhuru,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1569,Muhuru,,,,water_body_proximity,0.259,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1569,Muhuru,,,,wash_vulnerability,0.274,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1569,Muhuru,,,,exposed_population_proxy,224.5,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+2,North Kadem,10287,1444,2338,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+2,North Kadem,,,,population_density,305.8,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+2,North Kadem,,,,settlement_concentration,0.345,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+2,North Kadem,,,,floodplain_exposure,0.279,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+2,North Kadem,,,,water_body_proximity,0.342,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+2,North Kadem,,,,wash_vulnerability,0.368,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+2,North Kadem,,,,exposed_population_proxy,443.6,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1,North Kamagambo,10770,1521,2448,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1,North Kamagambo,,,,population_density,330.0,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1,North Kamagambo,,,,settlement_concentration,0.39,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1,North Kamagambo,,,,floodplain_exposure,0.305,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1,North Kamagambo,,,,water_body_proximity,0.385,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1,North Kamagambo,,,,wash_vulnerability,0.355,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1,North Kamagambo,,,,exposed_population_proxy,489.8,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1560,North Kanyamkago,9966,1375,2265,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1560,North Kanyamkago,,,,population_density,251.9,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1560,North Kanyamkago,,,,settlement_concentration,0.34,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1560,North Kanyamkago,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1560,North Kanyamkago,,,,water_body_proximity,0.319,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1560,North Kanyamkago,,,,wash_vulnerability,0.309,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1560,North Kanyamkago,,,,exposed_population_proxy,270.3,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1543,North Sakwa,10332,1431,2348,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1543,North Sakwa,,,,population_density,266.8,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1543,North Sakwa,,,,settlement_concentration,0.301,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1543,North Sakwa,,,,floodplain_exposure,0.224,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1543,North Sakwa,,,,water_body_proximity,0.272,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1543,North Sakwa,,,,wash_vulnerability,0.287,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1543,North Sakwa,,,,exposed_population_proxy,279.0,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1581,Ntimaru East,10386,1433,2360,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1581,Ntimaru East,,,,population_density,256.9,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1581,Ntimaru East,,,,settlement_concentration,0.315,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1581,Ntimaru East,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1581,Ntimaru East,,,,water_body_proximity,0.279,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1581,Ntimaru East,,,,wash_vulnerability,0.309,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1581,Ntimaru East,,,,exposed_population_proxy,281.7,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1580,Ntimaru West,10596,1462,2408,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1580,Ntimaru West,,,,population_density,259.4,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1580,Ntimaru West,,,,settlement_concentration,0.34,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1580,Ntimaru West,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1580,Ntimaru West,,,,water_body_proximity,0.299,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1580,Ntimaru West,,,,wash_vulnerability,0.274,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1580,Ntimaru West,,,,exposed_population_proxy,254.9,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1583,Nyabasi East,10806,1491,2456,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1583,Nyabasi East,,,,population_density,261.9,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1583,Nyabasi East,,,,settlement_concentration,0.29,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1583,Nyabasi East,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1583,Nyabasi East,,,,water_body_proximity,0.319,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1583,Nyabasi East,,,,wash_vulnerability,0.309,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1583,Nyabasi East,,,,exposed_population_proxy,293.1,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1584,Nyabasi West,11016,1520,2504,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1584,Nyabasi West,,,,population_density,264.4,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1584,Nyabasi West,,,,settlement_concentration,0.315,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1584,Nyabasi West,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1584,Nyabasi West,,,,water_body_proximity,0.259,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1584,Nyabasi West,,,,wash_vulnerability,0.274,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1584,Nyabasi West,,,,exposed_population_proxy,265.0,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1578,Nyamosense/Komosoko,11382,1576,2587,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1578,Nyamosense/Komosoko,,,,population_density,279.3,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1578,Nyamosense/Komosoko,,,,settlement_concentration,0.351,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1578,Nyamosense/Komosoko,,,,floodplain_exposure,0.224,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1578,Nyamosense/Komosoko,,,,water_body_proximity,0.292,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1578,Nyamosense/Komosoko,,,,wash_vulnerability,0.322,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1578,Nyamosense/Komosoko,,,,exposed_population_proxy,344.8,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1556,Ragana-Oruba,11436,1578,2599,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1556,Ragana-Oruba,,,,population_density,269.4,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1556,Ragana-Oruba,,,,settlement_concentration,0.29,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1556,Ragana-Oruba,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1556,Ragana-Oruba,,,,water_body_proximity,0.299,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1556,Ragana-Oruba,,,,wash_vulnerability,0.274,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1556,Ragana-Oruba,,,,exposed_population_proxy,275.1,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1542,South Kamagambo,12387,1739,2815,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1542,South Kamagambo,,,,population_density,330.8,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1542,South Kamagambo,,,,settlement_concentration,0.37,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1542,South Kamagambo,,,,floodplain_exposure,0.279,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1542,South Kamagambo,,,,water_body_proximity,0.382,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1542,South Kamagambo,,,,wash_vulnerability,0.368,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1542,South Kamagambo,,,,exposed_population_proxy,534.2,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1562,South Kanyamkago,11856,1636,2695,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1562,South Kanyamkago,,,,population_density,274.4,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1562,South Kanyamkago,,,,settlement_concentration,0.34,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1562,South Kanyamkago,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1562,South Kanyamkago,,,,water_body_proximity,0.259,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1562,South Kanyamkago,,,,wash_vulnerability,0.274,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1562,South Kanyamkago,,,,exposed_population_proxy,285.2,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1545,South Sakwa,12066,1665,2742,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1545,South Sakwa,,,,population_density,276.9,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1545,South Sakwa,,,,settlement_concentration,0.29,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1545,South Sakwa,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1545,South Sakwa,,,,water_body_proximity,0.279,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1545,South Sakwa,,,,wash_vulnerability,0.309,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1545,South Sakwa,,,,exposed_population_proxy,327.3,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1550,Suna Central,12432,1722,2825,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1550,Suna Central,,,,population_density,291.8,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1550,Suna Central,,,,settlement_concentration,0.326,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1550,Suna Central,,,,floodplain_exposure,0.224,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1550,Suna Central,,,,water_body_proximity,0.312,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1550,Suna Central,,,,wash_vulnerability,0.287,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1550,Suna Central,,,,exposed_population_proxy,335.7,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1577,Tagare,12486,1723,2838,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1577,Tagare,,,,population_density,281.9,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1577,Tagare,,,,settlement_concentration,0.34,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1577,Tagare,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1577,Tagare,,,,water_body_proximity,0.319,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1577,Tagare,,,,wash_vulnerability,0.309,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1577,Tagare,,,,exposed_population_proxy,338.7,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1557,Wasimbete,12696,1752,2885,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1557,Wasimbete,,,,population_density,284.4,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1557,Wasimbete,,,,settlement_concentration,0.29,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1557,Wasimbete,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1557,Wasimbete,,,,water_body_proximity,0.259,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1557,Wasimbete,,,,wash_vulnerability,0.274,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1557,Wasimbete,,,,exposed_population_proxy,305.4,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1555,Wasweta Ii,12906,1781,2933,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1555,Wasweta Ii,,,,population_density,286.9,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1555,Wasweta Ii,,,,settlement_concentration,0.315,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1555,Wasweta Ii,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1555,Wasweta Ii,,,,water_body_proximity,0.279,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1555,Wasweta Ii,,,,wash_vulnerability,0.309,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1555,Wasweta Ii,,,,exposed_population_proxy,350.1,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1558,West Kanyamkago,13116,1810,2981,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1558,West Kanyamkago,,,,population_density,289.4,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1558,West Kanyamkago,,,,settlement_concentration,0.34,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1558,West Kanyamkago,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1558,West Kanyamkago,,,,water_body_proximity,0.299,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1558,West Kanyamkago,,,,wash_vulnerability,0.274,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1558,West Kanyamkago,,,,exposed_population_proxy,315.5,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1546,West Sakwa,13482,1867,3064,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1546,West Sakwa,,,,population_density,304.3,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1546,West Sakwa,,,,settlement_concentration,0.301,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1546,West Sakwa,,,,floodplain_exposure,0.224,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1546,West Sakwa,,,,water_body_proximity,0.332,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1546,West Sakwa,,,,wash_vulnerability,0.322,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1546,West Sakwa,,,,exposed_population_proxy,408.4,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1554,Wiga,13536,1868,3076,,,,seeded_demo,seeded,fresh,,,seed-e2e:2026-05-07,Seeded ward population baseline for non-production e2e testing.
+1554,Wiga,,,,population_density,294.4,people_per_km2_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1554,Wiga,,,,settlement_concentration,0.315,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1554,Wiga,,,,floodplain_exposure,0.209,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1554,Wiga,,,,water_body_proximity,0.259,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1554,Wiga,,,,wash_vulnerability,0.274,index,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.
+1554,Wiga,,,,exposed_population_proxy,325.6,people_proxy,seeded_demo,seeded,fresh,deterministic_context_aligned_seed_profile,ward,seed-e2e:2026-05-07,Seeded exposure proxy for non-production e2e testing.

@@ -466,11 +466,15 @@ def run_mock_prediction_pipeline(
     alert_algorithm: str | None = None,
     execution_context: str = "manual_command",
     run_purpose: str | None = None,
+    include_seeded_training_labels: bool = False,
 ) -> list[RiskScore]:
     wards = Ward.objects.filter(is_active=True).order_by("name")
     inference_dataset = build_inference_feature_dataset(wards, month=month)
     inference_rows = inference_dataset.rows
-    training_dataset = build_training_feature_dataset(month=month)
+    training_dataset = build_training_feature_dataset(
+        month=month,
+        include_seeded_labels_for_simulation=include_seeded_training_labels,
+    )
     training_rows = training_dataset.rows
     created_scores: list[RiskScore] = []
     ward_list = list(wards)

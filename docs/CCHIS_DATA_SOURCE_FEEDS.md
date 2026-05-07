@@ -133,7 +133,26 @@ docker compose exec -T backend python manage.py seed_e2e_source_feeds \
   --score
 ```
 
-The command marks these records as `seeded_demo` / `seeded` and uses `fallback_used=True`, so dashboards and model governance can distinguish them from real operational truth.
+To also materialize dashboard-only simulation alerts for alert-candidate wards:
+
+```bash
+docker compose exec -T backend python manage.py seed_e2e_source_feeds \
+  --as-of 2026-05-05 \
+  --weeks 12 \
+  --ingest \
+  --build-downstream \
+  --score \
+  --simulate-alerts
+```
+
+`--simulate-alerts` never sends SMS and is blocked in staging/production. It
+creates clearly marked dashboard simulation records for alert-candidate scores.
+If the synthetic run produces no alert candidates, it creates one top-ranked
+threshold-probe alert so the local e2e path can still exercise data -> ETL ->
+features -> prediction -> rules -> alert materialization without treating seeded
+data as production alert-eligible.
+
+The command marks these records as `seeded_demo` / `seeded` and uses `fallback_used=True`, so dashboards and model governance can distinguish them from real operational truth. During `--score`, the e2e command explicitly allows seeded surveillance labels for simulation training; the model governance metadata still blocks live promotion because seeded truth is present.
 
 `--build-downstream` builds lead-time feature rows for prediction dates after the source load date. This preserves the leakage rule that a feature row can only use records created before that prediction day's source cutoff.
 

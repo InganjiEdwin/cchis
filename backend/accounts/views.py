@@ -89,8 +89,26 @@ def get_refresh_cookie_name() -> str:
     return getattr(settings, "AUTH_REFRESH_COOKIE_NAME", "cchis_refresh")
 
 
+def get_refresh_cookie_names() -> tuple[str, ...]:
+    names = [get_refresh_cookie_name()]
+    names.extend(getattr(settings, "AUTH_REFRESH_COOKIE_LEGACY_NAMES", ()))
+    return tuple(dict.fromkeys(name for name in names if name))
+
+
 def get_refresh_cookie_value(request) -> str:
-    return str(request.COOKIES.get(get_refresh_cookie_name()) or "")
+    for cookie_name in get_refresh_cookie_names():
+        cookie_value = request.COOKIES.get(cookie_name)
+        if cookie_value:
+            return str(cookie_value)
+    return ""
+
+
+def get_access_cookie_name() -> str:
+    return getattr(settings, "AUTH_ACCESS_COOKIE_NAME", "cchis_access")
+
+
+def get_access_cookie_value(request) -> str:
+    return str(request.COOKIES.get(get_access_cookie_name()) or "")
 
 
 def get_user_from_refresh_cookie(request):
@@ -122,14 +140,57 @@ def set_refresh_cookie(response: Response, refresh_token: str) -> None:
         samesite=getattr(settings, "AUTH_REFRESH_COOKIE_SAMESITE", "Lax"),
         path=getattr(settings, "AUTH_REFRESH_COOKIE_PATH", "/"),
     )
+    clear_legacy_refresh_cookies(response)
+
+
+def clear_legacy_refresh_cookies(response: Response) -> None:
+    for cookie_name in getattr(settings, "AUTH_REFRESH_COOKIE_LEGACY_NAMES", ()):
+        response.delete_cookie(
+            key=cookie_name,
+            path=getattr(settings, "AUTH_REFRESH_COOKIE_PATH", "/"),
+            samesite=getattr(settings, "AUTH_REFRESH_COOKIE_SAMESITE", "Lax"),
+        )
 
 
 def clear_refresh_cookie(response: Response) -> None:
-    response.delete_cookie(
-        key=get_refresh_cookie_name(),
-        path=getattr(settings, "AUTH_REFRESH_COOKIE_PATH", "/"),
-        samesite=getattr(settings, "AUTH_REFRESH_COOKIE_SAMESITE", "Lax"),
+    for cookie_name in get_refresh_cookie_names():
+        response.delete_cookie(
+            key=cookie_name,
+            path=getattr(settings, "AUTH_REFRESH_COOKIE_PATH", "/"),
+            samesite=getattr(settings, "AUTH_REFRESH_COOKIE_SAMESITE", "Lax"),
+        )
+
+
+def set_access_cookie(response: Response, access_token: str) -> None:
+    response.set_cookie(
+        key=get_access_cookie_name(),
+        value=access_token,
+        max_age=int(settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"].total_seconds()),
+        httponly=getattr(settings, "AUTH_ACCESS_COOKIE_HTTPONLY", True),
+        secure=getattr(settings, "AUTH_ACCESS_COOKIE_SECURE", False),
+        samesite=getattr(settings, "AUTH_ACCESS_COOKIE_SAMESITE", "Lax"),
+        path=getattr(settings, "AUTH_ACCESS_COOKIE_PATH", "/"),
     )
+
+
+def clear_access_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=get_access_cookie_name(),
+        path=getattr(settings, "AUTH_ACCESS_COOKIE_PATH", "/"),
+        samesite=getattr(settings, "AUTH_ACCESS_COOKIE_SAMESITE", "Lax"),
+    )
+
+
+def set_auth_cookies(response: Response, access_token: str | None, refresh_token: str | None) -> None:
+    if access_token:
+        set_access_cookie(response, access_token)
+    if refresh_token:
+        set_refresh_cookie(response, refresh_token)
+
+
+def clear_auth_cookies(response: Response) -> None:
+    clear_access_cookie(response)
+    clear_refresh_cookie(response)
 
 
 def build_session_response(*, authenticated: bool, user=None, access_token: str | None = None, session_source: str | None = None) -> Response:
@@ -536,9 +597,9 @@ class LoginAPIView(TokenObtainPairView):
 
         response = Response(serializer.validated_data, status=status.HTTP_200_OK)
 
+        access_token = serializer.validated_data.get("access")
         refresh_token = serializer.validated_data.get("refresh")
-        if refresh_token:
-            set_refresh_cookie(response, refresh_token)
+        set_auth_cookies(response, access_token, refresh_token)
 
         return response
 
@@ -558,7 +619,7 @@ class RefreshAPIView(TokenRefreshView):
                 {"detail": "Refresh session is missing or expired."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
-            clear_refresh_cookie(response)
+            clear_auth_cookies(response)
             return response
 
         if is_refresh_cooldown_active(request, refresh_fingerprint):
@@ -600,7 +661,7 @@ class RefreshAPIView(TokenRefreshView):
                 {"detail": "Invalid or expired refresh token."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
-            clear_refresh_cookie(response)
+            clear_auth_cookies(response)
             return response
 
         clear_failed_refresh_attempts(request, refresh_fingerprint)
@@ -613,9 +674,9 @@ class RefreshAPIView(TokenRefreshView):
         )
 
         response = Response(serializer.validated_data, status=status.HTTP_200_OK)
+        access_token = serializer.validated_data.get("access")
         issued_refresh = serializer.validated_data.get("refresh") or refresh_token
-        if issued_refresh:
-            set_refresh_cookie(response, issued_refresh)
+        set_auth_cookies(response, access_token, issued_refresh)
         return response
 
 
@@ -829,15 +890,32 @@ class SessionAPIView(APIView):
                     session_source="access",
                 )
 
-        refresh_token = request.COOKIES.get(get_refresh_cookie_name())
+        access_cookie_invalid = False
+        access_token = get_access_cookie_value(request)
+        if access_token:
+            try:
+                validated_token = jwt_authenticator.get_validated_token(access_token)
+                user = jwt_authenticator.get_user(validated_token)
+                return build_session_response(
+                    authenticated=True,
+                    user=user,
+                    session_source="access",
+                )
+            except (AuthenticationFailed, TokenError):
+                access_cookie_invalid = True
+
+        refresh_token = get_refresh_cookie_value(request)
         refresh_fingerprint = fingerprint_refresh_token(refresh_token or "")
 
         if not refresh_token:
-            return build_session_response(authenticated=False)
+            response = build_session_response(authenticated=False)
+            if access_cookie_invalid:
+                clear_access_cookie(response)
+            return response
 
         if is_refresh_cooldown_active(request, refresh_fingerprint):
             response = build_session_response(authenticated=False)
-            clear_refresh_cookie(response)
+            clear_auth_cookies(response)
             return response
 
         try:
@@ -848,12 +926,12 @@ class SessionAPIView(APIView):
         except TokenError:
             register_failed_refresh_attempt(request, refresh_fingerprint)
             response = build_session_response(authenticated=False)
-            clear_refresh_cookie(response)
+            clear_auth_cookies(response)
             return response
         except AuthenticationFailed:
             register_failed_refresh_attempt(request, refresh_fingerprint)
             response = build_session_response(authenticated=False)
-            clear_refresh_cookie(response)
+            clear_auth_cookies(response)
             return response
 
         clear_failed_refresh_attempts(request, refresh_fingerprint)
@@ -869,9 +947,9 @@ class SessionAPIView(APIView):
         response = build_session_response(
             authenticated=True,
             user=user,
-            access_token=access_token,
             session_source="refresh",
         )
+        set_auth_cookies(response, access_token, refresh_token)
         return response
 
 
@@ -981,7 +1059,7 @@ class VerifyTwoFactorAPIView(APIView):
             target_user=user,
         )
         response = Response(token_response, status=status.HTTP_200_OK)
-        set_refresh_cookie(response, token_response["refresh"])
+        set_auth_cookies(response, token_response.get("access"), token_response.get("refresh"))
         return response
 
 
@@ -1088,7 +1166,7 @@ class ConfirmTwoFactorEnrollmentAPIView(APIView):
             token_response["recovery_codes"] = recovery_codes
             token_response["recovery_codes_generated"] = True
             response = Response(token_response, status=status.HTTP_200_OK)
-            set_refresh_cookie(response, token_response["refresh"])
+            set_auth_cookies(response, token_response.get("access"), token_response.get("refresh"))
             return response
 
         return Response(
@@ -1221,7 +1299,7 @@ class LogoutAPIView(APIView):
                 {"detail": "Refresh session is missing or expired."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-            clear_refresh_cookie(response)
+            clear_auth_cookies(response)
             return response
 
         try:
@@ -1239,7 +1317,7 @@ class LogoutAPIView(APIView):
                 {"detail": "Invalid or expired refresh token."},
                 status=400,
             )
-            clear_refresh_cookie(response)
+            clear_auth_cookies(response)
             return response
 
         record_auth_event(
@@ -1250,7 +1328,7 @@ class LogoutAPIView(APIView):
             target_user=request.user,
         )
         response = Response(status=205)
-        clear_refresh_cookie(response)
+        clear_auth_cookies(response)
         return response
 
 

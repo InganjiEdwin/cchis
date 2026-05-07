@@ -33,6 +33,14 @@ class Command(BaseCommand):
             choices=["logistic_regression", "random_forest"],
             default=None,
         )
+        parser.add_argument(
+            "--include-seeded-training-labels",
+            action="store_true",
+            help=(
+                "Use seeded surveillance label datasets for non-production simulation scoring. "
+                "Live promotion remains blocked by seeded-truth policy."
+            ),
+        )
         parser.add_argument("--async", action="store_true", dest="run_async")
 
     def _validate_version_discipline(self, *, algorithm: str, model_version: str, benchmark_algorithm: str, benchmark_version: str, dual_model: bool):
@@ -60,6 +68,7 @@ class Command(BaseCommand):
         benchmark_algorithm = options["benchmark_algorithm"]
         benchmark_model_version = options["benchmark_version"]
         alert_algorithm = options["alert_algorithm"]
+        include_seeded_training_labels = options["include_seeded_training_labels"]
         run_async = options["run_async"]
         self._validate_version_discipline(
             algorithm=algorithm,
@@ -83,6 +92,7 @@ class Command(BaseCommand):
                 alert_algorithm=alert_algorithm,
                 execution_context="manual_task",
                 run_purpose=run_purpose,
+                include_seeded_training_labels=include_seeded_training_labels,
             )
             self.stdout.write(
                 self.style.SUCCESS(
@@ -103,6 +113,7 @@ class Command(BaseCommand):
             alert_algorithm=alert_algorithm,
             execution_context="manual_command",
             run_purpose=run_purpose,
+            include_seeded_training_labels=include_seeded_training_labels,
         )
 
         self.stdout.write(

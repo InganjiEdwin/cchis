@@ -13,6 +13,9 @@ export default defineConfig({
     setupFiles: ["./test/setup.ts"],
   },
   resolve: {
-    alias: [{ find: /^@\//, replacement: `${rootDir}/` }],
+    alias: [
+      { find: /^@\//, replacement: `${rootDir}/` },
+      { find: /^server-only$/, replacement: `${rootDir}/test/server-only.ts` },
+    ],
   },
 });

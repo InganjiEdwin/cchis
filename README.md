@@ -489,8 +489,12 @@ At minimum review and set:
 - `CORS_ALLOWED_ORIGINS`
 - `CSRF_TRUSTED_ORIGINS`
 - `SECURE_SSL_REDIRECT=True` when TLS is terminated correctly
+- `SECURE_SSL_REDIRECT_REVERSE_PROXY_EXEMPTION=True` only when a trusted proxy already enforces HTTPS redirects before Django
 - `SESSION_COOKIE_SECURE=True`
 - `CSRF_COOKIE_SECURE=True`
+- `AUTH_ACCESS_COOKIE_NAME=__Host-cchis_access`
+- `AUTH_REFRESH_COOKIE_NAME=__Host-cchis_refresh`
+- `AUTH_REFRESH_COOKIE_LEGACY_NAMES=cchis_refresh` only during the refresh-cookie migration window
 - `USE_X_FORWARDED_HOST=True` only when you trust the reverse proxy
 - `TRUST_X_FORWARDED_PROTO=True` only when your proxy sets `X-Forwarded-Proto` correctly
 - `TRUST_X_FORWARDED_FOR=True` only when your proxy strips and rewrites `X-Forwarded-For`
@@ -498,7 +502,7 @@ At minimum review and set:
 
 The app now supports these deployment-oriented settings in [backend/core/settings.py](/Users/edwininganji/VSCodeProjects/cchis/backend/core/settings.py).
 
-For deployment boundaries, assume TLS terminates at Nginx or your cloud load balancer and only trust forwarded headers from that layer. In local Docker development, keep the forwarded-header trust flags disabled unless you are deliberately testing behind a proxy that you control.
+For deployment boundaries, assume TLS terminates at Nginx or your cloud load balancer and only trust forwarded headers from that layer. In local Docker development, keep the forwarded-header trust flags disabled unless you are deliberately testing behind a proxy that you control. Shared environments now fail startup when secure cookie, HSTS, host, CORS, or SSL redirect settings remain in local-development shape.
 
 The full environment promotion, migration, and seeding policy lives in [docs/ENVIRONMENT_DISCIPLINE.md](/Users/edwininganji/VSCodeProjects/cchis/docs/ENVIRONMENT_DISCIPLINE.md).
 

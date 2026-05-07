@@ -20,7 +20,7 @@ from django.db import IntegrityError, transaction
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.core.cache import cache
-from django.test import RequestFactory
+from django.test import RequestFactory, SimpleTestCase
 from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -62,6 +62,7 @@ from core.observability import (
     OPERATIONAL_METRICS,
     RECOVERY_VISIBILITY_REQUIREMENTS,
 )
+from core.settings import collect_shared_environment_security_errors
 from core.data_lifecycle import DATA_RETENTION_INVENTORY, FIELD_DATA_MINIMIZATION_RULES
 from core.recovery_discipline import BACKUP_EXPECTATIONS, RESTORE_REHEARSAL_EXPECTATIONS
 from risk.ml.ingestion import fetch_rainfall_for_ward
@@ -161,6 +162,57 @@ def get_results(response):
     if isinstance(response.data, dict) and "results" in response.data:
         return response.data["results"]
     return response.data
+
+
+class SharedEnvironmentSecuritySettingsTestCase(SimpleTestCase):
+    def test_shared_environment_security_rejects_local_transport_defaults(self):
+        errors = collect_shared_environment_security_errors(
+            environment="production",
+            auth_refresh_cookie_secure=False,
+            auth_access_cookie_secure=False,
+            session_cookie_secure=False,
+            csrf_cookie_secure=False,
+            secure_ssl_redirect=False,
+            secure_ssl_redirect_reverse_proxy_exemption=False,
+            secure_hsts_seconds=0,
+            allowed_hosts=["*"],
+            cors_allow_all_origins=True,
+            cors_allowed_origins=["*"],
+            auth_refresh_cookie_name="__Host-cchis_refresh",
+            auth_refresh_cookie_path="/auth",
+            auth_access_cookie_name="__Host-cchis_access",
+            auth_access_cookie_path="/api",
+        )
+
+        self.assertTrue(any("AUTH_REFRESH_COOKIE_SECURE" in error for error in errors))
+        self.assertTrue(any("AUTH_ACCESS_COOKIE_SECURE" in error for error in errors))
+        self.assertTrue(any("SECURE_SSL_REDIRECT" in error for error in errors))
+        self.assertTrue(any("SECURE_HSTS_SECONDS" in error for error in errors))
+        self.assertTrue(any("ALLOWED_HOSTS" in error for error in errors))
+        self.assertTrue(any("CORS" in error for error in errors))
+        self.assertTrue(any("__Host- refresh" in error for error in errors))
+        self.assertTrue(any("__Host- access" in error for error in errors))
+
+    def test_shared_environment_security_allows_documented_proxy_redirect_exception(self):
+        errors = collect_shared_environment_security_errors(
+            environment="staging",
+            auth_refresh_cookie_secure=True,
+            auth_access_cookie_secure=True,
+            session_cookie_secure=True,
+            csrf_cookie_secure=True,
+            secure_ssl_redirect=False,
+            secure_ssl_redirect_reverse_proxy_exemption=True,
+            secure_hsts_seconds=3600,
+            allowed_hosts=["staging.cchis.example"],
+            cors_allow_all_origins=False,
+            cors_allowed_origins=["https://staging.cchis.example"],
+            auth_refresh_cookie_name="__Host-cchis_refresh",
+            auth_refresh_cookie_path="/",
+            auth_access_cookie_name="__Host-cchis_access",
+            auth_access_cookie_path="/",
+        )
+
+        self.assertEqual(errors, [])
 
 
 class AuthenticatedAPITestCase(APITestCase):
@@ -447,7 +499,7 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
             ).exists()
         )
 
-    def test_login_sets_refresh_cookie_for_direct_session(self):
+    def test_login_sets_auth_cookies_for_direct_session(self):
         response = self.client.post(
             reverse("auth-login"),
             {"username": self.chv_user.username, "password": self.password},
@@ -455,9 +507,12 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        cookie = response.cookies.get(settings.AUTH_REFRESH_COOKIE_NAME)
-        self.assertIsNotNone(cookie)
-        self.assertEqual(cookie.value, response.data["refresh"])
+        refresh_cookie = response.cookies.get(settings.AUTH_REFRESH_COOKIE_NAME)
+        access_cookie = response.cookies.get(settings.AUTH_ACCESS_COOKIE_NAME)
+        self.assertIsNotNone(refresh_cookie)
+        self.assertIsNotNone(access_cookie)
+        self.assertEqual(refresh_cookie.value, response.data["refresh"])
+        self.assertEqual(access_cookie.value, response.data["access"])
 
     def test_login_exposes_optional_two_factor_policy_for_analyst(self):
         response = self.client.post(
@@ -490,7 +545,7 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
             ).exists()
         )
 
-    def test_verify_2fa_sets_refresh_cookie(self):
+    def test_verify_2fa_sets_auth_cookies(self):
         login_response = self.client.post(
             reverse("auth-login"),
             {"username": self.admin_user.username, "password": self.password},
@@ -507,9 +562,12 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         )
 
         self.assertEqual(verify_response.status_code, status.HTTP_200_OK)
-        cookie = verify_response.cookies.get(settings.AUTH_REFRESH_COOKIE_NAME)
-        self.assertIsNotNone(cookie)
-        self.assertEqual(cookie.value, verify_response.data["refresh"])
+        refresh_cookie = verify_response.cookies.get(settings.AUTH_REFRESH_COOKIE_NAME)
+        access_cookie = verify_response.cookies.get(settings.AUTH_ACCESS_COOKIE_NAME)
+        self.assertIsNotNone(refresh_cookie)
+        self.assertIsNotNone(access_cookie)
+        self.assertEqual(refresh_cookie.value, verify_response.data["refresh"])
+        self.assertEqual(access_cookie.value, verify_response.data["access"])
         self.assertTrue(
             AuthAuditEvent.objects.filter(
                 event_type=AuthAuditEvent.EVENT_2FA_REQUIRED,
@@ -608,8 +666,11 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         self.assertTrue(confirm_response.data["recovery_codes_generated"])
         self.assertEqual(len(confirm_response.data["recovery_codes"]), 10)
         cookie = confirm_response.cookies.get(settings.AUTH_REFRESH_COOKIE_NAME)
+        access_cookie = confirm_response.cookies.get(settings.AUTH_ACCESS_COOKIE_NAME)
         self.assertIsNotNone(cookie)
+        self.assertIsNotNone(access_cookie)
         self.assertEqual(cookie.value, confirm_response.data["refresh"])
+        self.assertEqual(access_cookie.value, confirm_response.data["access"])
         unenrolled_admin.refresh_from_db()
         self.assertTrue(unenrolled_admin.is_totp_enabled)
         self.assertEqual(TwoFactorRecoveryCode.objects.filter(user=unenrolled_admin).count(), 10)
@@ -1459,6 +1520,22 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.data["user"]["id"], self.chv_user.id)
         self.assertIsNone(response.data["access"])
 
+    def test_session_returns_authenticated_user_for_valid_access_cookie(self):
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.chv_user.username, "password": self.password},
+            format="json",
+        )
+
+        self.client.cookies[settings.AUTH_ACCESS_COOKIE_NAME] = login_response.data["access"]
+        response = self.client.get(reverse("auth-session"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["authenticated"])
+        self.assertEqual(response.data["session_source"], "access")
+        self.assertEqual(response.data["user"]["id"], self.chv_user.id)
+        self.assertIsNone(response.data["access"])
+
     def test_session_bootstraps_from_refresh_cookie(self):
         login_response = self.client.post(
             reverse("auth-login"),
@@ -1474,6 +1551,7 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
             format="json",
         )
 
+        self.client.cookies.pop(settings.AUTH_ACCESS_COOKIE_NAME, None)
         self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = verify_response.data["refresh"]
         response = self.client.get(reverse("auth-session"))
 
@@ -1481,8 +1559,40 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         self.assertTrue(response.data["authenticated"])
         self.assertEqual(response.data["session_source"], "refresh")
         self.assertEqual(response.data["user"]["id"], self.admin_user.id)
-        self.assertIn("access", response.data)
-        self.assertTrue(response.data["access"])
+        self.assertIsNone(response.data["access"])
+        access_cookie = response.cookies.get(settings.AUTH_ACCESS_COOKIE_NAME)
+        self.assertIsNotNone(access_cookie)
+        self.assertTrue(access_cookie.value)
+
+    @override_settings(
+        AUTH_REFRESH_COOKIE_NAME="__Host-cchis_refresh",
+        AUTH_REFRESH_COOKIE_LEGACY_NAMES=("cchis_refresh",),
+        AUTH_REFRESH_COOKIE_SECURE=True,
+    )
+    def test_session_bootstrap_migrates_legacy_refresh_cookie_name(self):
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+        verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": login_response.data["temp_token"],
+                "code": generate_current_totp_code(self.admin_user.totp_secret),
+            },
+            format="json",
+        )
+
+        self.client.cookies.pop(settings.AUTH_REFRESH_COOKIE_NAME, None)
+        self.client.cookies.pop(settings.AUTH_ACCESS_COOKIE_NAME, None)
+        self.client.cookies["cchis_refresh"] = verify_response.data["refresh"]
+        response = self.client.get(reverse("auth-session"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["authenticated"])
+        self.assertEqual(response.cookies[settings.AUTH_REFRESH_COOKIE_NAME].value, verify_response.data["refresh"])
+        self.assertEqual(response.cookies["cchis_refresh"].value, "")
 
     def test_session_returns_unauthenticated_without_session(self):
         response = self.client.get(reverse("auth-session"))
@@ -1494,11 +1604,13 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
 
     def test_session_clears_invalid_refresh_cookie(self):
         self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = "bad-refresh-token"
+        self.client.cookies[settings.AUTH_ACCESS_COOKIE_NAME] = "bad-access-token"
         response = self.client.get(reverse("auth-session"))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertFalse(response.data["authenticated"])
         self.assertEqual(response.cookies[settings.AUTH_REFRESH_COOKIE_NAME].value, "")
+        self.assertEqual(response.cookies[settings.AUTH_ACCESS_COOKIE_NAME].value, "")
 
     def test_logout_blacklists_refresh_token(self):
         login_response = self.client.post(
@@ -1521,6 +1633,8 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
         logout_response = self.client.post(reverse("auth-logout"), {}, format="json")
         self.assertEqual(logout_response.status_code, status.HTTP_205_RESET_CONTENT)
+        self.assertEqual(logout_response.cookies[settings.AUTH_REFRESH_COOKIE_NAME].value, "")
+        self.assertEqual(logout_response.cookies[settings.AUTH_ACCESS_COOKIE_NAME].value, "")
 
         self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = refresh
         refresh_response = self.client.post(reverse("auth-refresh"), {}, format="json")
@@ -1556,6 +1670,7 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
 
         self.assertEqual(logout_response.status_code, status.HTTP_205_RESET_CONTENT)
         self.assertEqual(logout_response.cookies[settings.AUTH_REFRESH_COOKIE_NAME].value, "")
+        self.assertEqual(logout_response.cookies[settings.AUTH_ACCESS_COOKIE_NAME].value, "")
 
         refresh_response = self.client.post(reverse("auth-refresh"), {}, format="json")
         self.assertEqual(refresh_response.status_code, status.HTTP_401_UNAUTHORIZED)
@@ -1620,9 +1735,12 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(refresh_response.status_code, status.HTTP_200_OK)
         self.assertIn("access", refresh_response.data)
         self.assertIn("refresh", refresh_response.data)
-        cookie = refresh_response.cookies.get(settings.AUTH_REFRESH_COOKIE_NAME)
-        self.assertIsNotNone(cookie)
-        self.assertEqual(cookie.value, refresh_response.data["refresh"])
+        refresh_cookie = refresh_response.cookies.get(settings.AUTH_REFRESH_COOKIE_NAME)
+        access_cookie = refresh_response.cookies.get(settings.AUTH_ACCESS_COOKIE_NAME)
+        self.assertIsNotNone(refresh_cookie)
+        self.assertIsNotNone(access_cookie)
+        self.assertEqual(refresh_cookie.value, refresh_response.data["refresh"])
+        self.assertEqual(access_cookie.value, refresh_response.data["access"])
 
     @override_settings(
         AUTH_REFRESH_FAILURE_LIMIT=2,

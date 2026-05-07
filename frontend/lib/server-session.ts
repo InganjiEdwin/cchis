@@ -3,6 +3,7 @@ import "server-only";
 import { cookies } from "next/headers";
 
 import { getApiBaseUrl, type SessionResponse } from "@/lib/auth";
+import { getBackendSetCookieHeaders } from "@/lib/server-api";
 
 export function sanitizeSessionResponse(session: SessionResponse | null): SessionResponse | null {
   if (!session) {
@@ -16,6 +17,14 @@ export function sanitizeSessionResponse(session: SessionResponse | null): Sessio
 }
 
 export async function fetchServerSession(): Promise<SessionResponse | null> {
+  const result = await fetchServerSessionResult();
+  return result.session;
+}
+
+export async function fetchServerSessionResult(): Promise<{
+  session: SessionResponse | null;
+  cookieHeaders: string[];
+}> {
   const cookieStore = await cookies();
   const cookieHeader = cookieStore.toString();
 
@@ -27,11 +36,14 @@ export async function fetchServerSession(): Promise<SessionResponse | null> {
     });
 
     if (!response.ok) {
-      return null;
+      return { session: null, cookieHeaders: getBackendSetCookieHeaders(response) };
     }
 
-    return (await response.json()) as SessionResponse;
+    return {
+      session: (await response.json()) as SessionResponse,
+      cookieHeaders: getBackendSetCookieHeaders(response),
+    };
   } catch {
-    return null;
+    return { session: null, cookieHeaders: [] };
   }
 }

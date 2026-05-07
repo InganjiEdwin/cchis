@@ -1,21 +1,27 @@
 import { NextResponse } from "next/server";
 
-import { fetchServerSession, sanitizeSessionResponse } from "@/lib/server-session";
+import { jsonWithBackendCookies } from "@/lib/server-api";
+import { fetchServerSessionResult, sanitizeSessionResponse } from "@/lib/server-session";
 
 export async function GET() {
   try {
-    const session = sanitizeSessionResponse(await fetchServerSession());
+    const { session: backendSession, cookieHeaders } = await fetchServerSessionResult();
+    const session = sanitizeSessionResponse(backendSession);
 
     if (!session?.authenticated || !session.user) {
-      return NextResponse.json(session ?? {
-        authenticated: false,
-        user: null,
-        access: null,
-        session_source: null,
-      });
+      return jsonWithBackendCookies(
+        session ?? {
+          authenticated: false,
+          user: null,
+          access: null,
+          session_source: null,
+        },
+        undefined,
+        cookieHeaders,
+      );
     }
 
-    return NextResponse.json(session);
+    return jsonWithBackendCookies(session, undefined, cookieHeaders);
   } catch {
     return NextResponse.json({ detail: "Unable to resolve session state." }, { status: 500 });
   }

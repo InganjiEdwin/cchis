@@ -442,7 +442,11 @@ def _rainfall_source_lineage_by_ward_id(ingestion_run: IngestionRun | None) -> d
     return lineage_by_ward_id
 
 
-def build_training_feature_dataset(month: int) -> TrainingDataset:
+def build_training_feature_dataset(
+    month: int,
+    *,
+    include_seeded_labels_for_simulation: bool = False,
+) -> TrainingDataset:
     surveillance_label_dataset = latest_surveillance_label_dataset(dataset_role="training")
     surveillance_lead_time_validation = build_surveillance_lead_time_validation_summary(
         label_dataset=surveillance_label_dataset,
@@ -450,7 +454,7 @@ def build_training_feature_dataset(month: int) -> TrainingDataset:
     label_readiness = _surveillance_label_training_readiness(surveillance_label_dataset)
     population_exposure_snapshot = None
 
-    if surveillance_label_dataset and label_readiness["ready"]:
+    if surveillance_label_dataset and (label_readiness["ready"] or include_seeded_labels_for_simulation):
         label_ward_ids = FeatureDatasetRow.objects.filter(
             dataset=surveillance_label_dataset,
             ward__isnull=False,
@@ -465,7 +469,11 @@ def build_training_feature_dataset(month: int) -> TrainingDataset:
             surveillance_label_dataset.source_kind,
             population_exposure_snapshot.feature_dataset.source_kind,
         )
-        source_mode = "surveillance-label-training"
+        source_mode = (
+            "surveillance-label-training"
+            if label_readiness["ready"]
+            else "seeded-surveillance-label-simulation-training"
+        )
         surveillance_label_usage = SURVEILLANCE_LABEL_TRAINING_USAGE
     else:
         rows = build_mock_training_rows()
@@ -550,6 +558,7 @@ def build_training_feature_dataset(month: int) -> TrainingDataset:
             "surveillance_feature_schema_version": SURVEILLANCE_FEATURE_SCHEMA_VERSION,
             "surveillance_lead_time_validation": surveillance_lead_time_validation,
             "surveillance_label_truth_gate": surveillance_lead_time_validation["truth_gate"],
+            "include_seeded_labels_for_simulation": include_seeded_labels_for_simulation,
         },
     )
     FeatureDatasetRow.objects.bulk_create(

@@ -186,6 +186,11 @@ else:
     SECURE_PROXY_SSL_HEADER = None
 
 SECURE_SSL_REDIRECT = config("SECURE_SSL_REDIRECT", cast=bool, default=False)
+SECURE_SSL_REDIRECT_REVERSE_PROXY_EXEMPTION = config(
+    "SECURE_SSL_REDIRECT_REVERSE_PROXY_EXEMPTION",
+    cast=bool,
+    default=False,
+)
 SESSION_COOKIE_SECURE = config("SESSION_COOKIE_SECURE", cast=bool, default=False)
 CSRF_COOKIE_SECURE = config("CSRF_COOKIE_SECURE", cast=bool, default=False)
 SESSION_COOKIE_HTTPONLY = config("SESSION_COOKIE_HTTPONLY", cast=bool, default=True)
@@ -351,15 +356,38 @@ PASSWORD_RESET_TOKEN_LIFETIME_MINUTES = config(
     default=60,
 )
 FRONTEND_APP_URL = config("FRONTEND_APP_URL", default="http://localhost:3000").strip().rstrip("/")
-AUTH_REFRESH_COOKIE_NAME = config("AUTH_REFRESH_COOKIE_NAME", default="cchis_refresh").strip()
+AUTH_ACCESS_COOKIE_NAME = config(
+    "AUTH_ACCESS_COOKIE_NAME",
+    default="__Host-cchis_access" if IS_SHARED_ENVIRONMENT else "cchis_access",
+).strip()
+AUTH_ACCESS_COOKIE_PATH = config("AUTH_ACCESS_COOKIE_PATH", default="/").strip() or "/"
+AUTH_ACCESS_COOKIE_SECURE = config(
+    "AUTH_ACCESS_COOKIE_SECURE",
+    cast=bool,
+    default=True if IS_SHARED_ENVIRONMENT else SESSION_COOKIE_SECURE,
+)
+AUTH_ACCESS_COOKIE_HTTPONLY = config("AUTH_ACCESS_COOKIE_HTTPONLY", cast=bool, default=True)
+AUTH_ACCESS_COOKIE_SAMESITE = config("AUTH_ACCESS_COOKIE_SAMESITE", default="Lax").strip() or "Lax"
+AUTH_REFRESH_COOKIE_NAME = config(
+    "AUTH_REFRESH_COOKIE_NAME",
+    default="__Host-cchis_refresh" if IS_SHARED_ENVIRONMENT else "cchis_refresh",
+).strip()
 AUTH_REFRESH_COOKIE_PATH = config("AUTH_REFRESH_COOKIE_PATH", default="/").strip() or "/"
 AUTH_REFRESH_COOKIE_SECURE = config(
     "AUTH_REFRESH_COOKIE_SECURE",
     cast=bool,
-    default=SESSION_COOKIE_SECURE,
+    default=True if IS_SHARED_ENVIRONMENT else SESSION_COOKIE_SECURE,
 )
 AUTH_REFRESH_COOKIE_HTTPONLY = config("AUTH_REFRESH_COOKIE_HTTPONLY", cast=bool, default=True)
 AUTH_REFRESH_COOKIE_SAMESITE = config("AUTH_REFRESH_COOKIE_SAMESITE", default="Lax").strip() or "Lax"
+AUTH_REFRESH_COOKIE_LEGACY_NAMES = tuple(
+    cookie_name.strip()
+    for cookie_name in config(
+        "AUTH_REFRESH_COOKIE_LEGACY_NAMES",
+        default="cchis_refresh" if AUTH_REFRESH_COOKIE_NAME != "cchis_refresh" else "",
+    ).split(",")
+    if cookie_name.strip() and cookie_name.strip() != AUTH_REFRESH_COOKIE_NAME
+)
 CURRENT_TERMS_VERSION = (
     config("CURRENT_TERMS_VERSION", default="terms-2026-05").strip() or "terms-2026-05"
 )
@@ -376,6 +404,81 @@ PRE_AUTH_TOKEN_LIFETIME_MINUTES = config(
     cast=int,
     default=5,
 )
+
+
+def collect_shared_environment_security_errors(
+    *,
+    environment: str,
+    auth_refresh_cookie_secure: bool,
+    auth_access_cookie_secure: bool,
+    session_cookie_secure: bool,
+    csrf_cookie_secure: bool,
+    secure_ssl_redirect: bool,
+    secure_ssl_redirect_reverse_proxy_exemption: bool,
+    secure_hsts_seconds: int,
+    allowed_hosts: list[str],
+    cors_allow_all_origins: bool,
+    cors_allowed_origins: list[str],
+    auth_refresh_cookie_name: str,
+    auth_refresh_cookie_path: str,
+    auth_access_cookie_name: str,
+    auth_access_cookie_path: str,
+) -> list[str]:
+    if environment not in {"staging", "production"}:
+        return []
+
+    errors = []
+    if not auth_refresh_cookie_secure:
+        errors.append("AUTH_REFRESH_COOKIE_SECURE must be True.")
+    if not auth_access_cookie_secure:
+        errors.append("AUTH_ACCESS_COOKIE_SECURE must be True.")
+    if not session_cookie_secure:
+        errors.append("SESSION_COOKIE_SECURE must be True.")
+    if not csrf_cookie_secure:
+        errors.append("CSRF_COOKIE_SECURE must be True.")
+    if not secure_ssl_redirect and not secure_ssl_redirect_reverse_proxy_exemption:
+        errors.append(
+            "SECURE_SSL_REDIRECT must be True unless SECURE_SSL_REDIRECT_REVERSE_PROXY_EXEMPTION=True is documented for the deployment."
+        )
+    if secure_hsts_seconds <= 0:
+        errors.append("SECURE_HSTS_SECONDS must be greater than 0.")
+    if any("*" in host or host.startswith(".") for host in allowed_hosts):
+        errors.append("ALLOWED_HOSTS must not contain wildcard hosts.")
+    if cors_allow_all_origins or any("*" in origin for origin in cors_allowed_origins):
+        errors.append("CORS must not allow wildcard origins.")
+    if auth_refresh_cookie_name.startswith("__Host-") and auth_refresh_cookie_path != "/":
+        errors.append("__Host- refresh cookies must use AUTH_REFRESH_COOKIE_PATH=/.")
+    if auth_access_cookie_name.startswith("__Host-") and auth_access_cookie_path != "/":
+        errors.append("__Host- access cookies must use AUTH_ACCESS_COOKIE_PATH=/.")
+
+    return errors
+
+
+def enforce_shared_environment_security() -> None:
+    errors = collect_shared_environment_security_errors(
+        environment=CCHIS_ENVIRONMENT,
+        auth_refresh_cookie_secure=AUTH_REFRESH_COOKIE_SECURE,
+        auth_access_cookie_secure=AUTH_ACCESS_COOKIE_SECURE,
+        session_cookie_secure=SESSION_COOKIE_SECURE,
+        csrf_cookie_secure=CSRF_COOKIE_SECURE,
+        secure_ssl_redirect=SECURE_SSL_REDIRECT,
+        secure_ssl_redirect_reverse_proxy_exemption=SECURE_SSL_REDIRECT_REVERSE_PROXY_EXEMPTION,
+        secure_hsts_seconds=SECURE_HSTS_SECONDS,
+        allowed_hosts=ALLOWED_HOSTS,
+        cors_allow_all_origins=CORS_ALLOW_ALL_ORIGINS,
+        cors_allowed_origins=CORS_ALLOWED_ORIGINS,
+        auth_refresh_cookie_name=AUTH_REFRESH_COOKIE_NAME,
+        auth_refresh_cookie_path=AUTH_REFRESH_COOKIE_PATH,
+        auth_access_cookie_name=AUTH_ACCESS_COOKIE_NAME,
+        auth_access_cookie_path=AUTH_ACCESS_COOKIE_PATH,
+    )
+    if errors:
+        raise ImproperlyConfigured(
+            "Unsafe shared-environment security settings: " + " ".join(errors)
+        )
+
+
+enforce_shared_environment_security()
 
 
 def parse_role_setting(setting_name: str, default: str) -> tuple[str, ...]:
