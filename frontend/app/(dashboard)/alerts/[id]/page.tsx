@@ -195,15 +195,15 @@ function formatAlertPublicId(alertId: number) {
 function getToneSurface(tone: "red" | "amber" | "orange" | "blue" | "slate") {
   switch (tone) {
     case "red":
-      return "bg-[color-mix(in_srgb,var(--danger)_12%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]";
+      return "border border-[color-mix(in_srgb,var(--danger)_26%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--danger)_12%,var(--dashboard-panel-surface))] text-[color:var(--danger)]";
     case "blue":
-      return "bg-[color-mix(in_srgb,var(--brand)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]";
+      return "border border-[color-mix(in_srgb,var(--brand)_24%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--brand)_12%,var(--dashboard-panel-surface))] text-brand";
     case "orange":
     case "amber":
-      return "bg-[color-mix(in_srgb,var(--warning)_14%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_18%,transparent)]";
+      return "border border-[color-mix(in_srgb,var(--warning)_28%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--warning)_14%,var(--dashboard-panel-surface))] text-[color:var(--warning)]";
     case "slate":
     default:
-      return "bg-[color-mix(in_srgb,var(--dashboard-table-line)_60%,transparent)] text-panel-copy";
+      return "border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_26%,var(--dashboard-panel-surface))] text-panel-copy";
   }
 }
 
@@ -697,11 +697,11 @@ export default function AlertDetailPage() {
                     className={cn(
                       "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium",
                       item.tone === "success" &&
-                        "bg-[color-mix(in_srgb,var(--success)_10%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_16%,transparent)]",
+                        "border border-[color-mix(in_srgb,var(--success)_28%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--success)_10%,var(--dashboard-panel-surface))] text-[color:var(--success)]",
                       item.tone === "warning" &&
-                        "bg-[color-mix(in_srgb,var(--warning)_12%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_18%,transparent)]",
+                        "border border-[color-mix(in_srgb,var(--warning)_30%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--warning)_12%,var(--dashboard-panel-surface))] text-[color:var(--warning)]",
                       item.tone === "neutral" &&
-                        "bg-[color-mix(in_srgb,var(--dashboard-table-line)_60%,transparent)] text-panel-copy",
+                        "border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_26%,var(--dashboard-panel-surface))] text-panel-copy",
                     )}
                   >
                     <CheckCircle2 className="size-4 shrink-0" aria-hidden="true" />
@@ -836,12 +836,12 @@ export default function AlertDetailPage() {
                       <span
                         className={cn(
                           "inline-flex size-10 items-center justify-center rounded-full",
-                          item.tone === "primary" && "bg-[color-mix(in_srgb,var(--brand)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]",
-                          item.tone === "progress" && "bg-[color-mix(in_srgb,var(--warning)_12%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_18%,transparent)]",
-                          item.tone === "success" && "bg-[color-mix(in_srgb,var(--success)_12%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_18%,transparent)]",
-                          item.tone === "danger" && "bg-[color-mix(in_srgb,var(--danger)_12%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]",
-                          item.tone === "warning" && "bg-[color-mix(in_srgb,var(--warning)_14%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]",
-                          item.tone === "neutral" && "bg-[color-mix(in_srgb,var(--dashboard-table-line)_60%,transparent)] text-panel-copy",
+                          item.tone === "primary" && "border border-[color-mix(in_srgb,var(--brand)_24%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--brand)_12%,var(--dashboard-panel-surface))] text-brand",
+                          item.tone === "progress" && "border border-[color-mix(in_srgb,var(--warning)_28%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--warning)_12%,var(--dashboard-panel-surface))] text-[color:var(--warning)]",
+                          item.tone === "success" && "border border-[color-mix(in_srgb,var(--success)_26%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--success)_12%,var(--dashboard-panel-surface))] text-[color:var(--success)]",
+                          item.tone === "danger" && "border border-[color-mix(in_srgb,var(--danger)_26%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--danger)_12%,var(--dashboard-panel-surface))] text-[color:var(--danger)]",
+                          item.tone === "warning" && "border border-[color-mix(in_srgb,var(--warning)_30%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--warning)_14%,var(--dashboard-panel-surface))] text-[color:var(--warning)]",
+                          item.tone === "neutral" && "border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_26%,var(--dashboard-panel-surface))] text-panel-copy",
                         )}
                       >
                         {item.tone === "success" ? (
@@ -1028,7 +1028,7 @@ export default function AlertDetailPage() {
             ) : null}
 
             <Card className="rounded-[2rem] overflow-hidden p-0">
-              <div className="relative h-40 bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--brand)_12%,transparent),transparent_45%),linear-gradient(135deg,color-mix(in_srgb,var(--panel)_92%,white),var(--panel))]">
+              <div className="relative h-40 bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--brand)_12%,var(--dashboard-panel-surface)),transparent_45%),linear-gradient(135deg,color-mix(in_srgb,var(--dashboard-table-line)_18%,var(--dashboard-panel-surface)),var(--dashboard-panel-surface))]">
                 <div className="absolute inset-0 bg-[linear-gradient(90deg,color-mix(in_srgb,var(--dashboard-table-line)_28%,transparent)_1px,transparent_1px),linear-gradient(color-mix(in_srgb,var(--dashboard-table-line)_28%,transparent)_1px,transparent_1px)] bg-[size:3.5rem_3.5rem] opacity-60" />
                 <div className="absolute inset-x-6 bottom-5">
                   <div className="inline-flex rounded-full bg-panel/90 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-panel-strong shadow-sm backdrop-blur">

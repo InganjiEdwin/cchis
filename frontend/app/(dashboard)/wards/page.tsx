@@ -438,14 +438,14 @@ export default function WardsPage() {
       />
 
       {error ? (
-        <div className="rounded-2xl border border-[color-mix(in_srgb,var(--danger)_20%,white)] bg-[color-mix(in_srgb,var(--danger)_10%,white)] px-4 py-3 text-sm font-medium text-[color:var(--danger)]">
+        <div className="rounded-2xl border border-[color-mix(in_srgb,var(--danger)_30%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--danger)_10%,var(--dashboard-panel-surface))] px-4 py-3 text-sm font-medium text-[color:var(--danger)]">
           <AlertTriangle className="mr-2 inline-flex size-4" aria-hidden="true" />
           {error}
         </div>
       ) : null}
 
       {!isLoading && !error && items.length === 0 ? (
-        <div className="rounded-2xl border border-[color-mix(in_srgb,var(--warning)_20%,white)] bg-[color-mix(in_srgb,var(--warning)_10%,white)] px-4 py-3 text-sm font-medium text-[color:var(--warning)]">
+        <div className="rounded-2xl border border-[color-mix(in_srgb,var(--warning)_30%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--warning)_10%,var(--dashboard-panel-surface))] px-4 py-3 text-sm font-medium text-[color:var(--warning)]">
           <AlertTriangle className="mr-2 inline-flex size-4" aria-hidden="true" />
           No ward risk data is available yet.
         </div>
@@ -561,9 +561,9 @@ export default function WardsPage() {
 
       <Card className="space-y-5 p-6">
         {wardsRequiringAction.length > 0 ? (
-          <div className="flex flex-col gap-3 rounded-[1.4rem] border border-[color-mix(in_srgb,var(--warning)_24%,white)] bg-[color-mix(in_srgb,var(--warning)_7%,white)] px-4 py-4 dark:border-[color-mix(in_srgb,var(--warning)_28%,transparent)] dark:bg-[color-mix(in_srgb,var(--warning)_12%,transparent)] md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-col gap-3 rounded-[1.4rem] border border-[color-mix(in_srgb,var(--warning)_32%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--warning)_10%,var(--dashboard-panel-surface))] px-4 py-4 md:flex-row md:items-center md:justify-between">
             <div className="flex items-start gap-3">
-              <span className="inline-flex size-10 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--warning)_14%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_18%,transparent)]">
+              <span className="inline-flex size-10 shrink-0 items-center justify-center rounded-2xl border border-[color-mix(in_srgb,var(--warning)_30%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--warning)_14%,var(--dashboard-panel-surface))] text-[color:var(--warning)]">
                 <TriangleAlert className="size-5" aria-hidden="true" />
               </span>
               <div className="space-y-1">

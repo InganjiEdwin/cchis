@@ -85,6 +85,34 @@ function formatCountLabel(count: number, singular: string, plural = `${singular}
 
 type ReadinessTone = "success" | "warning" | "danger" | "default";
 
+function toneIconSurfaceClasses(tone: ReadinessTone | "info") {
+  switch (tone) {
+    case "success":
+      return "border-[color-mix(in_srgb,var(--success)_24%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--success)_14%,var(--dashboard-panel-surface))] text-[color:var(--success)]";
+    case "warning":
+      return "border-[color-mix(in_srgb,var(--warning)_26%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--warning)_16%,var(--dashboard-panel-surface))] text-[color:var(--warning)]";
+    case "danger":
+      return "border-[color-mix(in_srgb,var(--danger)_26%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--danger)_15%,var(--dashboard-panel-surface))] text-[color:var(--danger)]";
+    case "info":
+      return "border-[color-mix(in_srgb,var(--brand)_24%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--brand)_14%,var(--dashboard-panel-surface))] text-brand";
+    default:
+      return "border-[color-mix(in_srgb,var(--dashboard-subtle-copy)_24%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--dashboard-subtle-copy)_12%,var(--dashboard-panel-surface))] text-panel-muted";
+  }
+}
+
+function readinessRowSurfaceClasses(tone: ReadinessTone) {
+  switch (tone) {
+    case "success":
+      return "border-[color-mix(in_srgb,var(--success)_26%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--success)_9%,var(--dashboard-panel-surface))]";
+    case "warning":
+      return "border-[color-mix(in_srgb,var(--warning)_28%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--warning)_10%,var(--dashboard-panel-surface))]";
+    case "danger":
+      return "border-[color-mix(in_srgb,var(--danger)_30%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--danger)_10%,var(--dashboard-panel-surface))]";
+    default:
+      return "border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_24%,var(--dashboard-panel-surface))]";
+  }
+}
+
 function describeUpdate(timestamp: string | null, targetMinutes: number) {
   if (!timestamp) {
     return {
@@ -767,17 +795,8 @@ export default function SystemPage() {
                 </div>
                 <span
                   className={cn(
-                    "inline-flex size-11 shrink-0 items-center justify-center rounded-2xl",
-                    card.tone === "success" &&
-                      "bg-[color-mix(in_srgb,var(--success)_14%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_20%,transparent)]",
-                    card.tone === "warning" &&
-                      "bg-[color-mix(in_srgb,var(--warning)_14%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]",
-                    card.tone === "danger" &&
-                      "bg-[color-mix(in_srgb,var(--danger)_14%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_20%,transparent)]",
-                    card.tone === "default" &&
-                      "bg-[color-mix(in_srgb,var(--dashboard-subtle-copy)_14%,var(--panel))] text-panel-muted",
-                    card.tone === "info" &&
-                      "bg-[color-mix(in_srgb,var(--brand)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]",
+                    "inline-flex size-11 shrink-0 items-center justify-center rounded-2xl border",
+                    toneIconSurfaceClasses(card.tone),
                   )}
                 >
                   {card.icon}
@@ -813,28 +832,14 @@ export default function SystemPage() {
                   key={row.title}
                   className={cn(
                     "flex flex-col gap-3 rounded-[1.25rem] border px-4 py-4 sm:flex-row sm:items-center sm:justify-between",
-                    row.tone === "success" &&
-                      "border-[color-mix(in_srgb,var(--success)_18%,white)] bg-[color-mix(in_srgb,var(--success)_8%,white)] dark:border-[color-mix(in_srgb,var(--success)_26%,transparent)] dark:bg-[color-mix(in_srgb,var(--success)_12%,transparent)]",
-                    row.tone === "warning" &&
-                      "border-[color-mix(in_srgb,var(--warning)_18%,white)] bg-[color-mix(in_srgb,var(--warning)_8%,white)] dark:border-[color-mix(in_srgb,var(--warning)_26%,transparent)] dark:bg-[color-mix(in_srgb,var(--warning)_12%,transparent)]",
-                    row.tone === "danger" &&
-                      "border-[color-mix(in_srgb,var(--danger)_20%,white)] bg-[color-mix(in_srgb,var(--danger)_8%,white)] dark:border-[color-mix(in_srgb,var(--danger)_28%,transparent)] dark:bg-[color-mix(in_srgb,var(--danger)_12%,transparent)]",
-                    row.tone === "default" &&
-                      "border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_16%,transparent)]",
+                    readinessRowSurfaceClasses(row.tone),
                   )}
                 >
                   <div className="flex items-start gap-3">
                     <span
                       className={cn(
-                        "inline-flex size-10 shrink-0 items-center justify-center rounded-2xl",
-                        row.tone === "success" &&
-                          "bg-[color-mix(in_srgb,var(--success)_14%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_20%,transparent)]",
-                        row.tone === "warning" &&
-                          "bg-[color-mix(in_srgb,var(--warning)_14%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]",
-                        row.tone === "danger" &&
-                          "bg-[color-mix(in_srgb,var(--danger)_14%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_20%,transparent)]",
-                        row.tone === "default" &&
-                          "bg-[color-mix(in_srgb,var(--dashboard-subtle-copy)_14%,var(--panel))] text-panel-muted",
+                        "inline-flex size-10 shrink-0 items-center justify-center rounded-2xl border",
+                        toneIconSurfaceClasses(row.tone),
                       )}
                     >
                       {row.icon}
@@ -876,15 +881,8 @@ export default function SystemPage() {
                   <div className="flex items-start justify-between gap-3">
                     <span
                       className={cn(
-                        "inline-flex size-8 items-center justify-center rounded-xl",
-                        activity.tone === "success" &&
-                          "bg-[color-mix(in_srgb,var(--success)_14%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_20%,transparent)]",
-                        activity.tone === "warning" &&
-                          "bg-[color-mix(in_srgb,var(--warning)_14%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]",
-                        activity.tone === "danger" &&
-                          "bg-[color-mix(in_srgb,var(--danger)_14%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_20%,transparent)]",
-                        activity.tone === "default" &&
-                          "bg-[color-mix(in_srgb,var(--dashboard-subtle-copy)_14%,var(--panel))] text-panel-muted dark:bg-[color-mix(in_srgb,var(--dashboard-subtle-copy)_18%,transparent)]",
+                        "inline-flex size-8 items-center justify-center rounded-xl border",
+                        toneIconSurfaceClasses(activity.tone),
                       )}
                     >
                       {activity.icon}
@@ -986,7 +984,7 @@ export default function SystemPage() {
             <div className="mt-5 grid gap-4 xl:grid-cols-3">
               <div className="rounded-[1.35rem] border border-panel-table-wrap px-4 py-4">
                 <div className="flex items-center gap-3">
-                  <span className="inline-flex size-9 items-center justify-center rounded-xl bg-[color-mix(in_srgb,var(--success)_14%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_20%,transparent)]">
+                  <span className={cn("inline-flex size-9 items-center justify-center rounded-xl border", toneIconSurfaceClasses("success"))}>
                     <RefreshCcw className="size-4" aria-hidden="true" />
                   </span>
                   <h3 className="text-sm font-semibold text-panel-strong">Try sending waiting alerts again</h3>
@@ -1011,7 +1009,7 @@ export default function SystemPage() {
 
               <div className="rounded-[1.35rem] border border-panel-table-wrap px-4 py-4">
                 <div className="flex items-center gap-3">
-                  <span className="inline-flex size-9 items-center justify-center rounded-xl bg-[color-mix(in_srgb,var(--brand)_14%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--brand)_20%,transparent)]">
+                  <span className={cn("inline-flex size-9 items-center justify-center rounded-xl border", toneIconSurfaceClasses("info"))}>
                     <Siren className="size-4" aria-hidden="true" />
                   </span>
                   <h3 className="text-sm font-semibold text-panel-strong">Update ward risk now</h3>
@@ -1038,10 +1036,8 @@ export default function SystemPage() {
                 <div className="flex items-center gap-3">
                   <span
                     className={cn(
-                      "inline-flex size-9 items-center justify-center rounded-xl",
-                      alertDeliveryPaused
-                        ? "bg-[color-mix(in_srgb,var(--warning)_16%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_22%,transparent)]"
-                        : "bg-[color-mix(in_srgb,var(--success)_14%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_20%,transparent)]",
+                      "inline-flex size-9 items-center justify-center rounded-xl border",
+                      toneIconSurfaceClasses(alertDeliveryPaused ? "warning" : "success"),
                     )}
                   >
                     <BellRing className="size-4" aria-hidden="true" />

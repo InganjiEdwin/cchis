@@ -6,15 +6,15 @@ type StatusBannerTone = "default" | "success" | "warning" | "danger" | "info";
 
 const toneClasses: Record<StatusBannerTone, string> = {
   default:
-    "border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_32%,white)] text-panel-copy dark:bg-[color-mix(in_srgb,var(--dashboard-table-line)_72%,transparent)]",
+    "border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_26%,var(--dashboard-panel-surface))] text-panel-copy",
   success:
-    "border-[color-mix(in_srgb,var(--success)_20%,white)] bg-[color-mix(in_srgb,var(--success)_10%,white)] text-[color:var(--success)] dark:border-[color-mix(in_srgb,var(--success)_32%,transparent)] dark:bg-[color-mix(in_srgb,var(--success)_18%,transparent)]",
+    "border-[color-mix(in_srgb,var(--success)_28%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--success)_10%,var(--dashboard-panel-surface))] text-[color:var(--success)]",
   warning:
-    "border-[color-mix(in_srgb,var(--warning)_20%,white)] bg-[color-mix(in_srgb,var(--warning)_10%,white)] text-[color:var(--warning)] dark:border-[color-mix(in_srgb,var(--warning)_34%,transparent)] dark:bg-[color-mix(in_srgb,var(--warning)_18%,transparent)]",
+    "border-[color-mix(in_srgb,var(--warning)_30%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--warning)_11%,var(--dashboard-panel-surface))] text-[color:var(--warning)]",
   danger:
-    "border-[color-mix(in_srgb,var(--danger)_20%,white)] bg-[color-mix(in_srgb,var(--danger)_10%,white)] text-[color:var(--danger)] dark:border-[color-mix(in_srgb,var(--danger)_34%,transparent)] dark:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]",
+    "border-[color-mix(in_srgb,var(--danger)_30%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--danger)_10%,var(--dashboard-panel-surface))] text-[color:var(--danger)]",
   info:
-    "border-[color-mix(in_srgb,var(--brand)_14%,white)] bg-[color-mix(in_srgb,var(--brand)_8%,white)] text-brand dark:border-[color-mix(in_srgb,var(--brand)_28%,transparent)] dark:bg-[color-mix(in_srgb,var(--brand)_16%,transparent)]",
+    "border-[color-mix(in_srgb,var(--brand)_26%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--brand)_10%,var(--dashboard-panel-surface))] text-brand",
 };
 
 type StatusBannerProps = React.HTMLAttributes<HTMLDivElement> & {

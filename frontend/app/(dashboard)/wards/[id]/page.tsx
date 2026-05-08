@@ -791,7 +791,7 @@ export default function WardDetailPage() {
       />
 
       {error ? (
-        <div className="rounded-lg border border-[color-mix(in_srgb,var(--danger)_20%,white)] bg-[color-mix(in_srgb,var(--danger)_10%,white)] p-4 text-sm font-medium text-[color:var(--danger)]">
+        <div className="rounded-lg border border-[color-mix(in_srgb,var(--danger)_30%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--danger)_10%,var(--dashboard-panel-surface))] p-4 text-sm font-medium text-[color:var(--danger)]">
           <AlertTriangle className="mr-2 inline-flex size-4" aria-hidden="true" />
           {error}
         </div>
@@ -874,7 +874,7 @@ export default function WardDetailPage() {
                   }}
                 />
               ) : (
-                <div className="flex items-start gap-2 rounded-lg border border-[color-mix(in_srgb,var(--warning)_18%,white)] bg-[color-mix(in_srgb,var(--warning)_8%,white)] p-4 text-sm font-medium text-[color:var(--warning)] dark:border-[color-mix(in_srgb,var(--warning)_24%,var(--panel-border))] dark:bg-[color-mix(in_srgb,var(--warning)_14%,var(--panel))] dark:text-[color-mix(in_srgb,var(--warning)_78%,white)]">
+                <div className="flex items-start gap-2 rounded-lg border border-[color-mix(in_srgb,var(--warning)_30%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--warning)_10%,var(--dashboard-panel-surface))] p-4 text-sm font-medium text-[color:var(--warning)]">
                   <AlertTriangle className="mt-0.5 inline-flex size-4 shrink-0" aria-hidden="true" />
                   <span>{cockpitActionNudge}</span>
                 </div>
@@ -948,7 +948,7 @@ export default function WardDetailPage() {
       <Card className="space-y-6 p-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="flex items-center gap-4">
-            <span className="inline-flex size-11 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+            <span className="inline-flex size-11 items-center justify-center rounded-lg border border-[color-mix(in_srgb,var(--brand)_24%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--brand)_13%,var(--dashboard-panel-surface))] text-brand">
               <Radio className="size-5" aria-hidden="true" />
             </span>
             <div className="space-y-1">
@@ -969,7 +969,7 @@ export default function WardDetailPage() {
           <div className="grid gap-4 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.35fr)]">
             <div className="rounded-lg border border-[var(--dashboard-table-line)] bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] px-4 py-4">
               <div className="flex items-start gap-4">
-                <span className="inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--brand)_10%,white)] text-brand">
+                <span className="inline-flex size-10 shrink-0 items-center justify-center rounded-full border border-[color-mix(in_srgb,var(--brand)_22%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--brand)_12%,var(--dashboard-panel-surface))] text-brand">
                   <Activity className="size-4" aria-hidden="true" />
                 </span>
                 <div className="space-y-2">
@@ -1091,7 +1091,7 @@ export default function WardDetailPage() {
           <Card className="space-y-6 p-6">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div className="flex items-center gap-4">
-                <span className="inline-flex size-11 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--warning)_12%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]">
+                <span className="inline-flex size-11 items-center justify-center rounded-lg border border-[color-mix(in_srgb,var(--warning)_28%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--warning)_13%,var(--dashboard-panel-surface))] text-[color:var(--warning)]">
                   <ShieldAlert className="size-5" aria-hidden="true" />
                 </span>
                 <div className="space-y-1">
@@ -1107,9 +1107,9 @@ export default function WardDetailPage() {
                 className={cn(
                   "inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold",
                   trend.direction === "up"
-                    ? "bg-[color-mix(in_srgb,var(--danger)_10%,white)] text-[color:var(--danger)]"
+                    ? "bg-[color-mix(in_srgb,var(--danger)_10%,var(--dashboard-panel-surface))] text-[color:var(--danger)]"
                     : trend.direction === "down"
-                      ? "bg-[color-mix(in_srgb,var(--success)_10%,white)] text-[color:var(--success)]"
+                      ? "bg-[color-mix(in_srgb,var(--success)_10%,var(--dashboard-panel-surface))] text-[color:var(--success)]"
                       : "bg-[color-mix(in_srgb,var(--dashboard-table-line)_40%,transparent)] text-panel-copy",
                 )}
               >
@@ -1148,12 +1148,12 @@ export default function WardDetailPage() {
                     />
                     <span
                       className={cn(
-                        "inline-flex size-9 items-center justify-center rounded-full",
+                        "inline-flex size-9 items-center justify-center rounded-full border",
                         driver.tone === "critical"
-                          ? "bg-[color-mix(in_srgb,var(--danger)_10%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]"
+                          ? "border-[color-mix(in_srgb,var(--danger)_26%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--danger)_10%,var(--dashboard-panel-surface))] text-[color:var(--danger)]"
                           : driver.tone === "warning"
-                            ? "bg-[color-mix(in_srgb,var(--warning)_10%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_18%,transparent)]"
-                            : "bg-[color-mix(in_srgb,var(--dashboard-table-line)_40%,transparent)] text-panel-copy",
+                            ? "border-[color-mix(in_srgb,var(--warning)_26%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--warning)_10%,var(--dashboard-panel-surface))] text-[color:var(--warning)]"
+                            : "border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_24%,var(--dashboard-panel-surface))] text-panel-copy",
                       )}
                     >
                       {getRiskDriverIcon(driver)}
@@ -1180,7 +1180,7 @@ export default function WardDetailPage() {
             <Card className="space-y-6 p-6">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div className="flex items-center gap-4">
-                  <span className="inline-flex size-11 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+                  <span className="inline-flex size-11 items-center justify-center rounded-lg border border-[color-mix(in_srgb,var(--brand)_24%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--brand)_13%,var(--dashboard-panel-surface))] text-brand">
                     <Waves className="size-5" aria-hidden="true" />
                   </span>
                   <div className="space-y-1">
@@ -1231,12 +1231,12 @@ export default function WardDetailPage() {
                               <td className="border-b border-[var(--dashboard-table-line)] px-4 py-4 text-sm last:border-b-0">
                                 <span
                                   className={cn(
-                                    "inline-flex size-8 items-center justify-center rounded-full",
+                                    "inline-flex size-8 items-center justify-center rounded-full border",
                                     historyTrend === "up"
-                                      ? "bg-[color-mix(in_srgb,var(--danger)_10%,white)] text-[color:var(--danger)]"
+                                      ? "border-[color-mix(in_srgb,var(--danger)_26%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--danger)_10%,var(--dashboard-panel-surface))] text-[color:var(--danger)]"
                                       : historyTrend === "down"
-                                        ? "bg-[color-mix(in_srgb,var(--success)_10%,white)] text-[color:var(--success)]"
-                                        : "bg-[color-mix(in_srgb,var(--dashboard-table-line)_40%,transparent)] text-panel-copy",
+                                        ? "border-[color-mix(in_srgb,var(--success)_26%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--success)_10%,var(--dashboard-panel-surface))] text-[color:var(--success)]"
+                                        : "border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_24%,var(--dashboard-panel-surface))] text-panel-copy",
                                   )}
                                 >
                                   {historyTrend === "up" ? (
@@ -1268,7 +1268,7 @@ export default function WardDetailPage() {
           <Card className="space-y-6 p-6">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div className="flex items-center gap-4">
-                <span className="inline-flex size-11 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+                <span className="inline-flex size-11 items-center justify-center rounded-lg border border-[color-mix(in_srgb,var(--brand)_24%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--brand)_13%,var(--dashboard-panel-surface))] text-brand">
                   <BarChart3 className="size-5" aria-hidden="true" />
                 </span>
                 <div className="space-y-1">
@@ -1395,7 +1395,7 @@ export default function WardDetailPage() {
           <Card className="space-y-6 p-6">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div className="flex items-center gap-4">
-                <span className="inline-flex size-11 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+                <span className="inline-flex size-11 items-center justify-center rounded-lg border border-[color-mix(in_srgb,var(--brand)_24%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--brand)_13%,var(--dashboard-panel-surface))] text-brand">
                   <Activity className="size-5" aria-hidden="true" />
                 </span>
                 <div className="space-y-1">
@@ -1566,7 +1566,7 @@ export default function WardDetailPage() {
           <Card className="space-y-6 p-6">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div className="flex items-center gap-4">
-                <span className="inline-flex size-11 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+                <span className="inline-flex size-11 items-center justify-center rounded-lg border border-[color-mix(in_srgb,var(--brand)_24%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--brand)_13%,var(--dashboard-panel-surface))] text-brand">
                   <ClipboardCheck className="size-5" aria-hidden="true" />
                 </span>
                 <div className="space-y-1">
@@ -1853,7 +1853,7 @@ export default function WardDetailPage() {
             {activeTab === "history" ? (
             <Card className="space-y-6 p-6">
               <div className="flex items-start gap-4">
-                <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+                <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-lg border border-[color-mix(in_srgb,var(--brand)_24%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--brand)_13%,var(--dashboard-panel-surface))] text-brand">
                   <MapPinned className="size-5" aria-hidden="true" />
                 </span>
                 <div className="space-y-1">
@@ -1892,7 +1892,7 @@ export default function WardDetailPage() {
             {activeTab === "situation" ? (
             <Card className="space-y-6 p-6">
               <div className="flex items-start gap-4">
-                <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+                <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-lg border border-[color-mix(in_srgb,var(--brand)_24%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--brand)_13%,var(--dashboard-panel-surface))] text-brand">
                   <MapPinned className="size-5" aria-hidden="true" />
                 </span>
                 <div className="space-y-1">
@@ -1928,7 +1928,7 @@ export default function WardDetailPage() {
                         <span>Spatial graph</span>
                         <span>{spatialMapFeatures.length ? `${spatialMapFeatures.length} mapped wards` : "No geometry"}</span>
                       </div>
-                      <div className="h-64 overflow-hidden rounded-lg border border-panel-table-wrap bg-white/60 p-2 dark:bg-panel/70">
+                      <div className="h-64 overflow-hidden rounded-lg border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_24%,var(--dashboard-panel-surface))] p-2">
                         {spatialMapFeatures.length ? (
                           <MigoriWardMap
                             features={spatialMapFeatures}
@@ -1944,13 +1944,13 @@ export default function WardDetailPage() {
                       </div>
                       <div className="flex flex-wrap gap-2">
                         {detail?.wardMapFeature ? (
-                          <span className="inline-flex w-max items-center gap-2 rounded-full bg-[color-mix(in_srgb,var(--brand)_10%,white)] px-3 py-1.5 text-xs font-semibold text-panel-strong dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]">
+                          <span className="inline-flex w-max items-center gap-2 rounded-full border border-[color-mix(in_srgb,var(--brand)_24%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--brand)_12%,var(--dashboard-panel-surface))] px-3 py-1.5 text-xs font-semibold text-panel-strong">
                             <span className="size-2 rounded-full bg-brand" />
                             {detail.wardName}
                           </span>
                         ) : null}
                         {highRiskSpatialNeighbors.length ? (
-                          <span className="inline-flex w-max items-center gap-2 rounded-full bg-[color-mix(in_srgb,var(--danger)_10%,white)] px-3 py-1.5 text-xs font-semibold text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]">
+                          <span className="inline-flex w-max items-center gap-2 rounded-full border border-[color-mix(in_srgb,var(--danger)_24%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--danger)_10%,var(--dashboard-panel-surface))] px-3 py-1.5 text-xs font-semibold text-[color:var(--danger)]">
                             <span className="size-2 rounded-full bg-[color:var(--danger)]" />
                             High-risk neighbors
                           </span>
@@ -2116,7 +2116,7 @@ export default function WardDetailPage() {
         <WardActionRail>
           <Card className="space-y-6 p-6">
             <div className="flex items-center gap-4">
-              <span className="inline-flex size-11 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+              <span className="inline-flex size-11 items-center justify-center rounded-lg border border-[color-mix(in_srgb,var(--brand)_24%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--brand)_13%,var(--dashboard-panel-surface))] text-brand">
                 <Zap className="size-5" aria-hidden="true" />
               </span>
               <div className="space-y-1">
@@ -2153,7 +2153,7 @@ export default function WardDetailPage() {
                   <div className="mt-4 space-y-4">
                     {recommendedActionState?.nextSteps.map((step, index) => (
                       <div key={step} className="flex items-start gap-4">
-                        <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--brand)_10%,white)] text-xs font-semibold text-brand">
+                        <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-full border border-[color-mix(in_srgb,var(--brand)_22%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--brand)_12%,var(--dashboard-panel-surface))] text-xs font-semibold text-brand">
                           {index + 1}
                         </span>
                         <p className="pt-1 text-sm font-medium text-panel-strong">{step}</p>
@@ -2192,7 +2192,7 @@ export default function WardDetailPage() {
           {activeTab === "evidence" ? (
           <Card className="space-y-6 p-6">
             <div className="flex items-center gap-4">
-              <span className="inline-flex size-11 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--warning)_12%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]">
+              <span className="inline-flex size-11 items-center justify-center rounded-lg border border-[color-mix(in_srgb,var(--warning)_28%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--warning)_13%,var(--dashboard-panel-surface))] text-[color:var(--warning)]">
                 <ClipboardCheck className="size-5" aria-hidden="true" />
               </span>
               <div className="space-y-1">
@@ -2259,7 +2259,7 @@ export default function WardDetailPage() {
           {activeTab === "history" ? (
           <Card className="space-y-6 p-6">
             <div className="flex items-center gap-4">
-              <span className="inline-flex size-11 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+              <span className="inline-flex size-11 items-center justify-center rounded-lg border border-[color-mix(in_srgb,var(--brand)_24%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--brand)_13%,var(--dashboard-panel-surface))] text-brand">
                 <Bell className="size-5" aria-hidden="true" />
               </span>
               <div className="space-y-1">
@@ -2332,7 +2332,7 @@ export default function WardDetailPage() {
           {activeTab === "history" ? (
           <Card className="space-y-6 p-6">
             <div className="flex items-center gap-4">
-              <span className="inline-flex size-11 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+              <span className="inline-flex size-11 items-center justify-center rounded-lg border border-[color-mix(in_srgb,var(--brand)_24%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--brand)_13%,var(--dashboard-panel-surface))] text-brand">
                 <Clock3 className="size-5" aria-hidden="true" />
               </span>
               <div className="space-y-1">

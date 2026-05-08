@@ -1032,13 +1032,13 @@ export function DashboardTopbar({
                         className={cn(
                           "block rounded-[1.2rem] border px-5 py-4 transition",
                           level === "critical" &&
-                            "border-[color-mix(in_srgb,var(--danger)_18%,white)] bg-[color-mix(in_srgb,var(--danger)_8%,white)] hover:border-[color:var(--danger)]/35 dark:border-[color-mix(in_srgb,var(--danger)_26%,transparent)] dark:bg-[color-mix(in_srgb,var(--danger)_12%,transparent)]",
+                            "border-[color-mix(in_srgb,var(--danger)_28%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--danger)_10%,var(--dashboard-panel-surface))] hover:border-[color-mix(in_srgb,var(--danger)_44%,var(--dashboard-panel-border))]",
                           level === "warning" &&
-                            "border-[color-mix(in_srgb,var(--warning)_18%,white)] bg-[color-mix(in_srgb,var(--warning)_8%,white)] hover:border-[color:var(--warning)]/35 dark:border-[color-mix(in_srgb,var(--warning)_26%,transparent)] dark:bg-[color-mix(in_srgb,var(--warning)_12%,transparent)]",
+                            "border-[color-mix(in_srgb,var(--warning)_30%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--warning)_10%,var(--dashboard-panel-surface))] hover:border-[color-mix(in_srgb,var(--warning)_46%,var(--dashboard-panel-border))]",
                           level === "info" &&
-                            "border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_18%,transparent)] hover:border-[var(--dashboard-icon-button-border)]",
+                            "border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_22%,var(--dashboard-panel-surface))] hover:border-[var(--dashboard-icon-button-border)]",
                           drawerItem.kind === "group" &&
-                            "relative overflow-hidden border-[color-mix(in_srgb,var(--warning)_24%,white)] bg-[linear-gradient(135deg,color-mix(in_srgb,var(--warning)_10%,transparent),color-mix(in_srgb,var(--dashboard-table-line)_12%,transparent))]",
+                            "relative overflow-hidden border-[color-mix(in_srgb,var(--warning)_34%,var(--dashboard-panel-border))] bg-[linear-gradient(135deg,color-mix(in_srgb,var(--warning)_12%,var(--dashboard-panel-surface)),color-mix(in_srgb,var(--dashboard-table-line)_18%,var(--dashboard-panel-surface)))]",
                           item.state === "RESOLVED" && "opacity-70",
                           item.state === "DISMISSED" && "opacity-55",
                         )}
@@ -1049,7 +1049,7 @@ export function DashboardTopbar({
                         <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-2">
                           <div className="min-w-0">
                             {drawerItem.kind === "group" ? (
-                              <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-[color-mix(in_srgb,var(--warning)_22%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-[color:var(--warning)]">
+                              <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-[color-mix(in_srgb,var(--warning)_28%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--warning)_12%,var(--dashboard-panel-surface))] px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-[color:var(--warning)]">
                                 <Waves className="size-3.5" aria-hidden="true" />
                                 System health
                               </div>
@@ -1085,7 +1085,7 @@ export function DashboardTopbar({
                           <div className="mt-3">
                             <button
                               type="button"
-                              className="inline-flex items-center gap-2 rounded-full border border-panel-table-wrap/80 bg-[color-mix(in_srgb,var(--dashboard-table-line)_12%,transparent)] px-3 py-1.5 text-[0.72rem] font-semibold uppercase tracking-[0.14em] text-panel-copy transition hover:border-[var(--dashboard-icon-button-border)] hover:text-panel-strong"
+                              className="inline-flex items-center gap-2 rounded-full border border-panel-table-wrap/80 bg-[color-mix(in_srgb,var(--dashboard-table-line)_20%,var(--dashboard-panel-surface))] px-3 py-1.5 text-[0.72rem] font-semibold uppercase tracking-[0.14em] text-panel-copy transition hover:border-[var(--dashboard-icon-button-border)] hover:text-panel-strong"
                               onClick={() =>
                                 setExpandedNotificationGroups((currentValue) => ({
                                   ...currentValue,
@@ -1097,11 +1097,11 @@ export function DashboardTopbar({
                               {isGroupExpanded ? "Hide details" : `Show ${drawerItem.items.length} details`}
                             </button>
                             {isGroupExpanded ? (
-                              <div className="mt-3 space-y-2 rounded-[1rem] border border-panel-table-wrap/80 bg-[color-mix(in_srgb,var(--dashboard-table-line)_12%,transparent)] px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+                              <div className="mt-3 space-y-2 rounded-[1rem] border border-panel-table-wrap/80 bg-[color-mix(in_srgb,var(--dashboard-table-line)_24%,var(--dashboard-panel-surface))] px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
                                 {drawerItem.items.map((notification) => (
                                   <div
                                     key={notification.public_id}
-                                    className="flex items-start justify-between gap-3 rounded-[0.9rem] border border-transparent px-2 py-2 text-xs transition hover:border-panel-table-wrap/70 hover:bg-[color-mix(in_srgb,var(--dashboard-table-line)_14%,transparent)]"
+                                    className="flex items-start justify-between gap-3 rounded-[0.9rem] border border-transparent px-2 py-2 text-xs transition hover:border-panel-table-wrap/70 hover:bg-[color-mix(in_srgb,var(--dashboard-table-line)_28%,var(--dashboard-panel-surface))]"
                                   >
                                     <div className="min-w-0">
                                       <p className="font-medium text-panel-strong">{notification.title}</p>

@@ -51,6 +51,20 @@ function compactFacilityName(name: string) {
   return name.replace(/\s+(Dispensary|Health Centre|Health Center|Hospital)$/i, "");
 }
 
+function readinessIconSurface(tone: "brand" | "success" | "warning" | "danger") {
+  switch (tone) {
+    case "success":
+      return "border-[color-mix(in_srgb,var(--success)_26%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--success)_13%,var(--dashboard-panel-surface))] text-[color:var(--success)]";
+    case "warning":
+      return "border-[color-mix(in_srgb,var(--warning)_28%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--warning)_14%,var(--dashboard-panel-surface))] text-[color:var(--warning)]";
+    case "danger":
+      return "border-[color-mix(in_srgb,var(--danger)_28%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--danger)_13%,var(--dashboard-panel-surface))] text-[color:var(--danger)]";
+    case "brand":
+    default:
+      return "border-[color-mix(in_srgb,var(--brand)_24%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--brand)_13%,var(--dashboard-panel-surface))] text-brand";
+  }
+}
+
 export default function FacilityReadinessPage() {
   const [search, setSearch] = useState("");
   const [selectedWard, setSelectedWard] = useState("ALL");
@@ -285,7 +299,7 @@ export default function FacilityReadinessPage() {
         <section className="grid gap-4 md:grid-cols-3">
           <Card className="rounded-[2rem] bg-panel px-6 py-4">
             <div className="flex items-start gap-4">
-              <span className="inline-flex size-12 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--brand)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]">
+              <span className={cn("inline-flex size-12 shrink-0 items-center justify-center rounded-2xl border", readinessIconSurface("brand"))}>
                 <Building2 className="size-5" aria-hidden="true" />
               </span>
               <div>
@@ -309,10 +323,8 @@ export default function FacilityReadinessPage() {
             <div className="flex items-start gap-4">
               <span
                 className={cn(
-                  "inline-flex size-12 shrink-0 items-center justify-center rounded-2xl",
-                  surgeCardIsCalm
-                    ? "bg-[color-mix(in_srgb,var(--success)_14%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_18%,transparent)]"
-                    : "bg-[color-mix(in_srgb,var(--danger)_14%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]",
+                  "inline-flex size-12 shrink-0 items-center justify-center rounded-2xl border",
+                  readinessIconSurface(surgeCardIsCalm ? "success" : "danger"),
                 )}
               >
                 {surgeCardIsCalm ? <ShieldCheck className="size-5" aria-hidden="true" /> : <TriangleAlert className="size-5" aria-hidden="true" />}
@@ -335,7 +347,7 @@ export default function FacilityReadinessPage() {
 
           <Card className="rounded-[2rem] bg-panel px-6 py-4">
             <div className="flex items-start gap-4">
-              <span className="inline-flex size-12 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--warning)_14%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_18%,transparent)]">
+              <span className={cn("inline-flex size-12 shrink-0 items-center justify-center rounded-2xl border", readinessIconSurface("warning"))}>
                 <PackagePlus className="size-5" aria-hidden="true" />
               </span>
               <div>
@@ -613,13 +625,13 @@ export default function FacilityReadinessPage() {
                         >
                           <td className="px-5 py-4 align-top">
                             <div className="flex items-center gap-3">
-                              <span className="inline-flex size-11 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--brand)_12%,white)] text-sm font-semibold text-brand dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]">
+                              <span className={cn("inline-flex size-11 items-center justify-center rounded-full border text-sm font-semibold", readinessIconSurface("brand"))}>
                                 {row.facilityName.slice(0, 2).toUpperCase()}
                               </span>
                               <div>
                                 <strong className="block text-base text-panel-strong">{row.facilityName}</strong>
                                 {priorityLabelByFacilityId.has(row.facilityId) ? (
-                                  <small className="mt-1 inline-flex rounded-pill bg-[color-mix(in_srgb,var(--brand)_12%,white)] px-2.5 py-1 text-xs font-semibold text-brand dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]">
+                                  <small className="mt-1 inline-flex rounded-pill border border-[color-mix(in_srgb,var(--brand)_24%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--brand)_13%,var(--dashboard-panel-surface))] px-2.5 py-1 text-xs font-semibold text-brand">
                                     {priorityLabelByFacilityId.get(row.facilityId)}
                                   </small>
                                 ) : null}
@@ -800,7 +812,7 @@ export default function FacilityReadinessPage() {
                   })
                 ) : (
                   <div className="flex items-start gap-3 rounded-[1.5rem] border border-panel-table-wrap px-4 py-5">
-                    <span className="inline-flex size-10 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--success)_16%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_20%,transparent)]">
+                    <span className={cn("inline-flex size-10 items-center justify-center rounded-full border", readinessIconSurface("success"))}>
                       <ShieldCheck className="size-4" aria-hidden="true" />
                     </span>
                     <div>

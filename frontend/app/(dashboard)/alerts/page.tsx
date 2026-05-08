@@ -61,6 +61,20 @@ const STATUS_FILTER_OPTIONS: Array<{ value: AlertStatusFilter; label: string }> 
 
 const ROWS_PER_PAGE = 5;
 
+function alertIconSurface(tone: "brand" | "warning" | "danger" | "success") {
+  switch (tone) {
+    case "warning":
+      return "border-[color-mix(in_srgb,var(--warning)_30%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--warning)_14%,var(--dashboard-panel-surface))] text-[color:var(--warning)]";
+    case "danger":
+      return "border-[color-mix(in_srgb,var(--danger)_28%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--danger)_13%,var(--dashboard-panel-surface))] text-[color:var(--danger)]";
+    case "success":
+      return "border-[color-mix(in_srgb,var(--success)_26%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--success)_13%,var(--dashboard-panel-surface))] text-[color:var(--success)]";
+    case "brand":
+    default:
+      return "border-[color-mix(in_srgb,var(--brand)_24%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--brand)_13%,var(--dashboard-panel-surface))] text-brand";
+  }
+}
+
 function isAlertActionable(alert: AlertRecord | DecoratedAlert) {
   return alert.status === "FAILED" || alert.status === "RETRY_PENDING";
 }
@@ -455,10 +469,8 @@ export default function AlertsPage() {
             <div className="flex items-start gap-3">
               <span
                 className={cn(
-                  "mt-0.5 inline-flex size-9 shrink-0 items-center justify-center rounded-full",
-                  freshnessTone === "critical"
-                    ? "bg-[color-mix(in_srgb,var(--danger)_14%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]"
-                    : "bg-[color-mix(in_srgb,var(--warning)_16%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]",
+                  "mt-0.5 inline-flex size-9 shrink-0 items-center justify-center rounded-full border",
+                  alertIconSurface(freshnessTone === "critical" ? "danger" : "warning"),
                 )}
               >
                 <AlertTriangle className="size-4" aria-hidden="true" />
@@ -511,7 +523,7 @@ export default function AlertsPage() {
                     {isLoading ? "..." : requiresAttentionCount.toLocaleString()}
                   </div>
                 </div>
-                <span className="inline-flex size-10 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--brand)_10%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]">
+                <span className={cn("inline-flex size-10 items-center justify-center rounded-full border", alertIconSurface("brand"))}>
                   <ChevronRight className="size-4" aria-hidden="true" />
                 </span>
               </div>
@@ -528,7 +540,7 @@ export default function AlertsPage() {
                     {isLoading ? "..." : decoratedAlerts.filter((alert) => alert.status === "DELIVERED").length}
                   </div>
                 </div>
-                <span className="inline-flex size-10 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--warning)_18%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_18%,transparent)]">
+                <span className={cn("inline-flex size-10 items-center justify-center rounded-full border", alertIconSurface("warning"))}>
                   <BellRing className="size-4" aria-hidden="true" />
                 </span>
               </div>
@@ -556,10 +568,8 @@ export default function AlertsPage() {
                 </div>
                 <span
                   className={cn(
-                    "inline-flex size-10 items-center justify-center rounded-full",
-                    failedCount > 0
-                      ? "bg-[color-mix(in_srgb,var(--danger)_14%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]"
-                      : "bg-[color-mix(in_srgb,var(--success)_14%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_18%,transparent)]",
+                    "inline-flex size-10 items-center justify-center rounded-full border",
+                    alertIconSurface(failedCount > 0 ? "danger" : "success"),
                   )}
                 >
                   <AlertTriangle className="size-4" aria-hidden="true" />

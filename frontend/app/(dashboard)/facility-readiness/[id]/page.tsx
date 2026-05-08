@@ -36,14 +36,14 @@ import {
 function timelineToneClasses(tone: "danger" | "warning" | "info" | "success") {
   switch (tone) {
     case "danger":
-      return "bg-[color-mix(in_srgb,var(--danger)_14%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]";
+      return "border border-[color-mix(in_srgb,var(--danger)_28%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--danger)_13%,var(--dashboard-panel-surface))] text-[color:var(--danger)]";
     case "success":
-      return "bg-[color-mix(in_srgb,var(--success)_14%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_18%,transparent)]";
+      return "border border-[color-mix(in_srgb,var(--success)_26%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--success)_13%,var(--dashboard-panel-surface))] text-[color:var(--success)]";
     case "warning":
-      return "bg-[color-mix(in_srgb,var(--warning)_14%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_18%,transparent)]";
+      return "border border-[color-mix(in_srgb,var(--warning)_28%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--warning)_14%,var(--dashboard-panel-surface))] text-[color:var(--warning)]";
     case "info":
     default:
-      return "bg-[color-mix(in_srgb,var(--brand)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]";
+      return "border border-[color-mix(in_srgb,var(--brand)_24%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--brand)_13%,var(--dashboard-panel-surface))] text-brand";
   }
 }
 
@@ -226,7 +226,7 @@ export default function FacilityDetailPage() {
                   </div>
                 </div>
 
-                <div className="max-w-md rounded-[1.25rem] border border-[color:var(--danger)]/18 bg-[color-mix(in_srgb,var(--danger)_10%,white)] px-4 py-3 dark:bg-[color-mix(in_srgb,var(--danger)_16%,transparent)]">
+                <div className="max-w-md rounded-[1.25rem] border border-[color-mix(in_srgb,var(--danger)_28%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--danger)_10%,var(--dashboard-panel-surface))] px-4 py-3">
                   <div className="text-sm font-semibold text-[color:var(--danger)]">{readinessBannerTitle}</div>
                   <p className="mt-1 text-xs leading-5 text-panel-copy">{readinessBannerBody}</p>
                 </div>
@@ -285,13 +285,13 @@ export default function FacilityDetailPage() {
                       </div>
                     </div>
 
-                    <div className="overflow-hidden rounded-[1.5rem] border border-panel-table-wrap bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--brand)_10%,transparent),transparent_35%),radial-gradient(circle_at_bottom_right,color-mix(in_srgb,var(--warning)_10%,transparent),transparent_32%),linear-gradient(135deg,color-mix(in_srgb,var(--panel)_92%,white),var(--panel))] p-4">
+                    <div className="overflow-hidden rounded-[1.5rem] border border-panel-table-wrap bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--brand)_10%,var(--dashboard-panel-surface)),transparent_35%),radial-gradient(circle_at_bottom_right,color-mix(in_srgb,var(--warning)_10%,var(--dashboard-panel-surface)),transparent_32%),linear-gradient(135deg,color-mix(in_srgb,var(--dashboard-table-line)_18%,var(--dashboard-panel-surface)),var(--dashboard-panel-surface))] p-4">
                       <div className="flex h-full min-h-[14rem] flex-col gap-3 rounded-[1.1rem] border border-panel-table-wrap bg-panel/80 p-4">
                         <div className="flex items-center justify-between text-xs uppercase tracking-[0.18em] text-panel-subtle">
                           <span>Selected ward map</span>
                           <span>{selectedMapWard ? "Focused geometry" : "No ward geometry"}</span>
                         </div>
-                        <div className="min-h-[13rem] rounded-[1rem] border border-panel-table-wrap bg-white/60 p-2 dark:bg-panel/70">
+                        <div className="min-h-[13rem] rounded-[1rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-table-line)_24%,var(--dashboard-panel-surface))] p-2">
                           {focusedWardMapFeatures.length ? (
                             <MigoriWardMap
                               features={focusedWardMapFeatures}
@@ -304,7 +304,7 @@ export default function FacilityDetailPage() {
                             </div>
                           )}
                         </div>
-                        <div className="inline-flex w-max items-center gap-2 rounded-full bg-[color-mix(in_srgb,var(--brand)_10%,white)] px-3 py-1.5 text-xs font-semibold text-panel-strong">
+                        <div className="inline-flex w-max items-center gap-2 rounded-full border border-[color-mix(in_srgb,var(--brand)_24%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--brand)_12%,var(--dashboard-panel-surface))] px-3 py-1.5 text-xs font-semibold text-panel-strong">
                           <span className="size-2 rounded-full bg-brand" />
                           {selectedMapWard?.properties.name ?? facilityRecord.ward_name} ward context
                         </div>
@@ -326,14 +326,14 @@ export default function FacilityDetailPage() {
                       <div className="mt-4 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">ORS coverage estimate</div>
                       <div className="mt-2 text-3xl font-semibold text-panel-strong">{readiness.ors_estimate_percent}%</div>
                       <div className="mt-1 text-sm text-panel-muted">Calculated from ward pressure</div>
-                      <div className="mt-4 h-1.5 rounded-full bg-[color-mix(in_srgb,var(--danger)_12%,white)]">
+                      <div className="mt-4 h-1.5 rounded-full bg-[color-mix(in_srgb,var(--danger)_14%,var(--dashboard-panel-surface))]">
                         <div className="h-full rounded-full bg-[color:var(--danger)]" style={{ width: `${readiness.ors_estimate_percent}%` }} />
                       </div>
                     </Card>
 
                     <Card className="rounded-[1.6rem] bg-panel px-4 py-4">
                       <div className="flex items-center justify-between">
-                        <span className="inline-flex size-10 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--brand)_12%,white)] text-brand">
+                        <span className="inline-flex size-10 items-center justify-center rounded-2xl border border-[color-mix(in_srgb,var(--brand)_24%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--brand)_13%,var(--dashboard-panel-surface))] text-brand">
                           <Users className="size-4" aria-hidden="true" />
                         </span>
                         <span className="text-xs font-semibold text-brand">{readiness.staffing_state} estimate</span>
@@ -341,7 +341,7 @@ export default function FacilityDetailPage() {
                       <div className="mt-4 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Staffing adequacy</div>
                       <div className="mt-2 text-3xl font-semibold text-panel-strong">{readiness.staffing_percent}%</div>
                       <div className="mt-1 text-sm text-panel-muted">Calculated from ward pressure</div>
-                      <div className="mt-4 h-1.5 rounded-full bg-[color-mix(in_srgb,var(--brand)_12%,white)]">
+                      <div className="mt-4 h-1.5 rounded-full bg-[color-mix(in_srgb,var(--brand)_14%,var(--dashboard-panel-surface))]">
                         <div className="h-full rounded-full bg-brand" style={{ width: `${readiness.staffing_percent}%` }} />
                       </div>
                     </Card>
@@ -356,7 +356,7 @@ export default function FacilityDetailPage() {
                       <div className="mt-4 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Expected daily load</div>
                       <div className="mt-2 text-3xl font-semibold text-panel-strong">~{readiness.predicted_cases_per_day}</div>
                       <div className="mt-1 text-sm text-panel-muted">Calculated cases/day estimate</div>
-                      <div className="mt-4 h-1.5 rounded-full bg-[color-mix(in_srgb,var(--warning)_12%,white)]">
+                      <div className="mt-4 h-1.5 rounded-full bg-[color-mix(in_srgb,var(--warning)_14%,var(--dashboard-panel-surface))]">
                         <div className="h-full rounded-full bg-[color:var(--warning)]" style={{ width: `${Math.min(100, readiness.projected_cases * 4)}%` }} />
                       </div>
                     </Card>
@@ -438,7 +438,7 @@ export default function FacilityDetailPage() {
                   ) : null}
 
                   {mutationError ? (
-                    <div className="mt-3 rounded-[1rem] border border-[color:var(--danger)]/30 bg-[color-mix(in_srgb,var(--danger)_10%,white)] px-4 py-3 text-sm text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_16%,transparent)]">
+                    <div className="mt-3 rounded-[1rem] border border-[color-mix(in_srgb,var(--danger)_30%,var(--dashboard-panel-border))] bg-[color-mix(in_srgb,var(--danger)_10%,var(--dashboard-panel-surface))] px-4 py-3 text-sm text-[color:var(--danger)]">
                       {mutationError}
                     </div>
                   ) : null}
