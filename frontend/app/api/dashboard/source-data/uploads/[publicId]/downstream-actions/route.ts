@@ -23,7 +23,7 @@ export async function POST(
     return NextResponse.json(response, { status: response.action_status === "queued" ? 202 : 200 });
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload, { status: error.status });
     }
     return NextResponse.json({ detail: "Unable to run source-data downstream action." }, { status: 500 });
   }

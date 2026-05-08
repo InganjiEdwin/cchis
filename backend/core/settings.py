@@ -53,8 +53,10 @@ MIDDLEWARE = [
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "risk.middleware.RequestLogMiddleware",
+    "core.security.CookieAuthOriginMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "accounts.middleware.HighRiskActionAuditMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -251,6 +253,7 @@ REST_FRAMEWORK = {
         "auth_2fa": config("THROTTLE_AUTH_2FA", default="5/minute"),
         "auth_refresh": config("THROTTLE_AUTH_REFRESH", default="30/minute"),
         "auth_recovery": config("THROTTLE_AUTH_RECOVERY", default="20/hour"),
+        "auth_read": config("THROTTLE_AUTH_READ", default="120/minute"),
         "auth_write": config("THROTTLE_AUTH_WRITE", default="60/minute"),
         "public_ussd": config("THROTTLE_PUBLIC_USSD", default="120/minute"),
         "source_data_upload": config("THROTTLE_SOURCE_DATA_UPLOAD", default="20/hour"),
@@ -301,6 +304,26 @@ AUTH_2FA_COOLDOWN_SECONDS = config(
     "AUTH_2FA_COOLDOWN_SECONDS",
     cast=int,
     default=900,
+)
+AUTH_STEP_UP_DEFAULT_SECONDS = config(
+    "AUTH_STEP_UP_DEFAULT_SECONDS",
+    cast=int,
+    default=600,
+)
+AUTH_STEP_UP_DOWNLOAD_SECONDS = config(
+    "AUTH_STEP_UP_DOWNLOAD_SECONDS",
+    cast=int,
+    default=300,
+)
+AUTH_STEP_UP_FAILURE_NOTIFICATION_THRESHOLD = config(
+    "AUTH_STEP_UP_FAILURE_NOTIFICATION_THRESHOLD",
+    cast=int,
+    default=3,
+)
+AUTH_STEP_UP_FAILURE_NOTIFICATION_WINDOW_MINUTES = config(
+    "AUTH_STEP_UP_FAILURE_NOTIFICATION_WINDOW_MINUTES",
+    cast=int,
+    default=15,
 )
 AUTH_LOGIN_TURNSTILE_ENABLED = config(
     "AUTH_LOGIN_TURNSTILE_ENABLED",
@@ -356,6 +379,12 @@ PASSWORD_RESET_TOKEN_LIFETIME_MINUTES = config(
     default=60,
 )
 FRONTEND_APP_URL = config("FRONTEND_APP_URL", default="http://localhost:3000").strip().rstrip("/")
+AUTH_TOKEN_RESPONSE_MODE = config(
+    "AUTH_TOKEN_RESPONSE_MODE",
+    default="cookie_only" if IS_SHARED_ENVIRONMENT else "body_and_cookie",
+).strip().lower()
+if AUTH_TOKEN_RESPONSE_MODE not in {"body_and_cookie", "cookie_only"}:
+    raise ImproperlyConfigured("AUTH_TOKEN_RESPONSE_MODE must be body_and_cookie or cookie_only.")
 AUTH_ACCESS_COOKIE_NAME = config(
     "AUTH_ACCESS_COOKIE_NAME",
     default="__Host-cchis_access" if IS_SHARED_ENVIRONMENT else "cchis_access",
@@ -388,6 +417,51 @@ AUTH_REFRESH_COOKIE_LEGACY_NAMES = tuple(
     ).split(",")
     if cookie_name.strip() and cookie_name.strip() != AUTH_REFRESH_COOKIE_NAME
 )
+AUTH_REFRESH_PREVIOUS_JTI_GRACE_SECONDS = config(
+    "AUTH_REFRESH_PREVIOUS_JTI_GRACE_SECONDS",
+    cast=int,
+    default=10,
+)
+AUTH_SESSION_REFRESH_LIFETIME_ADMIN_HOURS = config(
+    "AUTH_SESSION_REFRESH_LIFETIME_ADMIN_HOURS",
+    cast=int,
+    default=24,
+)
+AUTH_SESSION_REFRESH_LIFETIME_SUPERVISOR_HOURS = config(
+    "AUTH_SESSION_REFRESH_LIFETIME_SUPERVISOR_HOURS",
+    cast=int,
+    default=24,
+)
+AUTH_SESSION_REFRESH_LIFETIME_ANALYST_HOURS = config(
+    "AUTH_SESSION_REFRESH_LIFETIME_ANALYST_HOURS",
+    cast=int,
+    default=72,
+)
+AUTH_SESSION_REFRESH_LIFETIME_CHV_HOURS = config(
+    "AUTH_SESSION_REFRESH_LIFETIME_CHV_HOURS",
+    cast=int,
+    default=168,
+)
+AUTH_SESSION_IDLE_TIMEOUT_ADMIN_MINUTES = config(
+    "AUTH_SESSION_IDLE_TIMEOUT_ADMIN_MINUTES",
+    cast=int,
+    default=60,
+)
+AUTH_SESSION_IDLE_TIMEOUT_SUPERVISOR_MINUTES = config(
+    "AUTH_SESSION_IDLE_TIMEOUT_SUPERVISOR_MINUTES",
+    cast=int,
+    default=60,
+)
+AUTH_SESSION_IDLE_TIMEOUT_ANALYST_MINUTES = config(
+    "AUTH_SESSION_IDLE_TIMEOUT_ANALYST_MINUTES",
+    cast=int,
+    default=120,
+)
+AUTH_SESSION_IDLE_TIMEOUT_CHV_MINUTES = config(
+    "AUTH_SESSION_IDLE_TIMEOUT_CHV_MINUTES",
+    cast=int,
+    default=10080,
+)
 CURRENT_TERMS_VERSION = (
     config("CURRENT_TERMS_VERSION", default="terms-2026-05").strip() or "terms-2026-05"
 )
@@ -411,6 +485,10 @@ def collect_shared_environment_security_errors(
     environment: str,
     auth_refresh_cookie_secure: bool,
     auth_access_cookie_secure: bool,
+    auth_refresh_cookie_httponly: bool,
+    auth_access_cookie_httponly: bool,
+    auth_refresh_cookie_samesite: str,
+    auth_access_cookie_samesite: str,
     session_cookie_secure: bool,
     csrf_cookie_secure: bool,
     secure_ssl_redirect: bool,
@@ -423,6 +501,7 @@ def collect_shared_environment_security_errors(
     auth_refresh_cookie_path: str,
     auth_access_cookie_name: str,
     auth_access_cookie_path: str,
+    auth_token_response_mode: str,
 ) -> list[str]:
     if environment not in {"staging", "production"}:
         return []
@@ -432,6 +511,20 @@ def collect_shared_environment_security_errors(
         errors.append("AUTH_REFRESH_COOKIE_SECURE must be True.")
     if not auth_access_cookie_secure:
         errors.append("AUTH_ACCESS_COOKIE_SECURE must be True.")
+    if not auth_refresh_cookie_httponly:
+        errors.append("AUTH_REFRESH_COOKIE_HTTPONLY must be True.")
+    if not auth_access_cookie_httponly:
+        errors.append("AUTH_ACCESS_COOKIE_HTTPONLY must be True.")
+    if auth_refresh_cookie_samesite not in {"Lax", "Strict"}:
+        errors.append("AUTH_REFRESH_COOKIE_SAMESITE must be Lax or Strict.")
+    if auth_access_cookie_samesite not in {"Lax", "Strict"}:
+        errors.append("AUTH_ACCESS_COOKIE_SAMESITE must be Lax or Strict.")
+    if auth_token_response_mode != "cookie_only":
+        errors.append("AUTH_TOKEN_RESPONSE_MODE must be cookie_only.")
+    if not auth_refresh_cookie_name.startswith("__Host-"):
+        errors.append("AUTH_REFRESH_COOKIE_NAME must use the __Host- prefix.")
+    if not auth_access_cookie_name.startswith("__Host-"):
+        errors.append("AUTH_ACCESS_COOKIE_NAME must use the __Host- prefix.")
     if not session_cookie_secure:
         errors.append("SESSION_COOKIE_SECURE must be True.")
     if not csrf_cookie_secure:
@@ -459,6 +552,10 @@ def enforce_shared_environment_security() -> None:
         environment=CCHIS_ENVIRONMENT,
         auth_refresh_cookie_secure=AUTH_REFRESH_COOKIE_SECURE,
         auth_access_cookie_secure=AUTH_ACCESS_COOKIE_SECURE,
+        auth_refresh_cookie_httponly=AUTH_REFRESH_COOKIE_HTTPONLY,
+        auth_access_cookie_httponly=AUTH_ACCESS_COOKIE_HTTPONLY,
+        auth_refresh_cookie_samesite=AUTH_REFRESH_COOKIE_SAMESITE,
+        auth_access_cookie_samesite=AUTH_ACCESS_COOKIE_SAMESITE,
         session_cookie_secure=SESSION_COOKIE_SECURE,
         csrf_cookie_secure=CSRF_COOKIE_SECURE,
         secure_ssl_redirect=SECURE_SSL_REDIRECT,
@@ -471,6 +568,7 @@ def enforce_shared_environment_security() -> None:
         auth_refresh_cookie_path=AUTH_REFRESH_COOKIE_PATH,
         auth_access_cookie_name=AUTH_ACCESS_COOKIE_NAME,
         auth_access_cookie_path=AUTH_ACCESS_COOKIE_PATH,
+        auth_token_response_mode=AUTH_TOKEN_RESPONSE_MODE,
     )
     if errors:
         raise ImproperlyConfigured(

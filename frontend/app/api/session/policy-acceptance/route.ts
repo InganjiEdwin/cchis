@@ -26,7 +26,7 @@ export async function GET(request: Request) {
     return jsonFromBackend(data, backendResponse);
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload ?? { detail: error.message }, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to load policy acceptance status." }, { status: 500 });
@@ -48,7 +48,7 @@ export async function POST(request: Request) {
     return jsonFromBackend(data, backendResponse);
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload ?? { detail: error.message }, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to accept policies." }, { status: 500 });

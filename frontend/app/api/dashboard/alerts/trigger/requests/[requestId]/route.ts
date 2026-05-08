@@ -25,7 +25,7 @@ export async function GET(request: Request, context: RouteContext) {
     return NextResponse.json(response, { status: 200 });
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload ?? { detail: error.message }, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to load alert request tracking." }, { status: 500 });

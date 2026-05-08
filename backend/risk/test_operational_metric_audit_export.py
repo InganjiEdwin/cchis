@@ -9,7 +9,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from accounts.models import User
+from accounts.models import StepUpGrant, User
 
 from .models import (
     Alert,
@@ -27,6 +27,7 @@ from .operational_metric_audit import (
 )
 from .operational_metric_builders import daily_period
 from .operational_metrics import sync_operational_metric_catalog
+from .test_step_up_utils import force_authenticate_with_step_up
 
 
 class OperationalMetricAuditExportTestCase(APITestCase):
@@ -51,7 +52,11 @@ class OperationalMetricAuditExportTestCase(APITestCase):
         )
         self.snapshot_date = timezone.localdate() - timedelta(days=1)
         self.period_start, self.period_end = daily_period(self.snapshot_date)
-        self.client.force_authenticate(self.user)
+        force_authenticate_with_step_up(
+            self.client,
+            self.user,
+            StepUpGrant.PURPOSE_SENSITIVE_EXPORT_DOWNLOAD,
+        )
 
     def _definition(self, metric_key: str):
         return OperationalMetricDefinition.objects.get(metric_key=metric_key, version="v1")
@@ -389,3 +394,20 @@ class OperationalMetricAuditExportTestCase(APITestCase):
         self.assertEqual(command_payload["schema_version"], "operational-kpi-integrity-audit-v1")
         self.assertEqual(command_payload["filters"]["ward_id"], self.ward.id)
         self.assertEqual(command_payload["filters"]["source_channel"], "SMS")
+
+    def test_me_export_requires_fresh_download_step_up(self):
+        self._snapshot("alerts_delivered_under_5m_pct", value=Decimal("100.000000"))
+        self.client.force_authenticate(self.user)
+
+        export_response = self.client.get(
+            reverse("operational-kpi-me-export"),
+            {
+                "date_from": self.snapshot_date.isoformat(),
+                "date_to": self.snapshot_date.isoformat(),
+                "export_format": "csv",
+            },
+        )
+
+        self.assertEqual(export_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(str(export_response.data["code"]), "step_up_required")
+        self.assertEqual(str(export_response.data["purpose"]), StepUpGrant.PURPOSE_SENSITIVE_EXPORT_DOWNLOAD)

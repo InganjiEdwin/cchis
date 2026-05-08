@@ -1,6 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { requiresPolicyAcceptance, type CurrentUser, type PolicyAcceptanceState } from "@/lib/auth";
+import {
+  AuthStepUpRequiredError,
+  persistEnrollmentToken,
+  persistPreAuthToken,
+  readEnrollmentToken,
+  readPreAuthToken,
+  requiresPolicyAcceptance,
+  revokeAllProfileSessionsViaBff,
+  type CurrentUser,
+  type PolicyAcceptanceState,
+} from "@/lib/auth";
 
 const currentPolicyAcceptance: PolicyAcceptanceState = {
   required: true,
@@ -60,5 +70,56 @@ describe("requiresPolicyAcceptance", () => {
     ).toBe(false);
     expect(requiresPolicyAcceptance(buildUser())).toBe(false);
     expect(requiresPolicyAcceptance(null)).toBe(false);
+  });
+});
+
+describe("temporary login tokens", () => {
+  beforeEach(() => {
+    window.sessionStorage.clear();
+  });
+
+  it("keeps pre-auth and enrollment tokens out of browser-readable storage", () => {
+    persistPreAuthToken("pre-auth-secret");
+    persistEnrollmentToken("enrollment-secret");
+
+    expect(window.sessionStorage.getItem("cchis.pre_auth_token")).toBeNull();
+    expect(window.sessionStorage.getItem("cchis.enrollment_token")).toBeNull();
+  });
+
+  it("clears legacy temporary tokens when hydrating auth state", () => {
+    window.sessionStorage.setItem("cchis.pre_auth_token", "legacy-pre-auth-secret");
+    window.sessionStorage.setItem("cchis.enrollment_token", "legacy-enrollment-secret");
+
+    expect(readPreAuthToken()).toBeNull();
+    expect(readEnrollmentToken()).toBeNull();
+    expect(window.sessionStorage.getItem("cchis.pre_auth_token")).toBeNull();
+    expect(window.sessionStorage.getItem("cchis.enrollment_token")).toBeNull();
+  });
+});
+
+describe("session BFF step-up errors", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("preserves typed step-up errors so protected session actions can open confirmation", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          detail: "This action needs a quick security check.",
+          code: "step_up_required",
+          purpose: "security_admin",
+        }),
+        {
+          status: 403,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    await expect(revokeAllProfileSessionsViaBff()).rejects.toMatchObject({
+      name: "AuthStepUpRequiredError",
+      purpose: "security_admin",
+    } satisfies Partial<AuthStepUpRequiredError>);
   });
 });

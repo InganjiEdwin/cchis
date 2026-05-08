@@ -5,7 +5,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from accounts.models import User
+from accounts.models import StepUpGrant, User
 from risk.ml.registry import ensure_registry_entry_for_promoted_run
 from risk.providers import DeliveryResult
 
@@ -31,6 +31,7 @@ from .services import (
     create_alerts_for_riskscore,
     record_contact_preference,
 )
+from .test_step_up_utils import force_authenticate_with_step_up
 
 
 class ContactPreferenceGovernanceTests(APITestCase):
@@ -233,8 +234,31 @@ class ContactPreferenceGovernanceTests(APITestCase):
                 message_purpose=MESSAGE_PURPOSE_HOUSEHOLD_PREVENTION,
             )
 
-    def test_contact_preference_api_records_preference_and_audit_event(self):
+    def test_contact_preference_api_requires_fresh_operational_step_up(self):
         self.client.force_authenticate(self.admin_user)
+
+        response = self.client.post(
+            reverse("contact-preference-list-create"),
+            {
+                "audience_type": ContactPreference.AUDIENCE_HOUSEHOLD,
+                "channel": ContactPreference.CHANNEL_SMS,
+                "phone_number": "0700111333",
+                "consent_status": ContactPreference.CONSENT_GRANTED,
+                "opt_out_status": ContactPreference.OPT_OUT_NOT_OPTED_OUT,
+                "source": "household_sms_consent",
+                "source_reference": "consent-form-2",
+                "metadata": {"lawful_basis": "public_health_response"},
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(str(response.data["code"]), "step_up_required")
+        self.assertEqual(str(response.data["purpose"]), StepUpGrant.PURPOSE_OPERATIONAL_DATA)
+        self.assertEqual(ContactPreference.objects.count(), 0)
+
+    def test_contact_preference_api_records_preference_and_audit_event(self):
+        force_authenticate_with_step_up(self.client, self.admin_user, StepUpGrant.PURPOSE_OPERATIONAL_DATA)
 
         response = self.client.post(
             reverse("contact-preference-list-create"),
@@ -264,7 +288,7 @@ class ContactPreferenceGovernanceTests(APITestCase):
         )
 
     def test_contact_preference_rejects_invalid_explicit_phone_identifier(self):
-        self.client.force_authenticate(self.admin_user)
+        force_authenticate_with_step_up(self.client, self.admin_user, StepUpGrant.PURPOSE_OPERATIONAL_DATA)
 
         response = self.client.post(
             reverse("contact-preference-list-create"),
@@ -303,7 +327,7 @@ class ContactPreferenceGovernanceTests(APITestCase):
             source_reference="reply-stop-chv",
             recorded_by=self.admin_user,
         )
-        self.client.force_authenticate(self.admin_user)
+        force_authenticate_with_step_up(self.client, self.admin_user, StepUpGrant.PURPOSE_ALERT_DELIVERY)
 
         with patch("risk.services.resolve_chv_message_mode", return_value="SEND"):
             response = self.client.post(
@@ -341,7 +365,7 @@ class ContactPreferenceGovernanceTests(APITestCase):
             source_reference="reply-stop-chv",
             recorded_by=self.admin_user,
         )
-        self.client.force_authenticate(self.admin_user)
+        force_authenticate_with_step_up(self.client, self.admin_user, StepUpGrant.PURPOSE_ALERT_DELIVERY)
 
         with patch("risk.services.resolve_chv_message_mode", return_value="SEND"):
             response = self.client.post(
@@ -397,7 +421,7 @@ class ContactPreferenceGovernanceTests(APITestCase):
             source_reference="facility-stop-1",
             recorded_by=self.admin_user,
         )
-        self.client.force_authenticate(self.admin_user)
+        force_authenticate_with_step_up(self.client, self.admin_user, StepUpGrant.PURPOSE_OPERATIONAL_DATA)
 
         response = self.client.post(
             reverse("facility-readiness-update-request-create", args=[review.public_id]),
@@ -435,7 +459,7 @@ class ContactPreferenceGovernanceTests(APITestCase):
             reason_codes=["STALE_INPUTS"],
             created_by=self.admin_user,
         )
-        self.client.force_authenticate(self.admin_user)
+        force_authenticate_with_step_up(self.client, self.admin_user, StepUpGrant.PURPOSE_OPERATIONAL_DATA)
 
         response = self.client.post(
             reverse("facility-readiness-update-request-create", args=[review.public_id]),

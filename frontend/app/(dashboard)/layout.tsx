@@ -8,10 +8,10 @@ import { fetchServerSession } from "@/lib/server-session";
 import { isDashboardRole } from "@/lib/roles";
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const session = await fetchServerSession();
+  const session = await fetchServerSession({ allowRefreshBootstrap: false });
 
   if (!session?.authenticated || !session.user) {
-    redirect("/login");
+    return <ProtectedShell>{children}</ProtectedShell>;
   }
 
   if (!isDashboardRole(session.user.role)) {

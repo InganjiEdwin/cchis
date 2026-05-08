@@ -33,7 +33,7 @@ export async function GET(
     return NextResponse.json(alertIntelligence);
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload ?? { detail: error.message }, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to load alert detail." }, { status: 500 });

@@ -1,3 +1,6 @@
+import { isStepUpPurpose, requestStepUp, StepUpUnavailableError } from "@/lib/step-up";
+import type { StepUpPurpose } from "@/lib/auth";
+
 export type PaginatedResponse<T> = {
   count: number;
   next: string | null;
@@ -660,13 +663,15 @@ export type DashboardNotification = {
     | "ALERT_RETRY_PENDING"
     | "FEED_STALE"
     | "CHV_COVERAGE_REQUEST_STATUS"
-    | "OPERATIONAL_KPI_THRESHOLD";
+    | "OPERATIONAL_KPI_THRESHOLD"
+    | "SESSION_REPLAY_DETECTED";
   category:
     | "system_health"
     | "alert_delivery"
     | "trigger_review"
     | "chv_coverage_workflow"
     | "operational_kpi_threshold"
+    | "security"
     | "general";
   group_key:
     | "data_freshness"
@@ -674,6 +679,7 @@ export type DashboardNotification = {
     | "alert_delivery_retries"
     | "chv_coverage_requests"
     | "operational_kpi_thresholds"
+    | "session_security"
     | null;
   severity: "INFO" | "WARNING" | "CRITICAL";
   title: string;
@@ -3634,7 +3640,22 @@ export type FetchOperationalKpiMeExportParams = FetchOperationalKpiDashboardPara
   export_format?: "json" | "csv";
 };
 
-async function requestDashboardRoute<T>(path: string, init: RequestInit = {}): Promise<T> {
+export class DashboardStepUpRequiredError extends Error {
+  code = "step_up_required" as const;
+  purpose: StepUpPurpose;
+
+  constructor(message: string, purpose: StepUpPurpose) {
+    super(message);
+    this.name = "DashboardStepUpRequiredError";
+    this.purpose = purpose;
+  }
+}
+
+async function requestDashboardRoute<T>(
+  path: string,
+  init: RequestInit = {},
+  options: { retriedAfterStepUp?: boolean } = {},
+): Promise<T> {
   const headers = new Headers(init.headers);
   const isFormDataBody = typeof FormData !== "undefined" && init.body instanceof FormData;
   if (!headers.has("Content-Type") && init.body && !isFormDataBody) {
@@ -3649,12 +3670,31 @@ async function requestDashboardRoute<T>(path: string, init: RequestInit = {}): P
 
   if (!response.ok) {
     let detail = "Unable to load dashboard data.";
+    let stepUpPurpose: StepUpPurpose | null = null;
 
     try {
-      const data = (await response.json()) as { detail?: string };
+      const data = (await response.json()) as { detail?: string; code?: string; purpose?: string };
       detail = data.detail ?? detail;
+      if (data.code === "step_up_required" && data.purpose && isStepUpPurpose(data.purpose)) {
+        stepUpPurpose = data.purpose;
+      }
     } catch {
       // Keep the generic message.
+    }
+
+    if (stepUpPurpose) {
+      if (!options.retriedAfterStepUp) {
+        try {
+          await requestStepUp(stepUpPurpose);
+          return requestDashboardRoute<T>(path, init, { retriedAfterStepUp: true });
+        } catch (error) {
+          if (!(error instanceof StepUpUnavailableError)) {
+            throw error;
+          }
+        }
+      }
+
+      throw new DashboardStepUpRequiredError(detail, stepUpPurpose);
     }
 
     throw new Error(detail);

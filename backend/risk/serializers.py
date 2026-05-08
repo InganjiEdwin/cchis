@@ -1932,6 +1932,13 @@ class DashboardNotificationSerializer(serializers.ModelSerializer):
             return "chv_coverage_workflow"
         if obj.type == DashboardNotification.TYPE_OPERATIONAL_KPI_THRESHOLD:
             return "operational_kpi_threshold"
+        if obj.type in {
+            DashboardNotification.TYPE_SESSION_REPLAY_DETECTED,
+            DashboardNotification.TYPE_STEP_UP_FAILURE_SPIKE,
+            DashboardNotification.TYPE_SESSION_CONTEXT_CHANGED,
+            DashboardNotification.TYPE_ADMIN_NEW_DEVICE,
+        }:
+            return "security"
         return "general"
 
     def get_group_key(self, obj):
@@ -1945,6 +1952,13 @@ class DashboardNotificationSerializer(serializers.ModelSerializer):
             return "chv_coverage_requests"
         if obj.type == DashboardNotification.TYPE_OPERATIONAL_KPI_THRESHOLD:
             return "operational_kpi_thresholds"
+        if obj.type in {
+            DashboardNotification.TYPE_SESSION_REPLAY_DETECTED,
+            DashboardNotification.TYPE_STEP_UP_FAILURE_SPIKE,
+            DashboardNotification.TYPE_SESSION_CONTEXT_CHANGED,
+            DashboardNotification.TYPE_ADMIN_NEW_DEVICE,
+        }:
+            return "session_security"
         return None
 
     class Meta:

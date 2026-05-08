@@ -1,14 +1,24 @@
 import { NextResponse } from "next/server";
 
 import type { BeginTwoFactorEnrollmentResponse } from "@/lib/auth";
-import { applyBackendSetCookie, fetchBackendResponse } from "@/lib/server-api";
+import { applyBackendSetCookie, fetchBackendAuthorizedResponse, fetchBackendResponse } from "@/lib/server-api";
 
 export async function POST(request: Request) {
   const cookieHeader = request.headers.get("cookie") ?? "";
 
   try {
     const body = await request.text();
-    const backendResponse = await fetchBackendResponse("/auth/2fa/setup/", {
+    let token = "";
+
+    try {
+      const parsed = body ? (JSON.parse(body) as { token?: unknown }) : {};
+      token = typeof parsed.token === "string" ? parsed.token.trim() : "";
+    } catch {
+      token = "";
+    }
+
+    const fetchBackend = token ? fetchBackendResponse : fetchBackendAuthorizedResponse;
+    const backendResponse = await fetchBackend("/auth/2fa/setup/", {
       method: "POST",
       body: body || JSON.stringify({}),
       cookieHeader,

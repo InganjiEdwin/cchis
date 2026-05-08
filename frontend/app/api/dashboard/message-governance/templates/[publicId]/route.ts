@@ -22,7 +22,7 @@ export async function GET(request: Request, context: RouteContext) {
     return NextResponse.json(templateDetail);
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload ?? { detail: error.message }, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to load message template detail." }, { status: 500 });

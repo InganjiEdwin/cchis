@@ -16,7 +16,7 @@ vi.mock("next/headers", () => ({
 }));
 
 vi.mock("@/lib/server-session", () => ({
-  fetchServerSession: () => mockFetchServerSession(),
+  fetchServerSession: (...args: unknown[]) => mockFetchServerSession(...args),
 }));
 
 vi.mock("@/components/protected-shell", () => ({
@@ -28,16 +28,16 @@ describe("DashboardLayout", () => {
     vi.clearAllMocks();
   });
 
-  it("redirects to login when the server cannot resolve a session", async () => {
+  it("lets the client restore the session when server rendering has no access cookie", async () => {
     mockFetchServerSession.mockResolvedValue(null);
 
     const { default: DashboardLayout } = await import("@/app/(dashboard)/layout");
 
-    await expect(DashboardLayout({ children: React.createElement("div", null, "Body") })).rejects.toThrow(
-      "NEXT_REDIRECT",
-    );
+    const result = await DashboardLayout({ children: React.createElement("div", null, "Body") });
 
-    expect(mockRedirect).toHaveBeenCalledWith("/login");
+    expect(result).toBeTruthy();
+    expect(mockFetchServerSession).toHaveBeenCalledWith({ allowRefreshBootstrap: false });
+    expect(mockRedirect).not.toHaveBeenCalled();
   });
 
   it("redirects policy-missing dashboard users before rendering dashboard children", async () => {

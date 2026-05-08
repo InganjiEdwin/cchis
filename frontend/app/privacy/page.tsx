@@ -81,7 +81,7 @@ const sections = [
     id: "cookies",
     title: "6. Cookies and Browser Storage",
     body: [
-      "CHIS uses essential cookies and browser storage to keep authorized users signed in, protect accounts, remember display preferences, support two-factor setup, and maintain security checks. These are used for system operation and security, not advertising.",
+      "CHIS uses essential cookies and browser storage to keep authorized users signed in, protect accounts, remember display preferences, and maintain security checks. These are used for system operation and security, not advertising.",
     ],
     storageItems: [
       {
@@ -91,14 +91,6 @@ const sections = [
       {
         name: "cchis.current_user",
         copy: "Browser storage for dashboard session hydration.",
-      },
-      {
-        name: "cchis.pre_auth_token",
-        copy: "Temporary browser storage during two-factor verification.",
-      },
-      {
-        name: "cchis.enrollment_token",
-        copy: "Temporary browser storage during two-factor enrollment.",
       },
       {
         name: "cchis.recovery_code_login_notice",

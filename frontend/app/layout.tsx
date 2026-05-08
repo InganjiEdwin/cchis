@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
+import { headers } from "next/headers";
 
 import "./globals.css";
 import { AuthProvider } from "@/components/auth-provider";
@@ -95,16 +96,21 @@ export const metadata: Metadata = {
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const initialSession = sanitizeSessionResponse(await fetchServerSession());
+  const requestHeaders = await headers();
+  const initialSession = sanitizeSessionResponse(
+    await fetchServerSession({ allowRefreshBootstrap: false }),
+  );
   const cookieNoticeVersion = [
     process.env.NEXT_PUBLIC_COOKIE_NOTICE_VERSION,
     process.env.CURRENT_COOKIE_NOTICE_VERSION,
   ].map((version) => version?.trim()).find(Boolean) ?? "cookies-2026-05";
+  const cspNonce = requestHeaders.get("x-nonce") ?? undefined;
 
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={axiforma.variable}>
         <script
+          nonce={cspNonce}
           dangerouslySetInnerHTML={{
             __html: `
               (function() {

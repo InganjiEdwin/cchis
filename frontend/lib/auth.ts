@@ -75,7 +75,7 @@ export function buildDefaultProfileCapabilities(
     can_manage_totp: isActive && twoFactorPolicy !== "NONE",
     can_view_own_activity: isActive,
     can_update_identity: canUpdateIdentity,
-    can_review_sessions: false,
+    can_review_sessions: isActive,
     can_generate_profile_report: false,
     identity_update_mode: canUpdateIdentity ? "totp_step_up" : "admin_managed",
     mode: "auth_contract_backed_profile",
@@ -179,6 +179,32 @@ export type UpdateProfilePayload = Partial<Pick<CurrentUser, "username" | "email
 export type VerifyProfileIdentityTwoFactorResponse = {
   detail: string;
 };
+export type StepUpPurpose =
+  | "admin_actions"
+  | "security_admin"
+  | "system_controls"
+  | "sensitive_exports"
+  | "sensitive_export_download"
+  | "source_data"
+  | "message_governance"
+  | "alert_delivery"
+  | "operational_data";
+const STEP_UP_PURPOSE_VALUES: readonly StepUpPurpose[] = [
+  "admin_actions",
+  "security_admin",
+  "system_controls",
+  "sensitive_exports",
+  "sensitive_export_download",
+  "source_data",
+  "message_governance",
+  "alert_delivery",
+  "operational_data",
+];
+export type VerifyStepUpResponse = {
+  detail: string;
+  purpose: StepUpPurpose;
+  expires_at: string;
+};
 export type PasswordResetRequestResponse = {
   detail: string;
 };
@@ -245,6 +271,41 @@ export type ProfileActivityResponse = {
     can_view_own_activity: boolean;
     mode: "self_scoped_auth_activity";
   };
+};
+export type ProfileSessionStatus = "current" | "active" | "revoked" | "suspicious" | "expired";
+export type ProfileSessionRecord = {
+  public_id: string;
+  device_label: string;
+  browser_label: string;
+  created_at: string;
+  last_seen_at: string;
+  last_rotated_at: string | null;
+  expires_at: string;
+  revoked_at: string | null;
+  revoked_reason: string;
+  location_label: string;
+  status: ProfileSessionStatus;
+  is_current: boolean;
+  is_active: boolean;
+  is_suspicious: boolean;
+  suspicion_reason: string;
+};
+export type ProfileSessionResponse = {
+  sessions: ProfileSessionRecord[];
+  current_session_id: string | null;
+  capabilities: {
+    can_review_sessions: boolean;
+    can_revoke_sessions: boolean;
+    revoke_all_requires_step_up: boolean;
+    revoke_others_requires_step_up: boolean;
+    mode: "self_scoped_session_management" | "admin_scoped_session_management";
+  };
+};
+export type ProfileSessionRevokeResponse = {
+  detail: string;
+  revoked_count: number;
+  blacklisted_tokens: number;
+  current_session_revoked: boolean;
 };
 export type PasswordResetValidateResponse = {
   detail: string;
@@ -330,7 +391,7 @@ function formatResponseErrorDetail(data: Record<string, unknown>) {
     ? data.errors as Record<string, unknown>
     : data;
   const fieldMessages = Object.entries(errors)
-    .filter(([field]) => field !== "detail" && field !== "errors")
+    .filter(([field]) => field !== "detail" && field !== "errors" && field !== "code" && field !== "purpose")
     .map(([field, value]) => {
       const message = stringifyErrorValue(value);
       return message ? `${field.replaceAll("_", " ")}: ${message}` : "";
@@ -342,6 +403,20 @@ function formatResponseErrorDetail(data: Record<string, unknown>) {
   }
 
   return typeof data.detail === "string" ? data.detail : "Request failed.";
+}
+
+function isAuthStepUpPurpose(value: unknown): value is StepUpPurpose {
+  return typeof value === "string" && STEP_UP_PURPOSE_VALUES.includes(value as StepUpPurpose);
+}
+
+export class AuthStepUpRequiredError extends Error {
+  purpose: StepUpPurpose;
+
+  constructor(message: string, purpose: StepUpPurpose) {
+    super(message);
+    this.name = "AuthStepUpRequiredError";
+    this.purpose = purpose;
+  }
 }
 
 export function isValidUsername(value: string) {
@@ -362,20 +437,20 @@ export function persistCurrentUser(user: CurrentUser | null) {
   writeStorageValue(CURRENT_USER_KEY, serialized, window.sessionStorage);
 }
 
-export function persistPreAuthToken(token: string | null) {
+export function persistPreAuthToken(_token: string | null) {
   if (typeof window === "undefined") {
     return;
   }
 
-  writeStorageValue(PRE_AUTH_TOKEN_KEY, token, window.sessionStorage);
+  writeStorageValue(PRE_AUTH_TOKEN_KEY, null, window.sessionStorage);
 }
 
-export function persistEnrollmentToken(token: string | null) {
+export function persistEnrollmentToken(_token: string | null) {
   if (typeof window === "undefined") {
     return;
   }
 
-  writeStorageValue(ENROLLMENT_TOKEN_KEY, token, window.sessionStorage);
+  writeStorageValue(ENROLLMENT_TOKEN_KEY, null, window.sessionStorage);
 }
 
 export function readCurrentUser() {
@@ -411,7 +486,8 @@ export function readPreAuthToken() {
     return null;
   }
 
-  return readStorageValue(PRE_AUTH_TOKEN_KEY, window.sessionStorage);
+  writeStorageValue(PRE_AUTH_TOKEN_KEY, null, window.sessionStorage);
+  return null;
 }
 
 export function readEnrollmentToken() {
@@ -419,7 +495,8 @@ export function readEnrollmentToken() {
     return null;
   }
 
-  return readStorageValue(ENROLLMENT_TOKEN_KEY, window.sessionStorage);
+  writeStorageValue(ENROLLMENT_TOKEN_KEY, null, window.sessionStorage);
+  return null;
 }
 
 export function persistRecoveryCodeLoginNotice(remainingCount: number) {
@@ -500,12 +577,20 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   if (!response.ok) {
     let detail = "Request failed.";
+    let stepUpPurpose: StepUpPurpose | null = null;
 
     try {
       const data = (await response.json()) as Record<string, unknown>;
       detail = formatResponseErrorDetail(data);
+      if (data.code === "step_up_required" && isAuthStepUpPurpose(data.purpose)) {
+        stepUpPurpose = data.purpose;
+      }
     } catch {
       // Ignore parse failures and keep the generic message.
+    }
+
+    if (stepUpPurpose) {
+      throw new AuthStepUpRequiredError(detail, stepUpPurpose);
     }
 
     throw new Error(detail);
@@ -550,12 +635,20 @@ async function requestBff<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   if (!response.ok) {
     let detail = "Request failed.";
+    let stepUpPurpose: StepUpPurpose | null = null;
 
     try {
       const data = (await response.json()) as Record<string, unknown>;
       detail = formatResponseErrorDetail(data);
+      if (data.code === "step_up_required" && isAuthStepUpPurpose(data.purpose)) {
+        stepUpPurpose = data.purpose;
+      }
     } catch {
       // Ignore parse failures and keep the generic message.
+    }
+
+    if (stepUpPurpose) {
+      throw new AuthStepUpRequiredError(detail, stepUpPurpose);
     }
 
     throw new Error(detail);
@@ -604,6 +697,13 @@ export async function verifyProfileIdentityTwoFactorViaBff(code: string) {
   });
 }
 
+export async function verifyStepUpViaBff(code: string, purpose: StepUpPurpose) {
+  return requestBff<VerifyStepUpResponse>("/api/session/step-up/verify", {
+    method: "POST",
+    body: JSON.stringify({ code, purpose }),
+  });
+}
+
 export async function updateProfileViaBff(payload: UpdateProfilePayload) {
   return requestBff<CurrentUser>("/api/session/me", {
     method: "PATCH",
@@ -629,6 +729,36 @@ export async function fetchProfileActivityViaBff(filters: ProfileActivityFilters
 
   return requestBff<ProfileActivityResponse>(`/api/session/activity?${query.toString()}`, {
     method: "GET",
+  });
+}
+
+export async function fetchProfileSessionsViaBff() {
+  return requestBff<ProfileSessionResponse>("/api/session/sessions", {
+    method: "GET",
+  });
+}
+
+export async function revokeProfileSessionViaBff(publicId: string) {
+  return requestBff<ProfileSessionRevokeResponse>(
+    `/api/session/sessions/${encodeURIComponent(publicId)}/revoke`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
+}
+
+export async function revokeOtherProfileSessionsViaBff() {
+  return requestBff<ProfileSessionRevokeResponse>("/api/session/sessions/revoke-others", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function revokeAllProfileSessionsViaBff() {
+  return requestBff<ProfileSessionRevokeResponse>("/api/session/sessions/revoke-all", {
+    method: "POST",
+    body: JSON.stringify({}),
   });
 }
 

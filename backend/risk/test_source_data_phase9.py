@@ -8,10 +8,11 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from accounts.models import User
+from accounts.models import StepUpGrant, User
 
 from .models import PopulationExposureSource, SourceDataConnectorRun, SourceDataFeedModeOverride, SourceDataUploadBatch, Ward
 from .source_data.connectors import source_data_csv_upload_enabled
+from .test_step_up_utils import force_authenticate_with_step_up
 
 
 class SourceDataPhaseNineConnectorIntegrationTests(APITestCase):
@@ -122,7 +123,7 @@ class SourceDataPhaseNineConnectorIntegrationTests(APITestCase):
 
     def test_connector_refresh_creates_validated_upload_with_same_canonical_checks(self):
         self.write_connector_fixture("dhis2_surveillance_weekly", self.weekly_csv())
-        self.client.force_authenticate(self.supervisor)
+        force_authenticate_with_step_up(self.client, self.supervisor, StepUpGrant.PURPOSE_SOURCE_DATA)
 
         response = self.client.post(
             reverse("source-data-connector-refresh", kwargs={"connector_key": "dhis2_surveillance_weekly"}),
@@ -146,7 +147,7 @@ class SourceDataPhaseNineConnectorIntegrationTests(APITestCase):
 
     def test_worldpop_connector_refresh_uses_generated_migori_fixture_alias(self):
         self.write_connector_fixture("migori_worldpop_2026_population", self.worldpop_csv())
-        self.client.force_authenticate(self.supervisor)
+        force_authenticate_with_step_up(self.client, self.supervisor, StepUpGrant.PURPOSE_SOURCE_DATA)
 
         with self.settings(
             SOURCE_DATA_WORLDPOP_KNBS_SOURCE_URL=(
@@ -176,7 +177,7 @@ class SourceDataPhaseNineConnectorIntegrationTests(APITestCase):
 
     def test_connector_failure_is_audited_and_uses_validation_diagnostics(self):
         self.write_connector_fixture("dhis2_surveillance_weekly", self.weekly_csv(notes="call +254712345678"))
-        self.client.force_authenticate(self.supervisor)
+        force_authenticate_with_step_up(self.client, self.supervisor, StepUpGrant.PURPOSE_SOURCE_DATA)
 
         response = self.client.post(
             reverse("source-data-connector-refresh", kwargs={"connector_key": "dhis2_surveillance_weekly"}),
@@ -194,7 +195,7 @@ class SourceDataPhaseNineConnectorIntegrationTests(APITestCase):
 
     def test_connector_refresh_options_use_same_pii_safe_metadata_guard(self):
         self.write_connector_fixture("dhis2_surveillance_weekly", self.weekly_csv())
-        self.client.force_authenticate(self.supervisor)
+        force_authenticate_with_step_up(self.client, self.supervisor, StepUpGrant.PURPOSE_SOURCE_DATA)
 
         response = self.client.post(
             reverse("source-data-connector-refresh", kwargs={"connector_key": "dhis2_surveillance_weekly"}),
@@ -214,7 +215,7 @@ class SourceDataPhaseNineConnectorIntegrationTests(APITestCase):
 
     def test_admin_can_disable_csv_when_api_connector_is_authoritative(self):
         self.write_connector_fixture("dhis2_surveillance_weekly", self.weekly_csv())
-        self.client.force_authenticate(self.admin)
+        force_authenticate_with_step_up(self.client, self.admin, StepUpGrant.PURPOSE_SOURCE_DATA)
 
         mode_response = self.client.post(
             reverse("source-data-feed-mode", kwargs={"feed_key": "surveillance_weekly_aggregate"}),
@@ -231,7 +232,7 @@ class SourceDataPhaseNineConnectorIntegrationTests(APITestCase):
         self.assertFalse(mode_response.data["csv_upload_enabled"])
         self.assertTrue(SourceDataFeedModeOverride.objects.filter(feed_key="surveillance_weekly_aggregate").exists())
 
-        self.client.force_authenticate(self.supervisor)
+        force_authenticate_with_step_up(self.client, self.supervisor, StepUpGrant.PURPOSE_SOURCE_DATA)
         upload_response = self.client.post(
             reverse("source-data-upload-list-create"),
             self.upload_payload(),
@@ -264,7 +265,7 @@ class SourceDataPhaseNineConnectorIntegrationTests(APITestCase):
             reason="Connector is normally authoritative.",
             updated_by=self.admin,
         )
-        self.client.force_authenticate(self.admin)
+        force_authenticate_with_step_up(self.client, self.admin, StepUpGrant.PURPOSE_SOURCE_DATA)
 
         with self.settings(SOURCE_DATA_API_CONNECTORS_ENABLED=False):
             registry_response = self.client.get(reverse("source-data-connectors"))

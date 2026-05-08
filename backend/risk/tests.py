@@ -31,7 +31,8 @@ from rest_framework.settings import api_settings
 
 from accounts.audit import get_client_ip
 from accounts.admin import AccessRequestAdmin
-from accounts.models import AccessRequest, AuthAuditEvent, PasswordResetToken, PreAuthToken, TwoFactorRecoveryCode
+from accounts.models import AccessRequest, AuthAuditEvent, PasswordResetToken, PreAuthToken, StepUpGrant, TwoFactorRecoveryCode, UserSession
+from accounts.session_security import hash_refresh_jti
 from accounts.services import create_current_policy_acceptances
 from accounts.turnstile import TurnstileVerificationResult
 from accounts.two_factor import (
@@ -109,7 +110,9 @@ from risk.serializers import IngestionRunSerializer
 from risk.services import create_alerts_for_riskscore, deliver_alert
 from risk.services import build_facility_intelligence_snapshot, build_facility_readiness_decision_summary
 from risk.tasks import deliver_alert_task, trigger_alerts_task
-from rest_framework_simplejwt.tokens import AccessToken
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
+from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
+from rest_framework_simplejwt.utils import datetime_from_epoch
 
 
 def started_at_ms(offset_ms: int = 2000) -> int:
@@ -170,6 +173,10 @@ class SharedEnvironmentSecuritySettingsTestCase(SimpleTestCase):
             environment="production",
             auth_refresh_cookie_secure=False,
             auth_access_cookie_secure=False,
+            auth_refresh_cookie_httponly=False,
+            auth_access_cookie_httponly=False,
+            auth_refresh_cookie_samesite="None",
+            auth_access_cookie_samesite="None",
             session_cookie_secure=False,
             csrf_cookie_secure=False,
             secure_ssl_redirect=False,
@@ -182,10 +189,16 @@ class SharedEnvironmentSecuritySettingsTestCase(SimpleTestCase):
             auth_refresh_cookie_path="/auth",
             auth_access_cookie_name="__Host-cchis_access",
             auth_access_cookie_path="/api",
+            auth_token_response_mode="body_and_cookie",
         )
 
         self.assertTrue(any("AUTH_REFRESH_COOKIE_SECURE" in error for error in errors))
         self.assertTrue(any("AUTH_ACCESS_COOKIE_SECURE" in error for error in errors))
+        self.assertTrue(any("AUTH_REFRESH_COOKIE_HTTPONLY" in error for error in errors))
+        self.assertTrue(any("AUTH_ACCESS_COOKIE_HTTPONLY" in error for error in errors))
+        self.assertTrue(any("AUTH_REFRESH_COOKIE_SAMESITE" in error for error in errors))
+        self.assertTrue(any("AUTH_ACCESS_COOKIE_SAMESITE" in error for error in errors))
+        self.assertTrue(any("AUTH_TOKEN_RESPONSE_MODE" in error for error in errors))
         self.assertTrue(any("SECURE_SSL_REDIRECT" in error for error in errors))
         self.assertTrue(any("SECURE_HSTS_SECONDS" in error for error in errors))
         self.assertTrue(any("ALLOWED_HOSTS" in error for error in errors))
@@ -198,6 +211,10 @@ class SharedEnvironmentSecuritySettingsTestCase(SimpleTestCase):
             environment="staging",
             auth_refresh_cookie_secure=True,
             auth_access_cookie_secure=True,
+            auth_refresh_cookie_httponly=True,
+            auth_access_cookie_httponly=True,
+            auth_refresh_cookie_samesite="Lax",
+            auth_access_cookie_samesite="Strict",
             session_cookie_secure=True,
             csrf_cookie_secure=True,
             secure_ssl_redirect=False,
@@ -210,9 +227,37 @@ class SharedEnvironmentSecuritySettingsTestCase(SimpleTestCase):
             auth_refresh_cookie_path="/",
             auth_access_cookie_name="__Host-cchis_access",
             auth_access_cookie_path="/",
+            auth_token_response_mode="cookie_only",
         )
 
         self.assertEqual(errors, [])
+
+    def test_shared_environment_security_requires_host_prefixed_auth_cookie_names(self):
+        errors = collect_shared_environment_security_errors(
+            environment="production",
+            auth_refresh_cookie_secure=True,
+            auth_access_cookie_secure=True,
+            auth_refresh_cookie_httponly=True,
+            auth_access_cookie_httponly=True,
+            auth_refresh_cookie_samesite="Lax",
+            auth_access_cookie_samesite="Lax",
+            session_cookie_secure=True,
+            csrf_cookie_secure=True,
+            secure_ssl_redirect=True,
+            secure_ssl_redirect_reverse_proxy_exemption=False,
+            secure_hsts_seconds=3600,
+            allowed_hosts=["cchis.example"],
+            cors_allow_all_origins=False,
+            cors_allowed_origins=["https://cchis.example"],
+            auth_refresh_cookie_name="cchis_refresh",
+            auth_refresh_cookie_path="/",
+            auth_access_cookie_name="cchis_access",
+            auth_access_cookie_path="/",
+            auth_token_response_mode="cookie_only",
+        )
+
+        self.assertTrue(any("AUTH_REFRESH_COOKIE_NAME" in error for error in errors))
+        self.assertTrue(any("AUTH_ACCESS_COOKIE_NAME" in error for error in errors))
 
 
 class AuthenticatedAPITestCase(APITestCase):
@@ -223,6 +268,7 @@ class AuthenticatedAPITestCase(APITestCase):
         octet = (self.__class__._client_counter % 250) + 1
         self.__class__._client_counter += 1
         self.client.defaults["REMOTE_ADDR"] = f"127.0.0.{octet}"
+        self.client.defaults["HTTP_ORIGIN"] = settings.FRONTEND_APP_URL
 
         self.ward = Ward.objects.create(
             name="North Kamagambo",
@@ -409,6 +455,34 @@ class AuthenticatedAPITestCase(APITestCase):
         user.is_totp_enabled = True
         user.save(update_fields=["totp_secret", "is_totp_enabled"])
 
+    def grant_step_up(self, user: User, purpose: str, seconds: int = 600) -> StepUpGrant:
+        session = UserSession.objects.filter(
+            user=user,
+            revoked_at__isnull=True,
+            expires_at__gt=timezone.now(),
+        ).order_by("-last_seen_at", "-created_at").first()
+        self.assertIsNotNone(session)
+        return StepUpGrant.objects.create(
+            user=user,
+            session=session,
+            purpose=purpose,
+            verified_at=timezone.now(),
+            expires_at=timezone.now() + timedelta(seconds=seconds),
+            method=StepUpGrant.METHOD_TOTP,
+        )
+
+    def authenticate_with_step_up(
+        self,
+        username: str,
+        purpose: str,
+        password: str | None = None,
+        seconds: int = 600,
+    ) -> str:
+        token = self.authenticate(username, password=password)
+        user = User.objects.get(username=username)
+        self.grant_step_up(user, purpose, seconds=seconds)
+        return token
+
 
 class TwoFactorRecoveryCodeServiceTestCase(APITestCase):
     def setUp(self):
@@ -482,6 +556,7 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
             reverse("auth-login"),
             {"username": self.chv_user.username, "password": self.password},
             format="json",
+            HTTP_USER_AGENT="CCHIS Test Browser",
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -504,6 +579,7 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
             reverse("auth-login"),
             {"username": self.chv_user.username, "password": self.password},
             format="json",
+            HTTP_USER_AGENT="CCHIS Test Browser",
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -513,6 +589,111 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         self.assertIsNotNone(access_cookie)
         self.assertEqual(refresh_cookie.value, response.data["refresh"])
         self.assertEqual(access_cookie.value, response.data["access"])
+
+    @override_settings(AUTH_TOKEN_RESPONSE_MODE="cookie_only")
+    def test_cookie_only_token_response_omits_login_token_body_but_sets_cookies(self):
+        response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.chv_user.username, "password": self.password},
+            format="json",
+            HTTP_USER_AGENT="CCHIS Cookie Only Browser",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertNotIn("access", response.data)
+        self.assertNotIn("refresh", response.data)
+        self.assertTrue(response.data["session_established"])
+        self.assertIsNotNone(response.cookies.get(settings.AUTH_REFRESH_COOKIE_NAME))
+        self.assertIsNotNone(response.cookies.get(settings.AUTH_ACCESS_COOKIE_NAME))
+
+    def test_login_creates_session_ledger_and_session_claims(self):
+        response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.chv_user.username, "password": self.password},
+            format="json",
+            HTTP_USER_AGENT="CCHIS Ledger Test Browser",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        user_session = UserSession.objects.get(user=self.chv_user)
+        refresh = RefreshToken(response.data["refresh"])
+        access = AccessToken(response.data["access"])
+
+        self.assertEqual(str(user_session.public_id), refresh["sid"])
+        self.assertEqual(str(user_session.public_id), access["sid"])
+        self.assertEqual(str(user_session.token_family_id), refresh["family"])
+        self.assertEqual(str(user_session.token_family_id), access["family"])
+        self.assertEqual(refresh["role"], self.chv_user.role)
+        self.assertEqual(access["role"], self.chv_user.role)
+        self.assertEqual(refresh["ward_id"], self.chv_user.ward_id)
+        self.assertEqual(access["ward_id"], self.chv_user.ward_id)
+        self.assertEqual(user_session.current_refresh_jti_hash, hash_refresh_jti(str(refresh["jti"])))
+        self.assertNotEqual(user_session.current_refresh_jti_hash, str(refresh["jti"]))
+        self.assertTrue(user_session.created_ip_prefix_hash)
+        self.assertTrue(user_session.user_agent_hash)
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_SESSION_CREATED,
+                status=AuthAuditEvent.STATUS_SUCCESS,
+                target_user=self.chv_user,
+                metadata__session_id=str(user_session.public_id),
+            ).exists()
+        )
+
+    def test_refresh_rejects_valid_refresh_token_not_linked_to_session_ledger(self):
+        orphaned_refresh = RefreshToken.for_user(self.chv_user)
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = str(orphaned_refresh)
+
+        response = self.client.post(reverse("auth-refresh"), {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(response.data["code"], "session_not_found")
+        self.assertEqual(response.cookies[settings.AUTH_REFRESH_COOKIE_NAME].value, "")
+        self.assertEqual(response.cookies[settings.AUTH_ACCESS_COOKIE_NAME].value, "")
+        self.assertFalse(UserSession.objects.filter(user=self.chv_user).exists())
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_REFRESH_FAILED,
+                status=AuthAuditEvent.STATUS_FAILED,
+                target_user=self.chv_user,
+                metadata__reason="session_not_found",
+            ).exists()
+        )
+
+    def test_role_based_session_lifetimes_cap_refresh_and_ledger_expiry(self):
+        admin_login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+        admin_verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": admin_login_response.data["temp_token"],
+                "code": generate_current_totp_code(self.admin_user.totp_secret),
+            },
+            format="json",
+        )
+        chv_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.chv_user.username, "password": self.password},
+            format="json",
+        )
+
+        self.assertEqual(admin_verify_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(chv_response.status_code, status.HTTP_200_OK)
+
+        admin_session = UserSession.objects.get(user=self.admin_user)
+        chv_session = UserSession.objects.get(user=self.chv_user)
+        admin_refresh_expires_at = datetime_from_epoch(RefreshToken(admin_verify_response.data["refresh"])["exp"])
+        chv_refresh_expires_at = datetime_from_epoch(RefreshToken(chv_response.data["refresh"])["exp"])
+        now = timezone.now()
+
+        self.assertLess(admin_refresh_expires_at, chv_refresh_expires_at)
+        self.assertLess((admin_session.expires_at - now).total_seconds(), 25 * 60 * 60)
+        self.assertGreater((chv_session.expires_at - now).total_seconds(), 6 * 24 * 60 * 60)
+        self.assertAlmostEqual(admin_session.expires_at.timestamp(), admin_refresh_expires_at.timestamp(), delta=5)
+        self.assertAlmostEqual(chv_session.expires_at.timestamp(), chv_refresh_expires_at.timestamp(), delta=5)
 
     def test_login_exposes_optional_two_factor_policy_for_analyst(self):
         response = self.client.post(
@@ -682,7 +863,6 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
             ward=self.ward,
         )
         self.authenticate(analyst.username)
-        self.client.credentials()
 
         setup_response = self.client.post(reverse("auth-2fa-setup"), {}, format="json")
 
@@ -701,6 +881,19 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(len(confirm_response.data["recovery_codes"]), 10)
         analyst.refresh_from_db()
         self.assertTrue(analyst.is_totp_enabled)
+
+    def test_refresh_cookie_alone_cannot_start_two_factor_enrollment(self):
+        analyst = self._create_user(
+            username="analyst_refresh_only_setup",
+            role=User.ROLE_ANALYST,
+            ward=self.ward,
+        )
+        self.authenticate(analyst.username)
+        self.client.credentials()
+
+        response = self.client.post(reverse("auth-2fa-setup"), {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_verify_2fa_returns_tokens_for_valid_code(self):
         secret = self.admin_user.totp_secret
@@ -732,6 +925,30 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
                 target_user=self.admin_user,
             ).exists()
         )
+
+    @override_settings(AUTH_TOKEN_RESPONSE_MODE="cookie_only")
+    def test_cookie_only_token_response_omits_2fa_token_body_but_sets_cookies(self):
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+
+        verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": login_response.data["temp_token"],
+                "code": generate_current_totp_code(self.admin_user.totp_secret),
+            },
+            format="json",
+        )
+
+        self.assertEqual(verify_response.status_code, status.HTTP_200_OK)
+        self.assertNotIn("access", verify_response.data)
+        self.assertNotIn("refresh", verify_response.data)
+        self.assertTrue(verify_response.data["session_established"])
+        self.assertIsNotNone(verify_response.cookies.get(settings.AUTH_REFRESH_COOKIE_NAME))
+        self.assertIsNotNone(verify_response.cookies.get(settings.AUTH_ACCESS_COOKIE_NAME))
 
     def test_verify_2fa_accepts_unused_recovery_code_once(self):
         recovery_code = generate_recovery_codes(self.admin_user, count=2)[0]
@@ -1261,7 +1478,7 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
                 "can_manage_totp": True,
                 "can_view_own_activity": True,
                 "can_update_identity": True,
-                "can_review_sessions": False,
+                "can_review_sessions": True,
                 "can_generate_profile_report": False,
                 "identity_update_mode": "totp_step_up",
                 "mode": "auth_contract_backed_profile",
@@ -1303,6 +1520,51 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("theme_preference", response.data)
+
+    def test_profile_identity_verification_requires_access_token_not_refresh_cookie(self):
+        self.authenticate(self.admin_user.username)
+        self.client.credentials()
+
+        response = self.client.post(
+            reverse("auth-me-identity-verify-2fa"),
+            {"code": generate_current_totp_code(self.admin_user.totp_secret)},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_profile_identity_step_up_is_bound_to_current_session(self):
+        self.authenticate(self.admin_user.username)
+        verify_response = self.client.post(
+            reverse("auth-me-identity-verify-2fa"),
+            {"code": generate_current_totp_code(self.admin_user.totp_secret)},
+            format="json",
+        )
+        self.assertEqual(verify_response.status_code, status.HTTP_200_OK)
+
+        self.authenticate(self.admin_user.username)
+        blocked_response = self.client.patch(
+            reverse("auth-me"),
+            {"full_name": "Changed From New Session"},
+            format="json",
+        )
+
+        self.assertEqual(blocked_response.status_code, status.HTTP_403_FORBIDDEN)
+
+        second_verify_response = self.client.post(
+            reverse("auth-me-identity-verify-2fa"),
+            {"code": generate_current_totp_code(self.admin_user.totp_secret)},
+            format="json",
+        )
+        self.assertEqual(second_verify_response.status_code, status.HTTP_200_OK)
+        update_response = self.client.patch(
+            reverse("auth-me"),
+            {"full_name": "Changed From Verified Session"},
+            format="json",
+        )
+
+        self.assertEqual(update_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(update_response.data["full_name"], "Changed From Verified Session")
 
     def test_me_returns_no_two_factor_requirement_for_chv(self):
         self.authenticate(self.chv_user.username)
@@ -1550,6 +1812,7 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
             },
             format="json",
         )
+        original_refresh = RefreshToken(verify_response.data["refresh"])
 
         self.client.cookies.pop(settings.AUTH_ACCESS_COOKIE_NAME, None)
         self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = verify_response.data["refresh"]
@@ -1563,6 +1826,22 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         access_cookie = response.cookies.get(settings.AUTH_ACCESS_COOKIE_NAME)
         self.assertIsNotNone(access_cookie)
         self.assertTrue(access_cookie.value)
+        refresh_cookie = response.cookies.get(settings.AUTH_REFRESH_COOKIE_NAME)
+        self.assertIsNotNone(refresh_cookie)
+        self.assertNotEqual(refresh_cookie.value, verify_response.data["refresh"])
+
+        rotated_refresh = RefreshToken(refresh_cookie.value)
+        user_session = UserSession.objects.get(user=self.admin_user)
+        self.assertEqual(user_session.previous_refresh_jti_hash, hash_refresh_jti(str(original_refresh["jti"])))
+        self.assertEqual(user_session.current_refresh_jti_hash, hash_refresh_jti(str(rotated_refresh["jti"])))
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_SESSION_REFRESHED,
+                status=AuthAuditEvent.STATUS_SUCCESS,
+                target_user=self.admin_user,
+                metadata__session_id=str(user_session.public_id),
+            ).exists()
+        )
 
     @override_settings(
         AUTH_REFRESH_COOKIE_NAME="__Host-cchis_refresh",
@@ -1591,8 +1870,53 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(response.data["authenticated"])
-        self.assertEqual(response.cookies[settings.AUTH_REFRESH_COOKIE_NAME].value, verify_response.data["refresh"])
+        self.assertNotEqual(response.cookies[settings.AUTH_REFRESH_COOKIE_NAME].value, verify_response.data["refresh"])
         self.assertEqual(response.cookies["cchis_refresh"].value, "")
+
+    @override_settings(AUTH_REFRESH_PREVIOUS_JTI_GRACE_SECONDS=0)
+    def test_session_bootstrap_replayed_refresh_revokes_session_family(self):
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+        verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": login_response.data["temp_token"],
+                "code": generate_current_totp_code(self.admin_user.totp_secret),
+            },
+            format="json",
+        )
+        original_refresh = verify_response.data["refresh"]
+        user_session = UserSession.objects.get(user=self.admin_user)
+
+        self.client.cookies.pop(settings.AUTH_ACCESS_COOKIE_NAME, None)
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = original_refresh
+        bootstrap_response = self.client.get(reverse("auth-session"))
+        self.assertEqual(bootstrap_response.status_code, status.HTTP_200_OK)
+        self.assertTrue(bootstrap_response.data["authenticated"])
+        self.assertNotEqual(bootstrap_response.cookies[settings.AUTH_REFRESH_COOKIE_NAME].value, original_refresh)
+
+        self.client.cookies.pop(settings.AUTH_ACCESS_COOKIE_NAME, None)
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = original_refresh
+        replay_response = self.client.get(reverse("auth-session"))
+
+        self.assertEqual(replay_response.status_code, status.HTTP_200_OK)
+        self.assertFalse(replay_response.data["authenticated"])
+        self.assertEqual(replay_response.cookies[settings.AUTH_REFRESH_COOKIE_NAME].value, "")
+        self.assertEqual(replay_response.cookies[settings.AUTH_ACCESS_COOKIE_NAME].value, "")
+        user_session.refresh_from_db()
+        self.assertIsNotNone(user_session.revoked_at)
+        self.assertEqual(user_session.revoked_reason, "refresh_replay_detected")
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_SESSION_REPLAY_DETECTED,
+                status=AuthAuditEvent.STATUS_FAILED,
+                target_user=self.admin_user,
+                metadata__session_id=str(user_session.public_id),
+            ).exists()
+        )
 
     def test_session_returns_unauthenticated_without_session(self):
         response = self.client.get(reverse("auth-session"))
@@ -1663,6 +1987,7 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         )
         access = verify_response.data["access"]
         refresh = verify_response.data["refresh"]
+        user_session = UserSession.objects.get(user=self.admin_user)
 
         self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = refresh
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
@@ -1671,10 +1996,186 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(logout_response.status_code, status.HTTP_205_RESET_CONTENT)
         self.assertEqual(logout_response.cookies[settings.AUTH_REFRESH_COOKIE_NAME].value, "")
         self.assertEqual(logout_response.cookies[settings.AUTH_ACCESS_COOKIE_NAME].value, "")
+        user_session.refresh_from_db()
+        self.assertIsNotNone(user_session.revoked_at)
+        self.assertEqual(user_session.revoked_by, self.admin_user)
+        self.assertEqual(user_session.revoked_reason, "logout")
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_SESSION_REVOKED,
+                status=AuthAuditEvent.STATUS_SUCCESS,
+                target_user=self.admin_user,
+                metadata__session_id=str(user_session.public_id),
+            ).exists()
+        )
 
         refresh_response = self.client.post(reverse("auth-refresh"), {}, format="json")
         self.assertEqual(refresh_response.status_code, status.HTTP_401_UNAUTHORIZED)
 
+    def test_cookie_auth_write_rejects_cross_site_origin(self):
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+        verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": login_response.data["temp_token"],
+                "code": generate_current_totp_code(self.admin_user.totp_secret),
+            },
+            format="json",
+        )
+        user_session = UserSession.objects.get(user=self.admin_user)
+
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = verify_response.data["refresh"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {verify_response.data['access']}")
+        response = self.client.post(
+            reverse("auth-logout"),
+            {},
+            format="json",
+            HTTP_ORIGIN="https://evil.example",
+            HTTP_SEC_FETCH_SITE="cross-site",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(json.loads(response.content)["code"], "cross_site_request_rejected")
+        user_session.refresh_from_db()
+        self.assertIsNone(user_session.revoked_at)
+
+    def test_cookie_auth_write_requires_origin_or_referer(self):
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+        verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": login_response.data["temp_token"],
+                "code": generate_current_totp_code(self.admin_user.totp_secret),
+            },
+            format="json",
+        )
+        self.client.defaults.pop("HTTP_ORIGIN", None)
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = verify_response.data["refresh"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {verify_response.data['access']}")
+
+        response = self.client.post(reverse("auth-logout"), {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(json.loads(response.content)["code"], "cross_site_request_rejected")
+
+    def test_cookie_auth_write_accepts_frontend_origin(self):
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+        verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": login_response.data["temp_token"],
+                "code": generate_current_totp_code(self.admin_user.totp_secret),
+            },
+            format="json",
+        )
+
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = verify_response.data["refresh"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {verify_response.data['access']}")
+        response = self.client.post(
+            reverse("auth-logout"),
+            {},
+            format="json",
+            HTTP_ORIGIN=settings.FRONTEND_APP_URL,
+            HTTP_SEC_FETCH_SITE="same-origin",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_205_RESET_CONTENT)
+
+    def test_session_management_lists_current_session(self):
+        self.authenticate(self.admin_user.username)
+
+        response = self.client.get(reverse("auth-session-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["capabilities"]["mode"], "self_scoped_session_management")
+        self.assertTrue(response.data["capabilities"]["can_review_sessions"])
+        self.assertEqual(len(response.data["sessions"]), 1)
+        session = response.data["sessions"][0]
+        self.assertEqual(session["status"], "current")
+        self.assertTrue(session["is_current"])
+        self.assertTrue(session["is_active"])
+        self.assertEqual(response.data["current_session_id"], session["public_id"])
+        self.assertIn("device_label", session)
+        self.assertEqual(session["location_label"], "Network fingerprint stored")
+
+    def test_session_management_revokes_session_and_blocks_refresh(self):
+        self.authenticate(self.admin_user.username)
+        refresh_cookie = self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME].value
+        first_session = UserSession.objects.get(user=self.admin_user)
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.post(
+            reverse("auth-session-revoke", args=[first_session.public_id]),
+            {},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["revoked_count"], 1)
+        self.assertFalse(response.data["current_session_revoked"])
+        first_session.refresh_from_db()
+        self.assertIsNotNone(first_session.revoked_at)
+        self.assertEqual(first_session.revoked_by, self.admin_user)
+
+        self.client.credentials()
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = refresh_cookie
+        refresh_response = self.client.post(reverse("auth-refresh"), {}, format="json")
+        self.assertEqual(refresh_response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_revoke_other_sessions_requires_step_up_and_keeps_current_session(self):
+        self.authenticate(self.admin_user.username)
+        first_session = UserSession.objects.get(user=self.admin_user)
+        self.authenticate(self.admin_user.username)
+        current_session = UserSession.objects.filter(
+            user=self.admin_user,
+            revoked_at__isnull=True,
+        ).order_by("-last_seen_at", "-created_at").first()
+
+        blocked_response = self.client.post(reverse("auth-session-revoke-others"), {}, format="json")
+
+        self.assertEqual(blocked_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(str(blocked_response.data["code"]), "step_up_required")
+        self.assertEqual(str(blocked_response.data["purpose"]), StepUpGrant.PURPOSE_SECURITY_ADMIN)
+
+        self.grant_step_up(self.admin_user, StepUpGrant.PURPOSE_SECURITY_ADMIN)
+        response = self.client.post(reverse("auth-session-revoke-others"), {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["revoked_count"], 1)
+        self.assertFalse(response.data["current_session_revoked"])
+        first_session.refresh_from_db()
+        current_session.refresh_from_db()
+        self.assertIsNotNone(first_session.revoked_at)
+        self.assertIsNone(current_session.revoked_at)
+
+    def test_revoke_all_sessions_requires_step_up_and_clears_current_cookies(self):
+        self.authenticate(self.admin_user.username)
+        current_session = UserSession.objects.get(user=self.admin_user)
+        self.grant_step_up(self.admin_user, StepUpGrant.PURPOSE_SECURITY_ADMIN)
+
+        response = self.client.post(reverse("auth-session-revoke-all"), {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["revoked_count"], 1)
+        self.assertTrue(response.data["current_session_revoked"])
+        self.assertEqual(response.cookies[settings.AUTH_REFRESH_COOKIE_NAME].value, "")
+        self.assertEqual(response.cookies[settings.AUTH_ACCESS_COOKIE_NAME].value, "")
+        current_session.refresh_from_db()
+        self.assertIsNotNone(current_session.revoked_at)
+
+    @override_settings(AUTH_REFRESH_PREVIOUS_JTI_GRACE_SECONDS=0)
     def test_refresh_rotates_token(self):
         login_response = self.client.post(
             reverse("auth-login"),
@@ -1714,6 +2215,179 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
             ).exists()
         )
 
+    @override_settings(AUTH_REFRESH_PREVIOUS_JTI_GRACE_SECONDS=0)
+    def test_refresh_replay_revokes_session_family_after_grace(self):
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+        verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": login_response.data["temp_token"],
+                "code": generate_current_totp_code(self.admin_user.totp_secret),
+            },
+            format="json",
+        )
+        refresh = verify_response.data["refresh"]
+        original_refresh = RefreshToken(refresh)
+        user_session = UserSession.objects.get(user=self.admin_user)
+
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = refresh
+        refresh_response = self.client.post(reverse("auth-refresh"), {}, format="json")
+        self.assertEqual(refresh_response.status_code, status.HTTP_200_OK)
+        rotated_refresh = RefreshToken(refresh_response.data["refresh"])
+
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = refresh
+        with self.captureOnCommitCallbacks(execute=True):
+            replay_response = self.client.post(reverse("auth-refresh"), {}, format="json")
+
+        self.assertEqual(replay_response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(
+            replay_response.data["detail"],
+            "We signed you out because this session looked unsafe. Please sign in again.",
+        )
+        self.assertEqual(replay_response.cookies[settings.AUTH_REFRESH_COOKIE_NAME].value, "")
+        self.assertEqual(replay_response.cookies[settings.AUTH_ACCESS_COOKIE_NAME].value, "")
+        user_session.refresh_from_db()
+        self.assertIsNotNone(user_session.revoked_at)
+        self.assertEqual(user_session.revoked_reason, "refresh_replay_detected")
+        self.assertTrue(user_session.is_suspicious)
+        self.assertEqual(user_session.suspicion_reason, "refresh_replay_detected")
+        self.assertTrue(BlacklistedToken.objects.filter(token__jti=str(original_refresh["jti"])).exists())
+        self.assertTrue(BlacklistedToken.objects.filter(token__jti=str(rotated_refresh["jti"])).exists())
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_SESSION_REPLAY_DETECTED,
+                status=AuthAuditEvent.STATUS_FAILED,
+                target_user=self.admin_user,
+                metadata__session_id=str(user_session.public_id),
+            ).exists()
+        )
+        self.assertTrue(
+            DashboardNotification.objects.filter(
+                type=DashboardNotification.TYPE_SESSION_REPLAY_DETECTED,
+                recipient_user=self.admin_user,
+                metadata__session_id=str(user_session.public_id),
+            ).exists()
+        )
+        self.assertTrue(
+            DashboardNotification.objects.filter(
+                type=DashboardNotification.TYPE_SESSION_REPLAY_DETECTED,
+                recipient_role=User.ROLE_ADMIN,
+                recipient_user__isnull=True,
+                metadata__session_id=str(user_session.public_id),
+            ).exists()
+        )
+
+    def test_concurrent_refresh_inside_grace_does_not_revoke_session_or_clear_cookies(self):
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+        verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": login_response.data["temp_token"],
+                "code": generate_current_totp_code(self.admin_user.totp_secret),
+            },
+            format="json",
+        )
+        original_refresh = verify_response.data["refresh"]
+        user_session = UserSession.objects.get(user=self.admin_user)
+
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = original_refresh
+        refresh_response = self.client.post(reverse("auth-refresh"), {}, format="json")
+        self.assertEqual(refresh_response.status_code, status.HTTP_200_OK)
+
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = original_refresh
+        concurrent_response = self.client.post(reverse("auth-refresh"), {}, format="json")
+
+        self.assertEqual(concurrent_response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", concurrent_response.data)
+        self.assertNotIn("refresh", concurrent_response.data)
+        self.assertIsNone(concurrent_response.cookies.get(settings.AUTH_REFRESH_COOKIE_NAME))
+        self.assertIsNotNone(concurrent_response.cookies.get(settings.AUTH_ACCESS_COOKIE_NAME))
+        user_session.refresh_from_db()
+        self.assertIsNone(user_session.revoked_at)
+        self.assertFalse(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_SESSION_REPLAY_DETECTED,
+                target_user=self.admin_user,
+                metadata__session_id=str(user_session.public_id),
+            ).exists()
+        )
+
+    def test_session_context_change_notifies_admins(self):
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.chv_user.username, "password": self.password},
+            format="json",
+            HTTP_USER_AGENT="CCHIS Test Browser A",
+        )
+        user_session = UserSession.objects.get(user=self.chv_user)
+
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = login_response.data["refresh"]
+        refresh_response = self.client.post(
+            reverse("auth-refresh"),
+            {},
+            format="json",
+            HTTP_USER_AGENT="CCHIS Test Browser B",
+        )
+
+        self.assertEqual(refresh_response.status_code, status.HTTP_200_OK)
+        user_session.refresh_from_db()
+        self.assertTrue(user_session.is_suspicious)
+        self.assertEqual(user_session.suspicion_reason, "user_agent_changed")
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_SESSION_CONTEXT_CHANGED,
+                status=AuthAuditEvent.STATUS_SUCCESS,
+                target_user=self.chv_user,
+                metadata__session_id=str(user_session.public_id),
+                metadata__changed_fields__contains=["user_agent"],
+            ).exists()
+        )
+        self.assertTrue(
+            DashboardNotification.objects.filter(
+                type=DashboardNotification.TYPE_SESSION_CONTEXT_CHANGED,
+                recipient_role=User.ROLE_ADMIN,
+                metadata__session_id=str(user_session.public_id),
+                metadata__changed_fields__contains=["user_agent"],
+            ).exists()
+        )
+
+    def test_admin_new_device_login_notifies_admins(self):
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+            HTTP_USER_AGENT="CCHIS Admin Browser A",
+        )
+
+        verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": login_response.data["temp_token"],
+                "code": generate_current_totp_code(self.admin_user.totp_secret),
+            },
+            format="json",
+            HTTP_USER_AGENT="CCHIS Admin Browser A",
+        )
+
+        self.assertEqual(verify_response.status_code, status.HTTP_200_OK)
+        user_session = UserSession.objects.get(user=self.admin_user)
+        self.assertTrue(
+            DashboardNotification.objects.filter(
+                type=DashboardNotification.TYPE_ADMIN_NEW_DEVICE,
+                recipient_role=User.ROLE_ADMIN,
+                metadata__session_id=str(user_session.public_id),
+                metadata__username=self.admin_user.username,
+            ).exists()
+        )
+
     def test_refresh_accepts_refresh_cookie_without_request_body(self):
         login_response = self.client.post(
             reverse("auth-login"),
@@ -1741,6 +2415,142 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         self.assertIsNotNone(access_cookie)
         self.assertEqual(refresh_cookie.value, refresh_response.data["refresh"])
         self.assertEqual(access_cookie.value, refresh_response.data["access"])
+
+    @override_settings(AUTH_TOKEN_RESPONSE_MODE="cookie_only")
+    def test_cookie_only_token_response_omits_refresh_token_body_but_rotates_cookies(self):
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.chv_user.username, "password": self.password},
+            format="json",
+        )
+
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = login_response.cookies[
+            settings.AUTH_REFRESH_COOKIE_NAME
+        ].value
+        refresh_response = self.client.post(reverse("auth-refresh"), {}, format="json")
+
+        self.assertEqual(refresh_response.status_code, status.HTTP_200_OK)
+        self.assertNotIn("access", refresh_response.data)
+        self.assertNotIn("refresh", refresh_response.data)
+        self.assertTrue(refresh_response.data["session_established"])
+        self.assertIsNotNone(refresh_response.cookies.get(settings.AUTH_REFRESH_COOKIE_NAME))
+        self.assertIsNotNone(refresh_response.cookies.get(settings.AUTH_ACCESS_COOKIE_NAME))
+
+    def test_refresh_updates_existing_session_ledger(self):
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+        verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": login_response.data["temp_token"],
+                "code": generate_current_totp_code(self.admin_user.totp_secret),
+            },
+            format="json",
+        )
+        original_refresh = RefreshToken(verify_response.data["refresh"])
+        user_session = UserSession.objects.get(user=self.admin_user)
+        original_session_public_id = user_session.public_id
+
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = verify_response.data["refresh"]
+        refresh_response = self.client.post(reverse("auth-refresh"), {}, format="json")
+
+        self.assertEqual(refresh_response.status_code, status.HTTP_200_OK)
+        rotated_refresh = RefreshToken(refresh_response.data["refresh"])
+        user_session.refresh_from_db()
+        self.assertEqual(user_session.public_id, original_session_public_id)
+        self.assertEqual(str(user_session.public_id), rotated_refresh["sid"])
+        self.assertEqual(user_session.previous_refresh_jti_hash, hash_refresh_jti(str(original_refresh["jti"])))
+        self.assertEqual(user_session.current_refresh_jti_hash, hash_refresh_jti(str(rotated_refresh["jti"])))
+        self.assertIsNotNone(user_session.previous_refresh_grace_until)
+        self.assertIsNotNone(user_session.last_rotated_at)
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_SESSION_REFRESHED,
+                status=AuthAuditEvent.STATUS_SUCCESS,
+                target_user=self.admin_user,
+                metadata__session_id=str(user_session.public_id),
+            ).exists()
+        )
+
+    def test_expired_role_session_rejects_refresh_with_clear_message(self):
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+        verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": login_response.data["temp_token"],
+                "code": generate_current_totp_code(self.admin_user.totp_secret),
+            },
+            format="json",
+        )
+        session = UserSession.objects.get(user=self.admin_user)
+        UserSession.objects.filter(pk=session.pk).update(expires_at=timezone.now() - timedelta(minutes=1))
+
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = verify_response.data["refresh"]
+        response = self.client.post(reverse("auth-refresh"), {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(response.data["code"], "session_expired")
+        self.assertEqual(response.data["detail"], "Your session has expired. Please sign in again.")
+        self.assertEqual(response.cookies[settings.AUTH_REFRESH_COOKIE_NAME].value, "")
+        self.assertEqual(response.cookies[settings.AUTH_ACCESS_COOKIE_NAME].value, "")
+
+    def test_expired_role_capped_refresh_token_uses_clear_session_message(self):
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.chv_user.username, "password": self.password},
+            format="json",
+        )
+        refresh = RefreshToken(login_response.data["refresh"])
+        refresh.set_exp(from_time=timezone.now() - timedelta(hours=2), lifetime=timedelta(minutes=1))
+        session = UserSession.objects.get(user=self.chv_user)
+        UserSession.objects.filter(pk=session.pk).update(expires_at=timezone.now() - timedelta(minutes=1))
+
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = str(refresh)
+        response = self.client.post(reverse("auth-refresh"), {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(response.data["code"], "session_expired")
+        self.assertEqual(response.data["detail"], "Your session has expired. Please sign in again.")
+        session.refresh_from_db()
+        self.assertIsNone(session.revoked_at)
+        self.assertFalse(session.is_suspicious)
+
+    @override_settings(AUTH_SESSION_IDLE_TIMEOUT_ADMIN_MINUTES=1)
+    def test_idle_admin_session_rejects_refresh_with_clear_message(self):
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+        verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": login_response.data["temp_token"],
+                "code": generate_current_totp_code(self.admin_user.totp_secret),
+            },
+            format="json",
+        )
+        session = UserSession.objects.get(user=self.admin_user)
+        UserSession.objects.filter(pk=session.pk).update(last_seen_at=timezone.now() - timedelta(minutes=2))
+
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = verify_response.data["refresh"]
+        response = self.client.post(reverse("auth-refresh"), {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(response.data["code"], "session_idle_timeout")
+        self.assertEqual(
+            response.data["detail"],
+            "Your session expired after a period of inactivity. Please sign in again.",
+        )
+        self.assertEqual(response.cookies[settings.AUTH_REFRESH_COOKIE_NAME].value, "")
+        self.assertEqual(response.cookies[settings.AUTH_ACCESS_COOKIE_NAME].value, "")
 
     @override_settings(
         AUTH_REFRESH_FAILURE_LIMIT=2,
@@ -1790,6 +2600,7 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
 
     def test_admin_can_register_user(self):
         self.authenticate(self.admin_user.username)
+        self.grant_step_up(self.admin_user, StepUpGrant.PURPOSE_ADMIN_ACTIONS)
         response = self.client.post(
             reverse("auth-register"),
             {
@@ -1818,6 +2629,7 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
 
     def test_admin_register_requires_strong_password(self):
         self.authenticate(self.admin_user.username)
+        self.grant_step_up(self.admin_user, StepUpGrant.PURPOSE_ADMIN_ACTIONS)
         response = self.client.post(
             reverse("auth-register"),
             {
@@ -1836,6 +2648,7 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
 
     def test_admin_register_requires_ward_for_chv(self):
         self.authenticate(self.admin_user.username)
+        self.grant_step_up(self.admin_user, StepUpGrant.PURPOSE_ADMIN_ACTIONS)
         response = self.client.post(
             reverse("auth-register"),
             {
@@ -1854,6 +2667,7 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
 
     def test_admin_register_normalizes_email(self):
         self.authenticate(self.admin_user.username)
+        self.grant_step_up(self.admin_user, StepUpGrant.PURPOSE_ADMIN_ACTIONS)
         response = self.client.post(
             reverse("auth-register"),
             {
@@ -1873,6 +2687,159 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
             "email_user@example.com",
         )
 
+    def test_high_risk_admin_action_requires_step_up(self):
+        self.authenticate(self.admin_user.username)
+        response = self.client.post(
+            reverse("auth-user-deactivate", kwargs={"user_id": self.chv_user.id}),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(
+            str(response.data["detail"]),
+            "This action needs a quick security check. Enter your authenticator code to continue.",
+        )
+        self.assertEqual(str(response.data["code"]), "step_up_required")
+        self.assertEqual(str(response.data["purpose"]), StepUpGrant.PURPOSE_ADMIN_ACTIONS)
+        self.chv_user.refresh_from_db()
+        self.assertTrue(self.chv_user.is_active)
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_STEP_UP_REQUIRED,
+                status=AuthAuditEvent.STATUS_FAILED,
+                actor=self.admin_user,
+                metadata__purpose=StepUpGrant.PURPOSE_ADMIN_ACTIONS,
+            ).exists()
+        )
+
+    def test_high_risk_step_up_action_records_completed_audit_event(self):
+        self.authenticate(self.admin_user.username)
+        self.grant_step_up(self.admin_user, StepUpGrant.PURPOSE_ADMIN_ACTIONS)
+
+        response = self.client.post(
+            reverse("auth-user-deactivate", kwargs={"user_id": self.chv_user.id}),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_HIGH_RISK_ACTION_COMPLETED,
+                status=AuthAuditEvent.STATUS_SUCCESS,
+                actor=self.admin_user,
+                metadata__purpose=StepUpGrant.PURPOSE_ADMIN_ACTIONS,
+                metadata__path=reverse("auth-user-deactivate", kwargs={"user_id": self.chv_user.id}),
+                metadata__method="POST",
+            ).exists()
+        )
+
+    def test_step_up_verify_unlocks_admin_action_for_current_session(self):
+        self.authenticate(self.admin_user.username)
+        verify_response = self.client.post(
+            reverse("auth-step-up-verify"),
+            {
+                "purpose": StepUpGrant.PURPOSE_ADMIN_ACTIONS,
+                "code": generate_current_totp_code(self.admin_user.totp_secret),
+            },
+            format="json",
+        )
+
+        self.assertEqual(verify_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(verify_response.data["detail"], "Security check confirmed.")
+        self.assertEqual(verify_response.data["purpose"], StepUpGrant.PURPOSE_ADMIN_ACTIONS)
+
+        response = self.client.post(
+            reverse("auth-user-deactivate", kwargs={"user_id": self.chv_user.id}),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.chv_user.refresh_from_db()
+        self.assertFalse(self.chv_user.is_active)
+        self.assertTrue(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_STEP_UP_VERIFIED,
+                status=AuthAuditEvent.STATUS_SUCCESS,
+                actor=self.admin_user,
+                metadata__purpose=StepUpGrant.PURPOSE_ADMIN_ACTIONS,
+            ).exists()
+        )
+
+    @override_settings(
+        AUTH_STEP_UP_FAILURE_NOTIFICATION_THRESHOLD=2,
+        AUTH_STEP_UP_FAILURE_NOTIFICATION_WINDOW_MINUTES=15,
+        AUTH_2FA_FAILURE_LIMIT=50,
+    )
+    def test_failed_step_up_attempts_notify_admins(self):
+        cache.clear()
+        self.authenticate(self.admin_user.username)
+
+        for _ in range(2):
+            response = self.client.post(
+                reverse("auth-step-up-verify"),
+                {
+                    "purpose": StepUpGrant.PURPOSE_SECURITY_ADMIN,
+                    "code": "not-a-real-code",
+                },
+                format="json",
+            )
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        self.assertTrue(
+            DashboardNotification.objects.filter(
+                type=DashboardNotification.TYPE_STEP_UP_FAILURE_SPIKE,
+                recipient_role=User.ROLE_ADMIN,
+                metadata__user_id=self.admin_user.id,
+                metadata__purpose=StepUpGrant.PURPOSE_SECURITY_ADMIN,
+                metadata__failed_count=2,
+            ).exists()
+        )
+
+    def test_step_up_grant_is_bound_to_current_session(self):
+        self.authenticate(self.admin_user.username)
+        verify_response = self.client.post(
+            reverse("auth-step-up-verify"),
+            {
+                "purpose": StepUpGrant.PURPOSE_ADMIN_ACTIONS,
+                "code": generate_current_totp_code(self.admin_user.totp_secret),
+            },
+            format="json",
+        )
+        self.assertEqual(verify_response.status_code, status.HTTP_200_OK)
+
+        self.authenticate(self.admin_user.username)
+        response = self.client.post(
+            reverse("auth-user-deactivate", kwargs={"user_id": self.chv_user.id}),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(str(response.data["code"]), "step_up_required")
+        self.chv_user.refresh_from_db()
+        self.assertTrue(self.chv_user.is_active)
+
+    def test_expired_step_up_grant_does_not_unlock_admin_action(self):
+        self.authenticate(self.admin_user.username)
+        session = UserSession.objects.filter(user=self.admin_user).order_by("-last_seen_at").first()
+        StepUpGrant.objects.create(
+            user=self.admin_user,
+            session=session,
+            purpose=StepUpGrant.PURPOSE_ADMIN_ACTIONS,
+            verified_at=timezone.now() - timedelta(minutes=20),
+            expires_at=timezone.now() - timedelta(minutes=10),
+            method=StepUpGrant.METHOD_TOTP,
+        )
+
+        response = self.client.post(
+            reverse("auth-user-deactivate", kwargs={"user_id": self.chv_user.id}),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(str(response.data["code"]), "step_up_required")
+        self.chv_user.refresh_from_db()
+        self.assertTrue(self.chv_user.is_active)
+
     def test_change_password_updates_credentials_and_blacklists_refresh_tokens(self):
         response = self.client.post(
             reverse("auth-login"),
@@ -1881,6 +2848,7 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         )
         refresh = response.data["refresh"]
         access = response.data["access"]
+        user_session = UserSession.objects.get(user=self.chv_user)
 
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
         change_response = self.client.post(
@@ -1893,7 +2861,16 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         )
 
         self.assertEqual(change_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(change_response.cookies[settings.AUTH_REFRESH_COOKIE_NAME].value, "")
+        self.assertEqual(change_response.cookies[settings.AUTH_ACCESS_COOKIE_NAME].value, "")
+        user_session.refresh_from_db()
+        self.assertIsNotNone(user_session.revoked_at)
+        self.assertEqual(user_session.revoked_reason, "password_changed")
 
+        stale_access_response = self.client.get(reverse("auth-me"))
+        self.assertEqual(stale_access_response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+        self.client.credentials()
         old_login = self.client.post(
             reverse("auth-login"),
             {"username": self.chv_user.username, "password": self.password},
@@ -1991,6 +2968,7 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
             format="json",
         )
         refresh = login_response.data["refresh"]
+        user_session = UserSession.objects.get(user=self.chv_user)
         token_record = PasswordResetToken.objects.create(
             user=self.chv_user,
             token="reset-token-123",
@@ -2006,6 +2984,9 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         token_record.refresh_from_db()
         self.assertIsNotNone(token_record.used_at)
+        user_session.refresh_from_db()
+        self.assertIsNotNone(user_session.revoked_at)
+        self.assertEqual(user_session.revoked_reason, "password_reset_completed")
 
         old_login = self.client.post(
             reverse("auth-login"),
@@ -2427,6 +3408,7 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         )
 
         self.authenticate(self.admin_user.username)
+        self.grant_step_up(self.admin_user, StepUpGrant.PURPOSE_ADMIN_ACTIONS)
         response = self.client.post(
             reverse("access-request-approve", kwargs={"request_id": access_request.id}),
             {"message": "Your request has been approved for onboarding."},
@@ -2453,6 +3435,7 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         )
 
         self.authenticate(self.admin_user.username)
+        self.grant_step_up(self.admin_user, StepUpGrant.PURPOSE_ADMIN_ACTIONS)
         response = self.client.post(
             reverse("access-request-reject", kwargs={"request_id": access_request.id}),
             {"message": "We cannot approve this request at this time."},
@@ -2551,8 +3534,10 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         )
         refresh = login_response.data["refresh"]
         access = login_response.data["access"]
+        user_session = UserSession.objects.get(user=self.chv_user)
 
         self.authenticate(self.admin_user.username)
+        self.grant_step_up(self.admin_user, StepUpGrant.PURPOSE_ADMIN_ACTIONS)
         deactivate_response = self.client.post(
             reverse("auth-user-deactivate", kwargs={"user_id": self.chv_user.id}),
             format="json",
@@ -2561,6 +3546,9 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
 
         self.chv_user.refresh_from_db()
         self.assertFalse(self.chv_user.is_active)
+        user_session.refresh_from_db()
+        self.assertIsNotNone(user_session.revoked_at)
+        self.assertEqual(user_session.revoked_reason, "user_deactivated")
 
         login_after_deactivate = self.client.post(
             reverse("auth-login"),
@@ -2582,6 +3570,7 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(me_after_deactivate.status_code, status.HTTP_401_UNAUTHORIZED)
 
         self.authenticate(self.admin_user.username)
+        self.grant_step_up(self.admin_user, StepUpGrant.PURPOSE_ADMIN_ACTIONS)
         reactivate_response = self.client.post(
             reverse("auth-user-reactivate", kwargs={"user_id": self.chv_user.id}),
             format="json",
@@ -2633,6 +3622,7 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         )
 
         self.authenticate(self.admin_user.username)
+        self.grant_step_up(self.admin_user, StepUpGrant.PURPOSE_SECURITY_ADMIN)
         response = self.client.get(reverse("auth-audit-events"))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -2655,6 +3645,7 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         )
 
         self.authenticate(self.admin_user.username)
+        self.grant_step_up(self.admin_user, StepUpGrant.PURPOSE_SECURITY_ADMIN)
         response = self.client.get(
             reverse("auth-audit-events"),
             {"status": AuthAuditEvent.STATUS_FAILED},
@@ -2684,6 +3675,7 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         )
 
         self.authenticate(self.admin_user.username)
+        self.grant_step_up(self.admin_user, StepUpGrant.PURPOSE_SECURITY_ADMIN)
         response = self.client.get(reverse("auth-audit-summary"))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -3064,6 +4056,13 @@ class RecoveryDisciplineTestCase(APITestCase):
 
 
 class RiskPermissionsTestCase(AuthenticatedAPITestCase):
+    def authenticate(self, username: str, password: str | None = None) -> str:
+        token = super().authenticate(username, password=password)
+        user = User.objects.get(username=username)
+        if user.role in [User.ROLE_ADMIN, User.ROLE_SUPERVISOR]:
+            self.grant_step_up(user, StepUpGrant.PURPOSE_OPERATIONAL_DATA)
+        return token
+
     def test_ward_list_requires_authentication(self):
         response = self.client.get(reverse("ward-list"))
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
@@ -3923,6 +4922,7 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         )
 
         self.authenticate(self.admin_user.username)
+        self.grant_step_up(self.admin_user, StepUpGrant.PURPOSE_ALERT_DELIVERY)
         with patch("risk.services.resolve_chv_message_mode", return_value="SEND"):
             response = self.client.post(
                 reverse("chv-message-list-create", args=[self.chv.public_id]),
@@ -3945,6 +4945,7 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
 
     def test_admin_can_queue_chv_message_when_live_send_is_unavailable(self):
         self.authenticate(self.admin_user.username)
+        self.grant_step_up(self.admin_user, StepUpGrant.PURPOSE_ALERT_DELIVERY)
         with patch("risk.services.resolve_chv_message_mode", return_value="QUEUE_ONLY"):
             response = self.client.post(
                 reverse("chv-message-list-create", args=[self.chv.public_id]),
@@ -3963,6 +4964,7 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
 
     def test_admin_cannot_create_chv_message_when_messaging_is_unavailable(self):
         self.authenticate(self.admin_user.username)
+        self.grant_step_up(self.admin_user, StepUpGrant.PURPOSE_ALERT_DELIVERY)
         with patch("risk.services.resolve_chv_message_mode", return_value="UNAVAILABLE"):
             response = self.client.post(
                 reverse("chv-message-list-create", args=[self.chv.public_id]),
@@ -4390,6 +5392,19 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]["ward"], self.ward.id)
+
+    def test_facility_readiness_review_create_requires_fresh_step_up(self):
+        AuthenticatedAPITestCase.authenticate(self, self.admin_user.username)
+        response = self.client.post(
+            reverse("facility-readiness-review-create", args=[self.health_facility.id]),
+            {"notes": "Review stale readiness inputs."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(str(response.data["code"]), "step_up_required")
+        self.assertEqual(str(response.data["purpose"]), StepUpGrant.PURPOSE_OPERATIONAL_DATA)
+        self.assertEqual(FacilityReadinessReview.objects.count(), 0)
 
     def test_admin_can_create_facility_readiness_review(self):
         self.authenticate(self.admin_user.username)
@@ -6131,8 +7146,11 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.data["expires_in_seconds"], 300)
 
         validated = AccessToken(response.data["token"])
+        user_session = UserSession.objects.get(user=self.analyst_user)
         self.assertEqual(validated["purpose"], "dashboard_notifications_stream")
         self.assertEqual(validated["role"], self.analyst_user.role)
+        self.assertEqual(validated["sid"], str(user_session.public_id))
+        self.assertEqual(validated["family"], str(user_session.token_family_id))
 
     def test_model_run_list_exposes_latest_runs(self):
         self.authenticate(self.analyst_user.username)
@@ -6413,6 +7431,7 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
     @patch("risk.views.trigger_alerts_task.delay", return_value=SimpleNamespace(id="task-123"))
     def test_supervisor_can_queue_alert_trigger(self, mock_delay):
         self.authenticate(self.supervisor_user.username)
+        self.grant_step_up(self.supervisor_user, StepUpGrant.PURPOSE_ALERT_DELIVERY)
         response = self.client.post(
             reverse("trigger-alerts"),
             {
@@ -6478,6 +7497,7 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
             public_health_caveats="Use only for governed cholera alert workflows.",
         )
         self.authenticate(self.supervisor_user.username)
+        self.grant_step_up(self.supervisor_user, StepUpGrant.PURPOSE_ALERT_DELIVERY)
 
         response = self.client.post(
             reverse("trigger-alerts"),
@@ -6509,6 +7529,7 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
 
     def test_trigger_alert_requires_explicit_ward_context(self):
         self.authenticate(self.supervisor_user.username)
+        self.grant_step_up(self.supervisor_user, StepUpGrant.PURPOSE_ALERT_DELIVERY)
         response = self.client.post(
             reverse("trigger-alerts"),
             {"send_sms": False},
@@ -6521,6 +7542,7 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
     @patch("risk.views.trigger_alerts_task.delay", return_value=SimpleNamespace(id="task-123"))
     def test_trigger_request_status_returns_pending_before_alert_materialization(self, mock_delay):
         self.authenticate(self.supervisor_user.username)
+        self.grant_step_up(self.supervisor_user, StepUpGrant.PURPOSE_ALERT_DELIVERY)
         response = self.client.post(
             reverse("trigger-alerts"),
             {"ward_id": self.other_ward.id, "send_sms": False},
@@ -6572,6 +7594,7 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
     @patch("risk.views.trigger_alerts_task.delay", return_value=SimpleNamespace(id="task-123"))
     def test_supervisor_cannot_trigger_alerts_outside_assigned_ward(self, mock_delay):
         self.authenticate(self.supervisor_user.username)
+        self.grant_step_up(self.supervisor_user, StepUpGrant.PURPOSE_ALERT_DELIVERY)
         response = self.client.post(
             reverse("trigger-alerts"),
             {"ward_id": self.ward.id, "send_sms": True},
@@ -6592,6 +7615,7 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         )
 
         self.authenticate(self.supervisor_user.username)
+        self.grant_step_up(self.supervisor_user, StepUpGrant.PURPOSE_ALERT_DELIVERY)
         response = self.client.post(
             reverse("trigger-alerts"),
             {"ward_id": empty_ward.id, "send_sms": False},
@@ -6795,6 +7819,7 @@ class SystemControlContractsTestCase(AuthenticatedAPITestCase):
             status=Alert.STATUS_DELIVERED,
         )
         self.authenticate(self.admin_user.username)
+        self.grant_step_up(self.admin_user, StepUpGrant.PURPOSE_SYSTEM_CONTROLS)
 
         response = self.client.post(reverse("system-control-retry"), {"limit": 10}, format="json")
 
@@ -6807,6 +7832,7 @@ class SystemControlContractsTestCase(AuthenticatedAPITestCase):
     @patch("risk.views.run_risk_model_task.delay", return_value=SimpleNamespace(id="risk-task"))
     def test_manual_risk_scoring_control_queues_model_task(self, mock_delay):
         self.authenticate(self.admin_user.username)
+        self.grant_step_up(self.admin_user, StepUpGrant.PURPOSE_SYSTEM_CONTROLS)
 
         response = self.client.post(
             reverse("system-control-manual-risk-scoring"),
@@ -6830,6 +7856,7 @@ class SystemControlContractsTestCase(AuthenticatedAPITestCase):
     @patch("risk.services.send_sms")
     def test_alert_delivery_pause_persists_and_defers_sms_attempts(self, mock_send_sms):
         self.authenticate(self.admin_user.username)
+        self.grant_step_up(self.admin_user, StepUpGrant.PURPOSE_SYSTEM_CONTROLS)
         pause_response = self.client.post(
             reverse("system-control-alert-delivery-pause"),
             {"paused": True, "duration_minutes": 30, "reason": "Maintenance window"},
@@ -6860,6 +7887,7 @@ class SystemControlContractsTestCase(AuthenticatedAPITestCase):
 
     def test_alert_delivery_resume_clears_pause(self):
         self.authenticate(self.admin_user.username)
+        self.grant_step_up(self.admin_user, StepUpGrant.PURPOSE_SYSTEM_CONTROLS)
         self.client.post(
             reverse("system-control-alert-delivery-pause"),
             {"paused": True, "duration_minutes": 30, "reason": "Maintenance window"},
@@ -9225,6 +10253,32 @@ class CHVCoverageWorkflowModelTestCase(AuthenticatedAPITestCase):
 
 
 class CHVCoverageWorkflowApiTestCase(AuthenticatedAPITestCase):
+    def authenticate(self, username: str, password: str | None = None) -> str:
+        token = super().authenticate(username, password=password)
+        user = User.objects.get(username=username)
+        if user.role in [User.ROLE_ADMIN, User.ROLE_SUPERVISOR]:
+            self.grant_step_up(user, StepUpGrant.PURPOSE_OPERATIONAL_DATA)
+        return token
+
+    def test_coverage_request_create_requires_fresh_step_up(self):
+        AuthenticatedAPITestCase.authenticate(self, self.admin_user.username)
+
+        create_response = self.client.post(
+            reverse("chv-coverage-request-list-create"),
+            {
+                "ward_id": self.ward.id,
+                "priority": CHVCoverageRequest.PRIORITY_HIGH,
+                "reason": "Coverage gap detected: 0 active CHVs recorded in this ward.",
+                "requested_chv_count": 1,
+            },
+            format="json",
+        )
+
+        self.assertEqual(create_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(str(create_response.data["code"]), "step_up_required")
+        self.assertEqual(str(create_response.data["purpose"]), StepUpGrant.PURPOSE_OPERATIONAL_DATA)
+        self.assertEqual(CHVCoverageRequest.objects.count(), 0)
+
     def test_admin_can_create_and_view_coverage_request_detail(self):
         self.authenticate(self.admin_user.username)
 
@@ -9865,6 +10919,13 @@ class CHVCoverageWorkflowApiTestCase(AuthenticatedAPITestCase):
 
 
 class CHVCoverageWorkflowNotificationTestCase(AuthenticatedAPITestCase):
+    def authenticate(self, username: str, password: str | None = None) -> str:
+        token = super().authenticate(username, password=password)
+        user = User.objects.get(username=username)
+        if user.role in [User.ROLE_ADMIN, User.ROLE_SUPERVISOR]:
+            self.grant_step_up(user, StepUpGrant.PURPOSE_OPERATIONAL_DATA)
+        return token
+
     @patch("risk.notifications.send_email")
     def test_approval_creates_dashboard_notification_and_records_email_attempt(self, mock_send_email):
         mock_send_email.return_value = EmailDeliveryResult(success=True, external_id="email-123", error="", provider="stub", status_code=200)

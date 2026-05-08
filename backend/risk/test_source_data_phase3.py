@@ -7,7 +7,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from accounts.models import User
+from accounts.models import StepUpGrant, User
 
 from .models import (
     PopulationBaselineRecord,
@@ -18,6 +18,7 @@ from .models import (
     SurveillanceRecord,
     Ward,
 )
+from .test_step_up_utils import force_authenticate_with_step_up
 
 
 class SourceDataPhaseThreeConfirmImportHistoryTests(APITestCase):
@@ -121,11 +122,11 @@ class SourceDataPhaseThreeConfirmImportHistoryTests(APITestCase):
         }
 
     def create_upload(self, payload: dict, *, actor=None):
-        self.client.force_authenticate(actor or self.supervisor)
+        force_authenticate_with_step_up(self.client, actor or self.supervisor, StepUpGrant.PURPOSE_SOURCE_DATA)
         return self.client.post(reverse("source-data-upload-list-create"), payload, format="multipart")
 
     def validate_upload(self, public_id: str, *, actor=None):
-        self.client.force_authenticate(actor or self.supervisor)
+        force_authenticate_with_step_up(self.client, actor or self.supervisor, StepUpGrant.PURPOSE_SOURCE_DATA)
         return self.client.post(
             reverse("source-data-upload-validate", kwargs={"public_id": public_id}),
             {},
@@ -133,7 +134,7 @@ class SourceDataPhaseThreeConfirmImportHistoryTests(APITestCase):
         )
 
     def confirm_upload(self, public_id: str, *, actor=None, payload: dict | None = None):
-        self.client.force_authenticate(actor or self.supervisor)
+        force_authenticate_with_step_up(self.client, actor or self.supervisor, StepUpGrant.PURPOSE_SOURCE_DATA)
         return self.client.post(
             reverse("source-data-upload-confirm", kwargs={"public_id": public_id}),
             payload or {},
@@ -236,7 +237,7 @@ class SourceDataPhaseThreeConfirmImportHistoryTests(APITestCase):
         )
         self.assertEqual(same_actor_approval_response.status_code, status.HTTP_400_BAD_REQUEST)
 
-        self.client.force_authenticate(self.approver)
+        force_authenticate_with_step_up(self.client, self.approver, StepUpGrant.PURPOSE_SOURCE_DATA)
         missing_reason_response = self.client.post(
             reverse("source-data-upload-approval", kwargs={"public_id": upload_response.data["public_id"]}),
             {"action": "approve"},
@@ -279,7 +280,7 @@ class SourceDataPhaseThreeConfirmImportHistoryTests(APITestCase):
             {"action": "request", "reason": "Confirmed surveillance truth updates operational evidence."},
             format="json",
         )
-        self.client.force_authenticate(self.approver)
+        force_authenticate_with_step_up(self.client, self.approver, StepUpGrant.PURPOSE_SOURCE_DATA)
         approval_response = self.client.post(
             reverse("source-data-upload-approval", kwargs={"public_id": upload_response.data["public_id"]}),
             {"action": "approve", "reason": "Confirmed counts reconciled against the source extract."},
@@ -317,7 +318,7 @@ class SourceDataPhaseThreeConfirmImportHistoryTests(APITestCase):
         upload_response = self.create_upload(self.surveillance_payload())
         public_id = upload_response.data["public_id"]
 
-        self.client.force_authenticate(self.supervisor)
+        force_authenticate_with_step_up(self.client, self.supervisor, StepUpGrant.PURPOSE_SOURCE_DATA)
         cancel_response = self.client.post(
             reverse("source-data-upload-cancel", kwargs={"public_id": public_id}),
             {"reason": "Wrong reporting period selected before validation."},

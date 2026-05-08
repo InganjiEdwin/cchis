@@ -5,16 +5,21 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import ProfilePage from "@/app/(dashboard)/profile/page";
-import type { CurrentUser, ProfileActivityResponse } from "@/lib/auth";
+import type { CurrentUser, ProfileActivityResponse, ProfileSessionResponse } from "@/lib/auth";
 import { isStrongPassword } from "@/lib/password-policy";
 
 const mockUseAuth = vi.fn();
 const mockRouterReplace = vi.fn();
 const mockFetchProfileActivityViaBff = vi.fn();
+const mockFetchProfileSessionsViaBff = vi.fn();
 const mockChangePasswordViaBff = vi.fn();
 const mockVerifyProfileIdentityTwoFactorViaBff = vi.fn();
 const mockFetchRecoveryCodeStatusViaBff = vi.fn();
 const mockRegenerateRecoveryCodesViaBff = vi.fn();
+const mockRevokeProfileSessionViaBff = vi.fn();
+const mockRevokeOtherProfileSessionsViaBff = vi.fn();
+const mockRevokeAllProfileSessionsViaBff = vi.fn();
+const mockRequestStepUp = vi.fn();
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({
@@ -49,10 +54,23 @@ vi.mock("@/lib/auth", async () => {
   return {
     ...actual,
     fetchProfileActivityViaBff: (...args: unknown[]) => mockFetchProfileActivityViaBff(...args),
+    fetchProfileSessionsViaBff: (...args: unknown[]) => mockFetchProfileSessionsViaBff(...args),
     fetchRecoveryCodeStatusViaBff: (...args: unknown[]) => mockFetchRecoveryCodeStatusViaBff(...args),
     regenerateRecoveryCodesViaBff: (...args: unknown[]) => mockRegenerateRecoveryCodesViaBff(...args),
+    revokeProfileSessionViaBff: (...args: unknown[]) => mockRevokeProfileSessionViaBff(...args),
+    revokeOtherProfileSessionsViaBff: (...args: unknown[]) => mockRevokeOtherProfileSessionsViaBff(...args),
+    revokeAllProfileSessionsViaBff: (...args: unknown[]) => mockRevokeAllProfileSessionsViaBff(...args),
     changePasswordViaBff: (...args: unknown[]) => mockChangePasswordViaBff(...args),
     verifyProfileIdentityTwoFactorViaBff: (...args: unknown[]) => mockVerifyProfileIdentityTwoFactorViaBff(...args),
+  };
+});
+
+vi.mock("@/lib/step-up", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/step-up")>("@/lib/step-up");
+
+  return {
+    ...actual,
+    requestStepUp: (...args: unknown[]) => mockRequestStepUp(...args),
   };
 });
 
@@ -80,10 +98,60 @@ function buildUser(overrides: Partial<CurrentUser> = {}): CurrentUser {
       can_manage_totp: true,
       can_view_own_activity: true,
       can_update_identity: false,
-      can_review_sessions: false,
+      can_review_sessions: true,
       can_generate_profile_report: false,
       identity_update_mode: "admin_managed",
       mode: "auth_contract_backed_profile",
+    },
+    ...overrides,
+  };
+}
+
+function buildSessionsResponse(overrides: Partial<ProfileSessionResponse> = {}): ProfileSessionResponse {
+  return {
+    current_session_id: "11111111-1111-4111-8111-111111111111",
+    sessions: [
+      {
+        public_id: "11111111-1111-4111-8111-111111111111",
+        device_label: "Chrome on macOS",
+        browser_label: "Chrome on macOS",
+        created_at: "2026-04-30T09:30:00Z",
+        last_seen_at: "2026-04-30T09:50:00Z",
+        last_rotated_at: null,
+        expires_at: "2026-05-01T09:30:00Z",
+        revoked_at: null,
+        revoked_reason: "",
+        location_label: "Network fingerprint stored",
+        status: "current",
+        is_current: true,
+        is_active: true,
+        is_suspicious: false,
+        suspicion_reason: "",
+      },
+      {
+        public_id: "22222222-2222-4222-8222-222222222222",
+        device_label: "Firefox on Windows",
+        browser_label: "Firefox on Windows",
+        created_at: "2026-04-29T09:30:00Z",
+        last_seen_at: "2026-04-29T10:10:00Z",
+        last_rotated_at: null,
+        expires_at: "2026-05-01T09:30:00Z",
+        revoked_at: null,
+        revoked_reason: "",
+        location_label: "Network fingerprint stored",
+        status: "active",
+        is_current: false,
+        is_active: true,
+        is_suspicious: false,
+        suspicion_reason: "",
+      },
+    ],
+    capabilities: {
+      can_review_sessions: true,
+      can_revoke_sessions: true,
+      revoke_all_requires_step_up: true,
+      revoke_others_requires_step_up: true,
+      mode: "self_scoped_session_management",
     },
     ...overrides,
   };
@@ -158,6 +226,7 @@ describe("ProfilePage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFetchProfileActivityViaBff.mockResolvedValue(buildActivityResponse());
+    mockFetchProfileSessionsViaBff.mockResolvedValue(buildSessionsResponse());
     mockFetchRecoveryCodeStatusViaBff.mockResolvedValue({
       remaining_count: 8,
       total_count: 10,
@@ -176,6 +245,25 @@ describe("ProfilePage", () => {
     });
     mockChangePasswordViaBff.mockResolvedValue({ detail: "Password changed." });
     mockVerifyProfileIdentityTwoFactorViaBff.mockResolvedValue({ detail: "Personal details unlocked for editing." });
+    mockRevokeProfileSessionViaBff.mockResolvedValue({
+      detail: "Session revoked.",
+      revoked_count: 1,
+      blacklisted_tokens: 1,
+      current_session_revoked: false,
+    });
+    mockRevokeOtherProfileSessionsViaBff.mockResolvedValue({
+      detail: "Other sessions revoked.",
+      revoked_count: 1,
+      blacklisted_tokens: 1,
+      current_session_revoked: false,
+    });
+    mockRevokeAllProfileSessionsViaBff.mockResolvedValue({
+      detail: "All sessions revoked.",
+      revoked_count: 2,
+      blacklisted_tokens: 2,
+      current_session_revoked: true,
+    });
+    mockRequestStepUp.mockResolvedValue(undefined);
   });
 
   it("renders account identity and metadata without fake profile copy", async () => {
@@ -199,6 +287,23 @@ describe("ProfilePage", () => {
     expect(screen.queryByText("Password change unavailable")).not.toBeInTheDocument();
     expect(screen.queryByText("Session review unavailable")).not.toBeInTheDocument();
     expect(screen.queryByText("Audit trail unavailable")).not.toBeInTheDocument();
+  });
+
+  it("renders active sessions and can revoke other devices", async () => {
+    const user = userEvent.setup();
+    renderProfilePage();
+
+    expect(screen.getByRole("heading", { name: "Active sessions" })).toBeInTheDocument();
+    expect((await screen.findAllByText("Chrome on macOS")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("Firefox on Windows")).length).toBeGreaterThan(0);
+    expect(screen.getByText("Current")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /sign out other devices/i }));
+
+    await waitFor(() => {
+      expect(mockRevokeOtherProfileSessionsViaBff).toHaveBeenCalledTimes(1);
+    });
+    expect(await screen.findByText("1 session signed out.")).toBeInTheDocument();
   });
 
   it("renders the TOTP setup link only when account policy and capability require setup", () => {

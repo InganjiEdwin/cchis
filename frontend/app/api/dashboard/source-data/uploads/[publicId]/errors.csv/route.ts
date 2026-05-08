@@ -30,7 +30,7 @@ export async function GET(
     });
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload ?? { detail: error.message }, { status: error.status });
     }
     return NextResponse.json({ detail: "Unable to download source-data validation errors." }, { status: 500 });
   }

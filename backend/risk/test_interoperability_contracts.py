@@ -3,7 +3,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from accounts.models import User
+from accounts.models import StepUpGrant, User
 
 from .interoperability import (
     CONNECTOR_REQUIRED_INTERFACE_METHODS,
@@ -35,6 +35,7 @@ from .models import (
     RiskScore,
     Ward,
 )
+from .test_step_up_utils import force_authenticate_with_step_up
 
 
 class InteroperabilityContractsTests(APITestCase):
@@ -79,7 +80,7 @@ class InteroperabilityContractsTests(APITestCase):
         )
 
     def authenticate_admin(self):
-        self.client.force_authenticate(self.admin_user)
+        force_authenticate_with_step_up(self.client, self.admin_user, StepUpGrant.PURPOSE_SOURCE_DATA)
 
     def mapping_csv(self, *rows: str) -> str:
         header = (

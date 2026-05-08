@@ -21,7 +21,7 @@ export async function GET(request: Request, context: RouteContext) {
     return NextResponse.json(messages);
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to load CHV messages." }, { status: 500 });
@@ -43,7 +43,7 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json(message, { status: 201 });
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to create CHV message." }, { status: 500 });

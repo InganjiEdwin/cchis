@@ -75,6 +75,15 @@ class AuthAuditEvent(models.Model):
     EVENT_USER_CREATED = "USER_CREATED"
     EVENT_USER_DEACTIVATED = "USER_DEACTIVATED"
     EVENT_USER_REACTIVATED = "USER_REACTIVATED"
+    EVENT_SESSION_CREATED = "SESSION_CREATED"
+    EVENT_SESSION_REFRESHED = "SESSION_REFRESHED"
+    EVENT_SESSION_REVOKED = "SESSION_REVOKED"
+    EVENT_SESSION_REPLAY_DETECTED = "SESSION_REPLAY_DETECTED"
+    EVENT_SESSION_CONTEXT_CHANGED = "SESSION_CONTEXT_CHANGED"
+    EVENT_STEP_UP_REQUIRED = "STEP_UP_REQUIRED"
+    EVENT_STEP_UP_VERIFIED = "STEP_UP_VERIFIED"
+    EVENT_STEP_UP_FAILED = "STEP_UP_FAILED"
+    EVENT_HIGH_RISK_ACTION_COMPLETED = "HIGH_RISK_ACTION_COMPLETED"
 
     EVENT_CHOICES = [
         (EVENT_LOGIN_SUCCESS, "Login Success"),
@@ -100,6 +109,15 @@ class AuthAuditEvent(models.Model):
         (EVENT_USER_CREATED, "User Created"),
         (EVENT_USER_DEACTIVATED, "User Deactivated"),
         (EVENT_USER_REACTIVATED, "User Reactivated"),
+        (EVENT_SESSION_CREATED, "Session Created"),
+        (EVENT_SESSION_REFRESHED, "Session Refreshed"),
+        (EVENT_SESSION_REVOKED, "Session Revoked"),
+        (EVENT_SESSION_REPLAY_DETECTED, "Session Replay Detected"),
+        (EVENT_SESSION_CONTEXT_CHANGED, "Session Context Changed"),
+        (EVENT_STEP_UP_REQUIRED, "Step-Up Required"),
+        (EVENT_STEP_UP_VERIFIED, "Step-Up Verified"),
+        (EVENT_STEP_UP_FAILED, "Step-Up Failed"),
+        (EVENT_HIGH_RISK_ACTION_COMPLETED, "High-Risk Action Completed"),
     ]
 
     STATUS_SUCCESS = "SUCCESS"
@@ -146,6 +164,130 @@ class AuthAuditEvent(models.Model):
 
     def __str__(self) -> str:
         return f"{self.event_type} [{self.status}]"
+
+
+class UserSession(models.Model):
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    user = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.CASCADE,
+        related_name="auth_sessions",
+    )
+    token_family_id = models.UUIDField(default=uuid.uuid4)
+    current_refresh_jti_hash = models.CharField(max_length=64)
+    previous_refresh_jti_hash = models.CharField(max_length=64, blank=True, null=True)
+    previous_refresh_grace_until = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    last_seen_at = models.DateTimeField(default=timezone.now)
+    last_rotated_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField()
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="revoked_auth_sessions",
+    )
+    revoked_reason = models.CharField(max_length=120, blank=True)
+    created_ip_prefix_hash = models.CharField(max_length=64, blank=True)
+    last_ip_prefix_hash = models.CharField(max_length=64, blank=True)
+    user_agent_hash = models.CharField(max_length=64, blank=True)
+    user_agent_label = models.CharField(max_length=255, blank=True)
+    device_label = models.CharField(max_length=255, blank=True)
+    is_suspicious = models.BooleanField(default=False)
+    suspicion_reason = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-last_seen_at", "-created_at"]
+        indexes = [
+            models.Index(fields=["user", "revoked_at", "expires_at"]),
+            models.Index(fields=["public_id"]),
+            models.Index(fields=["token_family_id"]),
+            models.Index(fields=["current_refresh_jti_hash"]),
+            models.Index(fields=["previous_refresh_jti_hash"]),
+            models.Index(fields=["last_seen_at"]),
+        ]
+
+    @property
+    def is_revoked(self) -> bool:
+        return self.revoked_at is not None
+
+    @property
+    def is_expired(self) -> bool:
+        return self.expires_at <= timezone.now()
+
+    @property
+    def is_active(self) -> bool:
+        return not self.is_revoked and not self.is_expired
+
+    def __str__(self) -> str:
+        return f"Session {self.public_id} for {self.user_id}"
+
+
+class StepUpGrant(models.Model):
+    PURPOSE_ADMIN_ACTIONS = "admin_actions"
+    PURPOSE_SECURITY_ADMIN = "security_admin"
+    PURPOSE_SYSTEM_CONTROLS = "system_controls"
+    PURPOSE_SENSITIVE_EXPORTS = "sensitive_exports"
+    PURPOSE_SENSITIVE_EXPORT_DOWNLOAD = "sensitive_export_download"
+    PURPOSE_SOURCE_DATA = "source_data"
+    PURPOSE_MESSAGE_GOVERNANCE = "message_governance"
+    PURPOSE_ALERT_DELIVERY = "alert_delivery"
+    PURPOSE_OPERATIONAL_DATA = "operational_data"
+
+    PURPOSE_CHOICES = [
+        (PURPOSE_ADMIN_ACTIONS, "Admin actions"),
+        (PURPOSE_SECURITY_ADMIN, "Security administration"),
+        (PURPOSE_SYSTEM_CONTROLS, "System controls"),
+        (PURPOSE_SENSITIVE_EXPORTS, "Sensitive exports"),
+        (PURPOSE_SENSITIVE_EXPORT_DOWNLOAD, "Sensitive export download"),
+        (PURPOSE_SOURCE_DATA, "Source data operations"),
+        (PURPOSE_MESSAGE_GOVERNANCE, "Message governance"),
+        (PURPOSE_ALERT_DELIVERY, "Alert delivery"),
+        (PURPOSE_OPERATIONAL_DATA, "Operational data"),
+    ]
+
+    METHOD_TOTP = "totp"
+    METHOD_RECOVERY_CODE = "recovery_code"
+    METHOD_CHOICES = [
+        (METHOD_TOTP, "TOTP"),
+        (METHOD_RECOVERY_CODE, "Recovery code"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    user = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.CASCADE,
+        related_name="step_up_grants",
+    )
+    session = models.ForeignKey(
+        "accounts.UserSession",
+        on_delete=models.CASCADE,
+        related_name="step_up_grants",
+    )
+    purpose = models.CharField(max_length=40, choices=PURPOSE_CHOICES)
+    verified_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField()
+    method = models.CharField(max_length=40, choices=METHOD_CHOICES)
+    ip_prefix_hash = models.CharField(max_length=64, blank=True)
+    user_agent_hash = models.CharField(max_length=64, blank=True)
+    consumed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-verified_at", "-id"]
+        indexes = [
+            models.Index(fields=["user", "session", "purpose", "expires_at"]),
+            models.Index(fields=["public_id"]),
+            models.Index(fields=["expires_at"]),
+        ]
+
+    @property
+    def is_fresh(self) -> bool:
+        return self.consumed_at is None and self.expires_at > timezone.now()
+
+    def __str__(self) -> str:
+        return f"Step-up {self.purpose} for {self.user_id}"
 
 
 class UserPolicyAcceptance(models.Model):

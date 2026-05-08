@@ -28,7 +28,7 @@ export async function GET(
     return NextResponse.json(intelligence);
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload ?? { detail: error.message }, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to load ward detail." }, { status: 500 });

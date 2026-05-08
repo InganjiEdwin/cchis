@@ -25,7 +25,7 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json(updatedTemplate);
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to update template approval." }, { status: 500 });

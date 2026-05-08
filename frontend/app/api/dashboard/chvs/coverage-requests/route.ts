@@ -32,7 +32,7 @@ export async function GET(request: Request) {
     return NextResponse.json(coverageRequests);
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload ?? { detail: error.message }, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to load CHV coverage requests." }, { status: 500 });
@@ -59,7 +59,7 @@ export async function POST(request: Request) {
     return NextResponse.json(coverageRequest, { status: 201 });
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload ?? { detail: error.message }, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to create CHV coverage request." }, { status: 500 });

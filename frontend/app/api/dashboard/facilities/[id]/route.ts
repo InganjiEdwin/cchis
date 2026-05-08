@@ -25,7 +25,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     return NextResponse.json(facility);
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload ?? { detail: error.message }, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to load facility detail." }, { status: 500 });

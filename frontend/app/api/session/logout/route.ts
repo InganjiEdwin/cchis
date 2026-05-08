@@ -25,7 +25,7 @@ export async function POST(request: Request) {
     return applyBackendSetCookie(new NextResponse(null, { status: 204 }), backendResponse);
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload ?? { detail: error.message }, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to end the current session." }, { status: 500 });

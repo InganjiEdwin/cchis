@@ -23,7 +23,7 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json(state);
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload, { status: error.status });
     }
     return NextResponse.json({ detail: "Unable to update source-data feed mode." }, { status: 500 });
   }

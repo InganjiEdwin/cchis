@@ -7,6 +7,7 @@ export const queryKeys = {
     policyAcceptance: () => ["auth", "policy-acceptance"] as const,
     activity: (filters?: QueryFilters) =>
       ["auth", "activity", filters ?? {}] as const,
+    sessions: () => ["auth", "sessions"] as const,
     recoveryCodes: () => ["auth", "recovery-codes"] as const,
   },
   wards: {

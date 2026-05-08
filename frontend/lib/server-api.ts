@@ -12,10 +12,12 @@ type ServerApiRequestInit = Omit<RequestInit, "headers"> & {
 
 export class ServerApiError extends Error {
   status: number;
+  payload: Record<string, unknown>;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, payload?: Record<string, unknown>) {
     super(message);
     this.status = status;
+    this.payload = payload ?? { detail: message };
   }
 }
 
@@ -55,7 +57,7 @@ function formatBackendErrorDetail(data: Record<string, unknown>) {
     ? data.errors as Record<string, unknown>
     : data;
   const fieldMessages = Object.entries(errors)
-    .filter(([field]) => field !== "detail" && field !== "errors")
+    .filter(([field]) => field !== "detail" && field !== "errors" && field !== "code" && field !== "purpose")
     .map(([field, value]) => {
       const message = stringifyErrorValue(value);
       return message ? `${field.replaceAll("_", " ")}: ${message}` : "";
@@ -75,6 +77,16 @@ function isFormDataBody(body: BodyInit | null | undefined) {
 
 function getCchisEnvironment() {
   return (process.env.CCHIS_ENVIRONMENT ?? "local").trim().toLowerCase();
+}
+
+function getFrontendAppUrl() {
+  return (process.env.FRONTEND_APP_URL ?? process.env.NEXT_PUBLIC_FRONTEND_APP_URL ?? "http://localhost:3000")
+    .trim()
+    .replace(/\/$/, "");
+}
+
+function isUnsafeMethod(method: string | undefined) {
+  return ["POST", "PUT", "PATCH", "DELETE"].includes((method ?? "GET").toUpperCase());
 }
 
 function getAccessCookieName() {
@@ -254,6 +266,10 @@ function buildBackendHeaders(init: ServerApiRequestInit, cookieHeader: string) {
     headers.set("Cookie", cookieHeader);
   }
 
+  if (isUnsafeMethod(init.method) && cookieHeader && !headers.has("Origin")) {
+    headers.set("Origin", getFrontendAppUrl());
+  }
+
   return headers;
 }
 
@@ -301,8 +317,9 @@ function responseWithBackendCookies(response: Response, setCookieHeaders: string
   const responseSetCookieHeaders = getBackendSetCookieHeaders(response);
   const headers = new Headers(response.headers);
   headers.delete("set-cookie");
-  setCookieHeaders.forEach((setCookie) => headers.append("set-cookie", setCookie));
-  responseSetCookieHeaders.forEach((setCookie) => headers.append("set-cookie", setCookie));
+  Array.from(new Set([...setCookieHeaders, ...responseSetCookieHeaders])).forEach((setCookie) => {
+    headers.append("set-cookie", setCookie);
+  });
 
   return new Response(response.body, {
     status: response.status,
@@ -311,17 +328,39 @@ function responseWithBackendCookies(response: Response, setCookieHeaders: string
   });
 }
 
-async function refreshBackendSession(cookieHeader: string) {
+type RefreshBackendSessionResult =
+  | {
+      ok: true;
+      accessToken: string;
+      cookieHeader: string;
+      setCookieHeaders: string[];
+    }
+  | {
+      ok: false;
+      response: Response;
+      setCookieHeaders: string[];
+    };
+
+async function refreshBackendSession(cookieHeader: string): Promise<RefreshBackendSessionResult> {
+  const headers = new Headers(cookieHeader ? { Cookie: cookieHeader } : {});
+  if (cookieHeader) {
+    headers.set("Origin", getFrontendAppUrl());
+  }
+
   const response = await fetch(`${getApiBaseUrl()}/auth/refresh/`, {
     method: "POST",
-    headers: cookieHeader ? { Cookie: cookieHeader } : {},
+    headers,
     cache: "no-store",
   });
   const setCookieHeaders = getBackendSetCookieHeaders(response);
   await commitBackendCookies(setCookieHeaders);
 
   if (!response.ok) {
-    return null;
+    return {
+      ok: false,
+      response,
+      setCookieHeaders,
+    };
   }
 
   const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
@@ -330,10 +369,18 @@ async function refreshBackendSession(cookieHeader: string) {
     : getCookieValue(applySetCookiesToCookieHeader(cookieHeader, setCookieHeaders), getAccessCookieName());
 
   if (!accessToken) {
-    return null;
+    return {
+      ok: false,
+      response: responseWithBackendCookies(
+        NextResponse.json({ detail: "Authentication required." }, { status: 401 }),
+        setCookieHeaders,
+      ),
+      setCookieHeaders,
+    };
   }
 
   return {
+    ok: true,
     accessToken,
     cookieHeader: applySetCookiesToCookieHeader(cookieHeader, setCookieHeaders),
     setCookieHeaders,
@@ -349,8 +396,8 @@ export async function fetchBackendAuthorizedResponse(path: string, init: ServerA
 
   if (!accessToken) {
     const refreshedSession = await refreshBackendSession(cookieHeader);
-    if (!refreshedSession) {
-      throw new ServerApiError(401, "Authentication required.");
+    if (!refreshedSession.ok) {
+      return refreshedSession.response;
     }
     accessToken = refreshedSession.accessToken;
     cookieHeader = refreshedSession.cookieHeader;
@@ -372,8 +419,8 @@ export async function fetchBackendAuthorizedResponse(path: string, init: ServerA
   }
 
   const refreshedSession = await refreshBackendSession(initialCookieHeader);
-  if (!refreshedSession) {
-    return responseWithBackendCookies(response, setCookieHeaders);
+  if (!refreshedSession.ok) {
+    return responseWithBackendCookies(refreshedSession.response, setCookieHeaders);
   }
 
   const retryHeaders = buildBackendHeaders(init, refreshedSession.cookieHeader);
@@ -390,18 +437,24 @@ export async function fetchBackendAuthorizedResponse(path: string, init: ServerA
 
 export async function fetchBackendJson<T>(path: string, init: ServerApiRequestInit = {}): Promise<T> {
   const response = await fetchBackendAuthorizedResponse(path, init);
+  await commitBackendCookies(getBackendSetCookieHeaders(response));
 
   if (!response.ok) {
     let detail = "Unable to load server-side dashboard data.";
+    let payload: Record<string, unknown> | undefined;
 
     try {
       const data = (await response.json()) as Record<string, unknown>;
-      detail = formatBackendErrorDetail(data);
+      detail = typeof data.detail === "string" ? data.detail : formatBackendErrorDetail(data);
+      payload = {
+        ...data,
+        detail,
+      };
     } catch {
       // Keep generic detail if parsing fails.
     }
 
-    throw new ServerApiError(response.status, detail);
+    throw new ServerApiError(response.status, detail, payload);
   }
 
   if (response.status === 204 || response.status === 205) {

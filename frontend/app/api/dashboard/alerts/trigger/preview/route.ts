@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     return NextResponse.json(response, { status: 200 });
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload ?? { detail: error.message }, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to load alert message preview." }, { status: 500 });

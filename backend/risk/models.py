@@ -4894,6 +4894,10 @@ class DashboardNotification(models.Model):
     TYPE_FEED_STALE = "FEED_STALE"
     TYPE_CHV_COVERAGE_REQUEST_STATUS = "CHV_COVERAGE_REQUEST_STATUS"
     TYPE_OPERATIONAL_KPI_THRESHOLD = "OPERATIONAL_KPI_THRESHOLD"
+    TYPE_SESSION_REPLAY_DETECTED = "SESSION_REPLAY_DETECTED"
+    TYPE_STEP_UP_FAILURE_SPIKE = "STEP_UP_FAILURE_SPIKE"
+    TYPE_SESSION_CONTEXT_CHANGED = "SESSION_CONTEXT_CHANGED"
+    TYPE_ADMIN_NEW_DEVICE = "ADMIN_NEW_DEVICE"
     TYPE_CHOICES = [
         (TYPE_WARD_RISK_HIGH, "Ward Risk High"),
         (TYPE_ALERT_FAILED, "Alert Failed"),
@@ -4901,6 +4905,10 @@ class DashboardNotification(models.Model):
         (TYPE_FEED_STALE, "Feed Stale"),
         (TYPE_CHV_COVERAGE_REQUEST_STATUS, "CHV Coverage Request Status"),
         (TYPE_OPERATIONAL_KPI_THRESHOLD, "Operational KPI Threshold"),
+        (TYPE_SESSION_REPLAY_DETECTED, "Session Replay Detected"),
+        (TYPE_STEP_UP_FAILURE_SPIKE, "Step-Up Failure Spike"),
+        (TYPE_SESSION_CONTEXT_CHANGED, "Session Context Changed"),
+        (TYPE_ADMIN_NEW_DEVICE, "Admin New Device"),
     ]
 
     SEVERITY_INFO = "INFO"

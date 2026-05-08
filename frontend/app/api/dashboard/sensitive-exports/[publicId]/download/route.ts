@@ -21,7 +21,7 @@ export async function GET(
     return NextResponse.json(download);
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to download sensitive export." }, { status: 500 });

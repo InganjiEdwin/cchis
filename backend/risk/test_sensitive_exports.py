@@ -4,8 +4,9 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
+from rest_framework_simplejwt.tokens import AccessToken
 
-from accounts.models import User
+from accounts.models import StepUpGrant, User, UserSession
 
 from .models import Alert, SensitiveExportDownloadAudit, SensitiveExportRequest, Ward
 
@@ -76,8 +77,36 @@ class SensitiveExportGovernanceTests(APITestCase):
             max_attempts=3,
         )
 
+    def authenticate_with_step_up(self, user: User, *purposes: str) -> UserSession:
+        session = UserSession.objects.create(
+            user=user,
+            current_refresh_jti_hash=f"test-sensitive-export-{user.id}-{timezone.now().timestamp()}",
+            expires_at=timezone.now() + timedelta(days=1),
+        )
+        token = AccessToken.for_user(user)
+        token["sid"] = str(session.public_id)
+        token["family"] = str(session.token_family_id)
+        token["role"] = user.role
+        token["ward_id"] = user.ward_id
+        self.client.force_authenticate(user=user, token=token)
+
+        for purpose in purposes:
+            StepUpGrant.objects.create(
+                user=user,
+                session=session,
+                purpose=purpose,
+                verified_at=timezone.now(),
+                expires_at=timezone.now() + timedelta(minutes=10),
+                method=StepUpGrant.METHOD_TOTP,
+            )
+        return session
+
     def test_admin_export_is_attributable_approved_and_download_audited(self):
-        self.client.force_authenticate(self.admin_user)
+        self.authenticate_with_step_up(
+            self.admin_user,
+            StepUpGrant.PURPOSE_SENSITIVE_EXPORTS,
+            StepUpGrant.PURPOSE_SENSITIVE_EXPORT_DOWNLOAD,
+        )
 
         response = self.client.post(
             reverse("sensitive-export-list-create"),
@@ -114,7 +143,11 @@ class SensitiveExportGovernanceTests(APITestCase):
         )
 
     def test_supervisor_direct_identifier_export_requires_admin_approval_and_stays_ward_scoped(self):
-        self.client.force_authenticate(self.supervisor_user)
+        self.authenticate_with_step_up(
+            self.supervisor_user,
+            StepUpGrant.PURPOSE_SENSITIVE_EXPORTS,
+            StepUpGrant.PURPOSE_SENSITIVE_EXPORT_DOWNLOAD,
+        )
 
         response = self.client.post(
             reverse("sensitive-export-list-create"),
@@ -141,13 +174,13 @@ class SensitiveExportGovernanceTests(APITestCase):
             ).exists()
         )
 
-        self.client.force_authenticate(self.admin_user)
+        self.authenticate_with_step_up(self.admin_user, StepUpGrant.PURPOSE_SENSITIVE_EXPORTS)
         approval_response = self.client.post(reverse("sensitive-export-approve", args=[export_request.public_id]))
         self.assertEqual(approval_response.status_code, status.HTTP_200_OK)
         self.assertEqual(approval_response.data["approval_state"], SensitiveExportRequest.APPROVAL_APPROVED)
         self.assertEqual(approval_response.data["row_count"], 1)
 
-        self.client.force_authenticate(self.supervisor_user)
+        self.authenticate_with_step_up(self.supervisor_user, StepUpGrant.PURPOSE_SENSITIVE_EXPORT_DOWNLOAD)
         download_response = self.client.get(reverse("sensitive-export-download", args=[export_request.public_id]))
         self.assertEqual(download_response.status_code, status.HTTP_200_OK)
         self.assertIn("+254700111222", download_response.data["payload"])
@@ -173,7 +206,11 @@ class SensitiveExportGovernanceTests(APITestCase):
         self.assertTrue(intelligence_response.data["alert"]["privacy_context"]["redacted"])
 
     def test_expired_export_is_blocked_cleared_and_audited(self):
-        self.client.force_authenticate(self.admin_user)
+        self.authenticate_with_step_up(
+            self.admin_user,
+            StepUpGrant.PURPOSE_SENSITIVE_EXPORTS,
+            StepUpGrant.PURPOSE_SENSITIVE_EXPORT_DOWNLOAD,
+        )
         response = self.client.post(
             reverse("sensitive-export-list-create"),
             {
@@ -202,7 +239,7 @@ class SensitiveExportGovernanceTests(APITestCase):
         )
 
     def test_export_rejects_unsafe_or_invalid_filters_before_ledger_creation(self):
-        self.client.force_authenticate(self.admin_user)
+        self.authenticate_with_step_up(self.admin_user, StepUpGrant.PURPOSE_SENSITIVE_EXPORTS)
 
         unsafe_response = self.client.post(
             reverse("sensitive-export-list-create"),

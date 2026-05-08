@@ -7,7 +7,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from accounts.models import User
+from accounts.models import StepUpGrant, User
 
 from .models import (
     PopulationExposureIngestionRun,
@@ -17,6 +17,7 @@ from .models import (
     SourceDataValidationIssue,
     SurveillanceIngestionRun,
 )
+from .test_step_up_utils import force_authenticate_with_step_up
 
 
 class SourceDataPhaseTwoUploadDryValidationTests(APITestCase):
@@ -66,7 +67,7 @@ class SourceDataPhaseTwoUploadDryValidationTests(APITestCase):
         )
 
     def create_upload(self, *, csv_text: str | None = None, filename: str = "weekly.csv"):
-        self.client.force_authenticate(self.supervisor)
+        force_authenticate_with_step_up(self.client, self.supervisor, StepUpGrant.PURPOSE_SOURCE_DATA)
         return self.client.post(
             reverse("source-data-upload-list-create"),
             self.upload_payload(csv_text=csv_text or self.valid_weekly_csv(), filename=filename),
@@ -89,6 +90,20 @@ class SourceDataPhaseTwoUploadDryValidationTests(APITestCase):
         self.assertTrue(
             SourceDataUploadEvent.objects.filter(event_type=SourceDataUploadEvent.EVENT_UPLOAD_CREATED).exists()
         )
+
+    def test_dry_validation_requires_fresh_source_data_step_up(self):
+        upload_response = self.create_upload()
+        self.client.force_authenticate(self.supervisor)
+
+        validate_response = self.client.post(
+            reverse("source-data-upload-validate", kwargs={"public_id": upload_response.data["public_id"]}),
+            {},
+            format="json",
+        )
+
+        self.assertEqual(validate_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(str(validate_response.data["code"]), "step_up_required")
+        self.assertEqual(str(validate_response.data["purpose"]), StepUpGrant.PURPOSE_SOURCE_DATA)
 
     def test_dry_validation_wraps_surveillance_inspector_and_stores_issues(self):
         upload_response = self.create_upload()
@@ -251,7 +266,7 @@ class SourceDataPhaseTwoUploadDryValidationTests(APITestCase):
         self.assertEqual(validate_response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_unknown_feed_key_and_oversized_file_are_rejected_before_storage(self):
-        self.client.force_authenticate(self.admin)
+        force_authenticate_with_step_up(self.client, self.admin, StepUpGrant.PURPOSE_SOURCE_DATA)
         unknown_response = self.client.post(
             reverse("source-data-upload-list-create"),
             {

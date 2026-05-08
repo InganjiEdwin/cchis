@@ -30,7 +30,7 @@ export async function POST(
     return NextResponse.json(coverageRequest);
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload ?? { detail: error.message }, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to assign CHV coverage request." }, { status: 500 });

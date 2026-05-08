@@ -17,7 +17,7 @@ export async function GET(request: Request) {
     return NextResponse.json(payload);
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload ?? { detail: error.message }, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to issue notification stream token." }, { status: 500 });

@@ -4,8 +4,9 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from accounts.models import User
+from accounts.models import StepUpGrant, User
 from risk.models import UssdMenuVersion, UssdSessionLog
+from risk.test_step_up_utils import force_authenticate_with_step_up
 from risk.ussd_governance import (
     USSD_BUILTIN_VERSION_LABEL,
     USSD_LANGUAGE_SELECTION_MENU_LEVEL,
@@ -184,7 +185,7 @@ class UssdGovernanceTests(APITestCase):
             password="StrongPass123!",
             role=User.ROLE_ADMIN,
         )
-        self.client.force_authenticate(admin)
+        force_authenticate_with_step_up(self.client, admin, StepUpGrant.PURPOSE_MESSAGE_GOVERNANCE)
         menu_version = UssdMenuVersion.objects.get(
             menu_key=USSD_MENU_KEY,
             language="sw",

@@ -43,7 +43,7 @@ export async function POST(request: Request) {
     );
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload ?? { detail: error.message }, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to run dashboard simulation." }, { status: 500 });

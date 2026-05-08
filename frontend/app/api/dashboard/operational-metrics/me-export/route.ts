@@ -28,7 +28,7 @@ export async function GET(request: Request) {
     return NextResponse.json(exportPayload);
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload ?? { detail: error.message }, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to export operational KPI M&E report." }, { status: 500 });

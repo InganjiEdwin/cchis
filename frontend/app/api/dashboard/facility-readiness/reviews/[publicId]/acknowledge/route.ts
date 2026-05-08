@@ -27,7 +27,7 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json(review);
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload ?? { detail: error.message }, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to mark readiness review as reviewed." }, { status: 500 });

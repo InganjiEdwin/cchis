@@ -337,6 +337,167 @@ def _frontend_absolute_url(path: str) -> str:
     return f"{base_url}{normalized_path}"
 
 
+def _notification_username(user: User | None) -> str:
+    if user is None:
+        return "Unknown user"
+    return user.full_name or user.username or f"User {user.id}"
+
+
+def _session_security_metadata(session, extra: dict | None = None) -> dict:
+    user = getattr(session, "user", None)
+    metadata = {
+        "session_id": str(getattr(session, "public_id", "")),
+        "token_family_id": str(getattr(session, "token_family_id", "")),
+        "user_id": getattr(user, "id", None),
+        "username": getattr(user, "username", ""),
+        "device_label": getattr(session, "device_label", ""),
+        "user_agent_label": getattr(session, "user_agent_label", ""),
+    }
+    if extra:
+        metadata.update(extra)
+    return metadata
+
+
+def notify_session_replay_detected(session, *, reason: str) -> None:
+    user = getattr(session, "user", None)
+    username = _notification_username(user)
+    common_defaults = {
+        "type": DashboardNotification.TYPE_SESSION_REPLAY_DETECTED,
+        "severity": DashboardNotification.SEVERITY_CRITICAL,
+        "source_system": "auth",
+        "source_object_type": "user_session",
+        "source_object_id": str(session.public_id),
+        "recipient_scope": DashboardNotification.SCOPE_GLOBAL,
+        "ward": None,
+        "requires_acknowledgement": True,
+        "dismissible": True,
+        "auto_resolve": False,
+        "pinned_until_actioned": True,
+        "metadata": _session_security_metadata(session, {"reason": reason}),
+    }
+    _upsert_notification(
+        external_key=f"auth-session-replay:user:{session.public_id}",
+        defaults={
+            **common_defaults,
+            "title": "Session security warning",
+            "body": "Another session used an old sign-in token, so we signed out this device for safety.",
+            "href": "/profile",
+            "recipient_role": "",
+            "recipient_user": user,
+        },
+    )
+    _upsert_notification(
+        external_key=f"auth-session-replay:admin:{session.public_id}",
+        defaults={
+            **common_defaults,
+            "title": f"Session replay detected for {username}",
+            "body": "A reused refresh token was detected and the affected session family was revoked.",
+            "href": "/system",
+            "recipient_role": User.ROLE_ADMIN,
+            "recipient_user": None,
+        },
+    )
+
+
+def notify_step_up_failure_spike(
+    user: User,
+    *,
+    purpose: str,
+    failed_count: int,
+    window_minutes: int,
+) -> None:
+    username = _notification_username(user)
+    purpose_label = purpose.replace("_", " ")
+    _upsert_notification(
+        external_key=f"auth-step-up-failures:user:{user.id}:purpose:{purpose}",
+        defaults={
+            "type": DashboardNotification.TYPE_STEP_UP_FAILURE_SPIKE,
+            "severity": DashboardNotification.SEVERITY_WARNING,
+            "title": "Repeated security check failures",
+            "body": (
+                f"{username} has {failed_count} failed security checks for "
+                f"{purpose_label} in the last {window_minutes} minutes."
+            ),
+            "source_system": "auth",
+            "source_object_type": "user",
+            "source_object_id": str(user.id),
+            "href": "/system",
+            "recipient_scope": DashboardNotification.SCOPE_GLOBAL,
+            "recipient_role": User.ROLE_ADMIN,
+            "recipient_user": None,
+            "ward": None,
+            "requires_acknowledgement": True,
+            "dismissible": True,
+            "auto_resolve": False,
+            "pinned_until_actioned": False,
+            "metadata": {
+                "user_id": user.id,
+                "username": user.username,
+                "purpose": purpose,
+                "failed_count": failed_count,
+                "window_minutes": window_minutes,
+            },
+        },
+    )
+
+
+def notify_session_context_changed(session, *, changed_fields: list[str] | tuple[str, ...]) -> None:
+    if "user_agent" not in set(changed_fields):
+        return
+
+    user = getattr(session, "user", None)
+    username = _notification_username(user)
+    _upsert_notification(
+        external_key=f"auth-session-context:{session.public_id}",
+        defaults={
+            "type": DashboardNotification.TYPE_SESSION_CONTEXT_CHANGED,
+            "severity": DashboardNotification.SEVERITY_WARNING,
+            "title": f"Session context changed for {username}",
+            "body": "A signed-in session changed browser/device context and should be reviewed.",
+            "source_system": "auth",
+            "source_object_type": "user_session",
+            "source_object_id": str(session.public_id),
+            "href": "/system",
+            "recipient_scope": DashboardNotification.SCOPE_GLOBAL,
+            "recipient_role": User.ROLE_ADMIN,
+            "recipient_user": None,
+            "ward": None,
+            "requires_acknowledgement": True,
+            "dismissible": True,
+            "auto_resolve": False,
+            "pinned_until_actioned": False,
+            "metadata": _session_security_metadata(session, {"changed_fields": list(changed_fields)}),
+        },
+    )
+
+
+def notify_admin_new_device(session) -> None:
+    user = getattr(session, "user", None)
+    username = _notification_username(user)
+    _upsert_notification(
+        external_key=f"auth-admin-new-device:user:{getattr(user, 'id', '')}:session:{session.public_id}",
+        defaults={
+            "type": DashboardNotification.TYPE_ADMIN_NEW_DEVICE,
+            "severity": DashboardNotification.SEVERITY_WARNING,
+            "title": "New admin device/browser sign-in",
+            "body": f"{username} signed in from a browser profile not seen before for that admin account.",
+            "source_system": "auth",
+            "source_object_type": "user_session",
+            "source_object_id": str(session.public_id),
+            "href": "/system",
+            "recipient_scope": DashboardNotification.SCOPE_GLOBAL,
+            "recipient_role": User.ROLE_ADMIN,
+            "recipient_user": None,
+            "ward": None,
+            "requires_acknowledgement": True,
+            "dismissible": True,
+            "auto_resolve": False,
+            "pinned_until_actioned": False,
+            "metadata": _session_security_metadata(session),
+        },
+    )
+
+
 def dispatch_chv_coverage_request_event_side_effects(event_id: int) -> None:
     event = (
         CHVCoverageRequestEvent.objects.select_related(

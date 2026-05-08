@@ -5,6 +5,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.conf import settings
+from django.db import transaction
 from rest_framework import serializers
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 from rest_framework.validators import UniqueValidator
@@ -15,7 +16,24 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from risk.models import Ward
 
 from .audit import get_client_ip
-from .models import AccessRequest, AuthAuditEvent, UserPolicyAcceptance
+from .models import AccessRequest, AuthAuditEvent, StepUpGrant, UserPolicyAcceptance, UserSession
+from .session_security import (
+    apply_role_refresh_lifetime,
+    apply_session_claims,
+    classify_session_refresh,
+    ensure_locked_session_for_refresh,
+    ensure_session_for_refresh,
+    get_refresh_jti_hash,
+    get_session_from_refresh_payload,
+    handle_failed_refresh_token,
+    mark_previous_refresh_grace_used,
+    mark_refresh_replay_detected,
+    mark_session_refreshed,
+    mark_session_seen,
+    parse_refresh_verified_allow_blacklisted,
+    SESSION_REPLAY_DETECTED_DETAIL,
+    sync_refresh_expiry_to_session,
+)
 from .services import build_policy_acceptance_status, get_current_policy_versions
 from .two_factor import (
     build_totp_provisioning_uri,
@@ -106,7 +124,7 @@ class UserSerializer(serializers.ModelSerializer):
             "can_manage_totp": obj.is_active and two_factor_policy != "NONE",
             "can_view_own_activity": obj.is_active,
             "can_update_identity": can_update_identity,
-            "can_review_sessions": False,
+            "can_review_sessions": obj.is_active,
             "can_generate_profile_report": False,
             "identity_update_mode": "totp_step_up" if can_update_identity else "admin_managed",
             "mode": "auth_contract_backed_profile",
@@ -162,6 +180,100 @@ class UserAppearanceSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ["theme_preference"]
+
+
+class UserSessionSerializer(serializers.ModelSerializer):
+    device_label = serializers.SerializerMethodField()
+    browser_label = serializers.SerializerMethodField()
+    location_label = serializers.SerializerMethodField()
+    status = serializers.SerializerMethodField()
+    is_current = serializers.SerializerMethodField()
+    is_active = serializers.SerializerMethodField()
+
+    class Meta:
+        model = UserSession
+        fields = [
+            "public_id",
+            "device_label",
+            "browser_label",
+            "created_at",
+            "last_seen_at",
+            "last_rotated_at",
+            "expires_at",
+            "revoked_at",
+            "revoked_reason",
+            "location_label",
+            "status",
+            "is_current",
+            "is_active",
+            "is_suspicious",
+            "suspicion_reason",
+        ]
+
+    def _summarize_user_agent(self, value):
+        user_agent = (value or "").strip()
+        if not user_agent:
+            return "Unknown device"
+
+        normalized = user_agent.lower()
+        if "edg/" in normalized:
+            browser = "Microsoft Edge"
+        elif "chrome/" in normalized or "crios/" in normalized:
+            browser = "Chrome"
+        elif "firefox/" in normalized or "fxios/" in normalized:
+            browser = "Firefox"
+        elif "safari/" in normalized:
+            browser = "Safari"
+        else:
+            browser = "Browser"
+
+        if "iphone" in normalized:
+            platform = "iPhone"
+        elif "ipad" in normalized:
+            platform = "iPad"
+        elif "android" in normalized:
+            platform = "Android"
+        elif "mac os x" in normalized or "macintosh" in normalized:
+            platform = "macOS"
+        elif "windows" in normalized:
+            platform = "Windows"
+        elif "linux" in normalized:
+            platform = "Linux"
+        else:
+            platform = "unknown device"
+
+        if browser == "Browser" and platform == "unknown device":
+            return user_agent[:96]
+        return f"{browser} on {platform}"
+
+    def get_device_label(self, obj):
+        return self._summarize_user_agent(obj.device_label or obj.user_agent_label)
+
+    def get_browser_label(self, obj):
+        return self._summarize_user_agent(obj.user_agent_label or obj.device_label)
+
+    def get_location_label(self, obj):
+        if obj.last_ip_prefix_hash or obj.created_ip_prefix_hash:
+            return "Network fingerprint stored"
+        return "Location not stored"
+
+    def get_is_current(self, obj):
+        current_session = self.context.get("current_session")
+        return bool(current_session and obj.pk == current_session.pk)
+
+    def get_is_active(self, obj):
+        return obj.is_active
+
+    def get_status(self, obj):
+        if self.get_is_current(obj):
+            return "current"
+        if obj.revoked_at:
+            return "revoked"
+        if obj.is_suspicious:
+            return "suspicious"
+        if obj.is_expired:
+            return "expired"
+        return "active"
 
 
 class UserProfileUpdateSerializer(serializers.ModelSerializer):
@@ -332,6 +444,17 @@ class VerifyAuthenticatedTwoFactorSerializer(serializers.Serializer):
         if len(digits_only) != 6:
             raise serializers.ValidationError("Enter a valid 6-digit code.")
         return digits_only
+
+
+class StepUpVerifySerializer(serializers.Serializer):
+    code = serializers.CharField(max_length=64)
+    purpose = serializers.ChoiceField(choices=[purpose for purpose, _ in StepUpGrant.PURPOSE_CHOICES])
+
+    def validate_code(self, value):
+        code = value.strip()
+        if not code:
+            raise serializers.ValidationError("Enter an authentication or recovery code.")
+        return code
 
 
 class BeginTwoFactorEnrollmentSerializer(serializers.Serializer):
@@ -563,22 +686,110 @@ class AccessRequestDecisionSerializer(serializers.Serializer):
 
 
 class CCHISTokenRefreshSerializer(TokenRefreshSerializer):
-    def validate(self, attrs):
-        try:
-            refresh = RefreshToken(attrs["refresh"])
-        except TokenError as exc:
-            raise InvalidToken("Invalid or expired refresh token.") from exc
+    def _get_refresh_user(self, refresh: RefreshToken):
         user_id = refresh.get("user_id")
 
         try:
-            user = User.objects.get(id=user_id)
+            return User.objects.get(id=user_id)
         except User.DoesNotExist as exc:
             raise AuthenticationFailed("User not found.", code="user_not_found") from exc
 
+    def _build_previous_grace_response(self, raw_refresh_token: str, request=None) -> dict | None:
+        try:
+            refresh = parse_refresh_verified_allow_blacklisted(raw_refresh_token)
+        except TokenError:
+            return None
+
+        user = self._get_refresh_user(refresh)
         if not user.is_active:
             raise AuthenticationFailed("User account is inactive.", code="user_inactive")
+        self.user = user
 
-        return super().validate(attrs)
+        with transaction.atomic():
+            session = get_session_from_refresh_payload(refresh, for_update=True)
+            if not session:
+                return None
+            refresh_match, _ = classify_session_refresh(session, refresh)
+            if refresh_match != "previous_grace":
+                return None
+
+            apply_session_claims(refresh, session, user)
+            mark_previous_refresh_grace_used(session, request=request)
+            return {"access": str(refresh.access_token)}
+
+    def validate(self, attrs):
+        raw_refresh_token = attrs["refresh"]
+        request = self.context.get("request")
+
+        try:
+            refresh = RefreshToken(raw_refresh_token)
+        except TokenError as exc:
+            grace_response = self._build_previous_grace_response(raw_refresh_token, request=request)
+            if grace_response is not None:
+                return grace_response
+            handle_failed_refresh_token(
+                raw_refresh_token,
+                request,
+                reason="token_invalid_or_blacklisted",
+                raise_session_policy_failure=True,
+            )
+            raise InvalidToken("Invalid or expired refresh token.") from exc
+
+        user = self._get_refresh_user(refresh)
+
+        if not user.is_active:
+            raise AuthenticationFailed("User account is inactive.", code="user_inactive")
+        self.user = user
+
+        data = None
+        replay_error = None
+        with transaction.atomic():
+            session, _ = ensure_locked_session_for_refresh(
+                user,
+                refresh,
+                request=request,
+                allow_create=False,
+            )
+            refresh_match, refresh_jti_hash = classify_session_refresh(session, refresh)
+
+            if refresh_match == "replay":
+                mark_refresh_replay_detected(session, request, refresh_jti_hash, reason="refresh_jti_mismatch")
+                replay_error = AuthenticationFailed(SESSION_REPLAY_DETECTED_DETAIL, code="session_replay_detected")
+            elif refresh_match == "previous_grace":
+                apply_session_claims(refresh, session, user)
+                mark_previous_refresh_grace_used(session, request=request)
+                data = {"access": str(refresh.access_token)}
+            else:
+                apply_session_claims(refresh, session, user)
+                data = {"access": str(refresh.access_token)}
+
+                if settings.SIMPLE_JWT["ROTATE_REFRESH_TOKENS"]:
+                    previous_jti_hash = get_refresh_jti_hash(refresh)
+                    if settings.SIMPLE_JWT["BLACKLIST_AFTER_ROTATION"]:
+                        try:
+                            refresh.blacklist()
+                        except AttributeError:
+                            pass
+
+                    refresh.set_jti()
+                    refresh.set_iat()
+                    sync_refresh_expiry_to_session(refresh, session)
+                    apply_session_claims(refresh, session, user)
+                    refresh.outstand()
+                    mark_session_refreshed(
+                        session,
+                        refresh,
+                        request=request,
+                        previous_jti_hash=previous_jti_hash,
+                    )
+                    data["refresh"] = str(refresh)
+                else:
+                    mark_session_seen(session, refresh, request=request)
+
+        if replay_error:
+            raise replay_error
+
+        return data
 
 
 class CCHISTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -593,8 +804,10 @@ class CCHISTokenObtainPairSerializer(TokenObtainPairSerializer):
         return token
 
     @classmethod
-    def build_token_response(cls, user):
+    def build_token_response(cls, user, request=None):
         refresh = cls.get_token(user)
+        apply_role_refresh_lifetime(refresh, user)
+        ensure_session_for_refresh(user, refresh, request=request)
         return {
             "access": str(refresh.access_token),
             "refresh": str(refresh),
@@ -622,7 +835,7 @@ class CCHISTokenObtainPairSerializer(TokenObtainPairSerializer):
                 "temp_token": token_record.token,
             }
 
-        data = self.build_token_response(self.user)
+        data = self.build_token_response(self.user, request=self.context.get("request"))
         data["requires_2fa_enrollment"] = False
         data["user"]["is_totp_enabled"] = is_totp_enrolled(self.user)
         return data
@@ -748,6 +961,38 @@ class OwnAuthActivityEventSerializer(serializers.ModelSerializer):
         AuthAuditEvent.EVENT_USER_REACTIVATED: (
             "Account reactivated",
             "Your user account was reactivated.",
+        ),
+        AuthAuditEvent.EVENT_SESSION_CREATED: (
+            "Session created",
+            "A dashboard session was created for your account.",
+        ),
+        AuthAuditEvent.EVENT_SESSION_REFRESHED: (
+            "Session rotated",
+            "Your dashboard session refresh token was rotated.",
+        ),
+        AuthAuditEvent.EVENT_SESSION_REVOKED: (
+            "Session revoked",
+            "A dashboard session for your account was revoked.",
+        ),
+        AuthAuditEvent.EVENT_SESSION_REPLAY_DETECTED: (
+            "Session replay detected",
+            "A reused refresh token was detected for your account.",
+        ),
+        AuthAuditEvent.EVENT_SESSION_CONTEXT_CHANGED: (
+            "Session context changed",
+            "A dashboard session for your account was used from a changed browser or network context.",
+        ),
+        AuthAuditEvent.EVENT_STEP_UP_REQUIRED: (
+            "Step-up required",
+            "Additional verification was required for a sensitive action.",
+        ),
+        AuthAuditEvent.EVENT_STEP_UP_VERIFIED: (
+            "Step-up verified",
+            "Additional verification was completed for a sensitive action.",
+        ),
+        AuthAuditEvent.EVENT_STEP_UP_FAILED: (
+            "Step-up failed",
+            "Additional verification failed for a sensitive action.",
         ),
     }
 

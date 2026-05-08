@@ -21,7 +21,7 @@ export async function GET(
     return NextResponse.json(action);
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload ?? { detail: error.message }, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to load preparedness action." }, { status: 500 });
@@ -49,7 +49,7 @@ export async function PATCH(
     return NextResponse.json(action);
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload ?? { detail: error.message }, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to update preparedness action." }, { status: 500 });

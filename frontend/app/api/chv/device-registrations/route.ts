@@ -16,7 +16,7 @@ export async function POST(request: Request) {
     return NextResponse.json(registration, { status: 201 });
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload ?? { detail: error.message }, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to register this CHV device." }, { status: 500 });

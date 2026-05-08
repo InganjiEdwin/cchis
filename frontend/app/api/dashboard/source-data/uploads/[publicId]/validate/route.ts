@@ -22,7 +22,7 @@ export async function POST(
     return NextResponse.json(upload);
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload ?? { detail: error.message }, { status: error.status });
     }
     return NextResponse.json({ detail: "Unable to validate source-data upload." }, { status: 500 });
   }

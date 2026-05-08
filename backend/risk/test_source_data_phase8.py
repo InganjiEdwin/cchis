@@ -11,10 +11,11 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from accounts.models import User
+from accounts.models import StepUpGrant, User
 
 from .models import ETLHeartbeat, SourceDataUploadArtifact, SourceDataUploadBatch, SourceDataValidationIssue
 from .source_data.operations import cleanup_expired_source_data_artifacts
+from .test_step_up_utils import force_authenticate_with_step_up
 
 
 def throttled_rest_framework(upload_rate: str = "2/minute", validate_rate: str = "2/minute") -> dict:
@@ -98,7 +99,7 @@ class SourceDataPhaseEightProductionHardeningTests(APITestCase):
         filename: str = "weekly.csv",
         content_type: str = "text/csv",
     ):
-        self.client.force_authenticate(actor or self.supervisor)
+        force_authenticate_with_step_up(self.client, actor or self.supervisor, StepUpGrant.PURPOSE_SOURCE_DATA)
         return self.client.post(
             reverse("source-data-upload-list-create"),
             self.upload_payload(csv_text=csv_text, filename=filename, content_type=content_type),
@@ -106,7 +107,7 @@ class SourceDataPhaseEightProductionHardeningTests(APITestCase):
         )
 
     def validate_upload(self, public_id: str):
-        self.client.force_authenticate(self.supervisor)
+        force_authenticate_with_step_up(self.client, self.supervisor, StepUpGrant.PURPOSE_SOURCE_DATA)
         return self.client.post(
             reverse("source-data-upload-validate", kwargs={"public_id": public_id}),
             {},
@@ -299,7 +300,7 @@ class SourceDataPhaseEightProductionHardeningTests(APITestCase):
         upload_response = self.create_upload(filename="feature-flags.csv")
         self.validate_upload(upload_response.data["public_id"])
 
-        self.client.force_authenticate(self.supervisor)
+        force_authenticate_with_step_up(self.client, self.supervisor, StepUpGrant.PURPOSE_SOURCE_DATA)
         with self.settings(SOURCE_DATA_IMPORT_CONFIRM_ENABLED=False):
             disabled_confirm_response = self.client.post(
                 reverse("source-data-upload-confirm", kwargs={"public_id": upload_response.data["public_id"]}),

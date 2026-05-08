@@ -31,7 +31,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return NextResponse.json(review, { status: 201 });
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload ?? { detail: error.message }, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to open readiness review." }, { status: 500 });

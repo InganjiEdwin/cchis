@@ -20,7 +20,7 @@ export async function GET(request: Request) {
     return NextResponse.json(uploads);
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload, { status: error.status });
     }
     return NextResponse.json({ detail: "Unable to load source-data uploads." }, { status: 500 });
   }
@@ -42,7 +42,7 @@ export async function POST(request: Request) {
     return NextResponse.json(upload, { status: 201 });
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload, { status: error.status });
     }
     return NextResponse.json({ detail: "Unable to create source-data upload." }, { status: 500 });
   }

@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 
-import { applyBackendSetCookie, fetchBackendResponse } from "@/lib/server-api";
+import { applyBackendSetCookie, fetchBackendAuthorizedResponse } from "@/lib/server-api";
 
 export async function POST(request: Request) {
   const cookieHeader = request.headers.get("cookie") ?? "";
 
   try {
     const body = await request.text();
-    const backendResponse = await fetchBackendResponse("/auth/me/identity/verify-2fa/", {
+    const backendResponse = await fetchBackendAuthorizedResponse("/auth/me/identity/verify-2fa/", {
       method: "POST",
       body,
       cookieHeader,

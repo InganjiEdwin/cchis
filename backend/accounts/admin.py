@@ -3,7 +3,7 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
 from django.utils import timezone
 
-from .models import AccessRequest, AuthAuditEvent, User, UserPolicyAcceptance
+from .models import AccessRequest, AuthAuditEvent, StepUpGrant, User, UserPolicyAcceptance, UserSession
 from .services import send_access_request_decision
 from .two_factor import generate_totp_secret
 from .views import with_access_request_review_signals
@@ -118,6 +118,77 @@ class UserPolicyAcceptanceAdmin(admin.ModelAdmin):
         return False
 
     def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(UserSession)
+class UserSessionAdmin(admin.ModelAdmin):
+    list_display = (
+        "public_id",
+        "user",
+        "device_label",
+        "last_seen_at",
+        "expires_at",
+        "revoked_at",
+        "is_suspicious",
+    )
+    list_filter = ("is_suspicious", "revoked_at", "created_at", "last_seen_at")
+    search_fields = ("public_id", "user__username", "user__email", "device_label", "user_agent_label")
+    readonly_fields = (
+        "public_id",
+        "user",
+        "token_family_id",
+        "current_refresh_jti_hash",
+        "previous_refresh_jti_hash",
+        "previous_refresh_grace_until",
+        "created_at",
+        "last_seen_at",
+        "last_rotated_at",
+        "expires_at",
+        "revoked_at",
+        "revoked_by",
+        "revoked_reason",
+        "created_ip_prefix_hash",
+        "last_ip_prefix_hash",
+        "user_agent_hash",
+        "user_agent_label",
+        "device_label",
+        "is_suspicious",
+        "suspicion_reason",
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(StepUpGrant)
+class StepUpGrantAdmin(admin.ModelAdmin):
+    list_display = (
+        "public_id",
+        "user",
+        "session",
+        "purpose",
+        "method",
+        "verified_at",
+        "expires_at",
+        "consumed_at",
+    )
+    list_filter = ("purpose", "method", "verified_at", "expires_at", "consumed_at")
+    search_fields = ("public_id", "user__username", "user__email", "session__public_id")
+    readonly_fields = (
+        "public_id",
+        "user",
+        "session",
+        "purpose",
+        "verified_at",
+        "expires_at",
+        "method",
+        "ip_prefix_hash",
+        "user_agent_hash",
+        "consumed_at",
+    )
+
+    def has_add_permission(self, request):
         return False
 
 

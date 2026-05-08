@@ -9,7 +9,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from accounts.models import User
+from accounts.models import StepUpGrant, User
 
 from .models import (
     FacilityForecastRun,
@@ -23,6 +23,7 @@ from .models import (
     Ward,
 )
 from .services import build_facility_intelligence_snapshot
+from .test_step_up_utils import force_authenticate_with_step_up
 
 
 class SourceDataPhaseSixFacilityReadinessSnapshotTests(APITestCase):
@@ -108,7 +109,7 @@ class SourceDataPhaseSixFacilityReadinessSnapshotTests(APITestCase):
         }
 
     def create_upload(self, csv_text: str):
-        self.client.force_authenticate(self.supervisor)
+        force_authenticate_with_step_up(self.client, self.supervisor, StepUpGrant.PURPOSE_SOURCE_DATA)
         return self.client.post(
             reverse("source-data-upload-list-create"),
             self.readiness_payload(csv_text),
@@ -116,7 +117,7 @@ class SourceDataPhaseSixFacilityReadinessSnapshotTests(APITestCase):
         )
 
     def validate_upload(self, public_id: str):
-        self.client.force_authenticate(self.supervisor)
+        force_authenticate_with_step_up(self.client, self.supervisor, StepUpGrant.PURPOSE_SOURCE_DATA)
         return self.client.post(
             reverse("source-data-upload-validate", kwargs={"public_id": public_id}),
             {},
@@ -124,7 +125,7 @@ class SourceDataPhaseSixFacilityReadinessSnapshotTests(APITestCase):
         )
 
     def confirm_upload(self, public_id: str):
-        self.client.force_authenticate(self.supervisor)
+        force_authenticate_with_step_up(self.client, self.supervisor, StepUpGrant.PURPOSE_SOURCE_DATA)
         return self.client.post(
             reverse("source-data-upload-confirm", kwargs={"public_id": public_id}),
             {},
@@ -266,7 +267,7 @@ class SourceDataPhaseSixFacilityReadinessSnapshotTests(APITestCase):
         self.validate_upload(upload_response.data["public_id"])
         confirm_response = self.confirm_upload(upload_response.data["public_id"])
 
-        self.client.force_authenticate(self.admin)
+        force_authenticate_with_step_up(self.client, self.admin, StepUpGrant.PURPOSE_SOURCE_DATA)
         downstream_response = self.client.post(
             reverse("source-data-upload-downstream-actions", kwargs={"public_id": confirm_response.data["public_id"]}),
             {"action_key": "recompute_facility_readiness_evidence"},

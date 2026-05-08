@@ -1,4 +1,5 @@
 import logging
+from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.conf import settings
@@ -21,7 +22,27 @@ from rest_framework_simplejwt.tokens import RefreshToken, TokenError
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from .audit import get_client_ip, record_auth_event
-from .models import AccessRequest, AuthAuditEvent, PasswordResetToken
+from .models import AccessRequest, AuthAuditEvent, PasswordResetToken, StepUpGrant, UserSession
+from .session_security import (
+    blacklist_known_refresh_tokens_for_session,
+    get_refresh_token_max_age_seconds,
+    handle_failed_refresh_token,
+    hmac_sha256,
+    RefreshTokenAlreadyRotated,
+    revoke_session,
+    revoke_session_from_refresh_token,
+    revoke_sessions_for_user,
+    validate_access_token_session,
+)
+from .step_up import (
+    RequireFreshStepUp,
+    StepUpRequired,
+    create_step_up_grant,
+    get_current_session_from_request,
+    get_fresh_step_up_grant,
+    mark_high_risk_action_for_audit,
+    record_step_up_required,
+)
 from .services import (
     build_policy_acceptance_status,
     create_password_reset_token,
@@ -44,6 +65,8 @@ from .serializers import (
     RegenerateTwoFactorRecoveryCodesSerializer,
     RegisterSerializer,
     AuthAuditEventSerializer,
+    StepUpVerifySerializer,
+    UserSessionSerializer,
     UserProfileUpdateSerializer,
     UserSerializer,
     PasswordResetRequestSerializer,
@@ -111,30 +134,12 @@ def get_access_cookie_value(request) -> str:
     return str(request.COOKIES.get(get_access_cookie_name()) or "")
 
 
-def get_user_from_refresh_cookie(request):
-    refresh_token = get_refresh_cookie_value(request)
-    refresh_fingerprint = fingerprint_refresh_token(refresh_token)
-
-    if not refresh_token or is_refresh_cooldown_active(request, refresh_fingerprint):
-        return None
-
-    try:
-        refresh = RefreshToken(refresh_token)
-        refresh.check_blacklist()
-        user = User.objects.filter(id=refresh["user_id"]).first()
-    except (KeyError, TokenError):
-        register_failed_refresh_attempt(request, refresh_fingerprint)
-        return None
-
-    clear_failed_refresh_attempts(request, refresh_fingerprint)
-    return user
-
-
 def set_refresh_cookie(response: Response, refresh_token: str) -> None:
+    max_age = get_refresh_token_max_age_seconds(refresh_token)
     response.set_cookie(
         key=get_refresh_cookie_name(),
         value=refresh_token,
-        max_age=int(settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds()),
+        max_age=max_age if max_age is not None else int(settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds()),
         httponly=getattr(settings, "AUTH_REFRESH_COOKIE_HTTPONLY", True),
         secure=getattr(settings, "AUTH_REFRESH_COOKIE_SECURE", False),
         samesite=getattr(settings, "AUTH_REFRESH_COOKIE_SAMESITE", "Lax"),
@@ -203,6 +208,46 @@ def build_session_response(*, authenticated: bool, user=None, access_token: str 
     return Response(payload, status=status.HTTP_200_OK)
 
 
+def public_auth_token_response_payload(payload: dict) -> dict:
+    response_payload = dict(payload)
+    if getattr(settings, "AUTH_TOKEN_RESPONSE_MODE", "body_and_cookie") != "cookie_only":
+        return response_payload
+
+    removed_token = False
+    for token_field in ("access", "refresh"):
+        if token_field in response_payload:
+            removed_token = True
+            response_payload.pop(token_field, None)
+
+    if removed_token:
+        response_payload["session_established"] = True
+
+    return response_payload
+
+
+def format_authentication_failed_response(exc: AuthenticationFailed) -> dict:
+    code = exc.get_codes()
+    detail = exc.detail
+    if code == "session_replay_detected":
+        detail = "We signed you out because this session looked unsafe. Please sign in again."
+    return {
+        "detail": " ".join(str(item) for item in detail) if isinstance(detail, list) else str(detail),
+        "code": code if isinstance(code, str) else "authentication_failed",
+    }
+
+
+SESSION_POLICY_REFRESH_FAILURE_CODES = {
+    "session_expired",
+    "session_idle_timeout",
+    "session_revoked",
+    "session_not_found",
+    "session_user_mismatch",
+    "session_replay_detected",
+    "user_inactive",
+    "user_not_found",
+}
+
+
 def build_policy_acceptance_audit_metadata(
     policy_status: dict,
     *,
@@ -230,6 +275,40 @@ def build_login_attempt_key(request, username: str) -> str:
     client_ip = get_client_ip(request) or "unknown"
     normalized_username = username.strip().lower() or "blank"
     return f"auth:login_attempts:{client_ip}:{normalized_username}"
+
+
+def notify_step_up_failure_spike_if_needed(request, user, purpose: str) -> None:
+    threshold = max(1, int(getattr(settings, "AUTH_STEP_UP_FAILURE_NOTIFICATION_THRESHOLD", 3)))
+    window_minutes = max(1, int(getattr(settings, "AUTH_STEP_UP_FAILURE_NOTIFICATION_WINDOW_MINUTES", 15)))
+    since = timezone.now() - timedelta(minutes=window_minutes)
+    failed_count = AuthAuditEvent.objects.filter(
+        target_user=user,
+        event_type=AuthAuditEvent.EVENT_STEP_UP_FAILED,
+        status=AuthAuditEvent.STATUS_FAILED,
+        created_at__gte=since,
+        metadata__purpose=purpose,
+    ).count()
+    if failed_count < threshold:
+        return
+
+    try:
+        from risk.notifications import notify_step_up_failure_spike
+    except Exception:
+        security_logger.exception("step_up_failure_notification_import_failed")
+        return
+
+    try:
+        notify_step_up_failure_spike(
+            user,
+            purpose=purpose,
+            failed_count=failed_count,
+            window_minutes=window_minutes,
+        )
+    except Exception:
+        security_logger.exception(
+            "step_up_failure_notification_failed",
+            extra={"user_id": user.id, "purpose": purpose},
+        )
 
 
 def build_login_cooldown_key(request, username: str) -> str:
@@ -342,16 +421,16 @@ def looks_like_recovery_code_input(code: str) -> bool:
     return not (normalized_code.isdigit() and len(normalized_code) == 6)
 
 
-def build_profile_identity_step_up_key(user_id: int) -> str:
-    return f"auth:profile_identity_step_up:{user_id}"
+def build_profile_identity_step_up_key(user_id: int, session: UserSession) -> str:
+    return f"auth:profile_identity_step_up:{user_id}:{session.public_id}"
 
 
-def mark_profile_identity_step_up_verified(user_id: int) -> None:
-    cache.set(build_profile_identity_step_up_key(user_id), True, timeout=300)
+def mark_profile_identity_step_up_verified(user_id: int, session: UserSession) -> None:
+    cache.set(build_profile_identity_step_up_key(user_id, session), True, timeout=300)
 
 
-def has_profile_identity_step_up(user_id: int) -> bool:
-    return bool(cache.get(build_profile_identity_step_up_key(user_id)))
+def has_profile_identity_step_up(user_id: int, session: UserSession) -> bool:
+    return bool(cache.get(build_profile_identity_step_up_key(user_id, session)))
 
 
 def build_refresh_attempt_key(request, token_fingerprint: str) -> str:
@@ -390,7 +469,7 @@ def fingerprint_refresh_token(token_value: str) -> str:
     token_value = token_value.strip()
     if not token_value:
         return "blank"
-    return token_value[:12]
+    return hmac_sha256(f"refresh-token-fingerprint:{token_value}")[:32]
 
 
 def with_access_request_review_signals(queryset):
@@ -442,7 +521,10 @@ def with_access_request_review_signals(queryset):
 class RegisterAPIView(generics.CreateAPIView):
     queryset = User.objects.all()
     serializer_class = RegisterSerializer
-    permission_classes = [IsAdminOnly]
+    permission_classes = [
+        IsAdminOnly,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_ADMIN_ACTIONS),
+    ]
     throttle_scope = "auth_write"
 
     def perform_create(self, serializer):
@@ -595,10 +677,12 @@ class LoginAPIView(TokenObtainPairView):
                 target_user=user,
             )
 
-        response = Response(serializer.validated_data, status=status.HTTP_200_OK)
-
         access_token = serializer.validated_data.get("access")
         refresh_token = serializer.validated_data.get("refresh")
+        response = Response(
+            public_auth_token_response_payload(serializer.validated_data),
+            status=status.HTTP_200_OK,
+        )
         set_auth_cookies(response, access_token, refresh_token)
 
         return response
@@ -647,6 +731,29 @@ class RefreshAPIView(TokenRefreshView):
 
         try:
             serializer.is_valid(raise_exception=True)
+        except RefreshTokenAlreadyRotated as exc:
+            return Response(
+                {
+                    "detail": str(exc.detail),
+                    "code": "session_already_rotated",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        except AuthenticationFailed as exc:
+            payload = format_authentication_failed_response(exc)
+            if payload["code"] not in SESSION_POLICY_REFRESH_FAILURE_CODES:
+                register_failed_refresh_attempt(request, refresh_fingerprint)
+            record_auth_event(
+                request=request,
+                event_type=AuthAuditEvent.EVENT_REFRESH_FAILED,
+                status=AuthAuditEvent.STATUS_FAILED,
+                actor=user,
+                target_user=user,
+                metadata={"reason": payload["code"]},
+            )
+            response = Response(payload, status=status.HTTP_401_UNAUTHORIZED)
+            clear_auth_cookies(response)
+            return response
         except Exception:
             register_failed_refresh_attempt(request, refresh_fingerprint)
             record_auth_event(
@@ -665,6 +772,7 @@ class RefreshAPIView(TokenRefreshView):
             return response
 
         clear_failed_refresh_attempts(request, refresh_fingerprint)
+        user = getattr(serializer, "user", user)
         record_auth_event(
             request=request,
             event_type=AuthAuditEvent.EVENT_REFRESH_SUCCESS,
@@ -673,9 +781,12 @@ class RefreshAPIView(TokenRefreshView):
             target_user=user,
         )
 
-        response = Response(serializer.validated_data, status=status.HTTP_200_OK)
         access_token = serializer.validated_data.get("access")
-        issued_refresh = serializer.validated_data.get("refresh") or refresh_token
+        issued_refresh = serializer.validated_data.get("refresh")
+        response = Response(
+            public_auth_token_response_payload(serializer.validated_data),
+            status=status.HTTP_200_OK,
+        )
         set_auth_cookies(response, access_token, issued_refresh)
         return response
 
@@ -700,7 +811,11 @@ class MeAPIView(APIView):
             if not is_totp_enrolled(request.user):
                 raise PermissionDenied("Set up two-factor authentication before editing personal details.")
 
-            if not has_profile_identity_step_up(request.user.id):
+            session = get_current_session_from_request(request)
+            if not session:
+                raise PermissionDenied("Identity updates require a session-bound access token.")
+
+            if not has_profile_identity_step_up(request.user.id, session):
                 raise PermissionDenied("Verify two-factor authentication before editing personal details.")
 
         serializer.save()
@@ -763,16 +878,17 @@ class PolicyAcceptanceAPIView(APIView):
 
 
 class VerifyProfileIdentityTwoFactorAPIView(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
     throttle_scope = "auth_2fa"
 
     def post(self, request):
         serializer = VerifyAuthenticatedTwoFactorSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = request.user if getattr(request.user, "is_authenticated", False) else get_user_from_refresh_cookie(request)
+        user = request.user
 
-        if not user:
-            return Response({"detail": "Authentication required."}, status=status.HTTP_401_UNAUTHORIZED)
+        session = get_current_session_from_request(request)
+        if not session:
+            raise PermissionDenied("Identity verification requires a session-bound access token.")
 
         if not user.is_active:
             raise PermissionDenied("Identity updates are not available for this account state.")
@@ -810,16 +926,127 @@ class VerifyProfileIdentityTwoFactorAPIView(APIView):
             )
 
         clear_failed_two_factor_attempts(request, user.id)
-        mark_profile_identity_step_up_verified(user.id)
+        mark_profile_identity_step_up_verified(user.id, session)
         record_auth_event(
             request=request,
             event_type=AuthAuditEvent.EVENT_2FA_VERIFIED,
             status=AuthAuditEvent.STATUS_SUCCESS,
             actor=user,
             target_user=user,
-            metadata={"purpose": "profile_identity_update"},
+            metadata={
+                "purpose": "profile_identity_update",
+                "session_id": str(session.public_id),
+            },
         )
         return Response({"detail": "Personal details unlocked for editing."}, status=status.HTTP_200_OK)
+
+
+class StepUpVerifyAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_scope = "auth_2fa"
+
+    def post(self, request):
+        serializer = StepUpVerifySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        purpose = serializer.validated_data["purpose"]
+
+        if not request.user.is_active:
+            raise PermissionDenied("Security checks are not available for this account state.")
+
+        if not is_totp_enrolled(request.user):
+            raise PermissionDenied("Set up two-factor authentication before high-impact actions.")
+
+        session = get_current_session_from_request(request)
+        if not session:
+            raise PermissionDenied("Security checks require a session-bound access token.")
+
+        if is_two_factor_cooldown_active(request, request.user.id):
+            record_auth_event(
+                request=request,
+                event_type=AuthAuditEvent.EVENT_STEP_UP_FAILED,
+                status=AuthAuditEvent.STATUS_FAILED,
+                actor=request.user,
+                target_user=request.user,
+                metadata={"reason": "cooldown_active", "purpose": purpose},
+            )
+            notify_step_up_failure_spike_if_needed(request, request.user, purpose)
+            return Response(
+                {"detail": "Too many verification attempts. Please wait and try again."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        verification = verify_second_factor_code(request.user, serializer.validated_data["code"])
+        if not verification:
+            register_failed_two_factor_attempt(request, request.user.id)
+            record_auth_event(
+                request=request,
+                event_type=AuthAuditEvent.EVENT_STEP_UP_FAILED,
+                status=AuthAuditEvent.STATUS_FAILED,
+                actor=request.user,
+                target_user=request.user,
+                metadata={"reason": "invalid_code", "purpose": purpose},
+            )
+            notify_step_up_failure_spike_if_needed(request, request.user, purpose)
+            return Response(
+                {"detail": "Invalid or expired code. Please try again."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        clear_failed_two_factor_attempts(request, request.user.id)
+        grant = create_step_up_grant(
+            user=request.user,
+            session=session,
+            request=request,
+            purpose=purpose,
+            method=verification["method"],
+        )
+        record_auth_event(
+            request=request,
+            event_type=AuthAuditEvent.EVENT_STEP_UP_VERIFIED,
+            status=AuthAuditEvent.STATUS_SUCCESS,
+            actor=request.user,
+            target_user=request.user,
+            metadata={
+                "purpose": purpose,
+                "method": verification["method"],
+                "session_id": str(session.public_id),
+                "grant_id": str(grant.public_id),
+                "expires_at": grant.expires_at.isoformat(),
+            },
+        )
+        if verification["method"] == "recovery_code":
+            recovery_code_status = verification["recovery_code_status"]
+            remaining_count = recovery_code_status["remaining_count"]
+            record_auth_event(
+                request=request,
+                event_type=AuthAuditEvent.EVENT_2FA_RECOVERY_CODE_USED,
+                status=AuthAuditEvent.STATUS_SUCCESS,
+                actor=request.user,
+                target_user=request.user,
+                metadata={
+                    "purpose": f"step_up:{purpose}",
+                    "remaining_count": remaining_count,
+                    "code_hint": verification["recovery_code"].code_hint,
+                },
+            )
+            if remaining_count <= RECOVERY_CODE_LOW_THRESHOLD:
+                record_auth_event(
+                    request=request,
+                    event_type=AuthAuditEvent.EVENT_2FA_RECOVERY_CODES_LOW,
+                    status=AuthAuditEvent.STATUS_SUCCESS,
+                    actor=request.user,
+                    target_user=request.user,
+                    metadata={"purpose": f"step_up:{purpose}", "remaining_count": remaining_count},
+                )
+
+        return Response(
+            {
+                "detail": "Security check confirmed.",
+                "purpose": purpose,
+                "expires_at": grant.expires_at,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class MeActivityAPIView(APIView):
@@ -879,6 +1106,9 @@ class SessionAPIView(APIView):
         if authorization_header:
             try:
                 auth_result = jwt_authenticator.authenticate(request)
+                if auth_result:
+                    user, validated_token = auth_result
+                    validate_access_token_session(user, validated_token)
             except AuthenticationFailed:
                 auth_result = None
 
@@ -896,6 +1126,7 @@ class SessionAPIView(APIView):
             try:
                 validated_token = jwt_authenticator.get_validated_token(access_token)
                 user = jwt_authenticator.get_user(validated_token)
+                validate_access_token_session(user, validated_token)
                 return build_session_response(
                     authenticated=True,
                     user=user,
@@ -919,17 +1150,44 @@ class SessionAPIView(APIView):
             return response
 
         try:
-            refresh = RefreshToken(refresh_token)
-            refresh.check_blacklist()
-            access_token = str(refresh.access_token)
-            user = get_object_or_404(User, id=refresh["user_id"])
-        except TokenError:
-            register_failed_refresh_attempt(request, refresh_fingerprint)
+            serializer = CCHISTokenRefreshSerializer(
+                data={"refresh": refresh_token},
+                context={"request": request},
+            )
+            serializer.is_valid(raise_exception=True)
+            access_token = serializer.validated_data.get("access")
+            refresh_token = serializer.validated_data.get("refresh")
+            if not access_token:
+                raise AuthenticationFailed("Session refresh did not issue access.", code="invalid_refresh")
+            validated_token = jwt_authenticator.get_validated_token(access_token)
+            user = jwt_authenticator.get_user(validated_token)
+            validate_access_token_session(user, validated_token)
+        except RefreshTokenAlreadyRotated:
+            response = build_session_response(authenticated=False)
+            if access_cookie_invalid:
+                clear_access_cookie(response)
+            return response
+        except AuthenticationFailed as exc:
+            payload = format_authentication_failed_response(exc)
+            if payload["code"] not in SESSION_POLICY_REFRESH_FAILURE_CODES:
+                register_failed_refresh_attempt(request, refresh_fingerprint)
+            record_auth_event(
+                request=request,
+                event_type=AuthAuditEvent.EVENT_REFRESH_FAILED,
+                status=AuthAuditEvent.STATUS_FAILED,
+                metadata={"reason": payload["code"], "source": "session_bootstrap"},
+            )
             response = build_session_response(authenticated=False)
             clear_auth_cookies(response)
             return response
-        except AuthenticationFailed:
+        except Exception:
             register_failed_refresh_attempt(request, refresh_fingerprint)
+            record_auth_event(
+                request=request,
+                event_type=AuthAuditEvent.EVENT_REFRESH_FAILED,
+                status=AuthAuditEvent.STATUS_FAILED,
+                metadata={"reason": "invalid_refresh", "source": "session_bootstrap"},
+            )
             response = build_session_response(authenticated=False)
             clear_auth_cookies(response)
             return response
@@ -1016,7 +1274,7 @@ class VerifyTwoFactorAPIView(APIView):
 
         consume_pre_auth_token(token_record)
         clear_failed_two_factor_attempts(request, user.id)
-        token_response = CCHISTokenObtainPairSerializer.build_token_response(user)
+        token_response = CCHISTokenObtainPairSerializer.build_token_response(user, request=request)
         token_response["second_factor_method"] = verification["method"]
         token_response.update(build_recovery_code_response_metadata(verification))
         record_auth_event(
@@ -1058,7 +1316,10 @@ class VerifyTwoFactorAPIView(APIView):
             actor=user,
             target_user=user,
         )
-        response = Response(token_response, status=status.HTTP_200_OK)
+        response = Response(
+            public_auth_token_response_payload(token_response),
+            status=status.HTTP_200_OK,
+        )
         set_auth_cookies(response, token_response.get("access"), token_response.get("refresh"))
         return response
 
@@ -1078,7 +1339,7 @@ class BeginTwoFactorEnrollmentAPIView(APIView):
             if getattr(request.user, "is_authenticated", False)
             else token_record.user
             if token_record
-            else get_user_from_refresh_cookie(request)
+            else None
         )
 
         if not user:
@@ -1119,7 +1380,7 @@ class ConfirmTwoFactorEnrollmentAPIView(APIView):
             if getattr(request.user, "is_authenticated", False)
             else token_record.user
             if token_record
-            else get_user_from_refresh_cookie(request)
+            else None
         )
 
         if not user:
@@ -1161,11 +1422,14 @@ class ConfirmTwoFactorEnrollmentAPIView(APIView):
 
         if token_record:
             consume_pre_auth_token(token_record)
-            token_response = CCHISTokenObtainPairSerializer.build_token_response(user)
+            token_response = CCHISTokenObtainPairSerializer.build_token_response(user, request=request)
             token_response["enrollment_completed"] = True
             token_response["recovery_codes"] = recovery_codes
             token_response["recovery_codes_generated"] = True
-            response = Response(token_response, status=status.HTTP_200_OK)
+            response = Response(
+                public_auth_token_response_payload(token_response),
+                status=status.HTTP_200_OK,
+            )
             set_auth_cookies(response, token_response.get("access"), token_response.get("refresh"))
             return response
 
@@ -1304,6 +1568,12 @@ class LogoutAPIView(APIView):
 
         try:
             token = RefreshToken(refresh_token)
+            revoke_session_from_refresh_token(
+                refresh_token,
+                request,
+                revoked_by=request.user,
+                reason="logout",
+            )
             token.blacklist()
         except TokenError:
             record_auth_event(
@@ -1332,6 +1602,242 @@ class LogoutAPIView(APIView):
         return response
 
 
+def require_security_admin_step_up(request) -> None:
+    grant = get_fresh_step_up_grant(request, StepUpGrant.PURPOSE_SECURITY_ADMIN)
+    if grant:
+        mark_high_risk_action_for_audit(
+            request,
+            StepUpGrant.PURPOSE_SECURITY_ADMIN,
+            grant=grant,
+        )
+        return
+
+    record_step_up_required(request, StepUpGrant.PURPOSE_SECURITY_ADMIN)
+    raise StepUpRequired(StepUpGrant.PURPOSE_SECURITY_ADMIN)
+
+
+def user_can_administer_sessions(user) -> bool:
+    return (
+        getattr(user, "is_authenticated", False)
+        and getattr(user, "role", None) == User.ROLE_ADMIN
+        and getattr(user, "is_active", False)
+    )
+
+
+def get_session_management_target_user(request):
+    requested_user_id = request.query_params.get("user_id")
+    if not requested_user_id and request.method.upper() != "GET":
+        requested_user_id = request.data.get("user_id")
+    if not requested_user_id or str(requested_user_id) == str(request.user.id):
+        return request.user
+
+    if not user_can_administer_sessions(request.user):
+        raise PermissionDenied("You can only manage your own sessions.")
+
+    require_security_admin_step_up(request)
+    return get_object_or_404(User, id=requested_user_id)
+
+
+def get_current_request_session(request) -> UserSession | None:
+    try:
+        return get_current_session_from_request(request)
+    except AuthenticationFailed:
+        return None
+
+
+def revoke_managed_session(
+    session: UserSession,
+    request,
+    *,
+    reason: str,
+    bulk_action: str | None = None,
+) -> int:
+    blacklisted_count = blacklist_known_refresh_tokens_for_session(session)
+    metadata = {"blacklisted_tokens": blacklisted_count}
+    if bulk_action:
+        metadata["bulk_action"] = bulk_action
+    revoke_session(
+        session,
+        request=request,
+        revoked_by=request.user,
+        reason=reason,
+        metadata=metadata,
+    )
+    return blacklisted_count
+
+
+def build_session_management_response(
+    *,
+    sessions,
+    current_session: UserSession | None,
+    target_user,
+    request_user,
+):
+    return {
+        "sessions": UserSessionSerializer(
+            sessions,
+            many=True,
+            context={"current_session": current_session},
+        ).data,
+        "current_session_id": str(current_session.public_id) if current_session else None,
+        "capabilities": {
+            "can_review_sessions": target_user.is_active,
+            "can_revoke_sessions": target_user.is_active,
+            "revoke_all_requires_step_up": True,
+            "revoke_others_requires_step_up": True,
+            "mode": "self_scoped_session_management"
+            if target_user.id == request_user.id
+            else "admin_scoped_session_management",
+        },
+    }
+
+
+class UserSessionListAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_scope = "auth_read"
+
+    def get(self, request):
+        target_user = get_session_management_target_user(request)
+        current_session = get_current_request_session(request)
+        sessions = (
+            UserSession.objects.filter(user=target_user)
+            .select_related("user", "revoked_by")
+            .order_by("-last_seen_at", "-created_at")
+        )
+        return Response(
+            build_session_management_response(
+                sessions=sessions,
+                current_session=current_session,
+                target_user=target_user,
+                request_user=request.user,
+            ),
+            status=status.HTTP_200_OK,
+        )
+
+
+class UserSessionRevokeAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_scope = "auth_write"
+
+    def post(self, request, public_id):
+        session = get_object_or_404(
+            UserSession.objects.select_related("user"),
+            public_id=public_id,
+        )
+
+        if session.user_id != request.user.id:
+            if not user_can_administer_sessions(request.user):
+                raise PermissionDenied("You can only revoke your own sessions.")
+            require_security_admin_step_up(request)
+
+        current_session = get_current_request_session(request)
+        is_current_session = bool(current_session and session.pk == current_session.pk)
+        was_already_revoked = session.revoked_at is not None
+        blacklisted_count = 0
+
+        if not was_already_revoked:
+            blacklisted_count = revoke_managed_session(
+                session,
+                request,
+                reason="user_session_management",
+            )
+
+        response = Response(
+            {
+                "detail": "Session revoked.",
+                "revoked_count": 0 if was_already_revoked else 1,
+                "blacklisted_tokens": blacklisted_count,
+                "current_session_revoked": is_current_session,
+            },
+            status=status.HTTP_200_OK,
+        )
+        if is_current_session:
+            clear_auth_cookies(response)
+        return response
+
+
+class UserSessionRevokeOthersAPIView(APIView):
+    permission_classes = [
+        permissions.IsAuthenticated,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_SECURITY_ADMIN),
+    ]
+    throttle_scope = "auth_write"
+
+    def post(self, request):
+        target_user = get_session_management_target_user(request)
+        current_session = get_current_request_session(request)
+        queryset = UserSession.objects.select_for_update().filter(
+            user=target_user,
+            revoked_at__isnull=True,
+        )
+        if current_session and current_session.user_id == target_user.id:
+            queryset = queryset.exclude(pk=current_session.pk)
+
+        revoked_count = 0
+        blacklisted_count = 0
+        with transaction.atomic():
+            for session in queryset:
+                blacklisted_count += revoke_managed_session(
+                    session,
+                    request,
+                    reason="user_revoked_other_sessions",
+                    bulk_action="revoke_others",
+                )
+                revoked_count += 1
+
+        return Response(
+            {
+                "detail": "Other sessions revoked.",
+                "revoked_count": revoked_count,
+                "blacklisted_tokens": blacklisted_count,
+                "current_session_revoked": False,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class UserSessionRevokeAllAPIView(APIView):
+    permission_classes = [
+        permissions.IsAuthenticated,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_SECURITY_ADMIN),
+    ]
+    throttle_scope = "auth_write"
+
+    def post(self, request):
+        target_user = get_session_management_target_user(request)
+        current_session = get_current_request_session(request)
+        current_session_revoked = bool(current_session and current_session.user_id == target_user.id)
+
+        revoked_count = 0
+        blacklisted_count = 0
+        with transaction.atomic():
+            sessions = UserSession.objects.select_for_update().filter(
+                user=target_user,
+                revoked_at__isnull=True,
+            )
+            for session in sessions:
+                blacklisted_count += revoke_managed_session(
+                    session,
+                    request,
+                    reason="user_revoked_all_sessions",
+                    bulk_action="revoke_all",
+                )
+                revoked_count += 1
+
+        response = Response(
+            {
+                "detail": "All sessions revoked.",
+                "revoked_count": revoked_count,
+                "blacklisted_tokens": blacklisted_count,
+                "current_session_revoked": current_session_revoked,
+            },
+            status=status.HTTP_200_OK,
+        )
+        if current_session_revoked:
+            clear_auth_cookies(response)
+        return response
+
+
 def blacklist_user_refresh_tokens(user):
     for token in user.outstandingtoken_set.all():
         BlacklistedToken.objects.get_or_create(token=token)
@@ -1348,6 +1854,12 @@ class ChangePasswordAPIView(APIView):
         request.user.set_password(serializer.validated_data["new_password"])
         request.user.save(update_fields=["password"])
         blacklist_user_refresh_tokens(request.user)
+        revoke_sessions_for_user(
+            request.user,
+            request=request,
+            revoked_by=request.user,
+            reason="password_changed",
+        )
         record_auth_event(
             request=request,
             event_type=AuthAuditEvent.EVENT_PASSWORD_CHANGED,
@@ -1356,7 +1868,9 @@ class ChangePasswordAPIView(APIView):
             target_user=request.user,
         )
 
-        return Response({"detail": "Password changed successfully."}, status=status.HTTP_200_OK)
+        response = Response({"detail": "Password changed successfully."}, status=status.HTTP_200_OK)
+        clear_auth_cookies(response)
+        return response
 
 
 class PasswordResetRequestAPIView(APIView):
@@ -1418,6 +1932,12 @@ class PasswordResetConfirmAPIView(APIView):
         token_record.used_at = timezone.now()
         token_record.save(update_fields=["used_at"])
         blacklist_user_refresh_tokens(user)
+        revoke_sessions_for_user(
+            user,
+            request=request,
+            revoked_by=user,
+            reason="password_reset_completed",
+        )
         record_auth_event(
             request=request,
             event_type=AuthAuditEvent.EVENT_PASSWORD_RESET_COMPLETED,
@@ -1598,7 +2118,10 @@ class AccessRequestListAPIView(generics.ListAPIView):
 
 
 class AccessRequestApproveAPIView(APIView):
-    permission_classes = [IsAdminOnly]
+    permission_classes = [
+        IsAdminOnly,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_ADMIN_ACTIONS),
+    ]
     throttle_scope = "auth_write"
 
     def post(self, request, request_id: int):
@@ -1630,7 +2153,10 @@ class AccessRequestApproveAPIView(APIView):
 
 
 class AccessRequestRejectAPIView(APIView):
-    permission_classes = [IsAdminOnly]
+    permission_classes = [
+        IsAdminOnly,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_ADMIN_ACTIONS),
+    ]
     throttle_scope = "auth_write"
 
     def post(self, request, request_id: int):
@@ -1662,7 +2188,10 @@ class AccessRequestRejectAPIView(APIView):
 
 
 class DeactivateUserAPIView(APIView):
-    permission_classes = [IsAdminOnly]
+    permission_classes = [
+        IsAdminOnly,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_ADMIN_ACTIONS),
+    ]
     throttle_scope = "auth_write"
 
     def post(self, request, user_id: int):
@@ -1670,6 +2199,12 @@ class DeactivateUserAPIView(APIView):
         user.is_active = False
         user.save(update_fields=["is_active"])
         blacklist_user_refresh_tokens(user)
+        revoke_sessions_for_user(
+            user,
+            request=request,
+            revoked_by=request.user,
+            reason="user_deactivated",
+        )
         record_auth_event(
             request=request,
             event_type=AuthAuditEvent.EVENT_USER_DEACTIVATED,
@@ -1681,7 +2216,10 @@ class DeactivateUserAPIView(APIView):
 
 
 class ReactivateUserAPIView(APIView):
-    permission_classes = [IsAdminOnly]
+    permission_classes = [
+        IsAdminOnly,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_ADMIN_ACTIONS),
+    ]
     throttle_scope = "auth_write"
 
     def post(self, request, user_id: int):
@@ -1700,7 +2238,10 @@ class ReactivateUserAPIView(APIView):
 
 class AuthAuditEventListAPIView(generics.ListAPIView):
     serializer_class = AuthAuditEventSerializer
-    permission_classes = [IsAdminOnly]
+    permission_classes = [
+        IsAdminOnly,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_SECURITY_ADMIN),
+    ]
     throttle_scope = "auth_write"
     filter_backends = [OrderingFilter]
     ordering_fields = ["created_at", "event_type", "status", "ip_address"]
@@ -1727,7 +2268,10 @@ class AuthAuditEventListAPIView(generics.ListAPIView):
 
 
 class AuthAuditSummaryAPIView(APIView):
-    permission_classes = [IsAdminOnly]
+    permission_classes = [
+        IsAdminOnly,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_SECURITY_ADMIN),
+    ]
     throttle_scope = "auth_write"
 
     def get(self, request):

@@ -5,7 +5,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from accounts.models import User
+from accounts.models import StepUpGrant, User
 
 from .models import (
     FeatureDataset,
@@ -24,6 +24,7 @@ from .models import (
     SurveillanceTruthLevel,
     Ward,
 )
+from .test_step_up_utils import force_authenticate_with_step_up
 
 
 class SourceDataPhaseFiveDownstreamActionTests(APITestCase):
@@ -146,7 +147,7 @@ class SourceDataPhaseFiveDownstreamActionTests(APITestCase):
         )
 
     def post_downstream_action(self, batch: SourceDataUploadBatch, payload: dict, *, actor=None):
-        self.client.force_authenticate(actor or self.admin)
+        force_authenticate_with_step_up(self.client, actor or self.admin, StepUpGrant.PURPOSE_SOURCE_DATA)
         return self.client.post(
             reverse("source-data-upload-downstream-actions", kwargs={"public_id": batch.public_id}),
             payload,

@@ -9,7 +9,7 @@ from django.utils import timezone
 from rest_framework import status as http_status
 from rest_framework.test import APITestCase
 
-from accounts.models import User
+from accounts.models import StepUpGrant, User
 from .models import (
     Alert,
     AlertWorkflowState,
@@ -28,6 +28,7 @@ from .models import (
 )
 from .preparedness_action_audit import build_preparedness_action_ledger_audit
 from .services import get_or_create_preparedness_action, sync_alert_workflow_for_ward, transition_preparedness_action
+from .test_step_up_utils import force_authenticate_with_step_up
 
 
 class PreparednessActionLedgerTestCase(APITestCase):
@@ -378,7 +379,7 @@ class PreparednessActionLedgerTestCase(APITestCase):
         )
 
     def test_api_create_is_idempotent_and_update_permissions_are_role_bound(self):
-        self.client.force_authenticate(user=self.supervisor_user)
+        force_authenticate_with_step_up(self.client, self.supervisor_user, StepUpGrant.PURPOSE_OPERATIONAL_DATA)
         payload = {
             "ward_id": self.ward.id,
             "action_type": PreparednessAction.ACTION_FIELD_VERIFICATION,
@@ -425,7 +426,7 @@ class PreparednessActionLedgerTestCase(APITestCase):
         analyst_create_response = self.client.post(reverse("preparedness-action-list-create"), payload, format="json")
         self.assertEqual(analyst_create_response.status_code, http_status.HTTP_403_FORBIDDEN)
 
-        self.client.force_authenticate(user=self.supervisor_user)
+        force_authenticate_with_step_up(self.client, self.supervisor_user, StepUpGrant.PURPOSE_OPERATIONAL_DATA)
         in_progress_response = self.client.patch(
             detail_url,
             {"status": PreparednessAction.STATUS_IN_PROGRESS, "detail": "Verification started."},
@@ -469,7 +470,7 @@ class PreparednessActionLedgerTestCase(APITestCase):
         self.assertTrue(complete_response.data["completion_evidence"])
 
     def test_api_rejects_clearing_due_time_on_active_action(self):
-        self.client.force_authenticate(user=self.supervisor_user)
+        force_authenticate_with_step_up(self.client, self.supervisor_user, StepUpGrant.PURPOSE_OPERATIONAL_DATA)
         create_response = self.client.post(
             reverse("preparedness-action-list-create"),
             {
@@ -526,7 +527,7 @@ class PreparednessActionLedgerTestCase(APITestCase):
             completed_at=timezone.now(),
         )
 
-        self.client.force_authenticate(user=self.supervisor_user)
+        force_authenticate_with_step_up(self.client, self.supervisor_user, StepUpGrant.PURPOSE_OPERATIONAL_DATA)
         facility_response = self.client.get(
             reverse("preparedness-action-list-create"),
             {"facility_id": self.facility.id},
@@ -615,7 +616,7 @@ class PreparednessActionLedgerTestCase(APITestCase):
         workflow = sync_alert_workflow_for_ward(self.ward, record_event=False)
         self.assertEqual(workflow.status, AlertWorkflowState.STATUS_DELIVERED)
 
-        self.client.force_authenticate(user=self.supervisor_user)
+        force_authenticate_with_step_up(self.client, self.supervisor_user, StepUpGrant.PURPOSE_OPERATIONAL_DATA)
         response = self.client.post(
             reverse("alert-workflow-preparedness-action-create", kwargs={"public_id": workflow.public_id}),
             {
@@ -654,7 +655,7 @@ class PreparednessActionLedgerTestCase(APITestCase):
         )
 
     def test_alert_trigger_creates_household_prevention_action(self):
-        self.client.force_authenticate(user=self.supervisor_user)
+        force_authenticate_with_step_up(self.client, self.supervisor_user, StepUpGrant.PURPOSE_OPERATIONAL_DATA)
         response = self.client.post(
             reverse("alert-preparedness-action-create", kwargs={"pk": self.alert.id}),
             {
@@ -700,7 +701,7 @@ class PreparednessActionLedgerTestCase(APITestCase):
             status=CHVAssignment.STATUS_ACTIVE,
         )
 
-        self.client.force_authenticate(user=self.supervisor_user)
+        force_authenticate_with_step_up(self.client, self.supervisor_user, StepUpGrant.PURPOSE_OPERATIONAL_DATA)
         response = self.client.post(
             reverse("chv-coverage-request-preparedness-action-create", kwargs={"public_id": coverage_request.public_id}),
             {"action_type": PreparednessAction.ACTION_CHV_FOLLOW_UP},
@@ -749,7 +750,7 @@ class PreparednessActionLedgerTestCase(APITestCase):
             created_by=self.admin_user,
         )
 
-        self.client.force_authenticate(user=self.supervisor_user)
+        force_authenticate_with_step_up(self.client, self.supervisor_user, StepUpGrant.PURPOSE_OPERATIONAL_DATA)
         review_response = self.client.post(
             reverse("facility-readiness-review-preparedness-action-create", kwargs={"public_id": review.public_id}),
             {"action_type": PreparednessAction.ACTION_FACILITY_ORS_REVIEW},

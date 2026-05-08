@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     return NextResponse.json(response);
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to update alert delivery pause." }, { status: 500 });

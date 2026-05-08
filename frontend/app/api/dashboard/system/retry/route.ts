@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     return NextResponse.json(response, { status: 202 });
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to queue background retry controls." }, { status: 500 });

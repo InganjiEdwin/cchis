@@ -17,6 +17,8 @@ const mockDismissNotificationViaBff = vi.fn();
 const mockMarkAllNotificationsSeenViaBff = vi.fn();
 const mockWebSocketClose = vi.fn();
 const mockWebSocketInstances: Array<{
+  url: string;
+  protocols?: string | string[];
   close: typeof mockWebSocketClose;
   onmessage: ((event: { data: string }) => void) | null;
   onerror: (() => void) | null;
@@ -240,12 +242,16 @@ describe("DashboardTopbar", () => {
     Object.defineProperty(window, "WebSocket", {
       writable: true,
       value: class MockWebSocket {
+        url: string;
+        protocols?: string | string[];
         close = mockWebSocketClose;
         onmessage: ((event: { data: string }) => void) | null = null;
         onerror: (() => void) | null = null;
         onclose: (() => void) | null = null;
 
-        constructor() {
+        constructor(url: string, protocols?: string | string[]) {
+          this.url = url;
+          this.protocols = protocols;
           mockWebSocketInstances.push(this);
         }
       },
@@ -326,6 +332,8 @@ describe("DashboardTopbar", () => {
       expect(mockFetchTopbarDataViaBff).toHaveBeenCalledTimes(1);
       expect(mockWebSocketInstances).toHaveLength(1);
     });
+    expect(mockWebSocketInstances[0].url).not.toContain("token=");
+    expect(mockWebSocketInstances[0].protocols).toEqual(["cchis.notifications", "stream-token"]);
 
     mockWebSocketInstances[0].onmessage?.({
       data: JSON.stringify({

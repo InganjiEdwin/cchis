@@ -25,7 +25,7 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json(updatedMenuVersion);
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to update USSD menu approval." }, { status: 500 });

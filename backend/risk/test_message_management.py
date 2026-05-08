@@ -3,8 +3,9 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from accounts.models import User
+from accounts.models import StepUpGrant, User
 from risk.models import Alert, CHV, CHVMessage, ContactPreference, ContactPreferenceAuditEvent, MessageTemplate, RiskScore, Ward
+from risk.test_step_up_utils import force_authenticate_with_step_up
 from risk.ussd_governance import create_ussd_session_log
 
 
@@ -313,7 +314,7 @@ class MessageManagementSurfaceTests(APITestCase):
         )
         self.assertEqual(forbidden.status_code, status.HTTP_403_FORBIDDEN)
 
-        self.client.force_authenticate(self.admin)
+        force_authenticate_with_step_up(self.client, self.admin, StepUpGrant.PURPOSE_MESSAGE_GOVERNANCE)
         response = self.client.post(
             reverse("message-template-approval", kwargs={"public_id": self.pending_template.public_id}),
             {"action": "approve", "reason": "Reviewed by county health promotion."},
@@ -328,7 +329,7 @@ class MessageManagementSurfaceTests(APITestCase):
         self.assertEqual(self.pending_template.lineage_metadata["approval_events"][-1]["action"], "approve")
 
     def test_admin_can_reject_translation_variant(self):
-        self.client.force_authenticate(self.admin)
+        force_authenticate_with_step_up(self.client, self.admin, StepUpGrant.PURPOSE_MESSAGE_GOVERNANCE)
 
         response = self.client.post(
             reverse("message-template-approval", kwargs={"public_id": self.sw_variant.public_id}),

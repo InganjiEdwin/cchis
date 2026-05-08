@@ -7,7 +7,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from accounts.models import User
+from accounts.models import StepUpGrant, User
 
 from .models import (
     SensitiveExportRequest,
@@ -19,6 +19,7 @@ from .source_data.validation import (
     SOURCE_DATA_VALIDATION_ERROR_CATALOG,
     source_data_validation_error_catalog,
 )
+from .test_step_up_utils import force_authenticate_with_step_up
 
 
 class SourceDataPhaseSevenUxSecurityContractTests(APITestCase):
@@ -77,7 +78,7 @@ class SourceDataPhaseSevenUxSecurityContractTests(APITestCase):
         }
 
     def create_upload(self, *, actor=None, csv_text: str | None = None):
-        self.client.force_authenticate(actor or self.supervisor)
+        force_authenticate_with_step_up(self.client, actor or self.supervisor, StepUpGrant.PURPOSE_SOURCE_DATA)
         return self.client.post(
             reverse("source-data-upload-list-create"),
             self.upload_payload(csv_text=csv_text),
@@ -183,11 +184,11 @@ class SourceDataPhaseSevenUxSecurityContractTests(APITestCase):
         upload_response = self.create_upload(actor=self.supervisor)
         public_id = upload_response.data["public_id"]
 
-        self.client.force_authenticate(self.admin)
+        force_authenticate_with_step_up(self.client, self.admin, StepUpGrant.PURPOSE_SOURCE_DATA)
         self.assertEqual(self.client.get(reverse("source-data-feed-types")).status_code, status.HTTP_200_OK)
         self.assertEqual(self.client.post(reverse("source-data-upload-list-create"), self.upload_payload(), format="multipart").status_code, status.HTTP_201_CREATED)
 
-        self.client.force_authenticate(self.supervisor)
+        force_authenticate_with_step_up(self.client, self.supervisor, StepUpGrant.PURPOSE_SOURCE_DATA)
         self.assertEqual(
             self.client.post(reverse("source-data-upload-validate", kwargs={"public_id": public_id}), {}, format="json").status_code,
             status.HTTP_200_OK,

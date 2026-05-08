@@ -3,6 +3,7 @@ from __future__ import annotations
 from rest_framework.exceptions import APIException
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
+from .session_security import validate_access_token_session
 from .services import build_policy_acceptance_status
 
 
@@ -66,6 +67,7 @@ class PolicyAwareJWTAuthentication(JWTAuthentication):
             return None
 
         user, validated_token = auth_result
+        validate_access_token_session(user, validated_token)
         if _is_policy_acceptance_bypass_path(request.path_info, request.method):
             return user, validated_token
 

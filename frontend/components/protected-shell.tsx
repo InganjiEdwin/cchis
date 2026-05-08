@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { DashboardFooter } from "@/components/dashboard-footer";
 import { DashboardSidebar } from "@/components/dashboard-sidebar";
+import { StepUpDialogProvider } from "@/components/step-up-dialog";
 import { StatusBanner } from "@/components/ui/status-banner";
 import { PublicCard, PublicScreen, PublicShell } from "@/components/ui/public-shell";
 import {
@@ -121,15 +122,17 @@ export function ProtectedShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="grid min-h-screen bg-app-bg text-panel-copy md:grid-cols-[260px_minmax(0,1fr)]">
-      <DashboardSidebar />
-      <div className="grid min-w-0 grid-rows-[1fr_auto]">
-        <main className="min-w-0 px-[1.4rem] pb-[1.1rem] max-[640px]:px-4 max-[640px]:pb-4">
-          <RecoveryCodeLoginNoticeBanner />
-          {children}
-        </main>
-        <DashboardFooter />
+    <StepUpDialogProvider>
+      <div className="grid min-h-screen bg-app-bg text-panel-copy md:grid-cols-[260px_minmax(0,1fr)]">
+        <DashboardSidebar />
+        <div className="grid min-w-0 grid-rows-[1fr_auto]">
+          <main className="min-w-0 px-[1.4rem] pb-[1.1rem] max-[640px]:px-4 max-[640px]:pb-4">
+            <RecoveryCodeLoginNoticeBanner />
+            {children}
+          </main>
+          <DashboardFooter />
+        </div>
       </div>
-    </div>
+    </StepUpDialogProvider>
   );
 }

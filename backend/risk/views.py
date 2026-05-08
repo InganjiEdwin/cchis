@@ -15,8 +15,9 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.audit import record_auth_event
-from accounts.models import AuthAuditEvent, User
+from accounts.models import AuthAuditEvent, StepUpGrant, User
 from accounts.permissions import IsAdminOnly, IsAdminOrSupervisor, IsAdminSupervisorOrAnalyst, IsFieldOperator
+from accounts.step_up import RequireFreshStepUp
 from accounts.throttles import AuthScopedRateThrottle
 
 from .tasks import deliver_alert_task, run_risk_model_task, trigger_alerts_task
@@ -696,7 +697,10 @@ class CHVActivityAPIView(APIView):
 
 
 class CHVMessageListCreateAPIView(APIView):
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_ALERT_DELIVERY, methods=("POST",)),
+    ]
 
     def get_chv(self, request, public_id):
         queryset = CHV.objects.select_related("ward").order_by("name")
@@ -741,7 +745,10 @@ class ContactPreferenceListCreateAPIView(generics.ListCreateAPIView):
     def get_permissions(self):
         if self.request.method == "GET":
             return [IsAdminOnly()]
-        return [IsAdminOrSupervisor()]
+        return [
+            IsAdminOrSupervisor(),
+            RequireFreshStepUp(StepUpGrant.PURPOSE_OPERATIONAL_DATA)(),
+        ]
 
     def get_queryset(self):
         queryset = ContactPreference.objects.select_related("recorded_by").order_by("-recorded_at", "-created_at")
@@ -787,7 +794,10 @@ class CHVCoverageRequestListCreateAPIView(generics.ListCreateAPIView):
 
     def get_permissions(self):
         if self.request.method == "POST":
-            return [IsAdminOrSupervisor()]
+            return [
+                IsAdminOrSupervisor(),
+                RequireFreshStepUp(StepUpGrant.PURPOSE_OPERATIONAL_DATA)(),
+            ]
         return [IsAdminSupervisorOrAnalyst()]
 
     def get_queryset(self):
@@ -968,7 +978,10 @@ class CHVCoverageRequestListCreateAPIView(generics.ListCreateAPIView):
 
 
 class CHVCoverageRequestFromAlertPrefillAPIView(APIView):
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_OPERATIONAL_DATA),
+    ]
 
     def post(self, request):
         serializer = CHVCoverageRequestFromAlertPrefillSerializer(data=request.data)
@@ -1060,7 +1073,10 @@ class CHVCoverageRequestDetailAPIView(APIView):
 
 
 class CHVCoverageRequestApproveAPIView(APIView):
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_OPERATIONAL_DATA),
+    ]
 
     def post(self, request, public_id):
         request_record = get_object_or_404(chv_coverage_request_queryset_for_user(request.user), public_id=public_id)
@@ -1079,7 +1095,10 @@ class CHVCoverageRequestApproveAPIView(APIView):
 
 
 class CHVCoverageRequestRejectAPIView(APIView):
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_OPERATIONAL_DATA),
+    ]
 
     def post(self, request, public_id):
         request_record = get_object_or_404(chv_coverage_request_queryset_for_user(request.user), public_id=public_id)
@@ -1098,7 +1117,10 @@ class CHVCoverageRequestRejectAPIView(APIView):
 
 
 class CHVCoverageRequestCancelAPIView(APIView):
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_OPERATIONAL_DATA),
+    ]
 
     def post(self, request, public_id):
         request_record = get_object_or_404(chv_coverage_request_queryset_for_user(request.user), public_id=public_id)
@@ -1117,7 +1139,10 @@ class CHVCoverageRequestCancelAPIView(APIView):
 
 
 class CHVCoverageRequestResolveAPIView(APIView):
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_OPERATIONAL_DATA),
+    ]
 
     def post(self, request, public_id):
         request_record = get_object_or_404(chv_coverage_request_queryset_for_user(request.user), public_id=public_id)
@@ -1136,7 +1161,10 @@ class CHVCoverageRequestResolveAPIView(APIView):
 
 
 class CHVCoverageRequestAssignAPIView(APIView):
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_OPERATIONAL_DATA),
+    ]
 
     def post(self, request, public_id):
         request_record = get_object_or_404(chv_coverage_request_queryset_for_user(request.user), public_id=public_id)
@@ -1165,7 +1193,10 @@ class CHVCoverageRequestAssignAPIView(APIView):
 
 
 class CHVAssignmentCompleteAPIView(APIView):
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_OPERATIONAL_DATA),
+    ]
 
     def post(self, request, public_id):
         assignment = get_object_or_404(chv_assignment_queryset_for_user(request.user), public_id=public_id)
@@ -1184,7 +1215,10 @@ class CHVAssignmentCompleteAPIView(APIView):
 
 
 class CHVAssignmentCancelAPIView(APIView):
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_OPERATIONAL_DATA),
+    ]
 
     def post(self, request, public_id):
         assignment = get_object_or_404(chv_assignment_queryset_for_user(request.user), public_id=public_id)
@@ -1321,7 +1355,10 @@ class FacilityReadinessReviewListAPIView(generics.ListAPIView):
 
 
 class FacilityReadinessReviewCreateAPIView(APIView):
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_OPERATIONAL_DATA),
+    ]
 
     def post(self, request, pk: int):
         queryset = HealthFacility.objects.filter(is_active=True).select_related("ward")
@@ -1347,7 +1384,13 @@ class FacilityReadinessReviewCreateAPIView(APIView):
 
 
 class FacilityReadinessReviewDetailAPIView(APIView):
-    permission_classes = [IsAdminSupervisorOrAnalyst]
+    def get_permissions(self):
+        if self.request.method == "PATCH":
+            return [
+                IsAdminOrSupervisor(),
+                RequireFreshStepUp(StepUpGrant.PURPOSE_OPERATIONAL_DATA)(),
+            ]
+        return [IsAdminSupervisorOrAnalyst()]
 
     def get_review(self, request, public_id):
         return get_object_or_404(facility_readiness_review_queryset_for_user(request.user), public_id=public_id)
@@ -1380,7 +1423,10 @@ class FacilityReadinessReviewDetailAPIView(APIView):
 
 
 class FacilityReadinessReviewAcknowledgeAPIView(APIView):
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_OPERATIONAL_DATA),
+    ]
 
     def post(self, request, public_id):
         review = get_object_or_404(facility_readiness_review_queryset_for_user(request.user), public_id=public_id)
@@ -1401,7 +1447,10 @@ class FacilityReadinessReviewAcknowledgeAPIView(APIView):
 
 
 class FacilityReadinessUpdateRequestCreateAPIView(APIView):
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_OPERATIONAL_DATA),
+    ]
 
     def post(self, request, public_id):
         review = get_object_or_404(facility_readiness_review_queryset_for_user(request.user), public_id=public_id)
@@ -1457,7 +1506,10 @@ class FacilityReadinessEscalationListAPIView(generics.ListAPIView):
 
 
 class FacilityReadinessEscalationCreateAPIView(APIView):
-    permission_classes = [IsAdminOnly]
+    permission_classes = [
+        IsAdminOnly,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_OPERATIONAL_DATA),
+    ]
 
     def post(self, request, public_id):
         review = get_object_or_404(facility_readiness_review_queryset_for_user(request.user), public_id=public_id)
@@ -1481,7 +1533,13 @@ class FacilityReadinessEscalationCreateAPIView(APIView):
 
 
 class FacilityReadinessEscalationDetailAPIView(APIView):
-    permission_classes = [IsAdminSupervisorOrAnalyst]
+    def get_permissions(self):
+        if self.request.method == "PATCH":
+            return [
+                IsAdminOnly(),
+                RequireFreshStepUp(StepUpGrant.PURPOSE_OPERATIONAL_DATA)(),
+            ]
+        return [IsAdminSupervisorOrAnalyst()]
 
     def get_escalation(self, request, public_id):
         return get_object_or_404(facility_readiness_escalation_queryset_for_user(request.user), public_id=public_id)
@@ -1677,7 +1735,10 @@ class AlertIntelligenceAPIView(APIView):
 
 
 class SensitiveExportRequestListCreateAPIView(generics.ListCreateAPIView):
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_SENSITIVE_EXPORTS, methods=("POST",)),
+    ]
 
     def get_serializer_class(self):
         if getattr(self.request, "method", None) == "POST":
@@ -1708,7 +1769,10 @@ class SensitiveExportRequestListCreateAPIView(generics.ListCreateAPIView):
 
 
 class SensitiveExportApproveAPIView(APIView):
-    permission_classes = [IsAdminOnly]
+    permission_classes = [
+        IsAdminOnly,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_SENSITIVE_EXPORTS),
+    ]
 
     def post(self, request, public_id):
         export_request = get_object_or_404(SensitiveExportRequest, public_id=public_id)
@@ -1717,7 +1781,10 @@ class SensitiveExportApproveAPIView(APIView):
 
 
 class SensitiveExportRejectAPIView(APIView):
-    permission_classes = [IsAdminOnly]
+    permission_classes = [
+        IsAdminOnly,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_SENSITIVE_EXPORTS),
+    ]
 
     def post(self, request, public_id):
         export_request = get_object_or_404(SensitiveExportRequest, public_id=public_id)
@@ -1732,7 +1799,10 @@ class SensitiveExportRejectAPIView(APIView):
 
 
 class SensitiveExportDownloadAPIView(APIView):
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_SENSITIVE_EXPORT_DOWNLOAD),
+    ]
 
     def get(self, request, public_id):
         export_request = get_object_or_404(
@@ -1783,7 +1853,10 @@ def _resolve_optional_by_public_id(queryset, public_id):
 
 
 class PreparednessActionSourceTriggerCreateMixin:
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_OPERATIONAL_DATA),
+    ]
 
     def create_preparedness_action_response(self, request, source_record, creator):
         serializer = PreparednessActionSourceTriggerSerializer(data=request.data)
@@ -1883,7 +1956,10 @@ class PreparednessActionListCreateAPIView(generics.ListCreateAPIView):
 
     def get_permissions(self):
         if self.request.method == "POST":
-            return [IsAdminOrSupervisor()]
+            return [
+                IsAdminOrSupervisor(),
+                RequireFreshStepUp(StepUpGrant.PURPOSE_OPERATIONAL_DATA)(),
+            ]
         return [IsAdminSupervisorOrAnalyst()]
 
     def get_queryset(self):
@@ -2041,7 +2117,13 @@ class PreparednessActionListCreateAPIView(generics.ListCreateAPIView):
 
 
 class PreparednessActionDetailAPIView(APIView):
-    permission_classes = [IsAdminSupervisorOrAnalyst]
+    def get_permissions(self):
+        if self.request.method == "PATCH":
+            return [
+                IsAdminOrSupervisor(),
+                RequireFreshStepUp(StepUpGrant.PURPOSE_OPERATIONAL_DATA)(),
+            ]
+        return [IsAdminSupervisorOrAnalyst()]
 
     def get_action(self, request, public_id):
         return get_object_or_404(preparedness_action_queryset_for_user(request.user), public_id=public_id)
@@ -2129,6 +2211,12 @@ class DashboardNotificationStreamTokenAPIView(APIView):
         token["purpose"] = "dashboard_notifications_stream"
         token["role"] = request.user.role
         token["ward_id"] = request.user.ward_id
+        source_token = getattr(request, "auth", None)
+        if source_token:
+            for claim in ("sid", "family"):
+                value = source_token.get(claim)
+                if value:
+                    token[claim] = str(value)
         token.set_exp(lifetime=timedelta(minutes=5))
         return Response(
             {
@@ -2254,7 +2342,10 @@ class OperationalKPIAuditAPIView(APIView):
 
 
 class OperationalKPIMEExportAPIView(APIView):
-    permission_classes = [IsAdminSupervisorOrAnalyst]
+    permission_classes = [
+        IsAdminSupervisorOrAnalyst,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_SENSITIVE_EXPORT_DOWNLOAD),
+    ]
 
     def get(self, request):
         try:
@@ -2369,7 +2460,10 @@ class SourceDataConnectorRegistryAPIView(SourceDataFeatureGateMixin, APIView):
 
 class SourceDataConnectorRefreshAPIView(SourceDataFeatureGateMixin, APIView):
     source_data_required_features = (FEATURE_SOURCE_DATA_OPS, FEATURE_API_CONNECTORS)
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_SOURCE_DATA),
+    ]
 
     def post(self, request, connector_key):
         serializer = SourceDataConnectorRefreshSerializer(data=request.data)
@@ -2390,7 +2484,10 @@ class SourceDataConnectorRefreshAPIView(SourceDataFeatureGateMixin, APIView):
 
 class SourceDataFeedModeAPIView(SourceDataFeatureGateMixin, APIView):
     source_data_required_features = (FEATURE_SOURCE_DATA_OPS, FEATURE_API_CONNECTORS)
-    permission_classes = [IsAdminOnly]
+    permission_classes = [
+        IsAdminOnly,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_SOURCE_DATA),
+    ]
 
     def post(self, request, feed_key):
         serializer = SourceDataFeedModeUpdateSerializer(
@@ -2443,7 +2540,10 @@ class SourceDataUploadListCreateAPIView(SourceDataFeatureGateMixin, APIView):
 
     def get_permissions(self):
         if self.request.method == "POST":
-            return [IsAdminOrSupervisor()]
+            return [
+                IsAdminOrSupervisor(),
+                RequireFreshStepUp(StepUpGrant.PURPOSE_SOURCE_DATA)(),
+            ]
         return [IsAdminSupervisorOrAnalyst()]
 
     def get(self, request):
@@ -2537,7 +2637,10 @@ class SourceDataUploadDetailAPIView(SourceDataFeatureGateMixin, APIView):
 
 
 class SourceDataUploadValidateAPIView(SourceDataFeatureGateMixin, APIView):
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_SOURCE_DATA),
+    ]
     throttle_classes = [AuthScopedRateThrottle]
     throttle_scope = "source_data_validate"
 
@@ -2586,7 +2689,10 @@ class SourceDataUploadValidateAPIView(SourceDataFeatureGateMixin, APIView):
 
 class SourceDataUploadApprovalAPIView(SourceDataFeatureGateMixin, APIView):
     source_data_required_features = (FEATURE_SOURCE_DATA_OPS, FEATURE_IMPORT_CONFIRM)
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_SOURCE_DATA),
+    ]
 
     def post(self, request, public_id):
         batch = _source_data_upload_batch_or_404(public_id)
@@ -2630,7 +2736,10 @@ class SourceDataUploadApprovalAPIView(SourceDataFeatureGateMixin, APIView):
 
 class SourceDataUploadConfirmAPIView(SourceDataFeatureGateMixin, APIView):
     source_data_required_features = (FEATURE_SOURCE_DATA_OPS, FEATURE_IMPORT_CONFIRM)
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_SOURCE_DATA),
+    ]
 
     def post(self, request, public_id):
         batch = _source_data_upload_batch_or_404(public_id)
@@ -2668,7 +2777,10 @@ class SourceDataUploadConfirmAPIView(SourceDataFeatureGateMixin, APIView):
 
 
 class SourceDataUploadCancelAPIView(SourceDataFeatureGateMixin, APIView):
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_SOURCE_DATA),
+    ]
 
     def post(self, request, public_id):
         batch = _source_data_upload_batch_or_404(public_id)
@@ -2718,7 +2830,10 @@ def _source_data_downstream_options(validated_data: dict) -> dict:
 
 class SourceDataUploadDownstreamActionsAPIView(SourceDataFeatureGateMixin, APIView):
     source_data_required_features = (FEATURE_SOURCE_DATA_OPS, FEATURE_DOWNSTREAM_ACTIONS)
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_SOURCE_DATA),
+    ]
 
     def post(self, request, public_id):
         batch = _source_data_upload_batch_or_404(public_id)
@@ -2838,7 +2953,10 @@ class InteroperabilityRunDetailAPIView(APIView):
 
 
 class InteroperabilityOrgUnitMappingImportAPIView(APIView):
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_SOURCE_DATA),
+    ]
 
     def post(self, request):
         serializer = InteroperabilityOrgUnitMappingImportSerializer(data=request.data)
@@ -2860,7 +2978,10 @@ class InteroperabilityOrgUnitMappingImportAPIView(APIView):
 
 
 class InteroperabilityExportPreviewAPIView(APIView):
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_SOURCE_DATA),
+    ]
 
     def post(self, request):
         serializer = InteroperabilityExportPreviewSerializer(data=request.data)
@@ -2874,7 +2995,10 @@ class InteroperabilityExportPreviewAPIView(APIView):
 
 
 class InteroperabilityRunRetryAPIView(APIView):
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_SOURCE_DATA),
+    ]
 
     def post(self, request, public_id):
         run = get_object_or_404(InteroperabilityRun, public_id=public_id)
@@ -2970,7 +3094,10 @@ class MessageTemplateGovernanceDetailAPIView(APIView):
 
 
 class MessageTemplateApprovalAPIView(APIView):
-    permission_classes = [IsAdminOnly]
+    permission_classes = [
+        IsAdminOnly,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_MESSAGE_GOVERNANCE),
+    ]
 
     def post(self, request, public_id):
         template = get_object_or_404(
@@ -2994,7 +3121,10 @@ class MessageTemplateApprovalAPIView(APIView):
 
 
 class UssdMenuVersionApprovalAPIView(APIView):
-    permission_classes = [IsAdminOnly]
+    permission_classes = [
+        IsAdminOnly,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_MESSAGE_GOVERNANCE),
+    ]
 
     def post(self, request, public_id):
         menu_version = get_object_or_404(
@@ -3082,7 +3212,10 @@ class TriggerAlertPreviewAPIView(APIView):
 
 
 class TriggerAlertsAPIView(APIView):
-    permission_classes = [IsAdminOrSupervisor]
+    permission_classes = [
+        IsAdminOrSupervisor,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_ALERT_DELIVERY),
+    ]
 
     def post(self, request):
         serializer = TriggerAlertRequestSerializer(data=request.data)
@@ -3221,7 +3354,10 @@ class SystemControlStatusAPIView(APIView):
 
 
 class SystemRetryControlsAPIView(APIView):
-    permission_classes = [IsAdminOnly]
+    permission_classes = [
+        IsAdminOnly,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_SYSTEM_CONTROLS),
+    ]
 
     def post(self, request):
         serializer = SystemRetryControlsRequestSerializer(data=request.data)
@@ -3262,7 +3398,10 @@ class SystemRetryControlsAPIView(APIView):
 
 
 class SystemManualRiskScoringAPIView(APIView):
-    permission_classes = [IsAdminOnly]
+    permission_classes = [
+        IsAdminOnly,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_SYSTEM_CONTROLS),
+    ]
 
     def post(self, request):
         serializer = ManualRiskScoringRequestSerializer(data=request.data)
@@ -3290,7 +3429,10 @@ class SystemManualRiskScoringAPIView(APIView):
 
 
 class SystemAlertDeliveryPauseAPIView(APIView):
-    permission_classes = [IsAdminOnly]
+    permission_classes = [
+        IsAdminOnly,
+        RequireFreshStepUp(StepUpGrant.PURPOSE_SYSTEM_CONTROLS),
+    ]
 
     def post(self, request):
         serializer = AlertDeliveryPauseRequestSerializer(data=request.data)

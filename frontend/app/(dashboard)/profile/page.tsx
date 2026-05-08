@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
+  AlertTriangle,
   CalendarClock,
   CheckCircle2,
   ChevronRight,
@@ -12,7 +13,9 @@ import {
   Edit3,
   Eye,
   EyeOff,
+  Globe2,
   KeyRound,
+  Laptop,
   LogOut,
   MapPinned,
   Monitor,
@@ -20,9 +23,12 @@ import {
   Moon,
   RefreshCw,
   ShieldCheck,
+  ShieldAlert,
   Save,
   Sun,
+  Trash2,
   UserRound,
+  Users,
   X,
 } from "lucide-react";
 import Link from "next/link";
@@ -38,20 +44,28 @@ import { PasswordPolicyChecklist } from "@/components/ui/password-policy-checkli
 import { StatusBanner } from "@/components/ui/status-banner";
 import { StatusBadge } from "@/components/ui/status-badge";
 import {
+  AuthStepUpRequiredError,
   changePasswordViaBff,
   fetchProfileActivityViaBff,
+  fetchProfileSessionsViaBff,
   fetchRecoveryCodeStatusViaBff,
   isValidUsername,
   normalizeCurrentUser,
   regenerateRecoveryCodesViaBff,
+  revokeAllProfileSessionsViaBff,
+  revokeOtherProfileSessionsViaBff,
+  revokeProfileSessionViaBff,
   verifyProfileIdentityTwoFactorViaBff,
   type CurrentUser,
   type ProfileActivityEvent,
   type ProfileActivityFilters,
+  type ProfileSessionRecord,
+  type ProfileSessionRevokeResponse,
   type ThemePreference,
 } from "@/lib/auth";
 import { generateStrongPassword, getPasswordPolicyError } from "@/lib/password-policy";
 import { queryKeys } from "@/lib/query-keys";
+import { requestStepUp } from "@/lib/step-up";
 
 const appearanceOptions = [
   { value: "LIGHT", label: "Light", Icon: Sun },
@@ -158,6 +172,62 @@ function getRecoveryCodeTone(recoveryStatus: { remaining_count: number; total_co
   }
 
   return "success" as const;
+}
+
+function getSessionTone(status: ProfileSessionRecord["status"]) {
+  if (status === "current") {
+    return "success" as const;
+  }
+
+  if (status === "suspicious") {
+    return "warning" as const;
+  }
+
+  if (status === "revoked") {
+    return "danger" as const;
+  }
+
+  if (status === "active") {
+    return "info" as const;
+  }
+
+  return "default" as const;
+}
+
+function getSessionStatusLabel(status: ProfileSessionRecord["status"]) {
+  if (status === "current") {
+    return "Current";
+  }
+
+  if (status === "suspicious") {
+    return "Suspicious";
+  }
+
+  if (status === "revoked") {
+    return "Revoked";
+  }
+
+  if (status === "expired") {
+    return "Expired";
+  }
+
+  return "Active";
+}
+
+function getSessionIcon(session: ProfileSessionRecord) {
+  if (session.status === "suspicious") {
+    return ShieldAlert;
+  }
+
+  if (session.is_current) {
+    return Laptop;
+  }
+
+  return Monitor;
+}
+
+function pluralizeSession(count: number) {
+  return `${count} ${count === 1 ? "session" : "sessions"}`;
 }
 
 function PasswordRevealInput({
@@ -276,6 +346,9 @@ export default function ProfilePage() {
     security_only: true,
     include_refresh_events: false,
   });
+  const [sessionActionPending, setSessionActionPending] = useState<string | null>(null);
+  const [sessionActionError, setSessionActionError] = useState<string | null>(null);
+  const [sessionActionSuccess, setSessionActionSuccess] = useState<string | null>(null);
 
   const currentUser = rawCurrentUser ? normalizeCurrentUser(rawCurrentUser) : null;
 
@@ -343,6 +416,12 @@ export default function ProfilePage() {
     placeholderData: (previousData) => previousData,
     staleTime: 60_000,
   });
+  const sessionsQuery = useQuery({
+    queryKey: queryKeys.auth.sessions(),
+    queryFn: fetchProfileSessionsViaBff,
+    enabled: Boolean(currentUser?.profile_capabilities?.can_review_sessions),
+    staleTime: 60_000,
+  });
   const recoveryStatusQuery = useQuery({
     queryKey: queryKeys.auth.recoveryCodes(),
     queryFn: fetchRecoveryCodeStatusViaBff,
@@ -367,9 +446,14 @@ export default function ProfilePage() {
   const canUpdateIdentity = capabilities?.can_update_identity === true;
   const canManageTotp = capabilities?.can_manage_totp === true;
   const canViewActivity = capabilities?.can_view_own_activity === true;
+  const canReviewSessions = capabilities?.can_review_sessions === true;
   const capabilityContractReady = Boolean(capabilities);
   const recoveryStatus = recoveryStatusQuery.data;
   const recoveryCodeTone = getRecoveryCodeTone(recoveryStatus);
+  const sessionData = sessionsQuery.data;
+  const sessions = sessionData?.sessions ?? [];
+  const activeSessions = sessions.filter((session) => session.is_active);
+  const otherActiveSessions = sessions.filter((session) => session.is_active && !session.is_current);
   const activityData = activityQuery.data;
   const activityEvents = activityData?.results ?? activityData?.events ?? [];
   const activityCount = activityData?.count ?? activityEvents.length;
@@ -401,6 +485,92 @@ export default function ProfilePage() {
       router.replace("/login");
     } finally {
       setIsSigningOut(false);
+    }
+  }
+
+  async function executeSessionActionWithStepUp(action: () => Promise<ProfileSessionRevokeResponse>) {
+    try {
+      return await action();
+    } catch (error) {
+      if (error instanceof AuthStepUpRequiredError) {
+        await requestStepUp(error.purpose);
+        return action();
+      }
+
+      throw error;
+    }
+  }
+
+  async function refetchSessionSecurityData() {
+    const refetches: Array<Promise<unknown>> = [sessionsQuery.refetch()];
+    if (canViewActivity) {
+      refetches.push(activityQuery.refetch());
+    }
+    await Promise.all(refetches);
+  }
+
+  async function handleRevokeSession(publicId: string) {
+    if (sessionActionPending) {
+      return;
+    }
+
+    setSessionActionPending(publicId);
+    setSessionActionError(null);
+    setSessionActionSuccess(null);
+
+    try {
+      const response = await executeSessionActionWithStepUp(() => revokeProfileSessionViaBff(publicId));
+      if (response.current_session_revoked) {
+        await logout().catch(() => undefined);
+        router.replace("/login");
+        return;
+      }
+      setSessionActionSuccess("Session revoked.");
+      await refetchSessionSecurityData();
+    } catch (error) {
+      setSessionActionError(error instanceof Error ? error.message : "Unable to revoke this session right now.");
+    } finally {
+      setSessionActionPending(null);
+    }
+  }
+
+  async function handleRevokeOtherSessions() {
+    if (sessionActionPending || otherActiveSessions.length === 0) {
+      return;
+    }
+
+    setSessionActionPending("others");
+    setSessionActionError(null);
+    setSessionActionSuccess(null);
+
+    try {
+      const response = await executeSessionActionWithStepUp(revokeOtherProfileSessionsViaBff);
+      setSessionActionSuccess(`${pluralizeSession(response.revoked_count)} signed out.`);
+      await refetchSessionSecurityData();
+    } catch (error) {
+      setSessionActionError(error instanceof Error ? error.message : "Unable to revoke other sessions right now.");
+    } finally {
+      setSessionActionPending(null);
+    }
+  }
+
+  async function handleRevokeAllSessions() {
+    if (sessionActionPending) {
+      return;
+    }
+
+    setSessionActionPending("all");
+    setSessionActionError(null);
+    setSessionActionSuccess(null);
+
+    try {
+      await executeSessionActionWithStepUp(revokeAllProfileSessionsViaBff);
+      await logout().catch(() => undefined);
+      router.replace("/login");
+    } catch (error) {
+      setSessionActionError(error instanceof Error ? error.message : "Unable to revoke sessions right now.");
+    } finally {
+      setSessionActionPending(null);
     }
   }
 
@@ -1058,9 +1228,160 @@ export default function ProfilePage() {
             Managed by administrator
           </p>
           <p className="mt-3 text-sm leading-6 text-panel-muted">
-            Session/device review, identity self-editing, saved alert preferences, and profile report generation are
-            handled through administrator-managed workflows.
+            Identity recovery, account deactivation, saved alert preferences, and profile report generation are handled
+            through administrator-managed workflows.
           </p>
+        </Card>
+      </section>
+
+      <section>
+        <Card className="rounded-[2rem] px-6 py-6">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <h2 className="text-[1.25rem] font-semibold tracking-[-0.04em] text-panel-strong">Active sessions</h2>
+              <p className="mt-1 text-sm text-panel-muted">
+                Devices and browsers with recent access to this account.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <StatusBadge tone="info">{pluralizeSession(activeSessions.length)} active</StatusBadge>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  void handleRevokeOtherSessions();
+                }}
+                disabled={!canReviewSessions || otherActiveSessions.length === 0 || Boolean(sessionActionPending)}
+              >
+                <Users className="size-4" aria-hidden="true" />
+                {sessionActionPending === "others" ? "Signing out..." : "Sign out other devices"}
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={() => {
+                  void handleRevokeAllSessions();
+                }}
+                disabled={!canReviewSessions || sessions.length === 0 || Boolean(sessionActionPending)}
+              >
+                <Trash2 className="size-4" aria-hidden="true" />
+                {sessionActionPending === "all" ? "Signing out..." : "Sign out all devices"}
+              </Button>
+            </div>
+          </div>
+
+          {sessionActionError ? <StatusBanner tone="danger" className="mt-5">{sessionActionError}</StatusBanner> : null}
+          {sessionActionSuccess ? <StatusBanner tone="success" className="mt-5">{sessionActionSuccess}</StatusBanner> : null}
+
+          <div className="mt-6">
+            {!capabilityContractReady ? (
+              <div className="rounded-[1.35rem] border border-panel-table-wrap px-4 py-5 text-sm text-panel-muted">
+                Refreshing account permissions...
+              </div>
+            ) : !canReviewSessions ? (
+              <div className="rounded-[1.35rem] border border-panel-table-wrap px-4 py-5 text-sm text-panel-muted">
+                Session review is not available for this account state.
+              </div>
+            ) : sessionsQuery.isPending ? (
+              <div className="rounded-[1.35rem] border border-panel-table-wrap px-4 py-5 text-sm text-panel-muted">
+                Loading active sessions...
+              </div>
+            ) : sessionsQuery.isError ? (
+              <div className="rounded-[1.35rem] border border-[color-mix(in_srgb,var(--danger)_42%,transparent)] bg-[color-mix(in_srgb,var(--danger)_10%,transparent)] px-4 py-5 text-sm text-panel-muted">
+                Unable to load active sessions right now.
+              </div>
+            ) : sessions.length === 0 ? (
+              <div className="rounded-[1.35rem] border border-panel-table-wrap px-4 py-5 text-sm text-panel-muted">
+                No active sessions have been recorded yet.
+              </div>
+            ) : (
+              <div className="overflow-hidden rounded-[1.35rem] border border-panel-table-wrap">
+                {sessions.map((session) => {
+                  const SessionIcon = getSessionIcon(session);
+                  const sessionPending = sessionActionPending === session.public_id;
+
+                  return (
+                    <div
+                      key={session.public_id}
+                      className="grid gap-4 border-b border-[var(--dashboard-table-line)] px-4 py-4 last:border-b-0 lg:grid-cols-[minmax(0,1.15fr)_minmax(15rem,0.85fr)_auto]"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-start gap-3">
+                          <span className="inline-flex size-10 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--brand)_14%,transparent)] text-brand">
+                            <SessionIcon className="size-4" aria-hidden="true" />
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-semibold text-panel-strong">
+                              {session.is_current ? "This device" : session.device_label}
+                            </span>
+                            <span className="mt-1 block break-words text-sm text-panel-muted">
+                              {session.browser_label}
+                            </span>
+                          </span>
+                        </div>
+
+                        {session.is_suspicious ? (
+                          <span className="mt-3 inline-flex items-center gap-2 text-sm font-semibold text-[color:var(--warning)]">
+                            <AlertTriangle className="size-4" aria-hidden="true" />
+                            {session.suspicion_reason
+                              ? session.suspicion_reason.replaceAll("_", " ")
+                              : "Context changed"}
+                          </span>
+                        ) : null}
+                      </div>
+
+                      <div className="grid gap-2 text-sm text-panel-muted sm:grid-cols-2 lg:grid-cols-1">
+                        <span className="inline-flex items-center gap-2">
+                          <CalendarClock className="size-4 text-brand" aria-hidden="true" />
+                          Created {formatDateTime(session.created_at)}
+                        </span>
+                        <span className="inline-flex items-center gap-2">
+                          <Clock3 className="size-4 text-brand" aria-hidden="true" />
+                          Last active {formatDateTime(session.last_seen_at)}
+                        </span>
+                        <span className="inline-flex items-center gap-2">
+                          <Globe2 className="size-4 text-brand" aria-hidden="true" />
+                          {session.location_label}
+                        </span>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-3 lg:justify-end">
+                        <StatusBadge tone={getSessionTone(session.status)}>
+                          {getSessionStatusLabel(session.status)}
+                        </StatusBadge>
+                        {session.is_current && session.is_active ? (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => {
+                              void handleSignOut();
+                            }}
+                            disabled={isSigningOut}
+                          >
+                            <LogOut className="size-4" aria-hidden="true" />
+                            {isSigningOut ? "Signing out..." : "Sign out this device"}
+                          </Button>
+                        ) : session.is_active ? (
+                          <Button
+                            variant="danger"
+                            size="sm"
+                            onClick={() => {
+                              void handleRevokeSession(session.public_id);
+                            }}
+                            disabled={Boolean(sessionActionPending)}
+                          >
+                            <LogOut className="size-4" aria-hidden="true" />
+                            {sessionPending ? "Signing out..." : "Sign out"}
+                          </Button>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </Card>
       </section>
 

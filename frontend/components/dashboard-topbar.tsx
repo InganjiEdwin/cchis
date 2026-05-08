@@ -69,6 +69,7 @@ type NotificationDrawerItem =
     };
 
 const GROUPING_WINDOW_MINUTES = 30;
+const NOTIFICATION_STREAM_SUBPROTOCOL = "cchis.notifications";
 
 function buildNotificationWebsocketUrl(websocketPath: string) {
   const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "http://localhost:8000/api/v1";
@@ -502,7 +503,8 @@ export function DashboardTopbar({
         }
 
         socket = new WebSocket(
-          `${buildNotificationWebsocketUrl(streamToken.websocket_path)}?token=${encodeURIComponent(streamToken.token)}`,
+          buildNotificationWebsocketUrl(streamToken.websocket_path),
+          [NOTIFICATION_STREAM_SUBPROTOCOL, streamToken.token],
         );
 
         socket.onmessage = (event) => {

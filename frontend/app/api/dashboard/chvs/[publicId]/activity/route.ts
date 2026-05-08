@@ -15,7 +15,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ publ
     return NextResponse.json(activity);
   } catch (error) {
     if (error instanceof ServerApiError) {
-      return NextResponse.json({ detail: error.message }, { status: error.status });
+      return NextResponse.json(error.payload ?? { detail: error.message }, { status: error.status });
     }
 
     return NextResponse.json({ detail: "Unable to load CHV activity." }, { status: 500 });
