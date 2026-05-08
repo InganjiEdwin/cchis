@@ -6,6 +6,7 @@ import ipaddress
 from datetime import timedelta
 from uuid import UUID
 
+import jwt
 from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
@@ -633,13 +634,6 @@ def notify_admin_new_device_if_needed(user, session: UserSession, context_hashes
         return
 
 
-def parse_refresh_unverified(refresh_token: str) -> RefreshToken | None:
-    try:
-        return RefreshToken(refresh_token, verify=False)
-    except TokenError:
-        return None
-
-
 def parse_refresh_verified_allow_blacklisted(refresh_token: str) -> RefreshToken:
     try:
         payload = token_backend.decode(refresh_token, verify=True)
@@ -652,6 +646,50 @@ def parse_refresh_verified_allow_blacklisted(refresh_token: str) -> RefreshToken
     refresh = RefreshToken(refresh_token, verify=False)
     refresh.payload = payload
     return refresh
+
+
+def parse_refresh_signature_verified_allow_expired(refresh_token: str) -> RefreshToken:
+    try:
+        decode_options = {"verify_exp": False}
+        decode_kwargs = {
+            "algorithms": [token_backend.algorithm],
+            "options": decode_options,
+        }
+        audience = getattr(token_backend, "audience", None)
+        issuer = getattr(token_backend, "issuer", None)
+        if audience is not None:
+            decode_kwargs["audience"] = audience
+        else:
+            decode_options["verify_aud"] = False
+        if issuer is not None:
+            decode_kwargs["issuer"] = issuer
+        if hasattr(token_backend, "get_leeway"):
+            decode_kwargs["leeway"] = token_backend.get_leeway()
+
+        payload = jwt.decode(
+            refresh_token,
+            token_backend.get_verifying_key(refresh_token),
+            **decode_kwargs,
+        )
+    except Exception as exc:
+        raise TokenError("Token signature is invalid.") from exc
+
+    if payload.get("token_type") != RefreshToken.token_type:
+        raise TokenError("Token has wrong type.")
+
+    refresh = RefreshToken(refresh_token, verify=False)
+    refresh.payload = payload
+    return refresh
+
+
+def parse_refresh_verified_for_failure_handling(refresh_token: str) -> RefreshToken | None:
+    try:
+        return parse_refresh_verified_allow_blacklisted(refresh_token)
+    except TokenError:
+        try:
+            return parse_refresh_signature_verified_allow_expired(refresh_token)
+        except TokenError:
+            return None
 
 
 def mark_refresh_replay_detected(
@@ -698,7 +736,7 @@ def handle_failed_refresh_token(
     reason: str,
     raise_session_policy_failure: bool = False,
 ) -> UserSession | None:
-    refresh = parse_refresh_unverified(refresh_token)
+    refresh = parse_refresh_verified_for_failure_handling(refresh_token)
     if not refresh:
         return None
 
@@ -707,14 +745,21 @@ def handle_failed_refresh_token(
         if not session:
             return None
 
-        expiry_failure = get_session_expiry_failure(session)
-        if expiry_failure:
+        try:
+            refresh_match, refresh_jti_hash = classify_session_refresh(session, refresh)
+        except AuthenticationFailed as exc:
             if raise_session_policy_failure:
-                code, detail = expiry_failure
-                raise AuthenticationFailed(detail, code=code)
+                raise exc
             return session
 
-        refresh_jti_hash = hash_refresh_jti(str(refresh.payload.get("jti", "")))
+        if refresh_match == "previous_grace":
+            raise RefreshTokenAlreadyRotated()
+
+        if refresh_match == "current":
+            if raise_session_policy_failure:
+                raise AuthenticationFailed("Invalid or expired refresh token.", code="invalid_refresh")
+            return session
+
         replay_detected = mark_refresh_replay_detected(session, request, refresh_jti_hash, reason=reason)
 
     if not replay_detected:
@@ -725,7 +770,7 @@ def handle_failed_refresh_token(
 
 
 def revoke_session_from_refresh_token(refresh_token: str, request=None, *, revoked_by=None, reason: str) -> UserSession | None:
-    refresh = parse_refresh_unverified(refresh_token)
+    refresh = parse_refresh_verified_for_failure_handling(refresh_token)
     if not refresh:
         return None
 
@@ -762,7 +807,7 @@ def validate_access_token_session(user, validated_token) -> UserSession | None:
     sid = validated_token.get("sid")
     family = validated_token.get("family")
     if not sid or not family:
-        return None
+        raise AuthenticationFailed("Access session is not recognized.", code="session_not_found")
 
     try:
         public_id = UUID(str(sid))

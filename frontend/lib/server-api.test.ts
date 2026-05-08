@@ -29,6 +29,8 @@ describe("server-api auth cookie handling", () => {
   const cookieSet = vi.fn();
   const originalFetch = global.fetch;
   const originalAccessCookieName = process.env.AUTH_ACCESS_COOKIE_NAME;
+  const originalCchisEnvironment = process.env.CCHIS_ENVIRONMENT;
+  const originalNextPublicCchisEnvironment = process.env.NEXT_PUBLIC_CCHIS_ENVIRONMENT;
   const originalFrontendAppUrl = process.env.FRONTEND_APP_URL;
 
   beforeEach(() => {
@@ -39,6 +41,8 @@ describe("server-api auth cookie handling", () => {
       set: cookieSet,
     });
     process.env.AUTH_ACCESS_COOKIE_NAME = "cchis_access";
+    process.env.CCHIS_ENVIRONMENT = "local";
+    delete process.env.NEXT_PUBLIC_CCHIS_ENVIRONMENT;
     process.env.FRONTEND_APP_URL = "http://localhost:3000";
     global.fetch = vi.fn() as typeof fetch;
   });
@@ -49,6 +53,16 @@ describe("server-api auth cookie handling", () => {
       delete process.env.AUTH_ACCESS_COOKIE_NAME;
     } else {
       process.env.AUTH_ACCESS_COOKIE_NAME = originalAccessCookieName;
+    }
+    if (originalCchisEnvironment === undefined) {
+      delete process.env.CCHIS_ENVIRONMENT;
+    } else {
+      process.env.CCHIS_ENVIRONMENT = originalCchisEnvironment;
+    }
+    if (originalNextPublicCchisEnvironment === undefined) {
+      delete process.env.NEXT_PUBLIC_CCHIS_ENVIRONMENT;
+    } else {
+      process.env.NEXT_PUBLIC_CCHIS_ENVIRONMENT = originalNextPublicCchisEnvironment;
     }
     if (originalFrontendAppUrl === undefined) {
       delete process.env.FRONTEND_APP_URL;
@@ -110,6 +124,29 @@ describe("server-api auth cookie handling", () => {
       "new-access",
       expect.objectContaining({ httpOnly: true, maxAge: 900, path: "/", sameSite: "lax" }),
     );
+  });
+
+  it("uses shared-environment access cookie defaults from the public frontend environment", async () => {
+    delete process.env.AUTH_ACCESS_COOKIE_NAME;
+    delete process.env.CCHIS_ENVIRONMENT;
+    process.env.NEXT_PUBLIC_CCHIS_ENVIRONMENT = "staging";
+
+    mocks.cookies.mockResolvedValue({
+      toString: () => "__Host-cchis_access=shared-access; __Host-cchis_refresh=shared-refresh",
+      set: cookieSet,
+    });
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock.mockResolvedValueOnce(jsonResponse({ ok: true }));
+
+    const response = await fetchBackendAuthorizedResponse("/wards/", {
+      cookieHeader: "__Host-cchis_access=shared-access; __Host-cchis_refresh=shared-refresh",
+    });
+
+    expect(await response.json()).toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe("http://backend.test/api/v1/wards/");
+    const headers = fetchMock.mock.calls[0][1]?.headers as Headers;
+    expect(headers.get("Authorization")).toBe("Bearer shared-access");
   });
 
   it("uses the refreshed access cookie when the backend omits token bodies", async () => {

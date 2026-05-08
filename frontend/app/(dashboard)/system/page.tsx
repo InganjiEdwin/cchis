@@ -677,7 +677,7 @@ export default function SystemPage() {
       />
 
       <RoleGate
-        allowedRoles={["ADMIN", "ANALYST"]}
+        pageCapability="system"
         title="You need permission to view this page"
         message="Admins and analysts can review readiness and safe actions."
       >

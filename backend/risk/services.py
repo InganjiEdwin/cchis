@@ -6233,7 +6233,10 @@ def _facility_freshness_state(updated_at, *, warning_minutes: int = 30, stale_mi
 def _facility_user_can_request_update(user) -> bool:
     if user is None or not getattr(user, "is_authenticated", False):
         return False
-    return getattr(user, "role", None) in {"ADMIN", "SUPERVISOR"}
+    return bool(
+        getattr(user, "is_superuser", False)
+        or getattr(user, "role", None) in {"ADMIN", "SUPERVISOR"}
+    )
 
 
 def _facility_user_can_escalate_county_review(user) -> bool:
@@ -6249,7 +6252,10 @@ def _facility_has_county_review_queue() -> bool:
 def _facility_user_can_open_chv_operations(user) -> bool:
     if user is None or not getattr(user, "is_authenticated", False):
         return False
-    return getattr(user, "role", None) in {"ADMIN", "SUPERVISOR"}
+    return bool(
+        getattr(user, "is_superuser", False)
+        or getattr(user, "role", None) in {"ADMIN", "SUPERVISOR"}
+    )
 
 
 def _can_view_direct_identifiers_for_service_user(user) -> bool:
@@ -7162,6 +7168,7 @@ def build_facility_intelligence_snapshot(
         facility.ward.alerts.select_related("risk_score").order_by("-created_at")[:6]
     )
     verified_contact = verified_facility_contact_for_facility(facility)
+    can_view_contact_detail = _facility_user_can_request_update(user) and verified_contact is not None
     active_review = active_facility_readiness_review_for_facility(facility)
     active_update_request = active_facility_readiness_update_request_for_facility(facility)
     active_escalation = active_facility_readiness_escalation_for_facility(facility)
@@ -7572,14 +7579,14 @@ def build_facility_intelligence_snapshot(
         },
         "decision_summary": decision_summary,
         "timeline": timeline,
-        "contact": verified_contact,
+        "contact": verified_contact if can_view_contact_detail else None,
         "active_review": active_review,
         "active_update_request": active_update_request,
         "active_escalation": active_escalation,
         "linked_alerts": linked_alerts,
         "chv_operations": chv_operations,
         "capabilities": {
-            "can_view_contacts": verified_contact is not None,
+            "can_view_contacts": can_view_contact_detail,
             "can_open_readiness_review": (
                 _facility_user_can_request_update(user)
                 and active_review is None

@@ -37,6 +37,7 @@ import {
   type SourceDataUploadBatchRecord,
   type SourceDataUploadFilters,
 } from "@/lib/dashboard";
+import { hasActionCapability } from "@/lib/capabilities";
 import { formatRelativeTimestamp } from "@/lib/freshness";
 import { queryKeys } from "@/lib/query-keys";
 import {
@@ -47,7 +48,6 @@ import {
   useSourceDataUploadsQuery,
 } from "@/queries/use-source-data-query";
 
-const ALLOWED_ROLES = ["ADMIN", "SUPERVISOR", "ANALYST"] as const;
 const CLIENT_MAX_CSV_FILE_BYTES = 20 * 1024 * 1024;
 
 type DataReadinessTab = "overview" | "review" | "history" | "templates";
@@ -630,7 +630,13 @@ function connectorTone(status: string): "success" | "warning" | "danger" | "info
   return statusTone(status);
 }
 
-function FeedCard({ feed, canManageImports }: { feed: SourceDataFeedDefinition; canManageImports: boolean }) {
+function FeedCard({
+  feed,
+  canUseSourceDataAdminControls,
+}: {
+  feed: SourceDataFeedDefinition;
+  canUseSourceDataAdminControls: boolean;
+}) {
   const queryClient = useQueryClient();
   const connector = feed.connector_status;
   const csvUploadEnabled = feed.csv_upload_enabled ?? true;
@@ -714,7 +720,7 @@ function FeedCard({ feed, canManageImports }: { feed: SourceDataFeedDefinition; 
                   {connector.last_successful_fetch_at ? formatRelativeTimestamp(connector.last_successful_fetch_at) : "not recorded"}
                 </p>
               </div>
-              {canManageImports ? (
+              {canUseSourceDataAdminControls ? (
                 <Button
                   type="button"
                   variant="secondary"
@@ -1510,10 +1516,12 @@ function AttentionPanel({
 
 function QuickUpdateGuide({
   selectedUpload,
+  canManageImports,
   onAddData,
   onReviewData,
 }: {
   selectedUpload?: SourceDataUploadBatchRecord;
+  canManageImports: boolean;
   onAddData: () => void;
   onReviewData: () => void;
 }) {
@@ -1547,20 +1555,24 @@ function QuickUpdateGuide({
           {readyForDashboard ? "A checked file is ready to add." : "No checked file is waiting right now."}
         </p>
         <p className="mt-1 text-sm leading-6 text-panel-muted">
-          {readyForDashboard
+          {!canManageImports
+            ? "Download templates and review current data status. Uploads are limited to operational data managers."
+            : readyForDashboard
             ? "Review the file check, then add it to refresh dashboard data."
             : "Start with the side panel when you have a trusted file."}
         </p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Button type="button" variant="primary" size="md" onClick={readyForDashboard ? onReviewData : onAddData}>
-            {readyForDashboard ? "Review checked file" : "Add data"}
-          </Button>
-          {readyForDashboard ? (
-            <Button type="button" variant="secondary" size="md" onClick={onAddData}>
-              Upload another file
+        {canManageImports ? (
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button type="button" variant="primary" size="md" onClick={readyForDashboard ? onReviewData : onAddData}>
+              {readyForDashboard ? "Review checked file" : "Add data"}
             </Button>
-          ) : null}
-        </div>
+            {readyForDashboard ? (
+              <Button type="button" variant="secondary" size="md" onClick={onAddData}>
+                Upload another file
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </Card>
   );
@@ -1632,7 +1644,15 @@ function OperationsHealthPanel({ operations }: { operations?: SourceDataOperatio
   );
 }
 
-function ImportConfirmation({ upload }: { upload?: SourceDataUploadBatchRecord }) {
+function ImportConfirmation({
+  upload,
+  canManageImports,
+  canApproveRiskyImports,
+}: {
+  upload?: SourceDataUploadBatchRecord;
+  canManageImports: boolean;
+  canApproveRiskyImports: boolean;
+}) {
   const queryClient = useQueryClient();
   const [approvalReason, setApprovalReason] = useState("");
   const [cancelReason, setCancelReason] = useState("");
@@ -1732,33 +1752,39 @@ function ImportConfirmation({ upload }: { upload?: SourceDataUploadBatchRecord }
                 />
               </label>
               <div className="flex flex-wrap gap-3">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="md"
-                  disabled={approvalMutation.isPending || !approvalReason.trim()}
-                  onClick={() => approvalMutation.mutate({ action: "request", reason: approvalReason })}
-                >
-                  Request review
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="md"
-                  disabled={approvalMutation.isPending || upload.approval_status !== "pending"}
-                  onClick={() => approvalMutation.mutate({ action: "approve", reason: approvalReason })}
-                >
-                  Mark reviewed
-                </Button>
-                <Button
-                  type="button"
-                  variant="danger"
-                  size="md"
-                  disabled={approvalMutation.isPending || upload.approval_status !== "pending"}
-                  onClick={() => approvalMutation.mutate({ action: "reject", reason: approvalReason })}
-                >
-                  Reject
-                </Button>
+                {canManageImports ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="md"
+                    disabled={approvalMutation.isPending || !approvalReason.trim()}
+                    onClick={() => approvalMutation.mutate({ action: "request", reason: approvalReason })}
+                  >
+                    Request review
+                  </Button>
+                ) : null}
+                {canApproveRiskyImports ? (
+                  <>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="md"
+                      disabled={approvalMutation.isPending || upload.approval_status !== "pending"}
+                      onClick={() => approvalMutation.mutate({ action: "approve", reason: approvalReason })}
+                    >
+                      Mark reviewed
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="danger"
+                      size="md"
+                      disabled={approvalMutation.isPending || upload.approval_status !== "pending"}
+                      onClick={() => approvalMutation.mutate({ action: "reject", reason: approvalReason })}
+                    >
+                      Reject
+                    </Button>
+                  </>
+                ) : null}
               </div>
             </div>
           ) : null}
@@ -1781,7 +1807,7 @@ function ImportConfirmation({ upload }: { upload?: SourceDataUploadBatchRecord }
               variant="primary"
               size="md"
               className="w-fit"
-              disabled={!canConfirm || confirmMutation.isPending}
+              disabled={!canManageImports || !canConfirm || confirmMutation.isPending}
               onClick={() => confirmMutation.mutate()}
             >
               <CheckCircle2 className="size-4" aria-hidden="true" />
@@ -1805,7 +1831,7 @@ function ImportConfirmation({ upload }: { upload?: SourceDataUploadBatchRecord }
                 variant="danger"
                 size="md"
                 className="w-fit"
-                disabled={cancelMutation.isPending || !cancelReason.trim()}
+                disabled={!canManageImports || cancelMutation.isPending || !cancelReason.trim()}
                 onClick={() => cancelMutation.mutate()}
               >
                 <AlertTriangle className="size-4" aria-hidden="true" />
@@ -1925,7 +1951,13 @@ function downstreamPayloadForAction(
   return payload;
 }
 
-function DownstreamActionsPanel({ upload }: { upload?: SourceDataUploadBatchRecord }) {
+function DownstreamActionsPanel({
+  upload,
+  canTriggerDownstreamActions,
+}: {
+  upload?: SourceDataUploadBatchRecord;
+  canTriggerDownstreamActions: boolean;
+}) {
   const queryClient = useQueryClient();
   const actions = upload?.downstream_actions ?? [];
   const isImported = upload?.status === "imported" && upload.import_status === "imported";
@@ -1992,7 +2024,7 @@ function DownstreamActionsPanel({ upload }: { upload?: SourceDataUploadBatchReco
                   type="button"
                   variant="secondary"
                   size="md"
-                  disabled={action.availability_status !== "available" || downstreamMutation.isPending}
+                  disabled={!canTriggerDownstreamActions || action.availability_status !== "available" || downstreamMutation.isPending}
                   onClick={() => downstreamMutation.mutate(action)}
                 >
                   <RefreshCcw className="size-4" aria-hidden="true" />
@@ -2027,6 +2059,7 @@ function UploadHistory({
   feeds,
   filters,
   selectedPublicId,
+  canFilterSourceName,
   onSelect,
   onFiltersChange,
 }: {
@@ -2034,6 +2067,7 @@ function UploadHistory({
   feeds: SourceDataFeedDefinition[];
   filters: SourceDataUploadFilters;
   selectedPublicId: string | null;
+  canFilterSourceName: boolean;
   onSelect: (publicId: string) => void;
   onFiltersChange: (filters: SourceDataUploadFilters) => void;
 }) {
@@ -2078,15 +2112,17 @@ function UploadHistory({
             <option value="import_failed">Failed</option>
           </select>
         </label>
-        <label className="grid gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted md:col-span-2">
-          Search source
-          <input
-            value={filters.source_name ?? ""}
-            onChange={(event) => updateFilter("source_name", event.target.value)}
-            placeholder="Filter by source name"
-            className="h-10 rounded-[0.5rem] border border-panel-table-wrap bg-panel px-3 text-sm normal-case tracking-normal text-panel-strong outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
-          />
-        </label>
+        {canFilterSourceName ? (
+          <label className="grid gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted md:col-span-2">
+            Search source
+            <input
+              value={filters.source_name ?? ""}
+              onChange={(event) => updateFilter("source_name", event.target.value)}
+              placeholder="Filter by source name"
+              className="h-10 rounded-[0.5rem] border border-panel-table-wrap bg-panel px-3 text-sm normal-case tracking-normal text-panel-strong outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+            />
+          </label>
+        ) : null}
       </div>
       <div className="overflow-x-auto rounded-[0.5rem] border border-[var(--dashboard-table-line)]">
         <table className="w-full min-w-[760px] text-left text-sm">
@@ -2148,7 +2184,9 @@ function SourceDataContent() {
   const contractErrors = data?.template_contract_errors ?? [];
   const mvpFeeds = data?.feeds ?? [];
   const selectedUpload = selectedUploadQuery.data ?? uploadsQuery.data?.results.find((item) => item.public_id === activeUploadId);
-  const canManageImports = currentUser?.role === "ADMIN" || currentUser?.role === "SUPERVISOR";
+  const canManageImports = hasActionCapability(currentUser, "manage_source_data_imports");
+  const canApproveRiskyImports = hasActionCapability(currentUser, "approve_source_data_risky_imports");
+  const canTriggerDownstreamActions = hasActionCapability(currentUser, "trigger_source_data_downstream_actions");
   const groupedFeeds = useMemo(() => {
     return mvpFeeds.reduce<Record<string, SourceDataFeedDefinition[]>>((groups, feed) => {
       groups[feed.domain] = [...(groups[feed.domain] ?? []), feed];
@@ -2174,15 +2212,17 @@ function SourceDataContent() {
           void operationsQuery.refetch();
         }}
       >
-        <Button
-          type="button"
-          variant="primary"
-          size="md"
-          onClick={() => setIsUploadDrawerOpen(true)}
-        >
-          <Upload className="size-4" aria-hidden="true" />
-          Add data
-        </Button>
+        {canManageImports ? (
+          <Button
+            type="button"
+            variant="primary"
+            size="md"
+            onClick={() => setIsUploadDrawerOpen(true)}
+          >
+            <Upload className="size-4" aria-hidden="true" />
+            Add data
+          </Button>
+        ) : null}
         <Button
           variant="secondary"
           size="md"
@@ -2216,6 +2256,7 @@ function SourceDataContent() {
             />
             <QuickUpdateGuide
               selectedUpload={selectedUpload}
+              canManageImports={canManageImports}
               onAddData={() => setIsUploadDrawerOpen(true)}
               onReviewData={() => setActiveTab("review")}
             />
@@ -2236,21 +2277,27 @@ function SourceDataContent() {
                     : "Choose a recent update or add a new file to begin."}
                 </p>
               </div>
-              <Button type="button" variant="primary" size="md" onClick={() => setIsUploadDrawerOpen(true)}>
-                <Upload className="size-4" aria-hidden="true" />
-                Add data
-              </Button>
+              {canManageImports ? (
+                <Button type="button" variant="primary" size="md" onClick={() => setIsUploadDrawerOpen(true)}>
+                  <Upload className="size-4" aria-hidden="true" />
+                  Add data
+                </Button>
+              ) : null}
             </div>
           </Card>
 
           <ValidationSummary upload={selectedUpload} />
 
           <section className="grid gap-4 xl:grid-cols-2">
-            <ImportConfirmation upload={selectedUpload} />
+            <ImportConfirmation
+              upload={selectedUpload}
+              canManageImports={canManageImports}
+              canApproveRiskyImports={canApproveRiskyImports}
+            />
             <ImportResult upload={selectedUpload} />
           </section>
 
-          <DownstreamActionsPanel upload={selectedUpload} />
+          <DownstreamActionsPanel upload={selectedUpload} canTriggerDownstreamActions={canTriggerDownstreamActions} />
         </div>
       ) : null}
 
@@ -2261,6 +2308,7 @@ function SourceDataContent() {
             feeds={mvpFeeds}
             filters={uploadFilters}
             selectedPublicId={activeUploadId}
+            canFilterSourceName={canManageImports}
             onSelect={(publicId) => {
               setSelectedUploadId(publicId);
               setActiveTab("review");
@@ -2309,7 +2357,11 @@ function SourceDataContent() {
                   {formatLabel(domain)}
                 </h2>
                 {feeds.map((feed) => (
-                  <FeedCard key={feed.feed_key} feed={feed} canManageImports={canManageImports} />
+                  <FeedCard
+                    key={feed.feed_key}
+                    feed={feed}
+                    canUseSourceDataAdminControls={canApproveRiskyImports}
+                  />
                 ))}
               </div>
             ))}
@@ -2340,15 +2392,17 @@ function SourceDataContent() {
         </Card>
       ) : null}
 
-      <UploadDrawer
-        isOpen={isUploadDrawerOpen}
-        feeds={mvpFeeds}
-        recentUploads={recentUploads}
-        selectedUpload={selectedUpload}
-        canManageImports={canManageImports}
-        onUploadSelected={handleUploadSelected}
-        onClose={() => setIsUploadDrawerOpen(false)}
-      />
+      {canManageImports ? (
+        <UploadDrawer
+          isOpen={isUploadDrawerOpen}
+          feeds={mvpFeeds}
+          recentUploads={recentUploads}
+          selectedUpload={selectedUpload}
+          canManageImports={canManageImports}
+          onUploadSelected={handleUploadSelected}
+          onClose={() => setIsUploadDrawerOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -2356,7 +2410,7 @@ function SourceDataContent() {
 export default function SourceDataPage() {
   return (
     <RoleGate
-      allowedRoles={[...ALLOWED_ROLES]}
+      pageCapability="source_data"
       title="Data readiness access is restricted"
       message="Data templates and update status are available to administrators, supervisors, and analysts."
     >

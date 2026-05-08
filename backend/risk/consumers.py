@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from urllib.parse import parse_qs
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
@@ -87,9 +86,7 @@ class DashboardNotificationConsumer(AsyncJsonWebsocketConsumer):
             if stream_token:
                 return stream_token, NOTIFICATION_STREAM_SUBPROTOCOL
 
-        query_string = self.scope.get("query_string", b"").decode("utf-8")
-        token = parse_qs(query_string).get("token", [""])[0].strip()
-        return token or None, None
+        return None, None
 
     @database_sync_to_async
     def _authenticate(self, token: str) -> User | None:

@@ -36,6 +36,8 @@ def get_two_factor_policy_for_role(role: str) -> str:
 
 
 def get_two_factor_policy_for_user(user) -> str:
+    if getattr(user, "is_superuser", False):
+        return TWO_FACTOR_POLICY_REQUIRED
     return get_two_factor_policy_for_role(user.role)
 
 

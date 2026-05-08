@@ -1,57 +1,14 @@
 import { NextResponse } from "next/server";
 
-import type {
-  AlertRecord,
-  ChvOperationsRecord,
-  FacilityRecord,
-  LatestWardRisk,
-  PaginatedResponse,
-  SystemControlStatus,
-  WardSummary,
-} from "@/lib/dashboard";
+import type { SystemControlStatus, SystemReadinessSnapshot } from "@/lib/dashboard";
 import { ServerApiError, fetchBackendJson } from "@/lib/server-api";
 
 export async function GET(request: Request) {
   const cookieHeader = request.headers.get("cookie") ?? "";
 
   try {
-    const [
-      wards,
-      latestRisks,
-      alerts,
-      queuedAlerts,
-      retryAlerts,
-      failedAlerts,
-      deliveredAlerts,
-      facilities,
-      chvOperations,
-      controlStatus,
-    ] = await Promise.all([
-      fetchBackendJson<PaginatedResponse<WardSummary>>("/wards/?page_size=100&county=Migori", {
-        cookieHeader,
-      }),
-      fetchBackendJson<LatestWardRisk[]>("/risk-score/latest/?county=Migori", {
-        cookieHeader,
-      }),
-      fetchBackendJson<PaginatedResponse<AlertRecord>>("/alerts/?page_size=20&ordering=-created_at", {
-        cookieHeader,
-      }),
-      fetchBackendJson<PaginatedResponse<AlertRecord>>("/alerts/?page_size=1&ordering=-created_at&status=QUEUED", {
-        cookieHeader,
-      }),
-      fetchBackendJson<PaginatedResponse<AlertRecord>>("/alerts/?page_size=1&ordering=-created_at&status=RETRY_PENDING", {
-        cookieHeader,
-      }),
-      fetchBackendJson<PaginatedResponse<AlertRecord>>("/alerts/?page_size=1&ordering=-created_at&status=FAILED", {
-        cookieHeader,
-      }),
-      fetchBackendJson<PaginatedResponse<AlertRecord>>("/alerts/?page_size=1&ordering=-created_at&status=DELIVERED", {
-        cookieHeader,
-      }),
-      fetchBackendJson<PaginatedResponse<FacilityRecord>>("/facilities/?page_size=1&ordering=-updated_at", {
-        cookieHeader,
-      }),
-      fetchBackendJson<ChvOperationsRecord[]>("/chvs/operations/", {
+    const [readiness, controlStatus] = await Promise.all([
+      fetchBackendJson<SystemReadinessSnapshot>("/system/readiness/", {
         cookieHeader,
       }),
       fetchBackendJson<SystemControlStatus>("/system/controls/", {
@@ -60,15 +17,7 @@ export async function GET(request: Request) {
     ]);
 
     return NextResponse.json({
-      wards,
-      latestRisks,
-      alerts,
-      queuedAlerts,
-      retryAlerts,
-      failedAlerts,
-      deliveredAlerts,
-      facilities,
-      chvOperations,
+      readiness,
       controlStatus,
     });
   } catch (error) {

@@ -17,6 +17,7 @@ from rest_framework.views import APIView
 from accounts.audit import record_auth_event
 from accounts.models import AuthAuditEvent, StepUpGrant, User
 from accounts.permissions import IsAdminOnly, IsAdminOrSupervisor, IsAdminSupervisorOrAnalyst, IsFieldOperator
+from accounts.role_capabilities import user_is_admin_equivalent
 from accounts.step_up import RequireFreshStepUp
 from accounts.throttles import AuthScopedRateThrottle
 
@@ -48,6 +49,7 @@ from datetime import timedelta
 from rest_framework_simplejwt.tokens import AccessToken
 
 from .notifications import notification_summary_for_user, notifications_for_user, transition_notification
+from .privacy_access import user_can_view_direct_identifiers
 from .message_management import (
     build_message_management_dashboard,
     build_message_template_detail,
@@ -175,6 +177,7 @@ from .serializers import (
     SourceDataUploadCreateSerializer,
     SourceDataUploadListResponseSerializer,
     SystemControlStatusSerializer,
+    SystemReadinessSerializer,
     SystemRetryControlsRequestSerializer,
     TriggerContextRequestSerializer,
     TriggerContextResponseSerializer,
@@ -238,6 +241,7 @@ from .services import (
     sync_alert_workflow_for_ward,
     sync_alert_workflows_for_wards,
 )
+from .system_readiness import build_system_readiness_snapshot
 
 
 alerts_logger = logging.getLogger("risk.alerts")
@@ -276,7 +280,10 @@ def request_audit_metadata(request):
 
 
 def user_has_broad_dashboard_scope(user: User) -> bool:
-    return user.role in [User.ROLE_ADMIN, User.ROLE_ANALYST]
+    return bool(
+        getattr(user, "is_superuser", False)
+        or user.role in [User.ROLE_ADMIN, User.ROLE_ANALYST]
+    )
 
 
 def apply_ward_scope_or_none(queryset, user: User, field_name: str = "ward_id"):
@@ -287,6 +294,40 @@ def apply_ward_scope_or_none(queryset, user: User, field_name: str = "ward_id"):
         return queryset.none()
 
     return queryset.filter(**{field_name: user.ward_id})
+
+
+def operational_kpi_query_params_for_user(request):
+    params = request.query_params.copy()
+    user = request.user
+    if user_has_broad_dashboard_scope(user):
+        return params
+
+    if user.role != User.ROLE_SUPERVISOR:
+        raise PermissionDenied("Operational KPI data is restricted to dashboard users.")
+
+    ward = Ward.objects.filter(id=user.ward_id, is_active=True).first() if user.ward_id else None
+    if ward is None:
+        raise PermissionDenied("Supervisors must be assigned to an active ward to view operational KPI data.")
+
+    requested_ward_id = params.get("ward_id")
+    if requested_ward_id:
+        try:
+            parsed_ward_id = int(requested_ward_id)
+        except (TypeError, ValueError) as error:
+            raise ValueError("ward_id must be an integer.") from error
+        if parsed_ward_id != ward.id:
+            raise PermissionDenied("Operational KPI data is restricted to your assigned ward.")
+
+    requested_sub_county = (params.get("sub_county") or "").strip()
+    if requested_sub_county and requested_sub_county.lower() != (ward.sub_county or "").lower():
+        raise PermissionDenied("Operational KPI data is restricted to your assigned ward.")
+
+    params["ward_id"] = str(ward.id)
+    if ward.sub_county:
+        params["sub_county"] = ward.sub_county
+    elif "sub_county" in params:
+        del params["sub_county"]
+    return params
 
 
 def facility_workflow_states_for_facilities(facilities):
@@ -406,7 +447,10 @@ def facility_readiness_escalation_queryset_for_user(user: User):
 
 
 def user_can_mutate_facility_readiness_review(user: User) -> bool:
-    return user.role in [User.ROLE_ADMIN, User.ROLE_SUPERVISOR]
+    return bool(
+        getattr(user, "is_superuser", False)
+        or user.role in [User.ROLE_ADMIN, User.ROLE_SUPERVISOR]
+    )
 
 
 def chv_assignment_queryset_for_user(user: User):
@@ -798,7 +842,7 @@ class CHVCoverageRequestListCreateAPIView(generics.ListCreateAPIView):
                 IsAdminOrSupervisor(),
                 RequireFreshStepUp(StepUpGrant.PURPOSE_OPERATIONAL_DATA)(),
             ]
-        return [IsAdminSupervisorOrAnalyst()]
+        return [IsAdminOrSupervisor()]
 
     def get_queryset(self):
         queryset = chv_coverage_request_queryset_for_user(self.request.user)
@@ -1065,7 +1109,7 @@ class CHVCoverageRequestFromAlertPrefillAPIView(APIView):
 
 
 class CHVCoverageRequestDetailAPIView(APIView):
-    permission_classes = [IsAdminSupervisorOrAnalyst]
+    permission_classes = [IsAdminOrSupervisor]
 
     def get(self, request, public_id):
         request_record = get_object_or_404(chv_coverage_request_queryset_for_user(request.user), public_id=public_id)
@@ -1379,7 +1423,7 @@ class FacilityReadinessReviewCreateAPIView(APIView):
         except ValueError as exc:
             raise ValidationError({"detail": str(exc)})
 
-        response_serializer = FacilityReadinessReviewSerializer(review)
+        response_serializer = FacilityReadinessReviewSerializer(review, context={"request": request})
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
 
@@ -1397,7 +1441,7 @@ class FacilityReadinessReviewDetailAPIView(APIView):
 
     def get(self, request, public_id):
         review = self.get_review(request, public_id)
-        serializer = FacilityReadinessReviewSerializer(review)
+        serializer = FacilityReadinessReviewSerializer(review, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def patch(self, request, public_id):
@@ -1418,7 +1462,7 @@ class FacilityReadinessReviewDetailAPIView(APIView):
         except ValueError as exc:
             raise ValidationError({"detail": str(exc)})
 
-        response_serializer = FacilityReadinessReviewSerializer(review)
+        response_serializer = FacilityReadinessReviewSerializer(review, context={"request": request})
         return Response(response_serializer.data, status=status.HTTP_200_OK)
 
 
@@ -1442,7 +1486,7 @@ class FacilityReadinessReviewAcknowledgeAPIView(APIView):
         except ValueError as exc:
             raise ValidationError({"detail": str(exc)})
 
-        response_serializer = FacilityReadinessReviewSerializer(review)
+        response_serializer = FacilityReadinessReviewSerializer(review, context={"request": request})
         return Response(response_serializer.data, status=status.HTTP_200_OK)
 
 
@@ -1473,7 +1517,7 @@ class FacilityReadinessUpdateRequestCreateAPIView(APIView):
         except ValueError as exc:
             raise ValidationError({"detail": str(exc)})
 
-        response_serializer = FacilityReadinessUpdateRequestSerializer(update_request)
+        response_serializer = FacilityReadinessUpdateRequestSerializer(update_request, context={"request": request})
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
 
@@ -1528,7 +1572,7 @@ class FacilityReadinessEscalationCreateAPIView(APIView):
         except ValueError as exc:
             raise ValidationError({"detail": str(exc)})
 
-        response_serializer = FacilityReadinessEscalationSerializer(escalation)
+        response_serializer = FacilityReadinessEscalationSerializer(escalation, context={"request": request})
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
 
@@ -1546,7 +1590,7 @@ class FacilityReadinessEscalationDetailAPIView(APIView):
 
     def get(self, request, public_id):
         escalation = self.get_escalation(request, public_id)
-        serializer = FacilityReadinessEscalationSerializer(escalation)
+        serializer = FacilityReadinessEscalationSerializer(escalation, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def patch(self, request, public_id):
@@ -1569,7 +1613,7 @@ class FacilityReadinessEscalationDetailAPIView(APIView):
         except ValueError as exc:
             raise ValidationError({"detail": str(exc)})
 
-        response_serializer = FacilityReadinessEscalationSerializer(escalation)
+        response_serializer = FacilityReadinessEscalationSerializer(escalation, context={"request": request})
         return Response(response_serializer.data, status=status.HTTP_200_OK)
 
 
@@ -2133,7 +2177,10 @@ class PreparednessActionDetailAPIView(APIView):
         return Response(PreparednessActionSerializer(action).data, status=status.HTTP_200_OK)
 
     def patch(self, request, public_id):
-        if request.user.role not in [User.ROLE_ADMIN, User.ROLE_SUPERVISOR]:
+        if not (
+            request.user.is_superuser
+            or request.user.role in [User.ROLE_ADMIN, User.ROLE_SUPERVISOR]
+        ):
             return Response({"detail": "You do not have permission to update preparedness actions."}, status=status.HTTP_403_FORBIDDEN)
 
         action = self.get_action(request, public_id)
@@ -2181,7 +2228,11 @@ class DashboardNotificationListAPIView(APIView):
         except (TypeError, ValueError):
             requested_page_size = 100
         page_size = min(max(requested_page_size, 1), 100)
-        serializer = DashboardNotificationSerializer(queryset[:page_size], many=True)
+        serializer = DashboardNotificationSerializer(
+            queryset[:page_size],
+            many=True,
+            context={"request": request},
+        )
         summary = notification_summary_for_user(request.user)
         return Response(
             {
@@ -2199,7 +2250,7 @@ class DashboardNotificationDetailAPIView(APIView):
     def get(self, request, public_id):
         queryset = notifications_for_user(request.user)
         notification = get_object_or_404(queryset, public_id=public_id)
-        serializer = DashboardNotificationSerializer(notification)
+        serializer = DashboardNotificationSerializer(notification, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
@@ -2235,7 +2286,10 @@ class DashboardNotificationSeenAPIView(APIView):
         queryset = notifications_for_user(request.user)
         notification = get_object_or_404(queryset, public_id=public_id)
         notification = transition_notification(notification, "SEEN", actor=request.user)
-        return Response(DashboardNotificationSerializer(notification).data, status=status.HTTP_200_OK)
+        return Response(
+            DashboardNotificationSerializer(notification, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
 
 
 class DashboardNotificationAcknowledgeAPIView(APIView):
@@ -2247,7 +2301,10 @@ class DashboardNotificationAcknowledgeAPIView(APIView):
         if not notification.requires_acknowledgement:
             return Response({"detail": "This notification does not require acknowledgement."}, status=status.HTTP_400_BAD_REQUEST)
         notification = transition_notification(notification, "ACKNOWLEDGED", actor=request.user)
-        return Response(DashboardNotificationSerializer(notification).data, status=status.HTTP_200_OK)
+        return Response(
+            DashboardNotificationSerializer(notification, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
 
 
 class DashboardNotificationDismissAPIView(APIView):
@@ -2259,7 +2316,10 @@ class DashboardNotificationDismissAPIView(APIView):
         if not notification.dismissible:
             return Response({"detail": "This notification cannot be dismissed."}, status=status.HTTP_400_BAD_REQUEST)
         notification = transition_notification(notification, "DISMISSED", actor=request.user)
-        return Response(DashboardNotificationSerializer(notification).data, status=status.HTTP_200_OK)
+        return Response(
+            DashboardNotificationSerializer(notification, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
 
 
 class DashboardNotificationMarkAllSeenAPIView(APIView):
@@ -2270,7 +2330,11 @@ class DashboardNotificationMarkAllSeenAPIView(APIView):
         for notification in queryset:
             transition_notification(notification, "SEEN", actor=request.user)
         refreshed = notifications_for_user(request.user)
-        serializer = DashboardNotificationSerializer(refreshed[:100], many=True)
+        serializer = DashboardNotificationSerializer(
+            refreshed[:100],
+            many=True,
+            context={"request": request},
+        )
         summary = notification_summary_for_user(request.user)
         return Response(
             {
@@ -2318,7 +2382,7 @@ class OperationalKPIDashboardAPIView(APIView):
 
     def get(self, request):
         try:
-            payload = build_operational_kpi_dashboard(request.query_params)
+            payload = build_operational_kpi_dashboard(operational_kpi_query_params_for_user(request))
         except ValueError as error:
             return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(payload, status=status.HTTP_200_OK)
@@ -2329,12 +2393,13 @@ class OperationalKPIAuditAPIView(APIView):
 
     def get(self, request):
         try:
+            params = operational_kpi_query_params_for_user(request)
             payload = build_operational_kpi_integrity_audit(
-                date_from=request.query_params.get("date_from"),
-                date_to=request.query_params.get("date_to"),
-                ward_id=request.query_params.get("ward_id"),
-                sub_county=request.query_params.get("sub_county", ""),
-                source_channel=request.query_params.get("source_channel", ""),
+                date_from=params.get("date_from"),
+                date_to=params.get("date_to"),
+                ward_id=params.get("ward_id"),
+                sub_county=params.get("sub_county", ""),
+                source_channel=params.get("source_channel", ""),
             )
         except ValueError as error:
             return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
@@ -2349,13 +2414,14 @@ class OperationalKPIMEExportAPIView(APIView):
 
     def get(self, request):
         try:
+            params = operational_kpi_query_params_for_user(request)
             payload = build_operational_kpi_me_export(
-                date_from=request.query_params.get("date_from"),
-                date_to=request.query_params.get("date_to"),
-                ward_id=request.query_params.get("ward_id"),
-                sub_county=request.query_params.get("sub_county", ""),
-                source_channel=request.query_params.get("source_channel", ""),
-                output_format=request.query_params.get("export_format", request.query_params.get("output_format", "json")),
+                date_from=params.get("date_from"),
+                date_to=params.get("date_to"),
+                ward_id=params.get("ward_id"),
+                sub_county=params.get("sub_county", ""),
+                source_channel=params.get("source_channel", ""),
+                output_format=params.get("export_format", params.get("output_format", "json")),
             )
         except ValueError as error:
             return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
@@ -2433,7 +2499,7 @@ class SourceDataOverviewAPIView(SourceDataFeatureGateMixin, APIView):
     permission_classes = [IsAdminSupervisorOrAnalyst]
 
     def get(self, request):
-        return Response(build_source_data_overview_payload(), status=status.HTTP_200_OK)
+        return Response(build_source_data_overview_payload(user=request.user), status=status.HTTP_200_OK)
 
 
 class SourceDataFreshnessAPIView(SourceDataFeatureGateMixin, APIView):
@@ -2461,7 +2527,7 @@ class SourceDataConnectorRegistryAPIView(SourceDataFeatureGateMixin, APIView):
 class SourceDataConnectorRefreshAPIView(SourceDataFeatureGateMixin, APIView):
     source_data_required_features = (FEATURE_SOURCE_DATA_OPS, FEATURE_API_CONNECTORS)
     permission_classes = [
-        IsAdminOrSupervisor,
+        IsAdminOnly,
         RequireFreshStepUp(StepUpGrant.PURPOSE_SOURCE_DATA),
     ]
 
@@ -2563,10 +2629,20 @@ class SourceDataUploadListCreateAPIView(SourceDataFeatureGateMixin, APIView):
 
         source_name = request.query_params.get("source_name")
         if source_name:
+            if not user_can_view_direct_identifiers(request.user):
+                return Response(
+                    {"detail": "Filtering source-data uploads by source name is restricted."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             queryset = queryset.filter(source_name__icontains=source_name.strip())
 
         actor = request.query_params.get("actor")
         if actor:
+            if not user_can_view_direct_identifiers(request.user):
+                return Response(
+                    {"detail": "Filtering source-data uploads by actor is restricted."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             actor = actor.strip()
             queryset = queryset.filter(
                 Q(created_by__username__icontains=actor)
@@ -2600,7 +2676,7 @@ class SourceDataUploadListCreateAPIView(SourceDataFeatureGateMixin, APIView):
             "count": queryset.count(),
             "results": list(queryset[:limit]),
         }
-        serializer = SourceDataUploadListResponseSerializer(payload)
+        serializer = SourceDataUploadListResponseSerializer(payload, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def post(self, request):
@@ -2625,7 +2701,10 @@ class SourceDataUploadListCreateAPIView(SourceDataFeatureGateMixin, APIView):
             },
         )
         batch = _source_data_upload_batch_or_404(batch.public_id)
-        return Response(SourceDataUploadBatchSerializer(batch).data, status=status.HTTP_201_CREATED)
+        return Response(
+            SourceDataUploadBatchSerializer(batch, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class SourceDataUploadDetailAPIView(SourceDataFeatureGateMixin, APIView):
@@ -2633,7 +2712,10 @@ class SourceDataUploadDetailAPIView(SourceDataFeatureGateMixin, APIView):
 
     def get(self, request, public_id):
         batch = _source_data_upload_batch_or_404(public_id)
-        return Response(SourceDataUploadBatchSerializer(batch).data, status=status.HTTP_200_OK)
+        return Response(
+            SourceDataUploadBatchSerializer(batch, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
 
 
 class SourceDataUploadValidateAPIView(SourceDataFeatureGateMixin, APIView):
@@ -2684,7 +2766,10 @@ class SourceDataUploadValidateAPIView(SourceDataFeatureGateMixin, APIView):
             },
         )
         validated_batch = _source_data_upload_batch_or_404(validated_batch.public_id)
-        return Response(SourceDataUploadBatchSerializer(validated_batch).data, status=status.HTTP_200_OK)
+        return Response(
+            SourceDataUploadBatchSerializer(validated_batch, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
 
 
 class SourceDataUploadApprovalAPIView(SourceDataFeatureGateMixin, APIView):
@@ -2700,6 +2785,14 @@ class SourceDataUploadApprovalAPIView(SourceDataFeatureGateMixin, APIView):
         serializer.is_valid(raise_exception=True)
         action = serializer.validated_data["action"]
         reason = serializer.validated_data.get("reason", "")
+        if action in {
+            SourceDataUploadApprovalActionSerializer.ACTION_APPROVE,
+            SourceDataUploadApprovalActionSerializer.ACTION_REJECT,
+        } and not (request.user.is_superuser or request.user.role == User.ROLE_ADMIN):
+            return Response(
+                {"detail": "Only admins can approve or reject risky source-data imports."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         try:
             if action == SourceDataUploadApprovalActionSerializer.ACTION_REQUEST:
@@ -2731,7 +2824,10 @@ class SourceDataUploadApprovalAPIView(SourceDataFeatureGateMixin, APIView):
             },
         )
         updated_batch = _source_data_upload_batch_or_404(updated_batch.public_id)
-        return Response(SourceDataUploadBatchSerializer(updated_batch).data, status=status.HTTP_200_OK)
+        return Response(
+            SourceDataUploadBatchSerializer(updated_batch, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
 
 
 class SourceDataUploadConfirmAPIView(SourceDataFeatureGateMixin, APIView):
@@ -2773,7 +2869,10 @@ class SourceDataUploadConfirmAPIView(SourceDataFeatureGateMixin, APIView):
             if confirmed_batch.status == SourceDataUploadBatch.STATUS_CONFIRMING
             else status.HTTP_200_OK
         )
-        return Response(SourceDataUploadBatchSerializer(confirmed_batch).data, status=response_status)
+        return Response(
+            SourceDataUploadBatchSerializer(confirmed_batch, context={"request": request}).data,
+            status=response_status,
+        )
 
 
 class SourceDataUploadCancelAPIView(SourceDataFeatureGateMixin, APIView):
@@ -2808,7 +2907,10 @@ class SourceDataUploadCancelAPIView(SourceDataFeatureGateMixin, APIView):
             },
         )
         cancelled_batch = _source_data_upload_batch_or_404(cancelled_batch.public_id)
-        return Response(SourceDataUploadBatchSerializer(cancelled_batch).data, status=status.HTTP_200_OK)
+        return Response(
+            SourceDataUploadBatchSerializer(cancelled_batch, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
 
 
 def _source_data_downstream_options(validated_data: dict) -> dict:
@@ -2888,7 +2990,7 @@ class SourceDataUploadDownstreamActionsAPIView(SourceDataFeatureGateMixin, APIVi
             return Response(
                 {
                     **queued_result,
-                    "batch": SourceDataUploadBatchSerializer(batch).data,
+                    "batch": SourceDataUploadBatchSerializer(batch, context={"request": request}).data,
                 },
                 status=status.HTTP_202_ACCEPTED,
             )
@@ -2907,7 +3009,7 @@ class SourceDataUploadDownstreamActionsAPIView(SourceDataFeatureGateMixin, APIVi
         return Response(
             {
                 **result,
-                "batch": SourceDataUploadBatchSerializer(batch).data,
+                "batch": SourceDataUploadBatchSerializer(batch, context={"request": request}).data,
             },
             status=status.HTTP_200_OK,
         )
@@ -2918,7 +3020,7 @@ class SourceDataUploadErrorsFileAPIView(SourceDataFeatureGateMixin, APIView):
 
     def get(self, request, public_id):
         batch = _source_data_upload_batch_or_404(public_id)
-        errors_file = build_source_data_upload_errors_csv(batch)
+        errors_file = build_source_data_upload_errors_csv(batch, user=request.user)
         record_source_data_upload_event(
             request=request,
             batch=batch,
@@ -2937,11 +3039,11 @@ class InteroperabilityDashboardAPIView(APIView):
     permission_classes = [IsAdminSupervisorOrAnalyst]
 
     def get(self, request):
-        return Response(build_interoperability_dashboard_snapshot(), status=status.HTTP_200_OK)
+        return Response(build_interoperability_dashboard_snapshot(user=request.user), status=status.HTTP_200_OK)
 
 
 class InteroperabilityRunDetailAPIView(APIView):
-    permission_classes = [IsAdminSupervisorOrAnalyst]
+    permission_classes = [IsAdminOrSupervisor]
 
     def get(self, request, public_id):
         run = get_object_or_404(
@@ -3007,7 +3109,7 @@ class InteroperabilityRunRetryAPIView(APIView):
 
 
 class InteroperabilityRunErrorFileAPIView(APIView):
-    permission_classes = [IsAdminSupervisorOrAnalyst]
+    permission_classes = [IsAdminOrSupervisor]
 
     def get(self, request, public_id):
         run = get_object_or_404(InteroperabilityRun, public_id=public_id)
@@ -3163,7 +3265,7 @@ class TriggerAlertContextAPIView(APIView):
 
         queryset = Ward.objects.filter(is_active=True).order_by("name")
         user = request.user
-        if user.role != User.ROLE_ADMIN:
+        if not user_is_admin_equivalent(user):
             queryset = apply_ward_scope_or_none(queryset, user, field_name="id")
 
         ward_id = serializer.validated_data.get("ward_id")
@@ -3189,7 +3291,7 @@ class TriggerAlertPreviewAPIView(APIView):
 
         queryset = Ward.objects.filter(is_active=True).order_by("name")
         user = request.user
-        if user.role != User.ROLE_ADMIN:
+        if not user_is_admin_equivalent(user):
             queryset = apply_ward_scope_or_none(queryset, user, field_name="id")
 
         ward = queryset.filter(id=serializer.validated_data["ward_id"]).first()
@@ -3232,7 +3334,7 @@ class TriggerAlertsAPIView(APIView):
 
         queryset = RiskScore.objects.select_related("ward", "model_run").all()
         user = request.user
-        if user.role != User.ROLE_ADMIN:
+        if not user_is_admin_equivalent(user):
             queryset = apply_ward_scope_or_none(queryset, user)
 
         queryset = queryset.filter(ward_id=ward_id)
@@ -3348,9 +3450,20 @@ class SystemControlStatusAPIView(APIView):
     permission_classes = [IsAdminSupervisorOrAnalyst]
 
     def get(self, request):
-        can_write = getattr(request.user, "role", None) == User.ROLE_ADMIN
+        can_write = bool(
+            getattr(request.user, "is_superuser", False)
+            or getattr(request.user, "role", None) == User.ROLE_ADMIN
+        )
         payload = build_system_control_status(can_write=can_write)
         return Response(SystemControlStatusSerializer(payload).data, status=status.HTTP_200_OK)
+
+
+class SystemReadinessAPIView(APIView):
+    permission_classes = [IsAdminSupervisorOrAnalyst]
+
+    def get(self, request):
+        payload = build_system_readiness_snapshot(request.user)
+        return Response(SystemReadinessSerializer(payload).data, status=status.HTTP_200_OK)
 
 
 class SystemRetryControlsAPIView(APIView):

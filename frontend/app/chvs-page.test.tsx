@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import ChvsPage from "@/app/(dashboard)/chvs/page";
+import { buildDashboardUser } from "@/test/dashboard-user";
 
 const mockUseAuth = vi.fn();
 const mockUseChvOperationsQuery = vi.fn();
@@ -213,10 +214,6 @@ vi.mock("@/components/dashboard-topbar", () => ({
     ),
 }));
 
-vi.mock("@/components/role-gate", () => ({
-  RoleGate: ({ children }: { children: React.ReactNode }) => React.createElement(React.Fragment, null, children),
-}));
-
 vi.mock("@/components/migori-ward-map", () => ({
   MigoriWardMap: ({
     features,
@@ -275,18 +272,14 @@ describe("ChvsPage", () => {
     vi.clearAllMocks();
 
     mockUseAuth.mockReturnValue({
-      currentUser: {
-        id: 1,
+      currentUser: buildDashboardUser("ADMIN", {
         username: "admin",
         email: "admin@example.com",
         full_name: "Admin User",
-        phone_number: null,
-        role: "ADMIN",
         theme_preference: "LIGHT",
         ward: null,
         ward_name: null,
-        is_active: true,
-      },
+      }),
     });
 
     mockUseChvOperationsQuery.mockReturnValue({
@@ -503,6 +496,25 @@ describe("ChvsPage", () => {
     expect(screen.queryByText("Alert delivery rate")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Planning Summary" })).not.toBeInTheDocument();
     expect(screen.getByText(/Gap means no active CHV coverage/i)).toBeInTheDocument();
+  }, 20000);
+
+  it("blocks analysts through the real CHV operations page capability gate", () => {
+    mockUseAuth.mockReturnValue({
+      currentUser: buildDashboardUser("ANALYST", {
+        username: "analyst",
+        email: "analyst@example.com",
+        full_name: "Analyst User",
+        theme_preference: "LIGHT",
+        ward: null,
+        ward_name: null,
+      }),
+    });
+
+    render(React.createElement(ChvsPage));
+
+    expect(screen.getByText("CHV operations are role-restricted")).toBeInTheDocument();
+    expect(screen.getByText("This route exists, but your current role does not have access to it.")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "CHV Directory" })).not.toBeInTheDocument();
   }, 20000);
 
   it("renders offline sync monitoring metrics and backend decisions", () => {

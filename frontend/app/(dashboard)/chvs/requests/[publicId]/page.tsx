@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { StatusBanner } from "@/components/ui/status-banner";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { hasActionCapability } from "@/lib/capabilities";
 import { type ChvCoverageRequestRecord } from "@/lib/dashboard";
 import { formatRelativeTimestamp } from "@/lib/freshness";
 import { useAssignChvCoverageRequestMutation } from "@/queries/use-assign-chv-coverage-request-mutation";
@@ -62,7 +63,7 @@ export default function ChvCoverageRequestPage() {
   const [feedback, setFeedback] = useState<string | null>(null);
 
   const publicId = useMemo(() => params.publicId ?? null, [params.publicId]);
-  const canManageAssignments = currentUser?.role === "ADMIN" || currentUser?.role === "SUPERVISOR";
+  const canManageAssignments = hasActionCapability(currentUser, "manage_chv_operations");
   const detailQuery = useChvCoverageRequestDetailQuery({
     publicId,
     enabled: Boolean(currentUser) && Boolean(publicId),

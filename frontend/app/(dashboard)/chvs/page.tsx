@@ -881,7 +881,7 @@ export default function ChvsPage() {
       />
 
       <RoleGate
-        allowedRoles={["ADMIN", "SUPERVISOR"]}
+        pageCapability="chv_operations"
         title="CHV operations are role-restricted"
         message="Only Admin and Supervisor roles should use the CHV operations page."
       >

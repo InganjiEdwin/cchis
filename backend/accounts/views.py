@@ -1557,38 +1557,60 @@ class LogoutAPIView(APIView):
 
     def post(self, request):
         refresh_token = get_refresh_cookie_value(request)
+        current_session = get_current_request_session(request)
 
-        if not refresh_token:
-            response = Response(
-                {"detail": "Refresh session is missing or expired."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-            clear_auth_cookies(response)
-            return response
-
-        try:
-            token = RefreshToken(refresh_token)
-            revoke_session_from_refresh_token(
-                refresh_token,
-                request,
+        if current_session:
+            blacklisted_count = blacklist_known_refresh_tokens_for_session(current_session)
+            revoke_session(
+                current_session,
+                request=request,
                 revoked_by=request.user,
                 reason="logout",
+                metadata={"blacklisted_tokens": blacklisted_count},
             )
-            token.blacklist()
-        except TokenError:
+        elif not refresh_token:
             record_auth_event(
                 request=request,
                 event_type=AuthAuditEvent.EVENT_LOGOUT,
                 status=AuthAuditEvent.STATUS_FAILED,
                 actor=request.user,
                 target_user=request.user,
+                metadata={"reason": "missing_session"},
             )
             response = Response(
-                {"detail": "Invalid or expired refresh token."},
-                status=400,
+                {"detail": "Current session is missing or expired."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
             clear_auth_cookies(response)
             return response
+
+        if refresh_token and not current_session:
+            try:
+                token = RefreshToken(refresh_token)
+                if str(token.get("user_id")) != str(request.user.id):
+                    raise TokenError("Refresh token user mismatch.")
+                revoke_session_from_refresh_token(
+                    refresh_token,
+                    request,
+                    revoked_by=request.user,
+                    reason="logout",
+                )
+                token.blacklist()
+            except TokenError:
+                record_auth_event(
+                    request=request,
+                    event_type=AuthAuditEvent.EVENT_LOGOUT,
+                    status=AuthAuditEvent.STATUS_FAILED,
+                    actor=request.user,
+                    target_user=request.user,
+                    metadata={"reason": "invalid_refresh"},
+                )
+                response = Response(
+                    {"detail": "Invalid or expired refresh token."},
+                    status=400,
+                )
+                clear_auth_cookies(response)
+                return response
 
         record_auth_event(
             request=request,

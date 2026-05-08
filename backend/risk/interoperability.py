@@ -30,6 +30,7 @@ from .models import (
     RiskScore,
     Ward,
 )
+from accounts.models import User
 
 
 INTEROPERABILITY_DASHBOARD_SCHEMA_VERSION = "interoperability-contracts-v1"
@@ -1678,7 +1679,18 @@ def build_interoperability_error_file(run: InteroperabilityRun) -> dict[str, str
     }
 
 
-def _system_payload(system: ExternalSystem) -> dict[str, Any]:
+def _user_can_view_interoperability_operational_details(user) -> bool:
+    return bool(
+        user
+        and getattr(user, "is_authenticated", False)
+        and (
+            getattr(user, "is_superuser", False)
+            or getattr(user, "role", None) in {User.ROLE_ADMIN, User.ROLE_SUPERVISOR}
+        )
+    )
+
+
+def _system_payload(system: ExternalSystem, *, include_operational_details: bool = True) -> dict[str, Any]:
     return {
         "public_id": str(system.public_id),
         "system_key": system.system_key,
@@ -1686,8 +1698,8 @@ def _system_payload(system: ExternalSystem) -> dict[str, Any]:
         "system_type": system.system_type,
         "owner": system.owner,
         "default_exchange_format": system.default_exchange_format,
-        "auth_config_reference": system.auth_config_reference,
-        "api_base_url": system.api_base_url,
+        "auth_config_reference": system.auth_config_reference if include_operational_details else "",
+        "api_base_url": system.api_base_url if include_operational_details else "",
         "status": system.status,
         "created_at": system.created_at.isoformat(),
         "updated_at": system.updated_at.isoformat(),
@@ -1754,7 +1766,36 @@ def _run_error_payload(error: InteroperabilityRunError) -> dict[str, Any]:
     }
 
 
-def _run_payload(run: InteroperabilityRun, *, include_children: bool = True) -> dict[str, Any]:
+def _analyst_safe_dry_run_preview(preview: dict[str, Any]) -> dict[str, Any]:
+    allowed_keys = {
+        "schema_version",
+        "records_seen",
+        "records_accepted",
+        "records_rejected",
+        "accepted_rows",
+        "rejected_rows",
+        "mapping_coverage",
+        "mapping_coverage_report",
+        "confirmable",
+        "operator_confirmation_required",
+        "confirmation_error",
+        "mutation_allowed",
+        "mutation_performed",
+        "next_action",
+        "missing_columns",
+        "missing_required_fields",
+    }
+    return {key: value for key, value in (preview or {}).items() if key in allowed_keys}
+
+
+def _run_payload(
+    run: InteroperabilityRun,
+    *,
+    include_children: bool = True,
+    include_operational_details: bool = True,
+    include_child_keys: bool | None = None,
+) -> dict[str, Any]:
+    include_child_keys = include_children if include_child_keys is None else include_child_keys
     payload = {
         "public_id": str(run.public_id),
         "direction": run.direction,
@@ -1765,17 +1806,17 @@ def _run_payload(run: InteroperabilityRun, *, include_children: bool = True) -> 
         "retry_of": str(run.retry_of.public_id) if run.retry_of else None,
         "status": run.status,
         "dry_run": run.dry_run,
-        "source_file_name": run.source_file_name,
-        "endpoint_url": run.endpoint_url,
-        "source_reference": interoperability_run_source_reference(run),
+        "source_file_name": run.source_file_name if include_operational_details else "",
+        "endpoint_url": run.endpoint_url if include_operational_details else "",
+        "source_reference": interoperability_run_source_reference(run) if include_operational_details else "",
         "records_seen": run.records_seen,
         "records_accepted": run.records_accepted,
         "records_rejected": run.records_rejected,
         "mapping_coverage": run.mapping_coverage,
-        "operator_username": run.operator.username if run.operator else "",
+        "operator_username": run.operator.username if include_operational_details and run.operator else "",
         "error_summary": run.error_summary,
-        "dry_run_preview": run.dry_run_preview,
-        "export_payload": run.export_payload,
+        "dry_run_preview": run.dry_run_preview if include_operational_details else _analyst_safe_dry_run_preview(run.dry_run_preview),
+        "export_payload": run.export_payload if include_operational_details else {},
         "started_at": run.started_at.isoformat(),
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
         "created_at": run.created_at.isoformat(),
@@ -1784,6 +1825,9 @@ def _run_payload(run: InteroperabilityRun, *, include_children: bool = True) -> 
     if include_children:
         payload["items"] = [_run_item_payload(item) for item in run.items.all()[:25]]
         payload["errors"] = [_run_error_payload(error) for error in run.errors.all()[:25]]
+    elif include_child_keys:
+        payload["items"] = []
+        payload["errors"] = []
     return payload
 
 
@@ -1880,7 +1924,10 @@ def build_interoperability_audit_checks() -> list[dict[str, Any]]:
     ]
 
 
-def build_interoperability_dashboard_snapshot() -> dict[str, Any]:
+def build_interoperability_dashboard_snapshot(user=None) -> dict[str, Any]:
+    include_operational_details = (
+        True if user is None else _user_can_view_interoperability_operational_details(user)
+    )
     systems = list(ExternalSystem.objects.order_by("system_key")[:50])
     versions = list(
         InteroperabilityMappingVersion.objects.select_related("system", "reviewed_by").order_by("-created_at")[:50]
@@ -1928,10 +1975,21 @@ def build_interoperability_dashboard_snapshot() -> dict[str, Any]:
             "run_status_counts": run_status_counts,
             "audit_status": "pass" if all(check["status"] == "PASS" for check in audit_checks) else "fail",
         },
-        "systems": [_system_payload(system) for system in systems],
+        "systems": [
+            _system_payload(system, include_operational_details=include_operational_details)
+            for system in systems
+        ],
         "mapping_versions": [_mapping_version_payload(version) for version in versions],
         "org_unit_mappings": [_org_mapping_payload(mapping) for mapping in org_mappings],
-        "runs": [_run_payload(run) for run in runs],
+        "runs": [
+            _run_payload(
+                run,
+                include_children=include_operational_details,
+                include_operational_details=include_operational_details,
+                include_child_keys=True,
+            )
+            for run in runs
+        ],
         "audit_checks": audit_checks,
     }
 

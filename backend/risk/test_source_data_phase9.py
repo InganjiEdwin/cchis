@@ -123,7 +123,7 @@ class SourceDataPhaseNineConnectorIntegrationTests(APITestCase):
 
     def test_connector_refresh_creates_validated_upload_with_same_canonical_checks(self):
         self.write_connector_fixture("dhis2_surveillance_weekly", self.weekly_csv())
-        force_authenticate_with_step_up(self.client, self.supervisor, StepUpGrant.PURPOSE_SOURCE_DATA)
+        force_authenticate_with_step_up(self.client, self.admin, StepUpGrant.PURPOSE_SOURCE_DATA)
 
         response = self.client.post(
             reverse("source-data-connector-refresh", kwargs={"connector_key": "dhis2_surveillance_weekly"}),
@@ -147,7 +147,7 @@ class SourceDataPhaseNineConnectorIntegrationTests(APITestCase):
 
     def test_worldpop_connector_refresh_uses_generated_migori_fixture_alias(self):
         self.write_connector_fixture("migori_worldpop_2026_population", self.worldpop_csv())
-        force_authenticate_with_step_up(self.client, self.supervisor, StepUpGrant.PURPOSE_SOURCE_DATA)
+        force_authenticate_with_step_up(self.client, self.admin, StepUpGrant.PURPOSE_SOURCE_DATA)
 
         with self.settings(
             SOURCE_DATA_WORLDPOP_KNBS_SOURCE_URL=(
@@ -177,7 +177,7 @@ class SourceDataPhaseNineConnectorIntegrationTests(APITestCase):
 
     def test_connector_failure_is_audited_and_uses_validation_diagnostics(self):
         self.write_connector_fixture("dhis2_surveillance_weekly", self.weekly_csv(notes="call +254712345678"))
-        force_authenticate_with_step_up(self.client, self.supervisor, StepUpGrant.PURPOSE_SOURCE_DATA)
+        force_authenticate_with_step_up(self.client, self.admin, StepUpGrant.PURPOSE_SOURCE_DATA)
 
         response = self.client.post(
             reverse("source-data-connector-refresh", kwargs={"connector_key": "dhis2_surveillance_weekly"}),
@@ -195,7 +195,7 @@ class SourceDataPhaseNineConnectorIntegrationTests(APITestCase):
 
     def test_connector_refresh_options_use_same_pii_safe_metadata_guard(self):
         self.write_connector_fixture("dhis2_surveillance_weekly", self.weekly_csv())
-        force_authenticate_with_step_up(self.client, self.supervisor, StepUpGrant.PURPOSE_SOURCE_DATA)
+        force_authenticate_with_step_up(self.client, self.admin, StepUpGrant.PURPOSE_SOURCE_DATA)
 
         response = self.client.post(
             reverse("source-data-connector-refresh", kwargs={"connector_key": "dhis2_surveillance_weekly"}),
@@ -242,11 +242,17 @@ class SourceDataPhaseNineConnectorIntegrationTests(APITestCase):
         self.assertEqual(upload_response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("CSV uploads are disabled", str(upload_response.data))
 
-    def test_connector_registry_is_readable_but_refresh_is_restricted(self):
+    def test_connector_registry_is_readable_but_refresh_is_restricted_to_admin(self):
         self.client.force_authenticate(self.analyst)
 
         registry_response = self.client.get(reverse("source-data-connectors"))
-        refresh_response = self.client.post(
+        analyst_refresh_response = self.client.post(
+            reverse("source-data-connector-refresh", kwargs={"connector_key": "dhis2_surveillance_weekly"}),
+            {},
+            format="json",
+        )
+        force_authenticate_with_step_up(self.client, self.supervisor, StepUpGrant.PURPOSE_SOURCE_DATA)
+        supervisor_refresh_response = self.client.post(
             reverse("source-data-connector-refresh", kwargs={"connector_key": "dhis2_surveillance_weekly"}),
             {},
             format="json",
@@ -254,7 +260,8 @@ class SourceDataPhaseNineConnectorIntegrationTests(APITestCase):
 
         self.assertEqual(registry_response.status_code, status.HTTP_200_OK)
         self.assertEqual(registry_response.data["schema_version"], "source-data-connector-registry-v1")
-        self.assertEqual(refresh_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(analyst_refresh_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(supervisor_refresh_response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_api_connector_flag_gates_connector_surface_and_restores_csv_fallback(self):
         SourceDataFeedModeOverride.objects.create(

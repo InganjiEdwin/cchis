@@ -6,12 +6,94 @@ PHONE_IN_TEXT_PATTERN = re.compile(r"(?<!\d)(?:\+?254|0)\s?[17]\d{2}[\s-]?\d{3}[
 EMAIL_CANDIDATE_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 EMAIL_IN_TEXT_PATTERN = re.compile(r"\b[^@\s]+@[^@\s]+\.[^@\s]+\b")
 
+DIRECT_IDENTIFIER_METADATA_KEYS = {
+    "address",
+    "caregiver_name",
+    "child_name",
+    "contact",
+    "contact_email",
+    "contact_phone",
+    "date_of_birth",
+    "dob",
+    "email",
+    "external_id",
+    "first_name",
+    "full_name",
+    "gps",
+    "household_head_name",
+    "id_number",
+    "last_name",
+    "mother_name",
+    "name",
+    "national_id",
+    "passport_number",
+    "patient_name",
+    "phone",
+    "phone_number",
+    "precise_location",
+    "provider_reference",
+    "recipient",
+    "recipient_email",
+    "recipient_phone",
+}
+DIRECT_REFERENCE_METADATA_KEYS = {
+    "actor_id",
+    "audit_event_public_id",
+    "contact_public_id",
+    "contact_reference",
+    "coverage_event_public_id",
+    "coverage_request_public_id",
+    "facility_contact_public_id",
+    "preference_public_id",
+    "provider_reference",
+    "source_reference",
+}
+DIRECT_IDENTIFIER_SUBJECT_TOKENS = {
+    "caregiver",
+    "child",
+    "client",
+    "father",
+    "household",
+    "mother",
+    "patient",
+    "person",
+}
+
+
+def metadata_key_is_direct_reference(key: str) -> bool:
+    normalized_key = str(key).lower()
+    key_parts = set(normalized_key.split("_"))
+    return normalized_key in DIRECT_REFERENCE_METADATA_KEYS or (
+        "public" in key_parts and "id" in key_parts and {"ward", "risk", "score"}.isdisjoint(key_parts)
+    )
+
+
+def metadata_key_is_direct_identifier(key: str) -> bool:
+    normalized_key = str(key).lower()
+    key_parts = set(normalized_key.split("_"))
+    if normalized_key in DIRECT_IDENTIFIER_METADATA_KEYS:
+        return True
+    if key_parts & {"email", "phone", "mobile", "msisdn", "address", "gps"}:
+        return True
+    if key_parts & {"national", "passport"} and "id" in key_parts:
+        return True
+    if {"birth", "date"}.issubset(key_parts) or "dob" in key_parts:
+        return True
+    if "name" in key_parts and key_parts & DIRECT_IDENTIFIER_SUBJECT_TOKENS:
+        return True
+    if "id" in key_parts and key_parts & DIRECT_IDENTIFIER_SUBJECT_TOKENS:
+        return True
+    return False
+
 
 def user_can_view_direct_identifiers(user) -> bool:
     return bool(
         user
         and getattr(user, "is_authenticated", False)
-        and getattr(user, "role", None) in {"ADMIN", "SUPERVISOR"}
+        and (
+            getattr(user, "is_superuser", False)
+            or getattr(user, "role", None) in {"ADMIN", "SUPERVISOR"}
+        )
     )
 
 

@@ -29,6 +29,10 @@ from risk.models import (
     SurveillanceRecord,
     SurveillanceTruthLevel,
 )
+from risk.privacy_access import (
+    redact_direct_identifiers_in_text,
+    user_can_view_direct_identifiers,
+)
 from risk.source_data.phase0 import (
     INGESTION_FAMILY_FACILITY_READINESS,
     INGESTION_FAMILY_POPULATION_EXPOSURE,
@@ -487,13 +491,19 @@ def build_source_data_freshness_payload() -> dict[str, Any]:
     }
 
 
-def _recent_upload_record(batch: SourceDataUploadBatch) -> dict[str, Any]:
+def _redact_recent_upload_text(value: str | None, *, user=None) -> str | None:
+    if value is None or user_can_view_direct_identifiers(user):
+        return value
+    return redact_direct_identifiers_in_text(value, can_view=False)
+
+
+def _recent_upload_record(batch: SourceDataUploadBatch, *, user=None) -> dict[str, Any]:
     return {
         "public_id": str(batch.public_id),
         "feed_key": batch.feed_key,
         "domain": batch.domain,
         "source_type": batch.source_type,
-        "source_name": batch.source_name,
+        "source_name": _redact_recent_upload_text(batch.source_name, user=user),
         "status": batch.status,
         "validation_status": batch.validation_status,
         "import_status": batch.import_status,
@@ -501,14 +511,22 @@ def _recent_upload_record(batch: SourceDataUploadBatch) -> dict[str, Any]:
         "accepted_count": batch.accepted_count,
         "rejected_count": batch.rejected_count,
         "warning_count": batch.warning_count,
-        "created_by_username": batch.created_by.username if batch.created_by_id else None,
-        "confirmed_by_username": batch.confirmed_by.username if batch.confirmed_by_id else None,
+        "created_by_username": (
+            _redact_recent_upload_text(batch.created_by.username, user=user)
+            if batch.created_by_id
+            else None
+        ),
+        "confirmed_by_username": (
+            _redact_recent_upload_text(batch.confirmed_by.username, user=user)
+            if batch.confirmed_by_id
+            else None
+        ),
         "created_at": _iso(batch.created_at),
         "confirmed_at": _iso(batch.confirmed_at),
     }
 
 
-def build_source_data_overview_payload() -> dict[str, Any]:
+def build_source_data_overview_payload(*, user=None) -> dict[str, Any]:
     freshness = build_source_data_freshness_payload()
     feed_statuses = [source for source in freshness["sources"] if source["key"].startswith("feed:")]
     source_gaps = [
@@ -524,7 +542,7 @@ def build_source_data_overview_payload() -> dict[str, Any]:
         if source["status"] in {STATUS_MISSING, STATUS_STALE, STATUS_DEMO_BACKED, STATUS_FAILED}
     ]
     recent_uploads = [
-        _recent_upload_record(batch)
+        _recent_upload_record(batch, user=user)
         for batch in SourceDataUploadBatch.objects.select_related("created_by", "confirmed_by").order_by("-created_at")[:10]
     ]
     return {

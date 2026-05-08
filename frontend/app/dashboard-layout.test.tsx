@@ -1,5 +1,9 @@
+import { readFileSync } from "node:fs";
+
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { buildDashboardUser } from "@/test/dashboard-user";
 
 const mockRedirect = vi.fn();
 const mockFetchServerSession = vi.fn();
@@ -45,17 +49,11 @@ describe("DashboardLayout", () => {
       authenticated: true,
       access: null,
       session_source: "refresh",
-      user: {
-        id: 1,
+      user: buildDashboardUser("ANALYST", {
         username: "analyst",
         email: "analyst@example.com",
         full_name: "Analyst",
-        phone_number: null,
-        role: "ANALYST",
         theme_preference: "SYSTEM",
-        ward: null,
-        ward_name: null,
-        is_active: true,
         policy_acceptance: {
           required: true,
           is_current: false,
@@ -70,7 +68,7 @@ describe("DashboardLayout", () => {
           privacy_url: "/privacy",
           cookie_notice_url: "/privacy#cookies",
         },
-      },
+      }),
     });
 
     const { default: DashboardLayout } = await import("@/app/(dashboard)/layout");
@@ -80,5 +78,41 @@ describe("DashboardLayout", () => {
     );
 
     expect(mockRedirect).toHaveBeenCalledWith("/policy-review?returnTo=%2Fwards%2F12%3Ftab%3Dactions");
+  });
+
+  it("redirects CHV users away from the dashboard shell", async () => {
+    mockFetchServerSession.mockResolvedValue({
+      authenticated: true,
+      access: null,
+      session_source: "refresh",
+      user: buildDashboardUser("CHV"),
+    });
+
+    const { default: DashboardLayout } = await import("@/app/(dashboard)/layout");
+
+    await expect(DashboardLayout({ children: React.createElement("div", null, "Body") })).rejects.toThrow(
+      "NEXT_REDIRECT",
+    );
+
+    expect(mockRedirect).toHaveBeenCalledWith("/unauthorized");
+  });
+
+  it("keeps dashboard page authorization display free of browser role storage", () => {
+    const dashboardPageFiles = [
+      "./(dashboard)/layout.tsx",
+      "./(dashboard)/alerts/page.tsx",
+      "./(dashboard)/wards/[id]/page.tsx",
+      "./(dashboard)/preparedness-actions/page.tsx",
+      "./(dashboard)/chvs/page.tsx",
+      "./(dashboard)/facility-readiness/page.tsx",
+      "./(dashboard)/source-data/page.tsx",
+      "./(dashboard)/message-governance/page.tsx",
+      "./(dashboard)/system/page.tsx",
+    ];
+
+    for (const file of dashboardPageFiles) {
+      const source = readFileSync(new URL(file, import.meta.url), "utf8");
+      expect(source, file).not.toMatch(/(?:localStorage|sessionStorage)/);
+    }
   });
 });

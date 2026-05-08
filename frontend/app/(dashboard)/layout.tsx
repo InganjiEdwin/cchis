@@ -3,9 +3,9 @@ import { redirect } from "next/navigation";
 
 import { ProtectedShell } from "@/components/protected-shell";
 import { requiresPolicyAcceptance } from "@/lib/auth";
+import { hasPageCapability } from "@/lib/capabilities";
 import { buildPolicyReviewRoute } from "@/lib/navigation";
 import { fetchServerSession } from "@/lib/server-session";
-import { isDashboardRole } from "@/lib/roles";
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const session = await fetchServerSession({ allowRefreshBootstrap: false });
@@ -14,7 +14,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
     return <ProtectedShell>{children}</ProtectedShell>;
   }
 
-  if (!isDashboardRole(session.user.role)) {
+  if (!hasPageCapability(session.user, "dashboard")) {
     redirect("/unauthorized");
   }
 

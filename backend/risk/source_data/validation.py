@@ -17,6 +17,15 @@ from risk.models import (
     SourceDataUploadBatch,
     SourceDataValidationIssue,
 )
+from risk.privacy_access import (
+    EMAIL_CANDIDATE_PATTERN,
+    PHONE_CANDIDATE_PATTERN,
+    mask_contact_value,
+    metadata_key_is_direct_identifier,
+    metadata_key_is_direct_reference,
+    redact_direct_identifiers_in_text,
+    user_can_view_direct_identifiers,
+)
 from risk.facility_readiness_ingestion import inspect_facility_readiness_snapshot_csv
 from risk.population_exposure_ingestion import inspect_population_exposure_csv
 from risk.privacy_minimization import unsafe_pii_findings_in_text
@@ -935,25 +944,61 @@ def validate_source_data_upload_batch(batch: SourceDataUploadBatch) -> SourceDat
     return batch
 
 
-def build_source_data_upload_errors_csv(batch: SourceDataUploadBatch) -> dict[str, Any]:
+def _redact_source_data_diagnostic_value(value):
+    if isinstance(value, dict):
+        return {
+            key: _redact_source_data_diagnostic_field(key, nested_value)
+            for key, nested_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_source_data_diagnostic_value(item) for item in value]
+    if isinstance(value, str):
+        if PHONE_CANDIDATE_PATTERN.match(value) or EMAIL_CANDIDATE_PATTERN.match(value):
+            return mask_contact_value(value)
+        return redact_direct_identifiers_in_text(value, can_view=False)
+    return value
+
+
+def _redact_source_data_diagnostic_field(key: str, value):
+    if metadata_key_is_direct_reference(key):
+        return ""
+    if metadata_key_is_direct_identifier(key):
+        key_parts = set(str(key).lower().split("_"))
+        if isinstance(value, str) and key_parts & {"contact", "email", "phone", "recipient"}:
+            return mask_contact_value(value)
+        return ""
+    return _redact_source_data_diagnostic_value(value)
+
+
+def _source_data_error_row_for_issue(issue: SourceDataValidationIssue, *, can_view_direct_identifiers: bool) -> dict[str, Any]:
+    if can_view_direct_identifiers:
+        message = issue.message
+        safe_context = issue.safe_context or {}
+    else:
+        message = redact_direct_identifiers_in_text(issue.message, can_view=False)
+        safe_context = _redact_source_data_diagnostic_value(issue.safe_context or {})
+
+    return {
+        "row_number": issue.row_number or "",
+        "severity": issue.severity,
+        "code": issue.code,
+        "column_name": issue.column_name,
+        "message": message,
+        "safe_context_json": json.dumps(safe_context, sort_keys=True),
+    }
+
+
+def build_source_data_upload_errors_csv(batch: SourceDataUploadBatch, *, user=None) -> dict[str, Any]:
     output = StringIO()
     writer = csv.DictWriter(
         output,
         fieldnames=["row_number", "severity", "code", "column_name", "message", "safe_context_json"],
     )
     writer.writeheader()
+    can_view_direct_identifiers = user_can_view_direct_identifiers(user)
     issues = batch.validation_issues.order_by("severity", "row_number", "created_at")
     for issue in issues:
-        writer.writerow(
-            {
-                "row_number": issue.row_number or "",
-                "severity": issue.severity,
-                "code": issue.code,
-                "column_name": issue.column_name,
-                "message": issue.message,
-                "safe_context_json": json.dumps(issue.safe_context or {}, sort_keys=True),
-            }
-        )
+        writer.writerow(_source_data_error_row_for_issue(issue, can_view_direct_identifiers=can_view_direct_identifiers))
     payload = output.getvalue()
     return {
         "filename": f"source_data_upload_{batch.public_id}_errors.csv",

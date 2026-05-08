@@ -180,6 +180,71 @@ class OperationalMetricDashboardApiTestCase(APITestCase):
         }
         self.assertIn("rainfall_ingestion_missing_stale_or_not_successful", warning_codes)
 
+    def test_supervisor_dashboard_is_forced_to_assigned_ward_and_rejects_peer_ward(self):
+        other_ward = Ward.objects.create(
+            name="Suna Central",
+            county="Migori",
+            sub_county="Suna East",
+            ward_code="SCT",
+            is_active=True,
+        )
+        supervisor = User.objects.create_user(
+            username="ops_dashboard_supervisor",
+            password=self.password,
+            email="ops-dashboard-supervisor@example.com",
+            role=User.ROLE_SUPERVISOR,
+            ward=self.ward,
+            is_active=True,
+        )
+        self._snapshot(
+            "alerts_delivered_under_5m_pct",
+            value=Decimal("91.000000"),
+            ward=self.ward,
+            county=self.ward.county,
+            sub_county=self.ward.sub_county,
+        )
+        self._snapshot(
+            "alerts_delivered_under_5m_pct",
+            value=Decimal("12.000000"),
+            ward=other_ward,
+            county=other_ward.county,
+            sub_county=other_ward.sub_county,
+        )
+
+        self.client.force_authenticate(supervisor)
+        response = self.client.get(
+            reverse("operational-kpi-dashboard"),
+            {
+                "date_from": self.snapshot_date.isoformat(),
+                "date_to": self.snapshot_date.isoformat(),
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["filters"]["ward_id"], self.ward.id)
+        self.assertEqual(response.data["filters"]["sub_county"], self.ward.sub_county)
+        self.assertEqual(response.data["summary"]["snapshot_count"], 1)
+        metric = next(
+            item
+            for item in response.data["metrics"]
+            if item["metric_key"] == "alerts_delivered_under_5m_pct"
+        )
+        self.assertEqual(metric["value"], 91.0)
+        self.assertEqual(
+            [ward["id"] for ward in response.data["available_filters"]["wards"]],
+            [self.ward.id],
+        )
+
+        blocked_response = self.client.get(
+            reverse("operational-kpi-dashboard"),
+            {
+                "date_from": self.snapshot_date.isoformat(),
+                "date_to": self.snapshot_date.isoformat(),
+                "ward_id": other_ward.id,
+            },
+        )
+        self.assertEqual(blocked_response.status_code, status.HTTP_403_FORBIDDEN)
+
     def test_dashboard_feeds_interoperability_mapping_coverage_warnings(self):
         system = ExternalSystem.objects.create(
             system_key="dhis2",

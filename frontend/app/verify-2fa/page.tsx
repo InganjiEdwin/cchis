@@ -39,7 +39,7 @@ export default function VerifyTwoFactorPage() {
     }
 
     if (isAuthenticated) {
-      router.replace(currentUser ? getDefaultRoute(currentUser.role) : "/overview");
+      router.replace(currentUser ? getDefaultRoute(currentUser) : "/overview");
       return;
     }
 

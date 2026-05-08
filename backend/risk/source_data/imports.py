@@ -10,6 +10,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from accounts.models import User
+from accounts.role_capabilities import user_is_admin_equivalent
 
 from risk.models import (
     FacilityReadinessIngestionRun,
@@ -60,14 +61,17 @@ def _approval_expiry_at():
 
 
 def _is_admin(user) -> bool:
-    return bool(user and user.is_authenticated and (user.is_superuser or user.role == User.ROLE_ADMIN))
+    return bool(user and user.is_authenticated and user_is_admin_equivalent(user))
 
 
 def _is_admin_or_supervisor(user) -> bool:
     return bool(
         user
         and user.is_authenticated
-        and user.role in {User.ROLE_ADMIN, User.ROLE_SUPERVISOR}
+        and (
+            user_is_admin_equivalent(user)
+            or user.role == User.ROLE_SUPERVISOR
+        )
     )
 
 

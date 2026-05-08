@@ -9,6 +9,7 @@ import type {
   SourceDataOverviewResponse,
   SourceDataUploadBatchRecord,
 } from "@/lib/dashboard";
+import { buildDashboardUser } from "@/test/dashboard-user";
 
 const dashboardMocks = vi.hoisted(() => ({
   runSourceDataDownstreamActionViaBff: vi.fn(),
@@ -18,6 +19,7 @@ const mockUseSourceDataOverviewQuery = vi.fn();
 const mockUseSourceDataOperationsQuery = vi.fn();
 const mockUseSourceDataUploadsQuery = vi.fn();
 const mockUseSourceDataUploadQuery = vi.fn();
+const mockUseAuth = vi.fn();
 const mockRefetch = vi.fn();
 const mockMutationRecords: Array<{ mutate: ReturnType<typeof vi.fn>; isPending: boolean; error: Error | null }> = [];
 
@@ -44,17 +46,7 @@ vi.mock("@/components/role-gate", () => ({
 }));
 
 vi.mock("@/components/auth-provider", () => ({
-  useAuth: () => ({
-    currentUser: {
-      id: 1,
-      username: "admin",
-      full_name: "Admin User",
-      role: "ADMIN",
-      theme_preference: "LIGHT",
-      ward: null,
-      ward_name: null,
-    },
-  }),
+  useAuth: () => mockUseAuth(),
 }));
 
 vi.mock("@tanstack/react-query", () => ({
@@ -114,6 +106,21 @@ function buildFeedTypes(): SourceDataFeedTypesResponse {
         requires_new_ingestion_path: false,
         default_reporting_granularity: "week",
         feed_policy: {},
+        feed_mode: "csv",
+        csv_upload_enabled: true,
+        connector_status: {
+          enabled: true,
+          connector_key: "dhis2_surveillance_weekly",
+          label: "DHIS2 weekly surveillance",
+          configured: true,
+          status: "configured",
+          last_run_status: "success",
+          last_run_at: "2026-05-05T08:00:00Z",
+          last_successful_fetch_at: "2026-05-05T08:00:00Z",
+          required_settings: ["SOURCE_DATA_DHIS2_BASE_URL"],
+          credential_values_exposed: false,
+          notes: "Routine weekly source refresh.",
+        },
       },
       {
         feed_key: "facility_readiness_snapshot",
@@ -334,6 +341,16 @@ describe("SourceDataPage", () => {
       batch: buildImportedUpload(),
     });
     mockMutationRecords.length = 0;
+    mockUseAuth.mockReturnValue({
+      currentUser: buildDashboardUser("ADMIN", {
+        username: "admin",
+        email: "admin@example.com",
+        full_name: "Admin User",
+        theme_preference: "LIGHT",
+        ward: null,
+        ward_name: null,
+      }),
+    });
     mockUseSourceDataFeedTypesQuery.mockReturnValue({
       data: buildFeedTypes(),
       isLoading: false,
@@ -516,6 +533,76 @@ describe("SourceDataPage", () => {
 
     expect(screen.getByText("Choose a .csv file. Save Excel workbooks as CSV before upload.")).toBeInTheDocument();
     expect(mockMutationRecords.every((record) => record.mutate.mock.calls.length === 0)).toBe(true);
+  });
+
+  it("lets analysts inspect templates and current status without upload controls", () => {
+    mockUseAuth.mockReturnValue({
+      currentUser: buildDashboardUser("ANALYST", {
+        username: "analyst",
+        email: "analyst@example.com",
+        full_name: "Analyst User",
+        theme_preference: "LIGHT",
+        ward: null,
+        ward_name: null,
+      }),
+    });
+
+    render(<SourceDataPage />);
+
+    expect(screen.getByText("Data Readiness | Check which data is up to date, upload new files, and safely add them to the dashboard")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /add data/i })).not.toBeInTheDocument();
+    expect(screen.getByText("Download templates and review current data status. Uploads are limited to operational data managers.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /templates/i }));
+
+    expect(screen.getAllByRole("link", { name: /download template/i }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: /upload file/i })).not.toBeInTheDocument();
+  });
+
+  it("lets supervisors request risky source-data review without admin approval controls", () => {
+    const upload = {
+      ...buildImportedUpload(),
+      status: "ready_for_confirmation" as const,
+      validation_status: "passed" as const,
+      import_status: "not_started" as const,
+      approval_status: "pending" as const,
+      approval_risk_category: "high" as const,
+      downstream_actions: [],
+    };
+    mockUseAuth.mockReturnValue({
+      currentUser: buildDashboardUser("SUPERVISOR", {
+        username: "supervisor",
+        email: "supervisor@example.com",
+        full_name: "Field Supervisor",
+        theme_preference: "LIGHT",
+        ward: 7,
+        ward_name: "North Kadem",
+      }),
+    });
+    mockUseSourceDataUploadsQuery.mockReturnValue({
+      data: { schema_version: "source-data-upload-batch-list-v1", count: 1, results: [upload] },
+      isLoading: false,
+      isError: false,
+    });
+    mockUseSourceDataUploadQuery.mockReturnValue({
+      data: upload,
+      isLoading: false,
+      isError: false,
+    });
+
+    render(<SourceDataPage />);
+    fireEvent.click(screen.getByRole("tab", { name: /review update/i }));
+
+    expect(screen.getByText("This file needs review before dashboard use.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /request review/i })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /mark reviewed/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^reject$/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /templates/i }));
+
+    expect(screen.getByText("Automatic update: DHIS2 weekly surveillance")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /pause manual upload/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /allow manual upload/i })).not.toBeInTheDocument();
   });
 
   it("applies last-used metadata and submits a clean upload payload", () => {

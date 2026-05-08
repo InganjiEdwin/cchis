@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import tempfile
@@ -26,7 +27,7 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.renderers import JSONOpenAPIRenderer
 from rest_framework import status
-from rest_framework.test import APITestCase
+from rest_framework.test import APITestCase, APITransactionTestCase
 from rest_framework.settings import api_settings
 
 from accounts.audit import get_client_ip
@@ -113,6 +114,7 @@ from risk.tasks import deliver_alert_task, trigger_alerts_task
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
 from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 from rest_framework_simplejwt.utils import datetime_from_epoch
+from risk.consumers import NOTIFICATION_STREAM_SUBPROTOCOL
 
 
 def started_at_ms(offset_ms: int = 2000) -> int:
@@ -659,6 +661,15 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
                 metadata__reason="session_not_found",
             ).exists()
         )
+
+    def test_access_token_without_session_claims_is_rejected(self):
+        orphaned_access = AccessToken.for_user(self.chv_user)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {orphaned_access}")
+
+        response = self.client.get(reverse("auth-me"))
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertFalse(UserSession.objects.filter(user=self.chv_user).exists())
 
     def test_role_based_session_lifetimes_cap_refresh_and_ledger_expiry(self):
         admin_login_response = self.client.post(
@@ -2012,6 +2023,34 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
         refresh_response = self.client.post(reverse("auth-refresh"), {}, format="json")
         self.assertEqual(refresh_response.status_code, status.HTTP_401_UNAUTHORIZED)
 
+    def test_logout_revokes_current_session_even_when_refresh_cookie_is_missing(self):
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+        verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": login_response.data["temp_token"],
+                "code": generate_current_totp_code(self.admin_user.totp_secret),
+            },
+            format="json",
+        )
+        access = verify_response.data["access"]
+        user_session = UserSession.objects.get(user=self.admin_user)
+
+        self.client.cookies.pop(settings.AUTH_REFRESH_COOKIE_NAME, None)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
+        logout_response = self.client.post(reverse("auth-logout"), {}, format="json")
+
+        self.assertEqual(logout_response.status_code, status.HTTP_205_RESET_CONTENT)
+        self.assertEqual(logout_response.cookies[settings.AUTH_REFRESH_COOKIE_NAME].value, "")
+        self.assertEqual(logout_response.cookies[settings.AUTH_ACCESS_COOKIE_NAME].value, "")
+        user_session.refresh_from_db()
+        self.assertIsNotNone(user_session.revoked_at)
+        self.assertEqual(user_session.revoked_reason, "logout")
+
     def test_cookie_auth_write_rejects_cross_site_origin(self):
         login_response = self.client.post(
             reverse("auth-login"),
@@ -2277,6 +2316,51 @@ class AuthEndpointsTestCase(AuthenticatedAPITestCase):
                 type=DashboardNotification.TYPE_SESSION_REPLAY_DETECTED,
                 recipient_role=User.ROLE_ADMIN,
                 recipient_user__isnull=True,
+                metadata__session_id=str(user_session.public_id),
+            ).exists()
+        )
+
+    def test_forged_refresh_payload_cannot_trigger_replay_revocation(self):
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": self.admin_user.username, "password": self.password},
+            format="json",
+        )
+        verify_response = self.client.post(
+            reverse("auth-verify-2fa"),
+            {
+                "token": login_response.data["temp_token"],
+                "code": generate_current_totp_code(self.admin_user.totp_secret),
+            },
+            format="json",
+        )
+        refresh = verify_response.data["refresh"]
+        user_session = UserSession.objects.get(user=self.admin_user)
+
+        header, payload, signature = refresh.split(".")
+        padding = "=" * (-len(payload) % 4)
+        payload_data = json.loads(base64.urlsafe_b64decode(f"{payload}{padding}"))
+        payload_data["jti"] = str(uuid.uuid4())
+        tampered_payload = (
+            base64.urlsafe_b64encode(
+                json.dumps(payload_data, separators=(",", ":")).encode("utf-8")
+            )
+            .rstrip(b"=")
+            .decode("ascii")
+        )
+        forged_refresh = f"{header}.{tampered_payload}.{signature}"
+
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = forged_refresh
+        response = self.client.post(reverse("auth-refresh"), {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        user_session.refresh_from_db()
+        self.assertIsNone(user_session.revoked_at)
+        self.assertFalse(user_session.is_suspicious)
+        self.assertFalse(
+            AuthAuditEvent.objects.filter(
+                event_type=AuthAuditEvent.EVENT_SESSION_REPLAY_DETECTED,
+                target_user=self.admin_user,
                 metadata__session_id=str(user_session.public_id),
             ).exists()
         )
@@ -5316,8 +5400,9 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         response = self.client.get(reverse("facility-intelligence", args=[self.health_facility.id]))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIsNotNone(response.data["contact"])
+        self.assertIsNone(response.data["contact"])
         self.assertTrue(response.data["capabilities"]["has_verified_contact"])
+        self.assertFalse(response.data["capabilities"]["can_view_contacts"])
         self.assertFalse(response.data["capabilities"]["can_request_facility_update"])
 
     def test_facility_intelligence_exposes_linked_alert_navigation_metadata(self):
@@ -7245,13 +7330,20 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         )
 
         token = AccessToken.for_user(self.analyst_user)
+        session = await sync_to_async(
+            lambda: UserSession.objects.filter(user=self.analyst_user).order_by("-last_seen_at").first()
+        )()
+        self.assertIsNotNone(session)
+        token["sid"] = str(session.public_id)
+        token["family"] = str(session.token_family_id)
         token["purpose"] = "dashboard_notifications_stream"
         token["role"] = self.analyst_user.role
         token["ward_id"] = self.analyst_user.ward_id
 
         communicator = WebsocketCommunicator(
             application,
-            f"/ws/notifications/stream/?token={token}",
+            "/ws/notifications/stream/",
+            subprotocols=[NOTIFICATION_STREAM_SUBPROTOCOL, str(token)],
         )
         connected, _ = await communicator.connect()
         self.assertTrue(connected)
@@ -7769,6 +7861,103 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
 
 
 class SystemControlContractsTestCase(AuthenticatedAPITestCase):
+    def test_system_readiness_exposes_analyst_safe_aggregate_snapshot(self):
+        UssdSessionLog.objects.create(
+            session_id="system-readiness-ussd-001",
+            phone_number=self.chv.phone_number,
+            ward=self.ward,
+            text="1*2",
+            response_text="OK",
+            menu_level="advice",
+        )
+        TriageSession.objects.create(
+            channel="API",
+            phone_number=self.chv.phone_number,
+            ward=self.ward,
+            referral_facility=self.health_facility,
+            recommendation="Refer now",
+            referral_needed=True,
+        )
+        SyncQueue.objects.create(
+            source_device_id="system-readiness-device-1",
+            client_submission_id="system-readiness-sync-001",
+            phone_number=self.chv.phone_number,
+            ward=self.ward,
+            payload={"client_submission_id": "system-readiness-sync-001"},
+            status=SyncQueue.STATUS_PROCESSED,
+            processed_at=timezone.now(),
+        )
+        Alert.objects.create(
+            ward=self.ward,
+            risk_score=self.risk_score,
+            channel=Alert.CHANNEL_DASHBOARD,
+            recipient="dashboard",
+            message="Ward alert",
+            status=Alert.STATUS_DELIVERED,
+            delivery_backend="internal-dashboard",
+        )
+
+        self.authenticate(self.analyst_user.username)
+        response = self.client.get(reverse("system-readiness"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["schema_version"], "system-readiness-v1")
+        self.assertEqual(response.data["mode"], "analyst_safe_system_readiness_v1")
+        self.assertEqual(response.data["scope"]["type"], "BROAD")
+        self.assertEqual(response.data["visible_wards"], 2)
+        self.assertEqual(response.data["high_risk_wards"], 1)
+        self.assertEqual(response.data["wards_with_fresh_risk"], 2)
+        self.assertEqual(response.data["active_chvs"], 1)
+        self.assertEqual(response.data["online_chvs"], 1)
+        self.assertEqual(response.data["triage_sessions_24h"], 1)
+        self.assertEqual(response.data["referrals_24h"], 1)
+        self.assertEqual(response.data["sync_payloads_24h"], 1)
+        self.assertEqual(response.data["ussd_sessions_24h"], 1)
+        self.assertEqual(response.data["delivery_backends"], [{"name": "internal-dashboard", "count": 1}])
+        payload_text = json.dumps(response.data, default=str)
+        self.assertNotIn(self.chv.name, payload_text)
+        self.assertNotIn(self.chv.phone_number, payload_text)
+        self.assertNotIn("phone_number", payload_text)
+        self.assertNotIn("message", payload_text)
+
+    def test_system_readiness_is_ward_scoped_for_supervisor(self):
+        other_chv = CHV.objects.create(
+            name="Other Ward CHV",
+            phone_number="+254700000010",
+            ward=self.other_ward,
+            is_active=True,
+            language="en",
+        )
+        SyncQueue.objects.create(
+            source_device_id="system-readiness-device-2",
+            client_submission_id="system-readiness-sync-002",
+            phone_number=other_chv.phone_number,
+            ward=self.other_ward,
+            payload={"client_submission_id": "system-readiness-sync-002"},
+            status=SyncQueue.STATUS_PROCESSED,
+            processed_at=timezone.now(),
+        )
+
+        self.authenticate(self.supervisor_user.username)
+        response = self.client.get(reverse("system-readiness"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["scope"]["type"], "WARD")
+        self.assertEqual(response.data["scope"]["ward_id"], self.other_ward.id)
+        self.assertEqual(response.data["visible_wards"], 1)
+        self.assertEqual(response.data["high_risk_wards"], 0)
+        self.assertEqual(response.data["active_chvs"], 1)
+        payload_text = json.dumps(response.data, default=str)
+        self.assertNotIn(self.chv.name, payload_text)
+        self.assertNotIn(self.chv.phone_number, payload_text)
+
+    def test_chv_operations_remains_blocked_for_analysts(self):
+        self.authenticate(self.analyst_user.username)
+
+        response = self.client.get(reverse("chv-operations"))
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
     def test_system_control_status_exposes_admin_contracts(self):
         self.authenticate(self.admin_user.username)
 
@@ -9987,7 +10176,17 @@ class CanonicalETLNormalizationTestCase(AuthenticatedAPITestCase):
         self.assertEqual(canonical.source_name, "facility-intelligence-snapshot")
 
 
-class ZZZNotificationWebsocketLifecycleIsolationTest(AuthenticatedAPITestCase):
+class ZZZNotificationWebsocketLifecycleIsolationTest(APITransactionTestCase):
+    password = AuthenticatedAPITestCase.password
+    _client_counter = 1
+    setUp = AuthenticatedAPITestCase.setUp
+    import_active_migori_geometry = AuthenticatedAPITestCase.import_active_migori_geometry
+    _create_user = AuthenticatedAPITestCase._create_user
+    authenticate = AuthenticatedAPITestCase.authenticate
+    _enroll_user_for_totp = AuthenticatedAPITestCase._enroll_user_for_totp
+    grant_step_up = AuthenticatedAPITestCase.grant_step_up
+    authenticate_with_step_up = AuthenticatedAPITestCase.authenticate_with_step_up
+
     @override_settings(
         CHANNEL_LAYERS={
             "default": {
@@ -10007,11 +10206,51 @@ class ZZZNotificationWebsocketLifecycleIsolationTest(AuthenticatedAPITestCase):
         }
     )
     def test_policy_missing_user_cannot_open_notification_websocket(self):
+        self.authenticate(self.analyst_user.username)
         self.analyst_user.policy_acceptances.all().delete()
         async_to_sync(self._exercise_policy_missing_notification_websocket_rejected)()
 
+    @override_settings(
+        CHANNEL_LAYERS={
+            "default": {
+                "BACKEND": "channels.layers.InMemoryChannelLayer",
+            }
+        }
+    )
+    def test_notification_websocket_rejects_query_string_token(self):
+        self.authenticate(self.analyst_user.username)
+        async_to_sync(self._exercise_notification_websocket_query_token_rejected)()
+
     async def _exercise_policy_missing_notification_websocket_rejected(self):
         token = AccessToken.for_user(self.analyst_user)
+        session = await sync_to_async(
+            lambda: UserSession.objects.filter(user=self.analyst_user).order_by("-last_seen_at").first()
+        )()
+        self.assertIsNotNone(session)
+        token["sid"] = str(session.public_id)
+        token["family"] = str(session.token_family_id)
+        token["purpose"] = "dashboard_notifications_stream"
+        token["role"] = self.analyst_user.role
+        token["ward_id"] = self.analyst_user.ward_id
+
+        communicator = WebsocketCommunicator(
+            application,
+            "/ws/notifications/stream/",
+            subprotocols=[NOTIFICATION_STREAM_SUBPROTOCOL, str(token)],
+        )
+        connected, close_code = await communicator.connect()
+
+        self.assertFalse(connected)
+        self.assertEqual(close_code, 4401)
+
+    async def _exercise_notification_websocket_query_token_rejected(self):
+        token = AccessToken.for_user(self.analyst_user)
+        session = await sync_to_async(
+            lambda: UserSession.objects.filter(user=self.analyst_user).order_by("-last_seen_at").first()
+        )()
+        self.assertIsNotNone(session)
+        token["sid"] = str(session.public_id)
+        token["family"] = str(session.token_family_id)
         token["purpose"] = "dashboard_notifications_stream"
         token["role"] = self.analyst_user.role
         token["ward_id"] = self.analyst_user.ward_id
@@ -10033,13 +10272,20 @@ class ZZZNotificationWebsocketLifecycleIsolationTest(AuthenticatedAPITestCase):
         )
 
         token = AccessToken.for_user(self.analyst_user)
+        session = await sync_to_async(
+            lambda: UserSession.objects.filter(user=self.analyst_user).order_by("-last_seen_at").first()
+        )()
+        self.assertIsNotNone(session)
+        token["sid"] = str(session.public_id)
+        token["family"] = str(session.token_family_id)
         token["purpose"] = "dashboard_notifications_stream"
         token["role"] = self.analyst_user.role
         token["ward_id"] = self.analyst_user.ward_id
 
         communicator = WebsocketCommunicator(
             application,
-            f"/ws/notifications/stream/?token={token}",
+            "/ws/notifications/stream/",
+            subprotocols=[NOTIFICATION_STREAM_SUBPROTOCOL, str(token)],
         )
         connected, _ = await communicator.connect()
         self.assertTrue(connected)
@@ -10748,7 +10994,7 @@ class CHVCoverageWorkflowApiTestCase(AuthenticatedAPITestCase):
         self.assertIn(str(manual_request.public_id), [item["public_id"] for item in unlinked_response.data["results"]])
         self.assertNotIn(str(alert_request.public_id), [item["public_id"] for item in unlinked_response.data["results"]])
 
-    def test_analyst_can_list_requests_but_cannot_create(self):
+    def test_analyst_cannot_list_or_create_requests(self):
         CHVCoverageRequest.objects.create(
             ward=self.ward,
             requested_by=self.admin_user,
@@ -10760,8 +11006,7 @@ class CHVCoverageWorkflowApiTestCase(AuthenticatedAPITestCase):
         self.authenticate(self.analyst_user.username)
 
         list_response = self.client.get(reverse("chv-coverage-request-list-create"))
-        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
-        self.assertGreaterEqual(list_response.data["count"], 1)
+        self.assertEqual(list_response.status_code, status.HTTP_403_FORBIDDEN)
 
         create_response = self.client.post(
             reverse("chv-coverage-request-list-create"),

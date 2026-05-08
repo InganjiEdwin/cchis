@@ -768,7 +768,7 @@ def sync_dashboard_notifications() -> None:
                 "type": DashboardNotification.TYPE_ALERT_FAILED,
                 "severity": DashboardNotification.SEVERITY_CRITICAL,
                 "title": f"{alert.ward.name}: alert delivery failed",
-                "body": f"{alert.channel} alert delivery failed for {alert.recipient}. Review the alert record.",
+                "body": f"{alert.channel} alert delivery failed. Review the alert record.",
                 "source_system": "alerts",
                 "source_object_type": "alert",
                 "source_object_id": str(alert.id),
@@ -780,7 +780,11 @@ def sync_dashboard_notifications() -> None:
                 "dismissible": False,
                 "auto_resolve": True,
                 "pinned_until_actioned": True,
-                "metadata": {"channel": alert.channel, "recipient": alert.recipient},
+                "metadata": {
+                    "channel": alert.channel,
+                    "alert_id": alert.id,
+                    "recipient_available_on_alert_record": True,
+                },
             },
         )
 
@@ -793,7 +797,7 @@ def sync_dashboard_notifications() -> None:
                 "type": DashboardNotification.TYPE_ALERT_RETRY_PENDING,
                 "severity": DashboardNotification.SEVERITY_WARNING,
                 "title": f"{alert.ward.name}: alert retry pending",
-                "body": f"{alert.channel} alert for {alert.recipient} is waiting for another delivery attempt.",
+                "body": f"{alert.channel} alert is waiting for another delivery attempt.",
                 "source_system": "alerts",
                 "source_object_type": "alert",
                 "source_object_id": str(alert.id),
@@ -805,7 +809,11 @@ def sync_dashboard_notifications() -> None:
                 "dismissible": True,
                 "auto_resolve": True,
                 "pinned_until_actioned": False,
-                "metadata": {"channel": alert.channel, "recipient": alert.recipient},
+                "metadata": {
+                    "channel": alert.channel,
+                    "alert_id": alert.id,
+                    "recipient_available_on_alert_record": True,
+                },
             },
         )
 

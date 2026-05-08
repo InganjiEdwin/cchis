@@ -58,6 +58,17 @@ Feeds expose a mode of `api`, `csv`, `manual`, `fallback`, or `demo`.
 
 Admins can mark a connector as authoritative and disable routine CSV upload for that feed. CSV can be re-enabled as fallback when source gaps, corrections, or recovery require it.
 
+## Authorization
+
+Source-data connector APIs follow the role contract in `README.md`.
+
+- `ADMIN` has full source-data access, including connector refreshes, feed-mode/admin controls, risky import approval, downstream actions, templates, upload validation, and confirmation.
+- `SUPERVISOR` can upload, validate, confirm, request approval, and run allowed downstream source-data actions within the operational source-data workflow, but cannot approve risky imports or use admin connector/feed-mode controls.
+- `ANALYST` can view source-data readiness and download templates or safe validation outputs, but cannot upload, confirm, approve, refresh connectors, or trigger downstream actions.
+- `CHV` has no source-data dashboard/API access.
+
+Source-data write operations require fresh `source_data` step-up for roles that are otherwise allowed. Frontend controls are UX only; backend permission checks remain authoritative for direct API calls.
+
 Population/exposure freshness is feed-scoped. Current counts and truth states
 exclude non-current records such as `replaced_by_new_release`,
 `replay_diagnostic`, and `replacement_not_activated`, so retired seeded rows do

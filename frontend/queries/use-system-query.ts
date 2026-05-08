@@ -34,76 +34,39 @@ export type SystemSnapshot = {
   controlStatus: SystemControlStatus;
 };
 
-function latestTimestamp(values: Array<string | null | undefined>) {
-  return values.reduce<string | null>((latest, value) => {
-    if (!value) {
-      return latest;
-    }
-
-    if (!latest || new Date(value).getTime() > new Date(latest).getTime()) {
-      return value;
-    }
-
-    return latest;
-  }, null);
-}
-
 export function useSystemQuery({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: queryKeys.system.root(),
     queryFn: async (): Promise<SystemSnapshot> => {
       const data = await fetchSystemDataViaBff();
-
-      const highRiskWards = data.latestRisks.filter((item) => item.risk_level === "HIGH").length;
-      const wardsWithFreshRisk = data.latestRisks.filter((item) => item.generated_at).length;
-      const latestRiskTimestamp = latestTimestamp(data.latestRisks.map((item) => item.generated_at));
-      const latestAlertTimestamp = latestTimestamp(data.alerts.results.map((item) => item.created_at));
-      const latestFacilityTimestamp = data.facilities.results[0]?.updated_at ?? null;
-      const latestChvTimestamp = latestTimestamp(
-        data.chvOperations.flatMap((item) => [item.last_activity_at, item.last_sync_at]),
-      );
-
-      const deliveryBackends = Array.from(
-        data.alerts.results.reduce((accumulator, alert) => {
-          const name = alert.delivery_backend || "Unassigned delivery source";
-          accumulator.set(name, (accumulator.get(name) ?? 0) + 1);
-          return accumulator;
-        }, new Map<string, number>()),
-      )
-        .map(([name, count]) => ({ name, count }))
-        .sort((left, right) => right.count - left.count);
-
-      const activeChvs = data.chvOperations.filter((item) => item.is_active).length;
-      const onlineChvs = data.chvOperations.filter((item) => item.sync_health === "ONLINE").length;
-      const delayedChvs = data.chvOperations.filter((item) => item.sync_health === "DELAYED").length;
-      const offlineChvs = data.chvOperations.filter((item) => item.sync_health === "OFFLINE").length;
+      const readiness = data.readiness;
 
       return {
-        visibleWards: data.wards.count,
-        visibleAlerts: data.alerts.count,
-        visibleFacilities: data.facilities.count,
-        highRiskWards,
-        wardsWithFreshRisk,
-        latestRiskTimestamp,
-        latestAlertTimestamp,
-        latestFacilityTimestamp,
-        latestChvTimestamp,
-        queuedAlerts: data.queuedAlerts.count,
-        retryPendingAlerts: data.retryAlerts.count,
-        failedAlerts: data.failedAlerts.count,
-        deliveredAlerts: data.deliveredAlerts.count,
-        latestFailedAlertTimestamp: data.failedAlerts.results[0]?.created_at ?? null,
-        latestRetryAlertTimestamp: data.retryAlerts.results[0]?.created_at ?? null,
-        latestDeliveredAlertTimestamp: data.deliveredAlerts.results[0]?.created_at ?? null,
-        activeChvs,
-        onlineChvs,
-        delayedChvs,
-        offlineChvs,
-        triageSessions24h: data.chvOperations.reduce((sum, item) => sum + item.triage_sessions_24h, 0),
-        referrals24h: data.chvOperations.reduce((sum, item) => sum + item.referrals_24h, 0),
-        syncPayloads24h: data.chvOperations.reduce((sum, item) => sum + item.sync_payloads_24h, 0),
-        ussdSessions24h: data.chvOperations.reduce((sum, item) => sum + item.ussd_sessions_24h, 0),
-        deliveryBackends,
+        visibleWards: readiness.visible_wards,
+        visibleAlerts: readiness.visible_alerts,
+        visibleFacilities: readiness.visible_facilities,
+        highRiskWards: readiness.high_risk_wards,
+        wardsWithFreshRisk: readiness.wards_with_fresh_risk,
+        latestRiskTimestamp: readiness.latest_risk_timestamp,
+        latestAlertTimestamp: readiness.latest_alert_timestamp,
+        latestFacilityTimestamp: readiness.latest_facility_timestamp,
+        latestChvTimestamp: readiness.latest_chv_timestamp,
+        queuedAlerts: readiness.queued_alerts,
+        retryPendingAlerts: readiness.retry_pending_alerts,
+        failedAlerts: readiness.failed_alerts,
+        deliveredAlerts: readiness.delivered_alerts,
+        latestFailedAlertTimestamp: readiness.latest_failed_alert_timestamp,
+        latestRetryAlertTimestamp: readiness.latest_retry_alert_timestamp,
+        latestDeliveredAlertTimestamp: readiness.latest_delivered_alert_timestamp,
+        activeChvs: readiness.active_chvs,
+        onlineChvs: readiness.online_chvs,
+        delayedChvs: readiness.delayed_chvs,
+        offlineChvs: readiness.offline_chvs,
+        triageSessions24h: readiness.triage_sessions_24h,
+        referrals24h: readiness.referrals_24h,
+        syncPayloads24h: readiness.sync_payloads_24h,
+        ussdSessions24h: readiness.ussd_sessions_24h,
+        deliveryBackends: readiness.delivery_backends,
         controlStatus: data.controlStatus,
       };
     },

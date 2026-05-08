@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import SystemPage from "@/app/(dashboard)/system/page";
 import type { SystemSnapshot } from "@/queries/use-system-query";
+import { buildDashboardUser } from "@/test/dashboard-user";
 
 const mockUseAuth = vi.fn();
 const mockUseSystemQuery = vi.fn();
@@ -30,10 +31,6 @@ vi.mock("@/components/dashboard-topbar", () => ({
     lastUpdatedLabel?: string;
     children?: React.ReactNode;
   }) => React.createElement("div", null, `${title} | ${subtitle} | ${lastUpdatedLabel ?? "no-label"}`, children),
-}));
-
-vi.mock("@/components/role-gate", () => ({
-  RoleGate: ({ children }: { children: React.ReactNode }) => React.createElement(React.Fragment, null, children),
 }));
 
 vi.mock("@/queries/use-system-query", () => ({
@@ -132,18 +129,14 @@ describe("SystemPage", () => {
     });
 
     mockUseAuth.mockReturnValue({
-      currentUser: {
-        id: 1,
+      currentUser: buildDashboardUser("ADMIN", {
         username: "admin",
         email: "admin@example.com",
         full_name: "System Admin",
-        phone_number: null,
-        role: "ADMIN",
         theme_preference: "DARK",
         ward: null,
         ward_name: null,
-        is_active: true,
-      },
+      }),
     });
   });
 
@@ -205,6 +198,48 @@ describe("SystemPage", () => {
     });
     await flushControlAction();
     expect(mockRefetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("lets analysts render readiness while keeping system write controls disabled", () => {
+    mockUseAuth.mockReturnValue({
+      currentUser: buildDashboardUser("ANALYST", {
+        username: "analyst",
+        email: "analyst@example.com",
+        full_name: "Analyst User",
+      }),
+    });
+
+    renderSystemPage(
+      buildSystemSnapshot({
+        controlStatus: {
+          ...buildSystemSnapshot().controlStatus,
+          can_retry_background_jobs: false,
+          can_run_manual_risk_scoring: false,
+          can_pause_alert_delivery: false,
+        },
+      }),
+    );
+
+    expect(screen.getByText(/Operations Readiness \| Check whether dashboard information is current and safe to use/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /send waiting alerts/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /update ward risk/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /pause outgoing sms/i })).toBeDisabled();
+  });
+
+  it("blocks supervisors through the real page capability gate", () => {
+    mockUseAuth.mockReturnValue({
+      currentUser: buildDashboardUser("SUPERVISOR", {
+        username: "supervisor",
+        email: "supervisor@example.com",
+        full_name: "Field Supervisor",
+      }),
+    });
+
+    renderSystemPage(buildSystemSnapshot());
+
+    expect(screen.getByText("You need permission to view this page")).toBeInTheDocument();
+    expect(screen.getByText("This route exists, but your current role does not have access to it.")).toBeInTheDocument();
+    expect(screen.queryByText("Are updates current?")).not.toBeInTheDocument();
   });
 
   it("renders missing updates as neutral readiness copy", () => {

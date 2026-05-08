@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DashboardSidebar } from "@/components/dashboard-sidebar";
 import type { CurrentUser } from "@/lib/auth";
+import { buildDashboardUser } from "@/test/dashboard-user";
 
 const mockUseAuth = vi.fn();
 const mockReplace = vi.fn();
@@ -26,23 +27,20 @@ vi.mock("@/components/auth-provider", () => ({
 }));
 
 function buildUser(overrides: Partial<CurrentUser> = {}): CurrentUser {
-  return {
-    id: 1,
+  const role = overrides.role ?? "ADMIN";
+  return buildDashboardUser(role, {
+    id: role === "ADMIN" ? 1 : role === "SUPERVISOR" ? 2 : role === "ANALYST" ? 3 : 4,
     username: "admin",
     email: "admin@example.com",
     full_name: "Edwin Inganji",
     phone_number: "+254711000001",
-    role: "ADMIN",
     theme_preference: "SYSTEM",
-    ward: 1,
-    ward_name: "North Kamagambo",
-    scope_type: "BROAD",
-    scope_ward_id: null,
-    two_factor_policy: "REQUIRED",
-    is_totp_enabled: true,
-    is_active: true,
+    ward: role === "SUPERVISOR" ? 1 : null,
+    ward_name: role === "SUPERVISOR" ? "North Kamagambo" : null,
+    scope_type: role === "SUPERVISOR" ? "WARD" : role === "CHV" ? "NONE" : "BROAD",
+    scope_ward_id: role === "SUPERVISOR" ? 1 : null,
     ...overrides,
-  };
+  });
 }
 
 describe("DashboardSidebar", () => {
@@ -130,5 +128,49 @@ describe("DashboardSidebar", () => {
     render(<DashboardSidebar />);
 
     expect(screen.getByLabelText("Open profile summary")).toHaveTextContent("North Kamagambo");
+  });
+
+  it("renders navigation from explicit dashboard capabilities for each role", () => {
+    mockPathname.mockReturnValue("/system");
+    mockUseAuth.mockReturnValue({
+      currentUser: buildUser({ role: "ADMIN" }),
+      logout: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const { rerender } = render(<DashboardSidebar />);
+
+    expect(screen.getByText("Operations Readiness")).toBeInTheDocument();
+    expect(screen.getByText("CHV Operations")).toBeInTheDocument();
+    expect(screen.getByText("Communication Review")).toBeInTheDocument();
+
+    mockPathname.mockReturnValue("/overview");
+    mockUseAuth.mockReturnValue({
+      currentUser: buildUser({ role: "SUPERVISOR" }),
+      logout: vi.fn().mockResolvedValue(undefined),
+    });
+    rerender(<DashboardSidebar />);
+
+    expect(screen.queryByText("Operations Readiness")).not.toBeInTheDocument();
+    expect(screen.getByText("CHV Operations")).toBeInTheDocument();
+    expect(screen.getByText("Communication Review")).toBeInTheDocument();
+
+    mockUseAuth.mockReturnValue({
+      currentUser: buildUser({ role: "ANALYST" }),
+      logout: vi.fn().mockResolvedValue(undefined),
+    });
+    rerender(<DashboardSidebar />);
+
+    expect(screen.getByText("Operations Readiness")).toBeInTheDocument();
+    expect(screen.queryByText("CHV Operations")).not.toBeInTheDocument();
+    expect(screen.getByText("Communication Review")).toBeInTheDocument();
+
+    mockUseAuth.mockReturnValue({
+      currentUser: buildUser({ role: "CHV" }),
+      logout: vi.fn().mockResolvedValue(undefined),
+    });
+    rerender(<DashboardSidebar />);
+
+    expect(screen.queryByText("Overview")).not.toBeInTheDocument();
+    expect(screen.queryByText("Operations Readiness")).not.toBeInTheDocument();
   });
 });

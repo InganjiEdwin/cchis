@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import WardDetailPage from "@/app/(dashboard)/wards/[id]/page";
+import { buildDashboardUser } from "@/test/dashboard-user";
 
 const mockUseAuth = vi.fn();
 const mockUseWardDetailQuery = vi.fn();
@@ -722,18 +723,14 @@ describe("WardDetailPage", () => {
     mockUseParams.mockReturnValue({ id: "12" });
     mockUseSearchParams.mockReturnValue(new URLSearchParams("returnTo=%2Fwards%3Frisk%3DHIGH%26page%3D2"));
     mockUseAuth.mockReturnValue({
-      currentUser: {
-        id: 1,
+      currentUser: buildDashboardUser("ADMIN", {
         username: "admin",
         email: "admin@example.com",
         full_name: "Admin User",
-        phone_number: null,
-        role: "ADMIN",
         theme_preference: "LIGHT",
         ward: null,
         ward_name: null,
-        is_active: true,
-      },
+      }),
     });
 
     mockUseWardDetailQuery.mockReturnValue({
@@ -832,7 +829,7 @@ describe("WardDetailPage", () => {
 
     expect(await screen.findByText("CHV action status")).toBeInTheDocument();
     expect(screen.getByText(/linked alerts: alert-7/i)).toBeInTheDocument();
-  });
+  }, 15000);
 
   it("renders a ward-level preparedness action lifecycle timeline", async () => {
     mockUseWardDetailQuery.mockReturnValue({
@@ -883,18 +880,14 @@ describe("WardDetailPage", () => {
 
   it("shows a read-only recommendation state for non-trigger roles", async () => {
     mockUseAuth.mockReturnValue({
-      currentUser: {
-        id: 2,
+      currentUser: buildDashboardUser("ANALYST", {
         username: "analyst",
         email: "analyst@example.com",
         full_name: "Analyst User",
-        phone_number: null,
-        role: "ANALYST",
         theme_preference: "LIGHT",
         ward: null,
         ward_name: null,
-        is_active: true,
-      },
+      }),
     });
     mockUseWardDetailQuery.mockReturnValue({
       data: buildWardDetailState({

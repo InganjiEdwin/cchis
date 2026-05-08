@@ -76,7 +76,9 @@ function isFormDataBody(body: BodyInit | null | undefined) {
 }
 
 function getCchisEnvironment() {
-  return (process.env.CCHIS_ENVIRONMENT ?? "local").trim().toLowerCase();
+  return (process.env.CCHIS_ENVIRONMENT ?? process.env.NEXT_PUBLIC_CCHIS_ENVIRONMENT ?? "local")
+    .trim()
+    .toLowerCase();
 }
 
 function getFrontendAppUrl() {

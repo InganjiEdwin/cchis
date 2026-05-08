@@ -49,7 +49,7 @@ import type {
   UssdMenuVersionRecord,
 } from "@/lib/dashboard";
 import { formatRelativeTimestamp } from "@/lib/freshness";
-import { MESSAGE_GOVERNANCE_ROLES, canApproveMessageTemplates } from "@/lib/roles";
+import { canApproveMessageTemplates } from "@/lib/roles";
 import {
   useApproveMessageTemplateMutation,
   useApproveUssdMenuVersionMutation,
@@ -1329,7 +1329,7 @@ export default function MessageGovernancePage() {
   const { data: selectedTemplateDetail } = useMessageTemplateDetailQuery(selectedTemplateId);
 
   const lastUpdatedLabel = data?.generated_at ? formatRelativeTimestamp(data.generated_at) : "No recent update";
-  const canApprove = canApproveMessageTemplates(currentUser?.role);
+  const canApprove = canApproveMessageTemplates(currentUser);
 
   useEffect(() => {
     setDraftFilters((current) => (filtersEqual(current, filters) ? current : filters));
@@ -1421,7 +1421,7 @@ export default function MessageGovernancePage() {
 
   return (
     <RoleGate
-      allowedRoles={MESSAGE_GOVERNANCE_ROLES}
+      pageCapability="message_governance"
       title="Communication review unavailable"
       message="Your role cannot view communication review."
     >

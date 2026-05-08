@@ -395,6 +395,76 @@ class OperationalMetricAuditExportTestCase(APITestCase):
         self.assertEqual(command_payload["filters"]["ward_id"], self.ward.id)
         self.assertEqual(command_payload["filters"]["source_channel"], "SMS")
 
+    def test_supervisor_audit_and_export_are_forced_to_assigned_ward(self):
+        other_ward = Ward.objects.create(
+            name="Suna Central",
+            county="Migori",
+            sub_county="Suna East",
+            ward_code="SCT",
+            is_active=True,
+        )
+        supervisor = User.objects.create_user(
+            username="me_export_supervisor",
+            password=self.password,
+            email="me-export-supervisor@example.com",
+            role=User.ROLE_SUPERVISOR,
+            ward=self.ward,
+            is_active=True,
+        )
+        self._snapshot(
+            "alerts_delivered_under_5m_pct",
+            value=Decimal("94.000000"),
+            ward=self.ward,
+            county=self.ward.county,
+            sub_county=self.ward.sub_county,
+        )
+        self._snapshot(
+            "alerts_delivered_under_5m_pct",
+            value=Decimal("11.000000"),
+            ward=other_ward,
+            county=other_ward.county,
+            sub_county=other_ward.sub_county,
+        )
+        force_authenticate_with_step_up(
+            self.client,
+            supervisor,
+            StepUpGrant.PURPOSE_SENSITIVE_EXPORT_DOWNLOAD,
+        )
+
+        audit_response = self.client.get(
+            reverse("operational-kpi-audit"),
+            {
+                "date_from": self.snapshot_date.isoformat(),
+                "date_to": self.snapshot_date.isoformat(),
+            },
+        )
+        export_response = self.client.get(
+            reverse("operational-kpi-me-export"),
+            {
+                "date_from": self.snapshot_date.isoformat(),
+                "date_to": self.snapshot_date.isoformat(),
+                "output_format": "json",
+            },
+        )
+        blocked_response = self.client.get(
+            reverse("operational-kpi-audit"),
+            {
+                "date_from": self.snapshot_date.isoformat(),
+                "date_to": self.snapshot_date.isoformat(),
+                "ward_id": other_ward.id,
+            },
+        )
+
+        self.assertEqual(audit_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(audit_response.data["filters"]["ward_id"], self.ward.id)
+        self.assertEqual(audit_response.data["record_totals"]["snapshots"], 1)
+        self.assertEqual(export_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(export_response.data["filters"]["ward_id"], self.ward.id)
+        self.assertEqual(export_response.data["row_count"], 1)
+        export_content = json.loads(export_response.data["payload"])
+        self.assertEqual(export_content["metric_rows"][0]["ward_id"], self.ward.id)
+        self.assertEqual(blocked_response.status_code, status.HTTP_403_FORBIDDEN)
+
     def test_me_export_requires_fresh_download_step_up(self):
         self._snapshot("alerts_delivered_under_5m_pct", value=Decimal("100.000000"))
         self.client.force_authenticate(self.user)

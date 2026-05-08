@@ -18,7 +18,11 @@ from .privacy_minimization import (
     ensure_pii_safe_text,
 )
 from .privacy_access import (
+    EMAIL_CANDIDATE_PATTERN,
+    PHONE_CANDIDATE_PATTERN,
     mask_contact_value,
+    metadata_key_is_direct_identifier,
+    metadata_key_is_direct_reference,
     privacy_context,
     redact_direct_identifiers_in_text,
     redact_field_health_text,
@@ -121,7 +125,42 @@ class SourceDataFeedTypesResponseSerializer(serializers.Serializer):
     validation_error_catalog = serializers.DictField(required=False)
 
 
+SOURCE_DATA_REDACTED_FILENAME = "redacted-source-data-file"
+
+
+def _serializer_can_view_direct_identifiers(serializer) -> bool:
+    return user_can_view_direct_identifiers(serializer_user(serializer))
+
+
+def _redact_direct_identifier_value(value):
+    if isinstance(value, dict):
+        return {
+            key: _redact_direct_identifier_field(key, nested_value)
+            for key, nested_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_direct_identifier_value(item) for item in value]
+    if isinstance(value, str):
+        if PHONE_CANDIDATE_PATTERN.match(value) or EMAIL_CANDIDATE_PATTERN.match(value):
+            return mask_contact_value(value)
+        return redact_direct_identifiers_in_text(value, can_view=False)
+    return value
+
+
+def _redact_direct_identifier_field(key: str, value):
+    if metadata_key_is_direct_reference(key):
+        return ""
+    if metadata_key_is_direct_identifier(key):
+        key_parts = set(str(key).lower().split("_"))
+        if isinstance(value, str) and key_parts & {"contact", "email", "phone", "recipient"}:
+            return mask_contact_value(value)
+        return ""
+    return _redact_direct_identifier_value(value)
+
+
 class SourceDataUploadArtifactSerializer(serializers.ModelSerializer):
+    original_filename = serializers.SerializerMethodField()
+
     class Meta:
         model = SourceDataUploadArtifact
         fields = [
@@ -137,8 +176,16 @@ class SourceDataUploadArtifactSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+    def get_original_filename(self, obj):
+        if _serializer_can_view_direct_identifiers(self):
+            return obj.original_filename
+        return SOURCE_DATA_REDACTED_FILENAME
+
 
 class SourceDataValidationIssueSerializer(serializers.ModelSerializer):
+    message = serializers.SerializerMethodField()
+    safe_context = serializers.SerializerMethodField()
+
     class Meta:
         model = SourceDataValidationIssue
         fields = [
@@ -153,9 +200,21 @@ class SourceDataValidationIssueSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+    def get_message(self, obj):
+        return redact_direct_identifiers_in_text(
+            obj.message,
+            can_view=_serializer_can_view_direct_identifiers(self),
+        )
+
+    def get_safe_context(self, obj):
+        if _serializer_can_view_direct_identifiers(self):
+            return obj.safe_context or {}
+        return _redact_direct_identifier_value(obj.safe_context or {})
+
 
 class SourceDataUploadEventSerializer(serializers.ModelSerializer):
-    actor_username = serializers.CharField(source="actor.username", allow_null=True, read_only=True)
+    actor_username = serializers.SerializerMethodField()
+    metadata = serializers.SerializerMethodField()
 
     class Meta:
         model = SourceDataUploadEvent
@@ -168,19 +227,35 @@ class SourceDataUploadEventSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+    def get_metadata(self, obj):
+        metadata = obj.metadata or {}
+        if _serializer_can_view_direct_identifiers(self):
+            return metadata
+        return _redact_direct_identifier_value(metadata)
+
+    def get_actor_username(self, obj):
+        if not obj.actor_id:
+            return None
+        if _serializer_can_view_direct_identifiers(self):
+            return obj.actor.username
+        return ""
+
 
 class SourceDataUploadBatchSerializer(serializers.ModelSerializer):
     artifacts = SourceDataUploadArtifactSerializer(many=True, read_only=True)
     validation_issues = SourceDataValidationIssueSerializer(many=True, read_only=True)
     events = SourceDataUploadEventSerializer(many=True, read_only=True)
-    created_by_username = serializers.CharField(source="created_by.username", allow_null=True, read_only=True)
-    confirmed_by_username = serializers.CharField(source="confirmed_by.username", allow_null=True, read_only=True)
-    approval_requested_by_username = serializers.CharField(
-        source="approval_requested_by.username",
-        allow_null=True,
-        read_only=True,
-    )
-    approved_by_username = serializers.CharField(source="approved_by.username", allow_null=True, read_only=True)
+    created_by_username = serializers.SerializerMethodField()
+    confirmed_by_username = serializers.SerializerMethodField()
+    approval_requested_by_username = serializers.SerializerMethodField()
+    approved_by_username = serializers.SerializerMethodField()
+    source_name = serializers.SerializerMethodField()
+    source_ref = serializers.SerializerMethodField()
+    release_version = serializers.SerializerMethodField()
+    replacement_reason = serializers.SerializerMethodField()
+    operator_note = serializers.SerializerMethodField()
+    approval_reason = serializers.SerializerMethodField()
+    metadata = serializers.SerializerMethodField()
     duplicate_of_public_id = serializers.SerializerMethodField()
     replaces_upload_public_id = serializers.SerializerMethodField()
     validation_summary = serializers.SerializerMethodField()
@@ -241,6 +316,54 @@ class SourceDataUploadBatchSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+    def _direct_text(self, value: str) -> str:
+        if _serializer_can_view_direct_identifiers(self):
+            return value or ""
+        return redact_direct_identifiers_in_text(value or "", can_view=False)
+
+    def _actor_username(self, user) -> str | None:
+        if user is None:
+            return None
+        if _serializer_can_view_direct_identifiers(self):
+            return user.username
+        return ""
+
+    def get_created_by_username(self, obj):
+        return self._actor_username(obj.created_by)
+
+    def get_confirmed_by_username(self, obj):
+        return self._actor_username(obj.confirmed_by)
+
+    def get_approval_requested_by_username(self, obj):
+        return self._actor_username(obj.approval_requested_by)
+
+    def get_approved_by_username(self, obj):
+        return self._actor_username(obj.approved_by)
+
+    def get_source_name(self, obj):
+        return self._direct_text(obj.source_name)
+
+    def get_source_ref(self, obj):
+        return self._direct_text(obj.source_ref)
+
+    def get_release_version(self, obj):
+        return self._direct_text(obj.release_version)
+
+    def get_replacement_reason(self, obj):
+        return self._direct_text(obj.replacement_reason)
+
+    def get_operator_note(self, obj):
+        return self._direct_text(obj.operator_note)
+
+    def get_approval_reason(self, obj):
+        return self._direct_text(obj.approval_reason)
+
+    def get_metadata(self, obj):
+        metadata = obj.metadata or {}
+        if _serializer_can_view_direct_identifiers(self):
+            return metadata
+        return _redact_direct_identifier_value(metadata)
+
     def get_duplicate_of_public_id(self, obj):
         return str(obj.duplicate_of.public_id) if obj.duplicate_of_id else None
 
@@ -248,10 +371,16 @@ class SourceDataUploadBatchSerializer(serializers.ModelSerializer):
         return str(obj.replaces_upload.public_id) if obj.replaces_upload_id else None
 
     def get_validation_summary(self, obj):
-        return (obj.metadata or {}).get("validation_summary", {})
+        summary = (obj.metadata or {}).get("validation_summary", {})
+        if _serializer_can_view_direct_identifiers(self):
+            return summary
+        return _redact_direct_identifier_value(summary)
 
     def get_downstream_actions(self, obj):
-        return downstream_actions_for_upload(obj)
+        actions = downstream_actions_for_upload(obj)
+        if _serializer_can_view_direct_identifiers(self):
+            return actions
+        return _redact_direct_identifier_value(actions)
 
 
 class SourceDataUploadListResponseSerializer(serializers.Serializer):
@@ -1485,6 +1614,7 @@ class AlertSerializer(serializers.ModelSerializer):
     risk_score = serializers.FloatField(source="risk_score.score", allow_null=True, read_only=True)
     recipient = serializers.SerializerMethodField()
     message = serializers.SerializerMethodField()
+    governance_metadata = serializers.SerializerMethodField()
     external_id = serializers.SerializerMethodField()
     error_message = serializers.SerializerMethodField()
     privacy_context = serializers.SerializerMethodField()
@@ -1534,6 +1664,12 @@ class AlertSerializer(serializers.ModelSerializer):
             obj.message,
             can_view=self._can_view_direct_identifiers(),
         )
+
+    def get_governance_metadata(self, obj: Alert) -> dict:
+        metadata = obj.governance_metadata or {}
+        if self._can_view_direct_identifiers():
+            return metadata
+        return _redact_direct_identifier_value(metadata)
 
     def get_external_id(self, obj: Alert) -> str:
         return redact_provider_identifier(
@@ -1918,8 +2054,11 @@ class InteroperabilityExportPreviewSerializer(serializers.Serializer):
 
 class DashboardNotificationSerializer(serializers.ModelSerializer):
     ward_name = serializers.CharField(source="ward.name", read_only=True)
+    body = serializers.SerializerMethodField()
     category = serializers.SerializerMethodField()
     group_key = serializers.SerializerMethodField()
+    metadata = serializers.SerializerMethodField()
+    privacy_context = serializers.SerializerMethodField()
 
     def get_category(self, obj):
         if obj.type == DashboardNotification.TYPE_FEED_STALE:
@@ -1961,6 +2100,67 @@ class DashboardNotificationSerializer(serializers.ModelSerializer):
             return "session_security"
         return None
 
+    def _can_view_direct_identifiers(self) -> bool:
+        user = serializer_user(self)
+        return user_can_view_direct_identifiers(user)
+
+    def get_body(self, obj):
+        return redact_direct_identifiers_in_text(
+            obj.body,
+            can_view=self._can_view_direct_identifiers(),
+        )
+
+    def _redact_metadata_value(self, value):
+        if isinstance(value, dict):
+            return {
+                key: self._redact_metadata_field(key, nested_value)
+                for key, nested_value in value.items()
+            }
+        if isinstance(value, list):
+            return [self._redact_metadata_value(item) for item in value]
+        if isinstance(value, str):
+            if PHONE_CANDIDATE_PATTERN.match(value) or EMAIL_CANDIDATE_PATTERN.match(value):
+                return mask_contact_value(value)
+            return redact_direct_identifiers_in_text(value, can_view=False)
+        return value
+
+    def _redact_metadata_field(self, key: str, value):
+        normalized_key = key.lower()
+        direct_identifier_keys = {
+            "contact_email",
+            "contact_phone",
+            "email",
+            "external_id",
+            "phone",
+            "phone_number",
+            "provider_reference",
+            "recipient",
+            "recipient_email",
+            "recipient_phone",
+        }
+        if normalized_key in direct_identifier_keys:
+            if isinstance(value, str):
+                return mask_contact_value(value)
+            return ""
+        return self._redact_metadata_value(value)
+
+    def get_metadata(self, obj):
+        metadata = obj.metadata or {}
+        if self._can_view_direct_identifiers():
+            return metadata
+        return self._redact_metadata_value(metadata)
+
+    def get_privacy_context(self, obj):
+        redacted = not self._can_view_direct_identifiers()
+        return privacy_context(
+            classification="dashboard_notification_metadata",
+            redacted=redacted,
+            reason=(
+                "Notification body and metadata are redacted for roles that cannot "
+                "view direct operational identifiers."
+            ),
+        )
+
     class Meta:
         model = DashboardNotification
         fields = [
@@ -1988,6 +2188,7 @@ class DashboardNotificationSerializer(serializers.ModelSerializer):
             "auto_resolve",
             "pinned_until_actioned",
             "metadata",
+            "privacy_context",
             "created_at",
             "seen_at",
             "acknowledged_at",
@@ -2215,8 +2416,55 @@ class FacilityChvOperationsNavigationSerializer(serializers.Serializer):
     message = serializers.CharField()
 
 
+FACILITY_CONTACT_METADATA_KEY_FRAGMENTS = (
+    "contact",
+    "phone",
+    "email",
+    "recipient",
+    "provider_reference",
+    "failure_reason",
+    "external_id",
+)
+FACILITY_CONTACT_SAFE_METADATA_KEYS = {
+    "workflow",
+    "update_request_status",
+    "channel",
+    "delivery_mode",
+    "emergency_override",
+    "message_template",
+    "status",
+    "action",
+}
+
+
+def redact_facility_contact_metadata(value, *, can_view: bool):
+    if can_view:
+        return value
+
+    if isinstance(value, dict):
+        redacted = {}
+        for key, nested_value in value.items():
+            normalized_key = str(key).lower()
+            if normalized_key not in FACILITY_CONTACT_SAFE_METADATA_KEYS:
+                continue
+            if any(fragment in normalized_key for fragment in FACILITY_CONTACT_METADATA_KEY_FRAGMENTS):
+                continue
+            redacted[key] = redact_facility_contact_metadata(nested_value, can_view=False)
+        return redacted
+
+    if isinstance(value, list):
+        return [redact_facility_contact_metadata(item, can_view=False) for item in value]
+
+    if isinstance(value, str):
+        return redact_direct_identifiers_in_text(value, can_view=False)
+
+    return value
+
+
 class FacilityReadinessReviewEventSerializer(serializers.ModelSerializer):
     actor_username = serializers.CharField(source="actor.username", read_only=True)
+    detail = serializers.SerializerMethodField()
+    metadata = serializers.SerializerMethodField()
 
     class Meta:
         model = FacilityReadinessReviewEvent
@@ -2232,6 +2480,21 @@ class FacilityReadinessReviewEventSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = fields
+
+    def _can_view_direct_identifiers(self) -> bool:
+        return user_can_view_direct_identifiers(serializer_user(self))
+
+    def get_detail(self, obj: FacilityReadinessReviewEvent) -> str:
+        return redact_direct_identifiers_in_text(
+            obj.detail,
+            can_view=self._can_view_direct_identifiers(),
+        )
+
+    def get_metadata(self, obj: FacilityReadinessReviewEvent) -> dict:
+        return redact_facility_contact_metadata(
+            obj.metadata or {},
+            can_view=self._can_view_direct_identifiers(),
+        )
 
 
 class FacilityReadinessReviewSummarySerializer(serializers.ModelSerializer):
@@ -2261,7 +2524,9 @@ class FacilityReadinessReviewSummarySerializer(serializers.ModelSerializer):
 
 class FacilityReadinessUpdateRequestSummarySerializer(serializers.ModelSerializer):
     facility_name = serializers.CharField(source="facility.name", read_only=True)
+    contact = serializers.SerializerMethodField()
     contact_display_label = serializers.SerializerMethodField()
+    governance_metadata = serializers.SerializerMethodField()
     requested_by_username = serializers.CharField(source="requested_by.username", read_only=True)
 
     class Meta:
@@ -2289,8 +2554,24 @@ class FacilityReadinessUpdateRequestSummarySerializer(serializers.ModelSerialize
         ]
         read_only_fields = fields
 
+    def _can_view_direct_identifiers(self) -> bool:
+        return user_can_view_direct_identifiers(serializer_user(self))
+
+    def get_contact(self, obj: FacilityReadinessUpdateRequest) -> int | None:
+        if self._can_view_direct_identifiers():
+            return obj.contact_id
+        return None
+
     def get_contact_display_label(self, obj: FacilityReadinessUpdateRequest) -> str:
+        if not self._can_view_direct_identifiers():
+            return "Facility contact"
         return obj.contact.name or obj.contact.role or "Facility contact"
+
+    def get_governance_metadata(self, obj: FacilityReadinessUpdateRequest) -> dict:
+        return redact_facility_contact_metadata(
+            obj.governance_metadata or {},
+            can_view=self._can_view_direct_identifiers(),
+        )
 
 
 class FacilityReadinessUpdateRequestSerializer(FacilityReadinessUpdateRequestSummarySerializer):
@@ -2301,6 +2582,22 @@ class FacilityReadinessUpdateRequestSerializer(FacilityReadinessUpdateRequestSum
             "failure_reason",
         ]
         read_only_fields = fields
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if self._can_view_direct_identifiers():
+            return data
+
+        data["message_body"] = redact_direct_identifiers_in_text(
+            instance.message_body,
+            can_view=False,
+        )
+        data["provider_reference"] = ""
+        data["failure_reason"] = redact_direct_identifiers_in_text(
+            instance.failure_reason,
+            can_view=False,
+        )
+        return data
 
 
 class FacilityReadinessEscalationSummarySerializer(serializers.ModelSerializer):
@@ -3034,6 +3331,43 @@ class SystemControlStatusSerializer(serializers.Serializer):
     alert_delivery_pause_updated_at = serializers.DateTimeField(allow_null=True)
     alert_delivery_pause_updated_by = serializers.CharField(allow_null=True)
     ward_risk_decision_policy = serializers.DictField()
+
+
+class SystemReadinessDeliveryBackendSerializer(serializers.Serializer):
+    name = serializers.CharField()
+    count = serializers.IntegerField()
+
+
+class SystemReadinessSerializer(serializers.Serializer):
+    schema_version = serializers.CharField()
+    mode = serializers.CharField()
+    generated_at = serializers.DateTimeField()
+    scope = serializers.DictField()
+    visible_wards = serializers.IntegerField()
+    high_risk_wards = serializers.IntegerField()
+    wards_with_fresh_risk = serializers.IntegerField()
+    latest_risk_timestamp = serializers.DateTimeField(allow_null=True)
+    visible_alerts = serializers.IntegerField()
+    latest_alert_timestamp = serializers.DateTimeField(allow_null=True)
+    queued_alerts = serializers.IntegerField()
+    retry_pending_alerts = serializers.IntegerField()
+    failed_alerts = serializers.IntegerField()
+    delivered_alerts = serializers.IntegerField()
+    latest_failed_alert_timestamp = serializers.DateTimeField(allow_null=True)
+    latest_retry_alert_timestamp = serializers.DateTimeField(allow_null=True)
+    latest_delivered_alert_timestamp = serializers.DateTimeField(allow_null=True)
+    visible_facilities = serializers.IntegerField()
+    latest_facility_timestamp = serializers.DateTimeField(allow_null=True)
+    latest_chv_timestamp = serializers.DateTimeField(allow_null=True)
+    active_chvs = serializers.IntegerField()
+    online_chvs = serializers.IntegerField()
+    delayed_chvs = serializers.IntegerField()
+    offline_chvs = serializers.IntegerField()
+    triage_sessions_24h = serializers.IntegerField()
+    referrals_24h = serializers.IntegerField()
+    sync_payloads_24h = serializers.IntegerField()
+    ussd_sessions_24h = serializers.IntegerField()
+    delivery_backends = SystemReadinessDeliveryBackendSerializer(many=True)
 
 
 class SystemRetryControlsRequestSerializer(serializers.Serializer):

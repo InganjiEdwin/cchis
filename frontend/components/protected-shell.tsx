@@ -16,8 +16,8 @@ import {
   readRecoveryCodeLoginNotice,
   type RecoveryCodeLoginNotice,
 } from "@/lib/auth";
+import { hasPageCapability } from "@/lib/capabilities";
 import { buildPolicyReviewRoute } from "@/lib/navigation";
-import { isDashboardRole } from "@/lib/roles";
 
 function RecoveryCodeLoginNoticeBanner() {
   const [notice, setNotice] = useState<RecoveryCodeLoginNotice | null>(null);
@@ -73,7 +73,7 @@ export function ProtectedShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { currentUser, isAuthenticated, isHydrating, requiresPolicyAcceptance } = useAuth();
-  const isDashboardUser = currentUser ? isDashboardRole(currentUser.role) : false;
+  const isDashboardUser = currentUser ? hasPageCapability(currentUser, "dashboard") : false;
   const search = searchParams.toString();
   const currentPath = search ? `${pathname}?${search}` : pathname;
 
@@ -87,7 +87,7 @@ export function ProtectedShell({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    if (!currentUser || !isDashboardRole(currentUser.role)) {
+    if (!currentUser || !hasPageCapability(currentUser, "dashboard")) {
       router.replace("/unauthorized");
       return;
     }

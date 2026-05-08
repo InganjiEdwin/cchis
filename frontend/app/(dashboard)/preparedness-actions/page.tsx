@@ -234,6 +234,22 @@ function formatCount(value: number | null) {
   return value === null ? "..." : String(value);
 }
 
+function getSummaryIconClass(tone: BadgeTone) {
+  if (tone === "danger") {
+    return "bg-[color-mix(in_srgb,var(--danger)_18%,var(--dashboard-panel-surface))] text-[color:var(--danger)]";
+  }
+  if (tone === "warning") {
+    return "bg-[color-mix(in_srgb,var(--warning)_18%,var(--dashboard-panel-surface))] text-[color:var(--warning)]";
+  }
+  if (tone === "success") {
+    return "bg-[color-mix(in_srgb,var(--success)_18%,var(--dashboard-panel-surface))] text-[color:var(--success)]";
+  }
+  if (tone === "info") {
+    return "bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_18%,var(--dashboard-panel-surface))] text-brand";
+  }
+  return "bg-[color-mix(in_srgb,var(--dashboard-table-line)_72%,var(--dashboard-panel-surface))] text-panel-copy";
+}
+
 function ActionDetailDrawer({
   action,
   canManage,
@@ -493,7 +509,7 @@ export default function PreparednessActionsPage() {
   const [search, setSearch] = useState("");
   const [queueFilter, setQueueFilter] = useState<QueueFilter>("ACTIVE");
   const [selectedPublicId, setSelectedPublicId] = useState<string | null>(null);
-  const canManage = canManagePreparednessActions(currentUser?.role);
+  const canManage = canManagePreparednessActions(currentUser);
   const scopeLabels = [
     wardId ? `ward ${wardId}` : null,
     facilityId ? `facility ${facilityId}` : null,
@@ -635,7 +651,7 @@ export default function PreparednessActionsPage() {
           return (
             <Card key={label} className="p-5">
               <div className="flex items-center justify-between gap-3">
-                <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+                <span className={cn("inline-flex size-11 items-center justify-center rounded-2xl", getSummaryIconClass(tone))}>
                   <SummaryIcon className="size-5" aria-hidden="true" />
                 </span>
                 <StatusBadge tone={tone} className="rounded-full px-2.5 py-1 tracking-[0.12em]">
@@ -653,7 +669,7 @@ export default function PreparednessActionsPage() {
       <Card className="space-y-5 p-5 md:p-6">
         <div className="space-y-4">
           <div className="flex items-start gap-3">
-            <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--brand)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--brand)_20%,transparent)]">
+            <span className={cn("inline-flex size-11 items-center justify-center rounded-2xl", getSummaryIconClass("info"))}>
               <ShieldCheck className="size-5" aria-hidden="true" />
             </span>
             <div className="min-w-0">

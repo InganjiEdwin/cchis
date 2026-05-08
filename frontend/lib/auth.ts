@@ -13,6 +13,62 @@ export type ProfileCapabilities = {
   mode: "auth_contract_backed_profile";
 };
 
+export const DASHBOARD_PAGE_CAPABILITY_KEYS = [
+  "dashboard",
+  "overview",
+  "wards",
+  "alerts",
+  "preparedness_actions",
+  "chv_operations",
+  "facility_readiness",
+  "operational_metrics",
+  "source_data",
+  "message_governance",
+  "model_health",
+  "interoperability",
+  "system",
+] as const;
+
+export const DASHBOARD_ACTION_CAPABILITY_KEYS = [
+  "trigger_alerts",
+  "manage_preparedness_actions",
+  "view_chv_operations",
+  "manage_chv_operations",
+  "manage_facility_readiness",
+  "request_sensitive_exports",
+  "approve_sensitive_exports",
+  "download_sensitive_exports",
+  "view_source_data",
+  "manage_source_data_imports",
+  "approve_source_data_risky_imports",
+  "trigger_source_data_downstream_actions",
+  "view_message_governance",
+  "approve_message_governance",
+  "view_system_readiness",
+  "read_system_control_status",
+  "use_system_controls",
+  "manage_auth_users",
+  "review_auth_audit",
+] as const;
+
+export type DashboardPageCapabilityKey = (typeof DASHBOARD_PAGE_CAPABILITY_KEYS)[number];
+export type DashboardActionCapabilityKey = (typeof DASHBOARD_ACTION_CAPABILITY_KEYS)[number];
+export type DashboardScopeType = "BROAD" | "WARD" | "NONE";
+export type TwoFactorPolicy = "REQUIRED" | "OPTIONAL" | "NONE";
+
+export type DashboardCapabilities = {
+  schema_version: "dashboard-capabilities-v1";
+  scope: {
+    type: DashboardScopeType;
+    ward_id: number | null;
+  };
+  pages: Record<DashboardPageCapabilityKey, boolean>;
+  actions: Record<DashboardActionCapabilityKey, boolean>;
+  policy: {
+    two_factor_policy: TwoFactorPolicy;
+  };
+};
+
 export type PolicyDocumentType = "TERMS" | "PRIVACY" | "COOKIE_NOTICE";
 export type PolicyAcceptanceContext = "first_sign_in" | "version_update" | "manual_review";
 
@@ -59,8 +115,111 @@ export type CurrentUser = {
   account_created_at?: string;
   last_login_at?: string | null;
   profile_capabilities?: ProfileCapabilities;
+  dashboard_capabilities?: DashboardCapabilities;
   policy_acceptance?: PolicyAcceptanceState;
 };
+
+function capabilityMap<T extends string>(enabledKeys: readonly T[], allKeys: readonly T[]) {
+  const enabled = new Set(enabledKeys);
+  return Object.fromEntries(allKeys.map((key) => [key, enabled.has(key)])) as Record<T, boolean>;
+}
+
+const ROLE_PAGE_CAPABILITIES: Record<UserRole, Record<DashboardPageCapabilityKey, boolean>> = {
+  ADMIN: capabilityMap(DASHBOARD_PAGE_CAPABILITY_KEYS, DASHBOARD_PAGE_CAPABILITY_KEYS),
+  SUPERVISOR: capabilityMap(
+    [
+      "dashboard",
+      "overview",
+      "wards",
+      "alerts",
+      "preparedness_actions",
+      "chv_operations",
+      "facility_readiness",
+      "operational_metrics",
+      "source_data",
+      "message_governance",
+      "model_health",
+      "interoperability",
+    ],
+    DASHBOARD_PAGE_CAPABILITY_KEYS,
+  ),
+  ANALYST: capabilityMap(
+    [
+      "dashboard",
+      "overview",
+      "wards",
+      "alerts",
+      "preparedness_actions",
+      "facility_readiness",
+      "operational_metrics",
+      "source_data",
+      "message_governance",
+      "model_health",
+      "interoperability",
+      "system",
+    ],
+    DASHBOARD_PAGE_CAPABILITY_KEYS,
+  ),
+  CHV: capabilityMap([], DASHBOARD_PAGE_CAPABILITY_KEYS),
+};
+
+const ROLE_ACTION_CAPABILITIES: Record<UserRole, Record<DashboardActionCapabilityKey, boolean>> = {
+  ADMIN: capabilityMap(DASHBOARD_ACTION_CAPABILITY_KEYS, DASHBOARD_ACTION_CAPABILITY_KEYS),
+  SUPERVISOR: capabilityMap(
+    [
+      "trigger_alerts",
+      "manage_preparedness_actions",
+      "view_chv_operations",
+      "manage_chv_operations",
+      "manage_facility_readiness",
+      "request_sensitive_exports",
+      "download_sensitive_exports",
+      "view_source_data",
+      "manage_source_data_imports",
+      "trigger_source_data_downstream_actions",
+      "view_message_governance",
+      "view_system_readiness",
+      "read_system_control_status",
+    ],
+    DASHBOARD_ACTION_CAPABILITY_KEYS,
+  ),
+  ANALYST: capabilityMap(
+    [
+      "view_source_data",
+      "view_message_governance",
+      "view_system_readiness",
+      "read_system_control_status",
+    ],
+    DASHBOARD_ACTION_CAPABILITY_KEYS,
+  ),
+  CHV: capabilityMap([], DASHBOARD_ACTION_CAPABILITY_KEYS),
+};
+
+const DEFAULT_TWO_FACTOR_POLICY_BY_ROLE: Record<UserRole, TwoFactorPolicy> = {
+  ADMIN: "REQUIRED",
+  SUPERVISOR: "REQUIRED",
+  ANALYST: "OPTIONAL",
+  CHV: "NONE",
+};
+
+export function buildDefaultDashboardCapabilities(
+  user: Pick<CurrentUser, "role" | "ward" | "scope_type" | "scope_ward_id" | "two_factor_policy">,
+): DashboardCapabilities {
+  const broadScope = user.role === "ADMIN" || user.role === "ANALYST";
+  const wardId = broadScope ? null : user.scope_ward_id ?? user.ward ?? null;
+  return {
+    schema_version: "dashboard-capabilities-v1",
+    scope: {
+      type: user.scope_type ?? (broadScope ? "BROAD" : wardId ? "WARD" : "NONE"),
+      ward_id: wardId,
+    },
+    pages: { ...ROLE_PAGE_CAPABILITIES[user.role] },
+    actions: { ...ROLE_ACTION_CAPABILITIES[user.role] },
+    policy: {
+      two_factor_policy: user.two_factor_policy ?? DEFAULT_TWO_FACTOR_POLICY_BY_ROLE[user.role],
+    },
+  };
+}
 
 export function buildDefaultProfileCapabilities(
   user: Pick<CurrentUser, "is_active" | "two_factor_policy" | "is_totp_enabled">,
@@ -83,13 +242,14 @@ export function buildDefaultProfileCapabilities(
 }
 
 export function normalizeCurrentUser(user: CurrentUser): CurrentUser {
-  if (user.profile_capabilities) {
+  if (user.profile_capabilities && user.dashboard_capabilities) {
     return user;
   }
 
   return {
     ...user,
-    profile_capabilities: buildDefaultProfileCapabilities(user),
+    profile_capabilities: user.profile_capabilities ?? buildDefaultProfileCapabilities(user),
+    dashboard_capabilities: user.dashboard_capabilities ?? buildDefaultDashboardCapabilities(user),
   };
 }
 

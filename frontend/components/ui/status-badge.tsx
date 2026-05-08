@@ -6,10 +6,10 @@ type StatusBadgeTone = "default" | "success" | "warning" | "danger" | "info";
 
 const toneClasses: Record<StatusBadgeTone, string> = {
   default: "bg-[color-mix(in_srgb,var(--dashboard-table-line)_70%,transparent)] text-panel-copy",
-  success: "bg-[color-mix(in_srgb,var(--success)_16%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_24%,transparent)]",
-  warning: "bg-[color-mix(in_srgb,var(--warning)_14%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_22%,transparent)]",
-  danger: "bg-[color-mix(in_srgb,var(--danger)_14%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_22%,transparent)]",
-  info: "bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]",
+  success: "bg-[color-mix(in_srgb,var(--success)_18%,var(--dashboard-panel-surface))] text-[color:var(--success)]",
+  warning: "bg-[color-mix(in_srgb,var(--warning)_16%,var(--dashboard-panel-surface))] text-[color:var(--warning)]",
+  danger: "bg-[color-mix(in_srgb,var(--danger)_16%,var(--dashboard-panel-surface))] text-[color:var(--danger)]",
+  info: "bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_14%,var(--dashboard-panel-surface))] text-brand",
 };
 
 type StatusBadgeProps = React.HTMLAttributes<HTMLSpanElement> & {

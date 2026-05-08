@@ -32,6 +32,7 @@ import {
   type AlertRecord,
   type ClimateEvidence,
 } from "@/lib/dashboard";
+import { hasActionCapability } from "@/lib/capabilities";
 import { canExportSensitiveReports } from "@/lib/roles";
 import { useAlertDetailQuery } from "@/queries/use-alert-detail-query";
 import { useCreateChvCoverageRequestFromAlertMutation } from "@/queries/use-create-chv-coverage-request-from-alert-mutation";
@@ -334,8 +335,8 @@ export default function AlertDetailPage() {
         messageSource.trigger_type ||
         messageSource.mode !== "unavailable"),
   );
-  const canRequestCoverage = currentUser?.role === "ADMIN" || currentUser?.role === "SUPERVISOR";
-  const canExportReport = canExportSensitiveReports(currentUser?.role);
+  const canRequestCoverage = hasActionCapability(currentUser, "manage_chv_operations");
+  const canExportReport = canExportSensitiveReports(currentUser);
   const isCoverageRequestPending = createFromAlertMutation.isPending || createCoverageRequestMutation.isPending;
   const liveCoverageRequestQuery = useLiveChvCoverageRequestForWardQuery({
     wardId: alert?.ward ?? null,

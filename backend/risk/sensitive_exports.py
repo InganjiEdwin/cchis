@@ -11,6 +11,7 @@ from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from accounts.models import User
+from accounts.role_capabilities import user_is_admin_equivalent
 
 from .models import Alert, SensitiveExportDownloadAudit, SensitiveExportRequest, Ward
 from .privacy_minimization import PrivacyMinimizationViolation, ensure_pii_safe_mapping
@@ -25,13 +26,20 @@ ALERT_EXPORT_SENSITIVE_FIELDS = [
 
 
 def user_can_request_sensitive_export(user: User) -> bool:
-    return bool(user and user.is_authenticated and user.role in [User.ROLE_ADMIN, User.ROLE_SUPERVISOR])
+    return bool(
+        user
+        and user.is_authenticated
+        and (
+            user_is_admin_equivalent(user)
+            or user.role == User.ROLE_SUPERVISOR
+        )
+    )
 
 
 def user_can_download_sensitive_export(user: User, export_request: SensitiveExportRequest) -> bool:
     if not user or not user.is_authenticated:
         return False
-    if user.role == User.ROLE_ADMIN:
+    if user_is_admin_equivalent(user):
         return True
     return user.role == User.ROLE_SUPERVISOR and export_request.requester_id == user.id
 
@@ -52,7 +60,7 @@ def _parse_iso_datetime(value):
 
 def _alert_queryset_for_user(user: User):
     queryset = Alert.objects.select_related("ward", "risk_score").all().order_by("-created_at")
-    if user.role == User.ROLE_SUPERVISOR:
+    if user.role == User.ROLE_SUPERVISOR and not user_is_admin_equivalent(user):
         if not user.ward_id:
             return queryset.none()
         return queryset.filter(ward_id=user.ward_id)
@@ -277,7 +285,7 @@ def request_sensitive_export(*, requester: User, export_type: str, purpose: str,
     if not sensitive_fields:
         raise ValidationError({"export_type": ["Unsupported sensitive export type."]})
 
-    requires_approval = requester.role != User.ROLE_ADMIN
+    requires_approval = not user_is_admin_equivalent(requester)
     export_request = SensitiveExportRequest.objects.create(
         export_type=export_type,
         requester=requester,

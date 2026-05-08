@@ -387,7 +387,7 @@ export default function OperationalMetricsPage() {
 
   return (
     <RoleGate
-      allowedRoles={["ADMIN", "SUPERVISOR", "ANALYST"]}
+      pageCapability="operational_metrics"
       title="Operational performance unavailable"
       message="Your role cannot view response performance measures."
     >

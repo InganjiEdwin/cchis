@@ -4,24 +4,35 @@ import Link from "next/link";
 
 import { useAuth } from "@/components/auth-provider";
 import { Card } from "@/components/ui/card";
-import type { UserRole } from "@/lib/auth";
+import type { DashboardActionCapabilityKey, DashboardPageCapabilityKey, UserRole } from "@/lib/auth";
+import { hasActionCapability, hasPageCapability } from "@/lib/capabilities";
 import { hasRole } from "@/lib/roles";
 
 type RoleGateProps = {
-  allowedRoles: UserRole[];
+  pageCapability?: DashboardPageCapabilityKey;
+  actionCapability?: DashboardActionCapabilityKey;
+  allowedRoles?: UserRole[];
   title: string;
   message: string;
   children: React.ReactNode;
 };
 
-export function RoleGate({ allowedRoles, title, message, children }: RoleGateProps) {
+export function RoleGate({ pageCapability, actionCapability, allowedRoles, title, message, children }: RoleGateProps) {
   const { currentUser } = useAuth();
 
   if (!currentUser) {
     return null;
   }
 
-  if (hasRole(currentUser.role, allowedRoles)) {
+  const hasCapabilityGate = Boolean(pageCapability || actionCapability);
+  const hasCapabilityAccess =
+    (pageCapability ? hasPageCapability(currentUser, pageCapability) : false) ||
+    (actionCapability ? hasActionCapability(currentUser, actionCapability) : false);
+  const hasAccess = hasCapabilityGate
+    ? hasCapabilityAccess
+    : (allowedRoles ? hasRole(currentUser.role, allowedRoles) : false);
+
+  if (hasAccess) {
     return <>{children}</>;
   }
 

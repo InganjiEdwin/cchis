@@ -7,6 +7,7 @@ from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import AuthAuditEvent, UserPolicyAcceptance
+from .session_security import apply_role_refresh_lifetime, ensure_session_for_refresh
 from .services import create_current_policy_acceptances
 
 
@@ -31,6 +32,8 @@ class PolicyAcceptanceApiTests(APITestCase):
 
     def _authenticate_with_jwt(self):
         refresh = RefreshToken.for_user(self.user)
+        apply_role_refresh_lifetime(refresh, self.user)
+        ensure_session_for_refresh(self.user, refresh)
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh.access_token}")
 
     def _current_acceptance_payload(self, **overrides):

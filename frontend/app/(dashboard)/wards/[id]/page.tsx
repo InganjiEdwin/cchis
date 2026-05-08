@@ -647,7 +647,7 @@ export default function WardDetailPage() {
       ? detail.spatialMapFeatures
       : wardMapFeatures;
   const highRiskSpatialNeighbors = spatialEvidence?.neighbors.filter((neighbor) => neighbor.risk_level === "HIGH") ?? [];
-  const canTriggerFromPage = currentUser ? canTriggerAlerts(currentUser.role) : false;
+  const canTriggerFromPage = canTriggerAlerts(currentUser);
   const hasLowSignalState = Boolean(
     detail &&
       detail.riskLevel === "LOW" &&
@@ -1653,7 +1653,7 @@ export default function WardDetailPage() {
                       <p className="text-sm font-semibold text-panel-strong">No recent alerts for this ward</p>
                       <p className="mt-1 text-sm text-panel-muted">
                         {detail?.primaryCtaKind === "OPEN_TRIGGER_FLOW" || detail?.primaryCtaKind === "REVIEW_TRIGGER"
-                          ? canTriggerAlerts(currentUser.role)
+                          ? canTriggerFromPage
                             ? detail.primaryCtaKind === "REVIEW_TRIGGER"
                               ? "Review trigger if guided follow-up is still needed."
                               : "Open trigger flow if a guided response is still needed."
@@ -2317,7 +2317,7 @@ export default function WardDetailPage() {
                 <p className="text-sm font-semibold text-panel-strong">No recent alerts for this ward</p>
                 <p className="mt-1 text-sm text-panel-muted">
                   {detail?.primaryCtaKind === "OPEN_TRIGGER_FLOW" || detail?.primaryCtaKind === "REVIEW_TRIGGER"
-                    ? canTriggerAlerts(currentUser.role)
+                    ? canTriggerFromPage
                       ? detail.primaryCtaKind === "REVIEW_TRIGGER"
                         ? "Review trigger if guided follow-up is still needed."
                         : "Open trigger flow if a guided response is still needed."

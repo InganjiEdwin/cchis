@@ -272,7 +272,7 @@ export default function FacilityReadinessPage() {
       />
 
       <RoleGate
-        allowedRoles={["ADMIN", "SUPERVISOR", "ANALYST"]}
+        pageCapability="facility_readiness"
         title="Facility readiness is role-restricted"
         message="Facility readiness is intended for dashboard roles coordinating preparedness and response."
       >

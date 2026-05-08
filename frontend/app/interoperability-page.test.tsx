@@ -3,8 +3,13 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import InteroperabilityPage from "@/app/(dashboard)/interoperability/page";
+import type { CurrentUser } from "@/lib/auth";
 import type { InteroperabilityDashboardResponse } from "@/lib/dashboard";
+import { buildDashboardUser } from "@/test/dashboard-user";
 
+const { mockUseAuth } = vi.hoisted(() => ({
+  mockUseAuth: vi.fn(),
+}));
 const mockUseInteroperabilityDashboardQuery = vi.fn();
 const mockUseInteroperabilityRunDetailMutation = vi.fn();
 const mockUseInteroperabilityOrgUnitMappingImportMutation = vi.fn();
@@ -40,6 +45,10 @@ vi.mock("@/components/dashboard-topbar", () => ({
 
 vi.mock("@/components/role-gate", () => ({
   RoleGate: ({ children }: { children: React.ReactNode }) => React.createElement(React.Fragment, null, children),
+}));
+
+vi.mock("@/components/auth-provider", () => ({
+  useAuth: () => mockUseAuth(),
 }));
 
 vi.mock("@/queries/use-interoperability-query", () => ({
@@ -267,6 +276,16 @@ function buildDashboard(): InteroperabilityDashboardResponse {
 describe("InteroperabilityPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseAuth.mockReturnValue({
+      currentUser: buildDashboardUser("ADMIN", {
+        username: "admin",
+        email: "admin@example.com",
+        full_name: "Admin User",
+        theme_preference: "SYSTEM",
+        ward: null,
+        ward_name: null,
+      }) satisfies CurrentUser,
+    });
     mockFetchRunDetail.mockImplementation(async (publicId: string) => {
       const run = buildDashboard().runs.find((item) => item.public_id === publicId);
       return run ?? buildDashboard().runs[0];
@@ -366,6 +385,28 @@ describe("InteroperabilityPage", () => {
         mapping_version_label: "dhis2-v2",
       });
     });
+  });
+
+  it("lets analysts inspect data connections without import or sharing-preview controls", () => {
+    mockUseAuth.mockReturnValue({
+      currentUser: buildDashboardUser("ANALYST", {
+        username: "analyst",
+        email: "analyst@example.com",
+        full_name: "Analyst User",
+        theme_preference: "SYSTEM",
+        ward: null,
+        ward_name: null,
+      }) satisfies CurrentUser,
+    });
+
+    render(<InteroperabilityPage />);
+
+    expect(screen.getByText(/Data Connections \| Safely receive files, match locations, and preview data before sharing/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Preview sharing" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Check matching file" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Check file" })).not.toBeInTheDocument();
+    expect(screen.getByText("Matching uploads are limited to operational data managers. Download the template to inspect the expected file shape.")).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "Download template" }).length).toBeGreaterThan(0);
   });
 
   it("confirms CSV imports only by referencing the reviewed dry-run", async () => {

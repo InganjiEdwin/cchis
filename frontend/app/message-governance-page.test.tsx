@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import MessageGovernancePage from "@/app/(dashboard)/message-governance/page";
 import type { MessageGovernanceDashboardResponse, MessageTemplateDetailResponse } from "@/lib/dashboard";
+import { buildDashboardUser } from "@/test/dashboard-user";
 
 const mockUseAuth = vi.fn();
 const mockUseMessageGovernanceDashboardQuery = vi.fn();
@@ -713,18 +714,14 @@ describe("MessageGovernancePage", () => {
     mockUssdMutateAsync.mockResolvedValue({});
     const dashboard = buildDashboard();
     mockUseAuth.mockReturnValue({
-      currentUser: {
-        id: 1,
+      currentUser: buildDashboardUser("ADMIN", {
         username: "admin",
         email: "admin@example.com",
         full_name: "Admin User",
-        phone_number: null,
-        role: "ADMIN",
         theme_preference: "DARK",
         ward: null,
         ward_name: null,
-        is_active: true,
-      },
+      }),
     });
     mockUseMessageGovernanceDashboardQuery.mockReturnValue({
       data: dashboard,
@@ -810,6 +807,54 @@ describe("MessageGovernancePage", () => {
       });
     });
     expect(mockRefetch).toHaveBeenCalled();
+  });
+
+  it("keeps supervisor and analyst message governance approval controls read-only", async () => {
+    for (const role of ["SUPERVISOR", "ANALYST"] as const) {
+      vi.clearAllMocks();
+      const dashboard = buildDashboard();
+      mockUseAuth.mockReturnValue({
+        currentUser: buildDashboardUser(role, {
+          username: role.toLowerCase(),
+          email: `${role.toLowerCase()}@example.com`,
+          full_name: `${role} User`,
+          theme_preference: "DARK",
+          ward: role === "SUPERVISOR" ? 7 : null,
+          ward_name: role === "SUPERVISOR" ? "North Kadem" : null,
+        }),
+      });
+      mockUseMessageGovernanceDashboardQuery.mockReturnValue({
+        data: dashboard,
+        isPending: false,
+        error: null,
+        refetch: mockRefetch,
+        isFetching: false,
+      });
+      mockUseMessageTemplateDetailQuery.mockImplementation((publicId: string | null) => ({
+        data: publicId ? buildTemplateDetail(dashboard) : undefined,
+        isPending: false,
+        error: null,
+      }));
+      mockUseApproveMessageTemplateMutation.mockReturnValue({
+        mutateAsync: mockMutateAsync,
+        isPending: false,
+      });
+      mockUseApproveUssdMenuVersionMutation.mockReturnValue({
+        mutateAsync: mockUssdMutateAsync,
+        isPending: false,
+      });
+
+      const { unmount } = render(React.createElement(MessageGovernancePage));
+
+      fireEvent.click(screen.getByRole("button", { name: /messages/i }));
+      await screen.findByText("Message Text");
+
+      expect(screen.getByText("Only admins can approve, reject, or archive messages.")).toBeInTheDocument();
+      expect(screen.getAllByRole("button", { name: /approve/i })[0]).toBeDisabled();
+      expect(screen.getAllByRole("button", { name: /reject/i })[0]).toBeDisabled();
+
+      unmount();
+    }
   });
 
   it("submits USSD menu review actions through the mutation contract", async () => {

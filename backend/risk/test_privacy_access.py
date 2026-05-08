@@ -11,8 +11,17 @@ from .models import (
     CHVAssignment,
     CHVCoverageRequest,
     ContactPreference,
+    DashboardNotification,
+    FacilityContact,
+    FacilityReadinessReview,
+    FacilityReadinessReviewEvent,
+    FacilityReadinessUpdateRequest,
     HealthFacility,
     RiskScore,
+    SourceDataUploadArtifact,
+    SourceDataUploadBatch,
+    SourceDataUploadEvent,
+    SourceDataValidationIssue,
     SyncQueue,
     TriageSession,
     UssdSessionLog,
@@ -78,6 +87,26 @@ class PrivacyAccessSafeViewTests(APITestCase):
             delivery_backend="stub",
             external_id="provider-alert-privacy-access",
             error_message="Provider retry path mentions +254700111098.",
+            governance_metadata={
+                "schema_version": "message-audience-governance-phase-2-v1",
+                "workflow": "risk_alert_sms",
+                "audience_decision": {
+                    "allowed": True,
+                    "contact_reference": f"chv:{self.chv.public_id}",
+                    "phone_number_present": True,
+                    "preference_public_id": "f7d2c92e-8d02-4516-ae4b-57672db3b09b",
+                    "audit_event_public_id": "3193a6f7-5927-4723-a7d8-cf0decd985ab",
+                    "source_reference": "privacy-access-consent-source",
+                },
+                "audience_scope": {
+                    "scope_kind": "assigned_ward",
+                    "scope_allowed": True,
+                    "actor_id": self.supervisor_user.id,
+                    "actor_role": User.ROLE_SUPERVISOR,
+                    "actor_ward_id": self.ward.id,
+                    "target_ward_id": self.ward.id,
+                },
+            },
         )
 
     def _create_user(self, username: str, role: str, ward: Ward | None = None) -> User:
@@ -104,10 +133,16 @@ class PrivacyAccessSafeViewTests(APITestCase):
         self.assertIn("[redacted phone]", list_alert["message"])
         self.assertEqual(list_alert["external_id"], "")
         self.assertNotIn("+254700111098", list_alert["error_message"])
+        self.assertNotIn(str(self.chv.public_id), str(list_alert["governance_metadata"]))
+        self.assertNotIn("privacy-access-consent-source", str(list_alert["governance_metadata"]))
+        self.assertEqual(list_alert["governance_metadata"]["audience_decision"]["contact_reference"], "")
+        self.assertEqual(list_alert["governance_metadata"]["audience_decision"]["preference_public_id"], "")
+        self.assertEqual(list_alert["governance_metadata"]["audience_scope"]["actor_id"], "")
         self.assertTrue(list_alert["privacy_context"]["redacted"])
         self.assertEqual(detail_response.data["recipient"], "+254******1001")
         self.assertNotIn("+254700111099", detail_response.data["message"])
         self.assertEqual(detail_response.data["external_id"], "")
+        self.assertNotIn(str(self.chv.public_id), str(detail_response.data["governance_metadata"]))
         self.assertEqual(detail_response.data["privacy_context"]["classification"], "sensitive_contact_data")
 
     def test_admin_alert_views_keep_direct_recipient_with_privacy_label(self):
@@ -120,7 +155,70 @@ class PrivacyAccessSafeViewTests(APITestCase):
         self.assertIn("+254700111099", response.data["message"])
         self.assertEqual(response.data["external_id"], "provider-alert-privacy-access")
         self.assertIn("+254700111098", response.data["error_message"])
+        self.assertEqual(
+            response.data["governance_metadata"]["audience_decision"]["contact_reference"],
+            f"chv:{self.chv.public_id}",
+        )
+        self.assertEqual(response.data["governance_metadata"]["audience_scope"]["actor_id"], self.supervisor_user.id)
         self.assertFalse(response.data["privacy_context"]["redacted"])
+
+    def test_analyst_notifications_do_not_expose_alert_delivery_recipients(self):
+        self.alert.status = Alert.STATUS_FAILED
+        self.alert.save(update_fields=["status"])
+        self.client.force_authenticate(self.analyst_user)
+
+        response = self.client.get(reverse("notification-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        notification = next(
+            item for item in response.data["results"]
+            if item["type"] == DashboardNotification.TYPE_ALERT_FAILED
+        )
+        self.assertNotIn("+254700111001", notification["body"])
+        self.assertNotIn("+254700111001", str(notification["metadata"]))
+        self.assertNotIn("recipient", notification["metadata"])
+        self.assertTrue(notification["privacy_context"]["redacted"])
+
+        stored_notification = DashboardNotification.objects.get(
+            type=DashboardNotification.TYPE_ALERT_FAILED,
+            source_object_id=str(self.alert.id),
+        )
+        self.assertNotIn("+254700111001", stored_notification.body)
+        self.assertNotIn("+254700111001", str(stored_notification.metadata))
+
+    def test_legacy_notification_metadata_is_redacted_for_analyst_but_visible_to_admin(self):
+        notification = DashboardNotification.objects.create(
+            type=DashboardNotification.TYPE_ALERT_FAILED,
+            severity=DashboardNotification.SEVERITY_CRITICAL,
+            title="Legacy alert failure",
+            body="SMS alert delivery failed for +254700111001. Provider mentioned +254700111099.",
+            source_system="alerts",
+            source_object_type="alert",
+            source_object_id=str(self.alert.id),
+            href=f"/alerts/{self.alert.id}",
+            recipient_scope=DashboardNotification.SCOPE_WARD,
+            ward=self.ward,
+            metadata={
+                "recipient": "+254700111001",
+                "failure": "Provider path for +254700111099 failed.",
+            },
+        )
+
+        self.client.force_authenticate(self.analyst_user)
+        analyst_response = self.client.get(reverse("notification-detail", args=[notification.public_id]))
+        self.client.force_authenticate(self.admin_user)
+        admin_response = self.client.get(reverse("notification-detail", args=[notification.public_id]))
+
+        self.assertEqual(analyst_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(admin_response.status_code, status.HTTP_200_OK)
+        self.assertNotIn("+254700111001", analyst_response.data["body"])
+        self.assertNotIn("+254700111099", analyst_response.data["body"])
+        self.assertEqual(analyst_response.data["metadata"]["recipient"], "+254******1001")
+        self.assertNotIn("+254700111099", analyst_response.data["metadata"]["failure"])
+        self.assertTrue(analyst_response.data["privacy_context"]["redacted"])
+        self.assertIn("+254700111001", admin_response.data["body"])
+        self.assertEqual(admin_response.data["metadata"]["recipient"], "+254700111001")
+        self.assertFalse(admin_response.data["privacy_context"]["redacted"])
 
     def test_chv_triage_response_is_assigned_scope_and_redacts_sensitive_echo(self):
         self.client.force_authenticate(self.chv_user)
@@ -187,7 +285,7 @@ class PrivacyAccessSafeViewTests(APITestCase):
         self.assertEqual(SyncQueue.objects.count(), 1)
         self.assertEqual(TriageSession.objects.get().text_input, "Child has loose stool and vomiting")
 
-    def test_analyst_coverage_request_masks_assignment_phone_by_default(self):
+    def test_analyst_cannot_access_chv_coverage_request_detail_and_serializer_masks_by_default(self):
         request_record = CHVCoverageRequest.objects.create(
             ward=self.ward,
             requested_by=self.admin_user,
@@ -198,7 +296,7 @@ class PrivacyAccessSafeViewTests(APITestCase):
             requested_chv_count=1,
             expected_response_by=timezone.now(),
         )
-        CHVAssignment.objects.create(
+        assignment = CHVAssignment.objects.create(
             coverage_request=request_record,
             ward=self.ward,
             chv=self.chv,
@@ -211,10 +309,10 @@ class PrivacyAccessSafeViewTests(APITestCase):
         self.client.force_authenticate(self.admin_user)
         admin_response = self.client.get(reverse("chv-coverage-request-detail", args=[request_record.public_id]))
 
-        self.assertEqual(analyst_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(analyst_response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(admin_response.status_code, status.HTTP_200_OK)
-        self.assertEqual(analyst_response.data["assignments"][0]["chv_phone_number"], "+254******1001")
         self.assertEqual(admin_response.data["assignments"][0]["chv_phone_number"], "+254700111001")
+        self.assertEqual(CHVAssignmentSerializer(assignment).data["chv_phone_number"], "+254******1001")
 
     def test_facility_intelligence_masks_linked_alert_recipients_for_analyst(self):
         facility = HealthFacility.objects.create(
@@ -247,6 +345,305 @@ class PrivacyAccessSafeViewTests(APITestCase):
         alert_timeline = next(item for item in response.data["timeline"] if item["category"] == "alert")
         self.assertIn("+254******1001", alert_timeline["meta"])
         self.assertNotIn("+254700111001", alert_timeline["meta"])
+
+    def test_facility_intelligence_hides_contact_level_data_from_analyst(self):
+        facility = HealthFacility.objects.create(
+            name="Privacy Access Contact Dispensary",
+            facility_code="PRIV-CONTACT-FAC",
+            ward=self.ward,
+            facility_type=HealthFacility.TYPE_DISPENSARY,
+            ownership=HealthFacility.OWNERSHIP_PUBLIC,
+            level=HealthFacility.LEVEL_2,
+            is_active=True,
+        )
+        FacilityContact.objects.create(
+            facility=facility,
+            name="Facility In-Charge",
+            role="Nurse in charge",
+            phone="+254720111777",
+            preferred_channel=FacilityContact.CHANNEL_SMS,
+            is_verified=True,
+            is_active=True,
+            source="trusted_facility_registry",
+            source_reference="privacy-access-facility-contact",
+            verified_at=timezone.now(),
+        )
+
+        self.client.force_authenticate(self.analyst_user)
+        analyst_response = self.client.get(reverse("facility-intelligence", args=[facility.id]))
+        self.client.force_authenticate(self.admin_user)
+        admin_response = self.client.get(reverse("facility-intelligence", args=[facility.id]))
+
+        self.assertEqual(analyst_response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(analyst_response.data["contact"])
+        self.assertTrue(analyst_response.data["capabilities"]["has_verified_contact"])
+        self.assertFalse(analyst_response.data["capabilities"]["can_view_contacts"])
+        self.assertFalse(analyst_response.data["capabilities"]["can_request_facility_update"])
+        self.assertNotIn("+254720111777", str(analyst_response.data))
+        self.assertNotIn("Facility In-Charge", str(analyst_response.data))
+
+        self.assertEqual(admin_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(admin_response.data["contact"]["display_label"], "Facility In-Charge")
+        self.assertEqual(admin_response.data["contact"]["phone_last4"], "1777")
+        self.assertTrue(admin_response.data["capabilities"]["can_view_contacts"])
+
+    def test_facility_readiness_review_hides_contact_workflow_identifiers_from_analyst(self):
+        facility = HealthFacility.objects.create(
+            name="Privacy Access Readiness Dispensary",
+            facility_code="PRIV-READINESS-FAC",
+            ward=self.ward,
+            facility_type=HealthFacility.TYPE_DISPENSARY,
+            ownership=HealthFacility.OWNERSHIP_PUBLIC,
+            level=HealthFacility.LEVEL_2,
+            is_active=True,
+        )
+        contact = FacilityContact.objects.create(
+            facility=facility,
+            name="Facility In-Charge",
+            role="Nurse in charge",
+            phone="+254720111888",
+            preferred_channel=FacilityContact.CHANNEL_SMS,
+            is_verified=True,
+            is_active=True,
+            source="trusted_facility_registry",
+            source_reference="privacy-access-readiness-contact",
+            verified_at=timezone.now(),
+        )
+        review = FacilityReadinessReview.objects.create(
+            facility=facility,
+            ward=self.ward,
+            status=FacilityReadinessReview.STATUS_OPEN,
+            severity=FacilityReadinessReview.SEVERITY_MEDIUM,
+            reason_codes=["STALE_INPUTS"],
+            created_by=self.admin_user,
+        )
+        update_request = FacilityReadinessUpdateRequest.objects.create(
+            review=review,
+            facility=facility,
+            contact=contact,
+            requested_by=self.admin_user,
+            channel=FacilityReadinessUpdateRequest.CHANNEL_SMS,
+            message_body="Please ask Facility In-Charge to call +254720111888 with readiness.",
+            governance_metadata={
+                "workflow": "facility_readiness_update_request",
+                "contact_public_id": str(contact.public_id),
+                "recipient_phone": contact.phone,
+                "operator_note": "Facility In-Charge handles ORS stock.",
+            },
+            status=FacilityReadinessUpdateRequest.STATUS_QUEUED,
+        )
+        FacilityReadinessReviewEvent.objects.create(
+            review=review,
+            action=FacilityReadinessReviewEvent.ACTION_UPDATE_REQUEST_CREATED,
+            old_status=review.status,
+            new_status=review.status,
+            detail="Facility update request queued for +254720111888.",
+            actor=self.admin_user,
+            metadata={
+                "workflow": "facility_readiness_update_request",
+                "update_request_public_id": str(update_request.public_id),
+                "contact_public_id": str(contact.public_id),
+                "recipient_phone": contact.phone,
+                "operator_note": "Facility In-Charge handles ORS stock.",
+            },
+        )
+
+        self.client.force_authenticate(self.analyst_user)
+        analyst_response = self.client.get(reverse("facility-readiness-review-detail", args=[review.public_id]))
+        self.client.force_authenticate(self.admin_user)
+        admin_response = self.client.get(reverse("facility-readiness-review-detail", args=[review.public_id]))
+
+        self.assertEqual(analyst_response.status_code, status.HTTP_200_OK)
+        analyst_payload_text = str(analyst_response.data)
+        analyst_update_request = analyst_response.data["update_requests"][0]
+        self.assertIsNone(analyst_update_request["contact"])
+        self.assertEqual(analyst_update_request["contact_display_label"], "Facility contact")
+        self.assertEqual(analyst_update_request["governance_metadata"], {"workflow": "facility_readiness_update_request"})
+        self.assertNotIn(str(contact.public_id), analyst_payload_text)
+        self.assertNotIn(contact.phone, analyst_payload_text)
+        self.assertNotIn("Facility In-Charge", analyst_payload_text)
+        self.assertNotIn("operator_note", analyst_payload_text)
+        self.assertNotIn("contact_public_id", analyst_payload_text)
+        self.assertIn("[redacted phone]", analyst_response.data["events"][0]["detail"])
+
+        self.assertEqual(admin_response.status_code, status.HTTP_200_OK)
+        admin_update_request = admin_response.data["update_requests"][0]
+        self.assertEqual(admin_update_request["contact"], contact.id)
+        self.assertEqual(admin_update_request["contact_display_label"], "Facility In-Charge")
+        self.assertEqual(admin_update_request["governance_metadata"]["contact_public_id"], str(contact.public_id))
+
+    def test_source_data_upload_reads_redact_legacy_direct_identifiers_for_analyst(self):
+        batch = SourceDataUploadBatch.objects.create(
+            feed_key="surveillance_weekly_aggregate",
+            domain="health_surveillance",
+            source_type="weekly_aggregate",
+            source_name="DHIS2 extract for +254700111010",
+            source_ref="source-row:+254700111011",
+            status=SourceDataUploadBatch.STATUS_UPLOADED,
+            validation_status=SourceDataUploadBatch.VALIDATION_FAILED,
+            import_status=SourceDataUploadBatch.IMPORT_NOT_STARTED,
+            row_count=1,
+            rejected_count=1,
+            operator_note="Caller +254700111012 asked for correction.",
+            metadata={
+                "validation_summary": {
+                    "contact_phone": "+254700111013",
+                    "note": "Follow up with +254700111014.",
+                },
+                "legacy_contact": "+254700111015",
+            },
+            created_by=self.admin_user,
+        )
+        SourceDataUploadArtifact.objects.create(
+            upload_batch=batch,
+            original_filename="household-+254700111016.csv",
+            content_type="text/csv",
+            size_bytes=24,
+            sha256="a" * 64,
+            storage_path="source-data/household-+254700111016.csv",
+        )
+        SourceDataUploadEvent.objects.create(
+            upload_batch=batch,
+            actor=self.admin_user,
+            event_type=SourceDataUploadEvent.EVENT_UPLOAD_CREATED,
+            metadata={
+                "recipient": "+254700111017",
+                "detail": "Upload mentioned +254700111018.",
+            },
+        )
+        SourceDataValidationIssue.objects.create(
+            upload_batch=batch,
+            row_number=2,
+            severity=SourceDataValidationIssue.SEVERITY_ERROR,
+            code="legacy_direct_identifier",
+            column_name="notes",
+            message="Legacy diagnostic mentioned +254700111019.",
+            safe_context={
+                "phone_number": "+254700111020",
+                "patient_name": "Jane Example",
+                "national_id": "12345678",
+                "contact_public_id": str(self.chv.public_id),
+                "filename": "legacy-+254700111021.csv",
+            },
+        )
+
+        self.client.force_authenticate(self.analyst_user)
+        analyst_list_response = self.client.get(reverse("source-data-upload-list-create"))
+        analyst_actor_filter_response = self.client.get(
+            reverse("source-data-upload-list-create"),
+            {"actor": self.admin_user.username},
+        )
+        analyst_source_name_filter_response = self.client.get(
+            reverse("source-data-upload-list-create"),
+            {"source_name": "+254700111010"},
+        )
+        analyst_detail_response = self.client.get(reverse("source-data-upload-detail", args=[batch.public_id]))
+        analyst_errors_response = self.client.get(reverse("source-data-upload-errors-file", args=[batch.public_id]))
+        self.client.force_authenticate(self.admin_user)
+        admin_actor_filter_response = self.client.get(
+            reverse("source-data-upload-list-create"),
+            {"actor": self.admin_user.username},
+        )
+        admin_source_name_filter_response = self.client.get(
+            reverse("source-data-upload-list-create"),
+            {"source_name": "+254700111010"},
+        )
+        admin_detail_response = self.client.get(reverse("source-data-upload-detail", args=[batch.public_id]))
+        admin_errors_response = self.client.get(reverse("source-data-upload-errors-file", args=[batch.public_id]))
+
+        self.assertEqual(analyst_list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(analyst_actor_filter_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(analyst_source_name_filter_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(analyst_detail_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(analyst_errors_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(admin_actor_filter_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(admin_source_name_filter_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(admin_detail_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(admin_errors_response.status_code, status.HTTP_200_OK)
+
+        analyst_payload = analyst_detail_response.data
+        self.assertNotIn("+254700111010", str(analyst_payload))
+        self.assertNotIn("+254700111011", str(analyst_payload))
+        self.assertNotIn("+254700111012", str(analyst_payload))
+        self.assertNotIn("+254700111013", str(analyst_payload))
+        self.assertNotIn("+254700111014", str(analyst_payload))
+        self.assertNotIn("+254700111015", str(analyst_payload))
+        self.assertNotIn("+254700111016", str(analyst_payload))
+        self.assertNotIn("+254700111017", str(analyst_payload))
+        self.assertNotIn("+254700111018", str(analyst_payload))
+        self.assertNotIn("+254700111019", str(analyst_payload))
+        self.assertNotIn("+254700111020", str(analyst_payload))
+        self.assertNotIn("+254700111021", str(analyst_payload))
+        self.assertNotIn("Jane Example", str(analyst_payload))
+        self.assertNotIn("12345678", str(analyst_payload))
+        self.assertNotIn(self.admin_user.username, str(analyst_payload))
+        self.assertNotIn(str(self.chv.public_id), str(analyst_payload))
+        self.assertEqual(analyst_payload["artifacts"][0]["original_filename"], "redacted-source-data-file")
+        self.assertEqual(analyst_payload["metadata"]["validation_summary"]["contact_phone"], "+254******1013")
+        self.assertIn("[redacted phone]", analyst_payload["events"][0]["metadata"]["detail"])
+        self.assertIn("[redacted phone]", analyst_payload["validation_issues"][0]["message"])
+        self.assertEqual(analyst_payload["validation_issues"][0]["safe_context"]["phone_number"], "+254******1020")
+        self.assertEqual(analyst_payload["validation_issues"][0]["safe_context"]["patient_name"], "")
+        self.assertEqual(analyst_payload["validation_issues"][0]["safe_context"]["national_id"], "")
+        self.assertEqual(analyst_payload["validation_issues"][0]["safe_context"]["contact_public_id"], "")
+        self.assertNotIn("+254700111010", str(analyst_list_response.data))
+        self.assertNotIn(self.admin_user.username, str(analyst_list_response.data))
+        self.assertNotIn("+254700111019", analyst_errors_response.data["payload"])
+        self.assertNotIn("+254700111020", analyst_errors_response.data["payload"])
+        self.assertNotIn("+254700111021", analyst_errors_response.data["payload"])
+        self.assertNotIn("Jane Example", analyst_errors_response.data["payload"])
+        self.assertNotIn("12345678", analyst_errors_response.data["payload"])
+        self.assertNotIn(str(self.chv.public_id), analyst_errors_response.data["payload"])
+        self.assertIn("[redacted phone]", analyst_errors_response.data["payload"])
+        self.assertIn("+254******1020", analyst_errors_response.data["payload"])
+
+        admin_payload = admin_detail_response.data
+        self.assertIn("+254700111010", admin_payload["source_name"])
+        self.assertIn(self.admin_user.username, str(admin_payload))
+        self.assertIn(self.admin_user.username, str(admin_actor_filter_response.data))
+        self.assertIn("+254700111010", str(admin_source_name_filter_response.data))
+        self.assertEqual(admin_payload["artifacts"][0]["original_filename"], "household-+254700111016.csv")
+        admin_upload_event = next(
+            event
+            for event in admin_payload["events"]
+            if event["event_type"] == SourceDataUploadEvent.EVENT_UPLOAD_CREATED
+        )
+        self.assertEqual(admin_upload_event["metadata"]["recipient"], "+254700111017")
+        self.assertIn("+254700111019", admin_errors_response.data["payload"])
+        self.assertIn("+254700111020", admin_errors_response.data["payload"])
+        self.assertIn("+254700111021", admin_errors_response.data["payload"])
+        self.assertIn("Jane Example", admin_errors_response.data["payload"])
+        self.assertIn("12345678", admin_errors_response.data["payload"])
+        self.assertIn(str(self.chv.public_id), admin_errors_response.data["payload"])
+
+    def test_source_data_overview_recent_uploads_redact_identifiers_for_analyst(self):
+        SourceDataUploadBatch.objects.create(
+            feed_key="surveillance_weekly_aggregate",
+            domain="health_surveillance",
+            source_type="weekly_aggregate",
+            source_name="DHIS2 extract for +254700111019",
+            status=SourceDataUploadBatch.STATUS_IMPORTED,
+            validation_status=SourceDataUploadBatch.VALIDATION_PASSED,
+            import_status=SourceDataUploadBatch.IMPORT_IMPORTED,
+            row_count=1,
+            accepted_count=1,
+            created_by=self.admin_user,
+            confirmed_by=self.admin_user,
+            confirmed_at=timezone.now(),
+        )
+
+        self.client.force_authenticate(self.analyst_user)
+        analyst_response = self.client.get(reverse("source-data-overview"))
+        self.client.force_authenticate(self.admin_user)
+        admin_response = self.client.get(reverse("source-data-overview"))
+
+        self.assertEqual(analyst_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(admin_response.status_code, status.HTTP_200_OK)
+        analyst_upload = analyst_response.data["recent_uploads"][0]
+        admin_upload = admin_response.data["recent_uploads"][0]
+        self.assertNotIn("+254700111019", str(analyst_upload))
+        self.assertIn("[redacted phone]", analyst_upload["source_name"])
+        self.assertEqual(admin_upload["source_name"], "DHIS2 extract for +254700111019")
 
     def test_sensitive_serializers_redact_when_request_context_is_missing(self):
         request_record = CHVCoverageRequest.objects.create(

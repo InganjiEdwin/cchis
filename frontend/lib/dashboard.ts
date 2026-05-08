@@ -2176,6 +2176,7 @@ export type SystemControlStatus = {
   alert_delivery_pause_reason: string;
   alert_delivery_pause_updated_at: string | null;
   alert_delivery_pause_updated_by: string | null;
+  ward_risk_decision_policy?: Record<string, unknown>;
 };
 
 export type SystemRetryControlResponse = {
@@ -2192,16 +2193,44 @@ export type SystemManualRiskScoringResponse = {
   control_status: SystemControlStatus;
 };
 
+export type SystemReadinessSnapshot = {
+  schema_version: "system-readiness-v1";
+  mode: "analyst_safe_system_readiness_v1";
+  generated_at: string;
+  scope: {
+    type: "BROAD" | "WARD" | "NONE";
+    ward_id: number | null;
+    ward_count: number;
+  };
+  visible_wards: number;
+  high_risk_wards: number;
+  wards_with_fresh_risk: number;
+  latest_risk_timestamp: string | null;
+  visible_alerts: number;
+  latest_alert_timestamp: string | null;
+  queued_alerts: number;
+  retry_pending_alerts: number;
+  failed_alerts: number;
+  delivered_alerts: number;
+  latest_failed_alert_timestamp: string | null;
+  latest_retry_alert_timestamp: string | null;
+  latest_delivered_alert_timestamp: string | null;
+  visible_facilities: number;
+  latest_facility_timestamp: string | null;
+  latest_chv_timestamp: string | null;
+  active_chvs: number;
+  online_chvs: number;
+  delayed_chvs: number;
+  offline_chvs: number;
+  triage_sessions_24h: number;
+  referrals_24h: number;
+  sync_payloads_24h: number;
+  ussd_sessions_24h: number;
+  delivery_backends: Array<{ name: string; count: number }>;
+};
+
 export type SystemRouteResponse = {
-  wards: PaginatedResponse<WardSummary>;
-  latestRisks: LatestWardRisk[];
-  alerts: PaginatedResponse<AlertRecord>;
-  queuedAlerts: PaginatedResponse<AlertRecord>;
-  retryAlerts: PaginatedResponse<AlertRecord>;
-  failedAlerts: PaginatedResponse<AlertRecord>;
-  deliveredAlerts: PaginatedResponse<AlertRecord>;
-  facilities: PaginatedResponse<FacilityRecord>;
-  chvOperations: ChvOperationsRecord[];
+  readiness: SystemReadinessSnapshot;
   controlStatus: SystemControlStatus;
 };
 

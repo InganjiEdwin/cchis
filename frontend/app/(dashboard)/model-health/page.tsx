@@ -182,6 +182,22 @@ function blockerLabel(blocker: string) {
   return labels[blocker] || formatLabel(blocker);
 }
 
+function getSummaryIconClass(tone: BadgeTone) {
+  if (tone === "danger") {
+    return "bg-[color-mix(in_srgb,var(--danger)_18%,var(--dashboard-panel-surface))] text-[color:var(--danger)]";
+  }
+  if (tone === "warning") {
+    return "bg-[color-mix(in_srgb,var(--warning)_18%,var(--dashboard-panel-surface))] text-[color:var(--warning)]";
+  }
+  if (tone === "success") {
+    return "bg-[color-mix(in_srgb,var(--success)_18%,var(--dashboard-panel-surface))] text-[color:var(--success)]";
+  }
+  if (tone === "info") {
+    return "bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_18%,var(--dashboard-panel-surface))] text-brand";
+  }
+  return "bg-[color-mix(in_srgb,var(--dashboard-table-line)_72%,var(--dashboard-panel-surface))] text-panel-copy";
+}
+
 function SummaryCard({
   label,
   value,
@@ -198,7 +214,7 @@ function SummaryCard({
   return (
     <Card className="grid gap-3 p-4">
       <div className="flex items-start justify-between gap-3">
-        <span className="inline-flex size-9 items-center justify-center rounded-[0.5rem] bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_10%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_18%,transparent)]">
+        <span className={cn("inline-flex size-9 items-center justify-center rounded-[0.5rem]", getSummaryIconClass(tone))}>
           {icon}
         </span>
         <PlainBadge tone={tone}>{label}</PlainBadge>
@@ -574,7 +590,7 @@ export default function ModelHealthPage() {
 
   return (
     <RoleGate
-      allowedRoles={["ADMIN", "SUPERVISOR", "ANALYST"]}
+      pageCapability="model_health"
       title="Forecast readiness unavailable"
       message="Your role cannot view forecast readiness."
     >

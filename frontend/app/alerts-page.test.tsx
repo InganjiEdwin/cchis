@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import AlertsPage from "@/app/(dashboard)/alerts/page";
+import { buildDashboardUser } from "@/test/dashboard-user";
 
 const mockUseAuth = vi.fn();
 const mockUseAlertsQuery = vi.fn();
@@ -106,18 +107,14 @@ describe("AlertsPage", () => {
     mockUseSearchParams.mockReturnValue(new URLSearchParams());
 
     mockUseAuth.mockReturnValue({
-      currentUser: {
-        id: 1,
+      currentUser: buildDashboardUser("ADMIN", {
         username: "admin",
         email: "admin@example.com",
         full_name: "Admin User",
-        phone_number: null,
-        role: "ADMIN",
         theme_preference: "LIGHT",
         ward: null,
         ward_name: null,
-        is_active: true,
-      },
+      }),
     });
 
     mockUseAlertsQuery.mockReturnValue({
@@ -218,24 +215,40 @@ describe("AlertsPage", () => {
 
   it("hides sensitive CSV export from analyst alert views", async () => {
     mockUseAuth.mockReturnValue({
-      currentUser: {
-        id: 2,
+      currentUser: buildDashboardUser("ANALYST", {
         username: "analyst",
         email: "analyst@example.com",
         full_name: "Analyst User",
-        phone_number: null,
-        role: "ANALYST",
         theme_preference: "LIGHT",
         ward: null,
         ward_name: null,
-        is_active: true,
-      },
+      }),
     });
 
     render(React.createElement(AlertsPage));
 
     expect(await screen.findByRole("heading", { name: "Requires attention" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Export CSV/i })).not.toBeInTheDocument();
+  });
+
+  it("hides CHV coverage actions from analyst alert reviews", async () => {
+    mockUseAuth.mockReturnValue({
+      currentUser: buildDashboardUser("ANALYST", {
+        username: "analyst",
+        email: "analyst@example.com",
+        full_name: "Analyst User",
+        theme_preference: "LIGHT",
+        ward: null,
+        ward_name: null,
+      }),
+    });
+
+    render(React.createElement(AlertsPage));
+
+    fireEvent.click((await screen.findAllByRole("button", { name: "Open review" }))[0]);
+
+    expect(screen.queryByRole("button", { name: "Request CHV coverage" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "View CHV coverage request" })).not.toBeInTheDocument();
   });
 
   it("requests and downloads alert CSV through the sensitive export ledger", async () => {

@@ -34,6 +34,7 @@ import {
   type AlertRecord,
 } from "@/lib/dashboard";
 import { describeFreshness, formatRelativeTimestamp, getLatestTimestamp } from "@/lib/freshness";
+import { hasActionCapability } from "@/lib/capabilities";
 import { canExportSensitiveReports } from "@/lib/roles";
 import { useAlertsQuery } from "@/queries/use-alerts-query";
 import { useCreateChvCoverageRequestFromAlertMutation } from "@/queries/use-create-chv-coverage-request-from-alert-mutation";
@@ -349,8 +350,8 @@ export default function AlertsPage() {
     () => decoratedAlerts.find((alert) => alert.id === selectedAlertId) ?? null,
     [decoratedAlerts, selectedAlertId],
   );
-  const canRequestCoverage = currentUser?.role === "ADMIN" || currentUser?.role === "SUPERVISOR";
-  const canExportCsv = canExportSensitiveReports(currentUser?.role);
+  const canRequestCoverage = hasActionCapability(currentUser, "manage_chv_operations");
+  const canExportCsv = canExportSensitiveReports(currentUser);
   const isCoverageRequestPending = createFromAlertMutation.isPending || createCoverageRequestMutation.isPending;
   const liveCoverageRequestQuery = useLiveChvCoverageRequestForWardQuery({
     wardId: selectedAlert?.ward ?? null,

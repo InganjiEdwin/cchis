@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import PreparednessActionsPage from "@/app/(dashboard)/preparedness-actions/page";
+import { buildDashboardUser } from "@/test/dashboard-user";
 
 const mockUseAuth = vi.fn();
 const mockUseSearchParams = vi.fn();
@@ -123,11 +124,9 @@ describe("PreparednessActionsPage", () => {
     vi.clearAllMocks();
     mockUseSearchParams.mockReturnValue(new URLSearchParams());
     mockUseAuth.mockReturnValue({
-      currentUser: {
-        id: 1,
+      currentUser: buildDashboardUser("ADMIN", {
         username: "admin",
-        role: "ADMIN",
-      },
+      }),
     });
     mockUsePreparednessActionsQuery.mockReturnValue(
       buildQueryResult({
@@ -310,6 +309,26 @@ describe("PreparednessActionsPage", () => {
         }),
       );
     });
+  });
+
+  it("keeps analyst preparedness actions read-only in the lifecycle drawer", () => {
+    mockUseAuth.mockReturnValue({
+      currentUser: buildDashboardUser("ANALYST", {
+        username: "analyst",
+        email: "analyst@example.com",
+        full_name: "Analyst User",
+        ward: null,
+        ward_name: null,
+      }),
+    });
+
+    render(<PreparednessActionsPage />);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Open action" })[0]);
+
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByText("Lifecycle updates are limited to admin and supervisor accounts.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Update action" })).not.toBeInTheDocument();
   });
 
   it("allows queued actions to be assigned to an owner team", async () => {

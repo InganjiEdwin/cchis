@@ -196,14 +196,14 @@ function getScoreTone(score: number) {
   const normalizedScore = normalizeRiskScore(score);
 
   if (normalizedScore >= 80)
-    return "bg-[color-mix(in_srgb,var(--danger)_14%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_20%,transparent)]";
+    return "bg-[color-mix(in_srgb,var(--danger)_18%,var(--dashboard-panel-surface))] text-[color:var(--danger)]";
   if (normalizedScore >= 65)
-    return "bg-[color-mix(in_srgb,var(--danger)_10%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_16%,transparent)]";
+    return "bg-[color-mix(in_srgb,var(--danger)_16%,var(--dashboard-panel-surface))] text-[color:var(--danger)]";
   if (normalizedScore >= 45)
-    return "bg-[color-mix(in_srgb,var(--warning)_14%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]";
+    return "bg-[color-mix(in_srgb,var(--warning)_18%,var(--dashboard-panel-surface))] text-[color:var(--warning)]";
   if (normalizedScore >= 25)
-    return "bg-[color-mix(in_srgb,var(--brand)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--brand)_18%,transparent)]";
-  return "bg-[color-mix(in_srgb,var(--success)_14%,white)] text-[color:var(--success)] dark:bg-[color-mix(in_srgb,var(--success)_20%,transparent)]";
+    return "bg-[color-mix(in_srgb,var(--brand)_16%,var(--dashboard-panel-surface))] text-brand";
+  return "bg-[color-mix(in_srgb,var(--success)_18%,var(--dashboard-panel-surface))] text-[color:var(--success)]";
 }
 
 function getRiskBadgeTone(level: "LOW" | "MEDIUM" | "HIGH" | null) {
@@ -242,14 +242,14 @@ function getAttentionCardClass(level: "LOW" | "MEDIUM" | "HIGH" | null, isPrimar
   const base = "space-y-3 rounded-[1.5rem] p-4 shadow-none";
 
   if (level === "HIGH") {
-    return `${base} border-[color-mix(in_srgb,var(--danger)_20%,white)] bg-[color-mix(in_srgb,var(--danger)_6%,white)] dark:border-[color-mix(in_srgb,var(--danger)_24%,transparent)] dark:bg-[color-mix(in_srgb,var(--danger)_12%,transparent)]${isPrimary ? " ring-1 ring-[color:var(--danger)]/12 dark:ring-[color:var(--danger)]/20" : ""}`;
+    return `${base} border-[color-mix(in_srgb,var(--danger)_26%,var(--dashboard-panel-border))] bg-[linear-gradient(135deg,color-mix(in_srgb,var(--danger)_12%,var(--dashboard-panel-surface)),var(--dashboard-panel-surface))]${isPrimary ? " ring-1 ring-[color:var(--danger)]/20" : ""}`;
   }
 
   if (level === "MEDIUM") {
-    return `${base} border-[color-mix(in_srgb,var(--warning)_20%,white)] bg-[color-mix(in_srgb,var(--warning)_6%,white)] dark:border-[color-mix(in_srgb,var(--warning)_24%,transparent)] dark:bg-[color-mix(in_srgb,var(--warning)_12%,transparent)]`;
+    return `${base} border-[color-mix(in_srgb,var(--warning)_26%,var(--dashboard-panel-border))] bg-[linear-gradient(135deg,color-mix(in_srgb,var(--warning)_12%,var(--dashboard-panel-surface)),var(--dashboard-panel-surface))]`;
   }
 
-  return `${base} border-[color-mix(in_srgb,var(--success)_18%,white)] bg-[color-mix(in_srgb,var(--success)_6%,white)] dark:border-[color-mix(in_srgb,var(--success)_22%,transparent)] dark:bg-[color-mix(in_srgb,var(--success)_12%,transparent)]`;
+  return `${base} border-[color-mix(in_srgb,var(--success)_24%,var(--dashboard-panel-border))] bg-[linear-gradient(135deg,color-mix(in_srgb,var(--success)_12%,var(--dashboard-panel-surface)),var(--dashboard-panel-surface))]`;
 }
 
 function getMapFilterLabel(filter: OverviewMapFilter) {
@@ -443,15 +443,15 @@ function getKpiCardClass(activeTone: "brand" | "danger" | "warning" | "alerts", 
   }
 
   if (activeTone === "danger") {
-    return "overflow-hidden border-[color-mix(in_srgb,var(--danger)_34%,white)] ring-1 ring-[color:var(--danger)]/20 p-0 dark:border-[color-mix(in_srgb,var(--danger)_28%,transparent)]";
+    return "overflow-hidden border-[color-mix(in_srgb,var(--danger)_34%,var(--dashboard-panel-border))] ring-1 ring-[color:var(--danger)]/20 p-0";
   }
 
   if (activeTone === "warning") {
-    return "overflow-hidden border-[color-mix(in_srgb,var(--warning)_34%,white)] ring-1 ring-[color:var(--warning)]/20 p-0 dark:border-[color-mix(in_srgb,var(--warning)_28%,transparent)]";
+    return "overflow-hidden border-[color-mix(in_srgb,var(--warning)_34%,var(--dashboard-panel-border))] ring-1 ring-[color:var(--warning)]/20 p-0";
   }
 
   if (activeTone === "alerts") {
-    return "overflow-hidden border-[color-mix(in_srgb,#F97316_34%,white)] ring-1 ring-[#F97316]/20 p-0 dark:border-[color-mix(in_srgb,#F97316_28%,transparent)]";
+    return "overflow-hidden border-[color-mix(in_srgb,#F97316_34%,var(--dashboard-panel-border))] ring-1 ring-[#F97316]/20 p-0";
   }
 
   return "overflow-hidden border-brand/35 ring-1 ring-brand/20 p-0";
@@ -999,7 +999,7 @@ export default function OverviewPage() {
             onMouseEnter={() => setHoveredMapFilter(null)}
             onMouseLeave={() => setHoveredMapFilter(null)}
           >
-            <div className="inline-flex size-10 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_12%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_20%,transparent)]">
+            <div className="inline-flex size-10 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_18%,var(--dashboard-panel-surface))] text-brand">
               <Activity className="size-4.5" aria-hidden="true" />
             </div>
             <div className="space-y-1.5">
@@ -1029,7 +1029,7 @@ export default function OverviewPage() {
             onMouseEnter={() => setHoveredMapFilter("high")}
             onMouseLeave={() => setHoveredMapFilter(null)}
           >
-            <div className="inline-flex size-10 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--danger)_12%,white)] text-[color:var(--danger)] dark:bg-[color-mix(in_srgb,var(--danger)_20%,transparent)]">
+            <div className="inline-flex size-10 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--danger)_18%,var(--dashboard-panel-surface))] text-[color:var(--danger)]">
               <TriangleAlert className="size-4.5" aria-hidden="true" />
             </div>
             <div className="space-y-1.5">
@@ -1061,7 +1061,7 @@ export default function OverviewPage() {
             onMouseEnter={() => setHoveredMapFilter("workflow_active")}
             onMouseLeave={() => setHoveredMapFilter(null)}
           >
-            <div className="inline-flex size-10 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--warning)_12%,white)] text-[color:var(--warning)] dark:bg-[color-mix(in_srgb,var(--warning)_20%,transparent)]">
+            <div className="inline-flex size-10 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--warning)_18%,var(--dashboard-panel-surface))] text-[color:var(--warning)]">
               <CircleAlert className="size-4.5" aria-hidden="true" />
             </div>
             <div className="space-y-1.5">
@@ -1089,7 +1089,7 @@ export default function OverviewPage() {
             onMouseEnter={() => setHoveredMapFilter("alerts")}
             onMouseLeave={() => setHoveredMapFilter(null)}
           >
-            <div className="inline-flex size-10 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-table-line)_70%,transparent)] text-panel-copy">
+            <div className="inline-flex size-10 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--dashboard-table-line)_72%,var(--dashboard-panel-surface))] text-panel-copy">
               <Bell className="size-4.5" aria-hidden="true" />
             </div>
             <div className="space-y-1.5">

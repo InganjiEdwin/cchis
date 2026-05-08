@@ -20,12 +20,14 @@ import {
 import type { ChangeEvent, FormEvent, ReactNode } from "react";
 import { useMemo, useState } from "react";
 
+import { useAuth } from "@/components/auth-provider";
 import { DashboardTopbar } from "@/components/dashboard-topbar";
 import { RoleGate } from "@/components/role-gate";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { cn } from "@/lib/cn";
+import { hasActionCapability } from "@/lib/capabilities";
 import type { InteroperabilityDashboardResponse, InteroperabilityRunRecord } from "@/lib/dashboard";
 import { formatRelativeTimestamp } from "@/lib/freshness";
 import {
@@ -229,6 +231,22 @@ function connectionState(data: InteroperabilityDashboardResponse | undefined) {
   };
 }
 
+function getSummaryIconClass(tone: BadgeTone) {
+  if (tone === "danger") {
+    return "bg-[color-mix(in_srgb,var(--danger)_18%,var(--dashboard-panel-surface))] text-[color:var(--danger)]";
+  }
+  if (tone === "warning") {
+    return "bg-[color-mix(in_srgb,var(--warning)_18%,var(--dashboard-panel-surface))] text-[color:var(--warning)]";
+  }
+  if (tone === "success") {
+    return "bg-[color-mix(in_srgb,var(--success)_18%,var(--dashboard-panel-surface))] text-[color:var(--success)]";
+  }
+  if (tone === "info") {
+    return "bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_18%,var(--dashboard-panel-surface))] text-brand";
+  }
+  return "bg-[color-mix(in_srgb,var(--dashboard-table-line)_72%,var(--dashboard-panel-surface))] text-panel-copy";
+}
+
 function SummaryCard({
   label,
   value,
@@ -245,7 +263,7 @@ function SummaryCard({
   return (
     <Card className="grid gap-3 p-4">
       <div className="flex items-start justify-between gap-3">
-        <span className="inline-flex size-9 items-center justify-center rounded-[0.5rem] bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_10%,white)] text-brand dark:bg-[color-mix(in_srgb,var(--dashboard-sidebar-title)_18%,transparent)]">
+        <span className={cn("inline-flex size-9 items-center justify-center rounded-[0.5rem]", getSummaryIconClass(tone))}>
           {icon}
         </span>
         <PlainBadge tone={tone}>{label}</PlainBadge>
@@ -269,9 +287,11 @@ function InlineMetric({ label, value }: { label: string; value: string | number 
 
 function DataConnectionsHero({
   data,
+  canManageImports,
   onCheckFile,
 }: {
   data: InteroperabilityDashboardResponse | undefined;
+  canManageImports: boolean;
   onCheckFile: () => void;
 }) {
   const state = connectionState(data);
@@ -291,10 +311,12 @@ function DataConnectionsHero({
         <p className="mt-2 max-w-3xl text-sm leading-6 text-panel-muted md:text-base">{state.message}</p>
       </div>
       <div className="flex flex-col gap-2 sm:flex-row md:flex-col">
-        <Button type="button" onClick={onCheckFile}>
-          <Upload className="size-4" aria-hidden="true" />
-          Check matching file
-        </Button>
+        {canManageImports ? (
+          <Button type="button" onClick={onCheckFile}>
+            <Upload className="size-4" aria-hidden="true" />
+            Check matching file
+          </Button>
+        ) : null}
         <a
           className="inline-flex h-11 items-center justify-center gap-2 rounded-pill border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-4 text-sm font-semibold text-panel-copy hover:border-[var(--dashboard-icon-button-border)] hover:text-[var(--dashboard-icon-button-ink-hover)]"
           href={TEMPLATE_URL}
@@ -469,6 +491,7 @@ function MatchingFilePanel({
   sourceFileName,
   showPasteCsv,
   isPending,
+  canManageImports,
   onCsvChange,
   onConfirmChange,
   onFileChange,
@@ -482,6 +505,7 @@ function MatchingFilePanel({
   sourceFileName: string;
   showPasteCsv: boolean;
   isPending: boolean;
+  canManageImports: boolean;
   onCsvChange: (value: string) => void;
   onConfirmChange: (value: boolean) => void;
   onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
@@ -510,6 +534,7 @@ function MatchingFilePanel({
         </a>
       </div>
 
+      {canManageImports ? (
       <form className="grid gap-3" onSubmit={onSubmit}>
         <label className="grid gap-1 text-sm font-medium text-panel-copy">
           Matching set name
@@ -562,6 +587,11 @@ function MatchingFilePanel({
           {confirmImport ? "Save approved matches" : "Check file"}
         </Button>
       </form>
+      ) : (
+        <p className="rounded-[0.75rem] border border-[var(--dashboard-table-line)] px-4 py-4 text-sm leading-6 text-panel-muted">
+          Matching uploads are limited to operational data managers. Download the template to inspect the expected file shape.
+        </p>
+      )}
     </Card>
   );
 }
@@ -629,11 +659,13 @@ function TransferRow({
   onRetry,
   onReview,
   isRetrying,
+  canManageImports,
 }: {
   run: InteroperabilityRunRecord;
   onRetry: (publicId: string) => void;
   onReview: (run: InteroperabilityRunRecord) => void | Promise<void>;
   isRetrying: boolean;
+  canManageImports: boolean;
 }) {
   const canRetry = run.status === "FAILED" || run.status === "PARTIAL";
   return (
@@ -651,7 +683,7 @@ function TransferRow({
         <FileWarning className="size-4" aria-hidden="true" />
         Review
       </Button>
-      {canRetry ? (
+      {canRetry && canManageImports ? (
         <Button size="sm" variant="secondary" disabled={isRetrying} onClick={() => onRetry(run.public_id)}>
           <RefreshCcw className="size-4" aria-hidden="true" />
           Try again
@@ -682,6 +714,7 @@ function RecentTransfersPanel({
   onRetry,
   onReview,
   isRetrying,
+  canManageImports,
 }: {
   runs: InteroperabilityRunRecord[];
   isFetching: boolean;
@@ -689,6 +722,7 @@ function RecentTransfersPanel({
   onRetry: (publicId: string) => void;
   onReview: (run: InteroperabilityRunRecord) => void | Promise<void>;
   isRetrying: boolean;
+  canManageImports: boolean;
 }) {
   return (
     <Card className="overflow-hidden">
@@ -701,7 +735,14 @@ function RecentTransfersPanel({
       </div>
       <div>
         {runs.map((run) => (
-          <TransferRow key={run.public_id} run={run} onRetry={onRetry} onReview={onReview} isRetrying={isRetrying} />
+          <TransferRow
+            key={run.public_id}
+            run={run}
+            onRetry={onRetry}
+            onReview={onReview}
+            isRetrying={isRetrying}
+            canManageImports={canManageImports}
+          />
         ))}
         {!runs.length && !isLoading ? (
           <div className="px-4 py-6 text-sm text-panel-muted">No files have been checked or shared yet.</div>
@@ -834,6 +875,7 @@ function AvailableFlowsPanel({ data }: { data: InteroperabilityDashboardResponse
 }
 
 export default function InteroperabilityPage() {
+  const { currentUser } = useAuth();
   const { data, isLoading, error, refetch, isFetching } = useInteroperabilityDashboardQuery();
   const importMutation = useInteroperabilityOrgUnitMappingImportMutation();
   const exportPreviewMutation = useInteroperabilityExportPreviewMutation();
@@ -853,6 +895,7 @@ export default function InteroperabilityPage() {
     () => data?.audit_checks.filter((check) => check.status === "FAIL") ?? [],
     [data?.audit_checks],
   );
+  const canManageImports = hasActionCapability(currentUser, "manage_source_data_imports");
 
   async function handleDryRunSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -911,7 +954,7 @@ export default function InteroperabilityPage() {
 
   return (
     <RoleGate
-      allowedRoles={["ADMIN", "SUPERVISOR", "ANALYST"]}
+      pageCapability="interoperability"
       title="Data connections access required"
       message="Data connection review is available to dashboard operators."
     >
@@ -923,10 +966,12 @@ export default function InteroperabilityPage() {
           lastUpdatedTone={data?.summary.audit_status === "fail" ? "stale" : "default"}
           onRefresh={() => void refetch()}
         >
-          <Button size="sm" variant="secondary" onClick={handleExportPreview} disabled={exportPreviewMutation.isPending}>
-            <Play className="size-4" aria-hidden="true" />
-            Preview sharing
-          </Button>
+          {canManageImports ? (
+            <Button size="sm" variant="secondary" onClick={handleExportPreview} disabled={exportPreviewMutation.isPending}>
+              <Play className="size-4" aria-hidden="true" />
+              Preview sharing
+            </Button>
+          ) : null}
         </DashboardTopbar>
 
         {error ? (
@@ -941,7 +986,7 @@ export default function InteroperabilityPage() {
           </Card>
         ) : null}
 
-        <DataConnectionsHero data={data} onCheckFile={scrollToCheckFile} />
+        <DataConnectionsHero data={data} canManageImports={canManageImports} onCheckFile={scrollToCheckFile} />
 
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <SummaryCard
@@ -983,6 +1028,7 @@ export default function InteroperabilityPage() {
             sourceFileName={sourceFileName}
             showPasteCsv={showPasteCsv}
             isPending={importMutation.isPending}
+            canManageImports={canManageImports}
             onCsvChange={setCsvText}
             onConfirmChange={setConfirmImport}
             onFileChange={(event) => void handleFileChange(event)}
@@ -1002,6 +1048,7 @@ export default function InteroperabilityPage() {
             onRetry={handleRetry}
             onReview={handleReview}
             isRetrying={retryMutation.isPending}
+            canManageImports={canManageImports}
           />
           <TransferReviewPanel
             reviewRun={reviewRun}

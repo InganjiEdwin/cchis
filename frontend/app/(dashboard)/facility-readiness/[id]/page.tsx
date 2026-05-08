@@ -180,7 +180,7 @@ export default function FacilityDetailPage() {
       />
 
       <RoleGate
-        allowedRoles={["ADMIN", "SUPERVISOR", "ANALYST"]}
+        pageCapability="facility_readiness"
         title="Facility detail is role-restricted"
         message="Facility detail is intended for dashboard roles coordinating preparedness and response."
       >

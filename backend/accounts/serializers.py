@@ -17,6 +17,7 @@ from risk.models import Ward
 
 from .audit import get_client_ip
 from .models import AccessRequest, AuthAuditEvent, StepUpGrant, UserPolicyAcceptance, UserSession
+from .role_capabilities import build_dashboard_capabilities, dashboard_scope_for_user
 from .session_security import (
     apply_role_refresh_lifetime,
     apply_session_claims,
@@ -75,6 +76,7 @@ class UserSerializer(serializers.ModelSerializer):
     account_created_at = serializers.DateTimeField(source="date_joined", read_only=True)
     last_login_at = serializers.DateTimeField(source="last_login", read_only=True, allow_null=True)
     profile_capabilities = serializers.SerializerMethodField()
+    dashboard_capabilities = serializers.SerializerMethodField()
     policy_acceptance = serializers.SerializerMethodField()
 
     class Meta:
@@ -97,20 +99,15 @@ class UserSerializer(serializers.ModelSerializer):
             "account_created_at",
             "last_login_at",
             "profile_capabilities",
+            "dashboard_capabilities",
             "policy_acceptance",
         ]
 
     def get_scope_type(self, obj):
-        if obj.role in [User.ROLE_ADMIN, User.ROLE_ANALYST]:
-            return "BROAD"
-        if obj.ward_id:
-            return "WARD"
-        return "NONE"
+        return dashboard_scope_for_user(obj)["type"]
 
     def get_scope_ward_id(self, obj):
-        if obj.role in [User.ROLE_ADMIN, User.ROLE_ANALYST]:
-            return None
-        return obj.ward_id
+        return dashboard_scope_for_user(obj)["ward_id"]
 
     def get_two_factor_policy(self, obj):
         return get_two_factor_policy_for_user(obj)
@@ -129,6 +126,12 @@ class UserSerializer(serializers.ModelSerializer):
             "identity_update_mode": "totp_step_up" if can_update_identity else "admin_managed",
             "mode": "auth_contract_backed_profile",
         }
+
+    def get_dashboard_capabilities(self, obj):
+        return build_dashboard_capabilities(
+            obj,
+            two_factor_policy=get_two_factor_policy_for_user(obj),
+        )
 
     def get_policy_acceptance(self, obj):
         return build_policy_acceptance_status(obj)

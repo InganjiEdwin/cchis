@@ -97,13 +97,18 @@ Auth endpoints:
 
 - `POST /api/v1/auth/login/`
 - `POST /api/v1/auth/verify-2fa/`
+- `POST /api/v1/auth/step-up/verify/`
+- `POST /api/v1/auth/2fa/setup/`
+- `POST /api/v1/auth/2fa/setup/confirm/`
 - `POST /api/v1/auth/refresh/`
+- `GET /api/v1/auth/session/`
 - `POST /api/v1/auth/logout/`
 - `POST /api/v1/auth/change-password/`
 - `GET /api/v1/auth/me/`
 - `POST /api/v1/auth/password-reset/request/`
 - `POST /api/v1/auth/password-reset/confirm/`
 - `POST /api/v1/auth/access/request/`
+- `GET /api/v1/auth/access/request/options/`
 - `GET /api/v1/auth/access/requests/`
 - `POST /api/v1/auth/access/requests/<id>/approve/`
 - `POST /api/v1/auth/access/requests/<id>/reject/`
@@ -113,9 +118,7 @@ Auth endpoints:
 - `GET /api/v1/auth/audit-events/` for admin-only auth audit review
 - `GET /api/v1/auth/audit-events/summary/` for admin-only auth event aggregation
 
-Most API endpoints are protected. The deliberate public exception is the USSD callback endpoint:
-
-- `POST /api/v1/ussd/menu/`
+Most API endpoints are protected. The deliberate public exceptions are limited to authentication/bootstrap flows, the machine-readable schema, and the USSD callback endpoint. Every operational route still requires authentication plus backend role and scope checks.
 
 For abuse monitoring, the most important auth events currently captured are login success or failure, refresh success or failure, logout attempts, password changes, user creation, and user activation changes.
 
@@ -123,17 +126,101 @@ For abuse monitoring, the most important auth events currently captured are logi
 
 The backend is intentionally private-by-default. If an endpoint is not documented here as public, contributors should assume it requires authentication and role checks.
 
-Current intentionally public endpoint:
+Current intentionally public endpoints:
 
+- `POST /api/v1/auth/login/`
+- `POST /api/v1/auth/verify-2fa/`
+- `POST /api/v1/auth/refresh/`
+- `GET /api/v1/auth/session/`
+- `POST /api/v1/auth/2fa/setup/`
+- `POST /api/v1/auth/2fa/setup/confirm/`
+- `POST /api/v1/auth/password-reset/request/`
+- `POST /api/v1/auth/password-reset/confirm/`
+- `POST /api/v1/auth/access/request/`
+- `GET /api/v1/auth/access/request/options/`
+- `GET /api/v1/schema/`
 - `POST /api/v1/ussd/menu/`
 
-Why it is public:
+Why these are public:
 
+- auth bootstrap and recovery endpoints must be reachable before a user has a session
+- the schema endpoint lets client developers inspect the contract, but schema visibility does not grant route access
 - it supports provider-initiated USSD callbacks
 - it enables low-connectivity access patterns for feature-phone users
-- it is rate-limited because public endpoints are part of the abuse surface
+- public endpoints are rate-limited or otherwise abuse-controlled because they are part of the unauthenticated surface
 
 If you introduce a new public endpoint, document the rationale, abuse controls, and expected deployment assumptions in both `README.md` and `SECURITY.md`.
+
+## Authorization And Role Contract
+
+Backend authorization is the source of truth. Frontend route gates, hidden buttons, and disabled controls are UX affordances only; direct API calls must still be rejected by backend permission classes, object-scope filters, and step-up checks.
+
+`GET /api/v1/auth/me/` returns the current user plus authorization metadata used by the dashboard:
+
+- `role`
+- `ward` and `ward_name`
+- `scope_type` and `scope_ward_id`
+- `two_factor_policy`
+- `profile_capabilities`
+- `dashboard_capabilities`
+- `policy_acceptance`
+
+The dashboard capability payload includes page flags, action flags, scope, and a schema version. Clients should consume those flags instead of hard-coding role strings where possible.
+
+Role definitions:
+
+- `ADMIN`: broad administrative and operational access across wards; default 2FA policy is required.
+- `SUPERVISOR`: ward-scoped operational access for the user's assigned ward; default 2FA policy is required.
+- `ANALYST`: broad read and analysis access; mutation, sensitive export, CHV operations, and approval controls are blocked; default 2FA policy is optional.
+- `CHV`: field/offline workflow role, not a dashboard role; dashboard pages and operational admin APIs are blocked by default.
+
+Scope behavior:
+
+- `ADMIN` and `ANALYST` use broad dashboard scope.
+- `SUPERVISOR` uses ward scope when assigned to a ward. Ward-scoped direct object access outside that ward returns a scoped denial, usually `404`, so cross-ward record existence is not leaked.
+- `CHV` uses field scope for CHV/offline flows and has no dashboard page capability.
+
+Capability matrix:
+
+| Capability | Admin | Supervisor | Analyst |
+| --- | --- | --- | --- |
+| Dashboard access | Yes | Yes | Yes |
+| Ward/data scope | Broad | Own ward for ward-scoped data | Broad |
+| Trigger alerts | Yes | Yes, ward-scoped | No |
+| Manage preparedness actions | Yes | Yes, ward-scoped | View only |
+| CHV operations | Yes | Yes, ward-scoped | No |
+| Facility readiness reviews | Yes | Yes, ward-scoped | View only |
+| Sensitive exports | Auto/request/approve/download | Request/download own approved | No |
+| Source data imports | Full, including risky approval/admin controls | Upload/validate/confirm/request approval | View/download templates only |
+| Message governance | View and approve | View only | View only |
+| System controls | Full write controls | Backend read only, frontend hidden | Frontend shown, backend write blocked |
+| Auth/user admin | Yes | No | No |
+| 2FA policy | Required by default | Required by default | Optional by default |
+
+Dashboard page matrix:
+
+| Dashboard page | Admin | Supervisor | Analyst | CHV |
+| --- | --- | --- | --- | --- |
+| Dashboard shell | Yes | Yes | Yes | No |
+| Overview | Yes | Yes | Yes | No |
+| Ward Decisions | Yes | Yes, ward-scoped | Yes | No |
+| Alerts | Yes | Yes, ward-scoped | Yes, read-only for delivery actions | No |
+| Response Tasks | Yes | Yes, ward-scoped | Yes, read-only | No |
+| CHV Operations | Yes | Yes, ward-scoped | No | No |
+| Facility Readiness | Yes | Yes, ward-scoped | Yes, read-only | No |
+| Metrics | Yes | Yes, ward-scoped where data is ward-owned | Yes | No |
+| Data Readiness | Yes | Yes, upload/validate/request approval | Yes, read/templates only | No |
+| Communication Review | Yes, approve | Yes, view only | Yes, view only | No |
+| Forecast Readiness | Yes | Yes, operational view | Yes | No |
+| Data Connections | Yes | Yes, upload/validate/request approval | Yes, read/templates only | No |
+| Operations Readiness | Yes | Frontend hidden; backend read-only status only | Yes, read-only status only | No |
+
+High-risk action step-up:
+
+- Fresh step-up is session-bound and purpose-specific. A valid login TOTP alone is not enough for a later high-risk operation after the step-up window expires.
+- The backend responds with `403`, `code: step_up_required`, and the required `purpose` when a permitted role still needs fresh verification.
+- Current step-up purposes are `admin_actions`, `security_admin`, `system_controls`, `sensitive_exports`, `sensitive_export_download`, `source_data`, `message_governance`, `alert_delivery`, and `operational_data`.
+- Examples include admin user creation/deactivation/reactivation, access-request decisions, admin session revocation, alert triggering, preparedness and facility-readiness writes, CHV coverage operations, sensitive export request/approval/download, source-data upload/validation/confirmation/approval/downstream actions, message-template or USSD governance approval, and system control writes.
 
 ## API Surface Snapshot
 
@@ -142,11 +229,22 @@ Current notable API routes include:
 - `POST /api/v1/auth/password-reset/request/`
 - `POST /api/v1/auth/password-reset/confirm/`
 - `POST /api/v1/auth/access/request/`
+- `GET /api/v1/auth/session/`
+- `GET /api/v1/auth/me/`
 - `GET /api/v1/wards/`
 - `GET /api/v1/risk-scores/`
 - `GET /api/v1/risk-score/latest/`
 - `GET /api/v1/alerts/`
 - `POST /api/v1/alerts/trigger/`
+- `GET /api/v1/preparedness-actions/`
+- `GET /api/v1/chvs/`
+- `GET /api/v1/facility-readiness/reviews/`
+- `GET /api/v1/sensitive-exports/`
+- `GET /api/v1/source-data/overview/`
+- `POST /api/v1/source-data/uploads/`
+- `GET /api/v1/message-governance/dashboard/`
+- `GET /api/v1/system/readiness/`
+- `GET /api/v1/system/controls/`
 - `POST /api/v1/chv/triage/`
 - `POST /api/v1/chv/sync/`
 - `POST /api/v1/ussd/menu/`
@@ -251,18 +349,28 @@ These are the main v1 contract expectations for current backend consumers.
 - `POST /api/v1/auth/login/`
   - public
   - request body: `username`, `password`
-  - returns final JWTs and serialized current user, or a `requires_2fa` branch with a temporary pre-auth token for privileged users
+  - returns the serialized current user and establishes the auth session, or a `requires_2fa` branch with a temporary pre-auth token for users whose policy requires 2FA
+  - shared/staging/production deployments should use secure cookie transport; local token responses are only a development convenience when enabled
 - `POST /api/v1/auth/verify-2fa/`
   - public after successful primary credential verification
   - request body: `token`, `code`
-  - returns final access token, refresh token, and serialized current user
+  - verifies TOTP or recovery code, establishes the final auth session, and returns the serialized current user
+- `POST /api/v1/auth/2fa/setup/` and `POST /api/v1/auth/2fa/setup/confirm/`
+  - public when used with a valid pre-auth enrollment token, or authenticated when used inside an existing session
+  - starts and confirms TOTP enrollment for roles whose policy requires or permits 2FA
+- `POST /api/v1/auth/step-up/verify/`
+  - authenticated
+  - request body: `purpose`, `code`
+  - creates a session-bound fresh step-up grant for the requested high-risk action purpose
 - `POST /api/v1/auth/refresh/`
   - public
-  - request body: `refresh`
-  - returns a rotated access token and refresh token
+  - rotates the refresh session using the configured cookie or token transport
+- `GET /api/v1/auth/session/`
+  - public bootstrap endpoint
+  - returns anonymous session state or the current authenticated user from valid access/refresh cookies
 - `GET /api/v1/auth/me/`
   - authenticated
-  - returns the current user profile
+  - returns the current user profile, scope metadata, 2FA policy, policy-acceptance state, and dashboard/profile capabilities
 - `POST /api/v1/auth/password-reset/request/`
   - public
   - request body: username or email identifier
@@ -277,39 +385,91 @@ These are the main v1 contract expectations for current backend consumers.
 - `GET /api/v1/auth/access/requests/`
   - admin only
 - `POST /api/v1/auth/access/requests/<id>/approve/`
-  - admin only
+  - admin only with fresh `admin_actions` step-up
 - `POST /api/v1/auth/access/requests/<id>/reject/`
-  - admin only
+  - admin only with fresh `admin_actions` step-up
 
 ### Risk and Operational Endpoints
 
 - `GET /api/v1/wards/`
-  - authenticated
+  - admin, supervisor, or analyst
+  - admin and analyst see broad data
+  - supervisor responses are restricted to the user's assigned ward
   - paginated
   - supports filtering and ordering
 - `GET /api/v1/risk-scores/`
-  - authenticated
+  - admin, supervisor, or analyst
+  - admin and analyst see broad data
+  - supervisor responses are restricted to the user's assigned ward
   - paginated
   - supports `ward_id`, `risk_level`, `source`, and `ordering`
 - `GET /api/v1/alerts/`
   - admin, supervisor, or analyst
+  - admin and analyst see broad data; analyst delivery identifiers are redacted where required
+  - supervisor responses are restricted to the user's assigned ward
   - paginated
   - supports `ward_id`, `channel`, `status`, and `ordering`
+- `POST /api/v1/alerts/trigger/`
+  - admin or supervisor only with fresh `alert_delivery` step-up
+  - supervisors can trigger only for their assigned ward
+- `GET /api/v1/preparedness-actions/`
+  - admin, supervisor, or analyst
+  - supervisors are ward-scoped; analysts are read-only
+- `POST/PATCH /api/v1/preparedness-actions/`
+  - admin or ward-scoped supervisor only with fresh `operational_data` step-up
+- `GET /api/v1/chvs/` and `GET /api/v1/chv/coverage-requests/`
+  - admin or supervisor only
+  - supervisors are ward-scoped
+- `POST/PATCH` CHV coverage and related operational actions
+  - admin or ward-scoped supervisor only with fresh `operational_data` step-up
+- `GET /api/v1/facility-readiness/reviews/`
+  - admin, supervisor, or analyst
+  - supervisors are ward-scoped; analysts are read-only
+- `POST/PATCH` facility-readiness reviews and escalations
+  - admin or ward-scoped supervisor only with fresh `operational_data` step-up
+- `GET /api/v1/sensitive-exports/`
+  - admin or supervisor
+  - supervisors can see and download only their own approved ward-scoped exports
+- `POST /api/v1/sensitive-exports/`
+  - admin or supervisor with fresh `sensitive_exports` step-up
+  - admin requests can be auto-approved by policy; supervisor requests require admin approval before download
+- `POST /api/v1/sensitive-exports/<id>/approve/`
+  - admin only with fresh `sensitive_exports` step-up
+- `GET /api/v1/sensitive-exports/<id>/download/`
+  - admin or owning supervisor with fresh `sensitive_export_download` step-up
+- `GET` source-data feed, overview, freshness, template, and validation-error endpoints
+  - admin, supervisor, or analyst
+  - analysts are view/template-only
+- `POST/PATCH` source-data upload, validation, confirmation, cancellation, and downstream-action endpoints
+  - admin or supervisor only with fresh `source_data` step-up
+  - risky import approval and admin connector controls are admin only
+- `GET` message-governance dashboards and template detail endpoints
+  - admin, supervisor, or analyst
+  - supervisors and analysts are view-only
+- `POST` message-template and USSD approval endpoints
+  - admin only with fresh `message_governance` step-up
+- `GET /api/v1/system/readiness/` and `GET /api/v1/system/controls/`
+  - admin, supervisor, or analyst
+  - supervisor and analyst responses expose read-only status and `can_*` write flags as false
+- `POST` system retry, manual risk scoring, and alert-delivery pause endpoints
+  - admin only with fresh `system_controls` step-up
 
 ### Field and Low-Connectivity Endpoints
 
 - `GET /api/v1/chv/offline/contract/`
-  - operational user roles only
+  - field/operator roles only
   - returns the versioned offline workflow, bundle, upload envelope, and sync health contract for the user's assigned ward
 - `POST /api/v1/chv/device-registrations/`
-  - operational user roles only
+  - field/operator roles only
   - registers or refreshes a CHV offline device against the user's assigned ward and current contract version
 - `POST /api/v1/chv/triage/`
-  - operational user roles only
+  - supervisor or CHV only
+  - ward checks are enforced for both roles
   - accepts ward and symptom data
   - returns triage guidance and referral decision
 - `POST /api/v1/chv/sync/`
-  - operational user roles only
+  - supervisor or CHV only
+  - ward checks are enforced for both roles
   - accepts legacy `payloads` or versioned `uploads` envelopes for supported offline submissions
   - returns sync processing results, conflict state, server receipts, and sync health
 - `POST /api/v1/ussd/menu/`
@@ -510,10 +670,10 @@ The full environment promotion, migration, and seeding policy lives in [docs/ENV
 
 The seed command creates local demo users with password `ChangeMe123!`.
 
-- `admin` with role `ADMIN`
-- `supervisor` with role `SUPERVISOR`
-- `chv_demo` with role `CHV`
-- `analyst_demo` with role `ANALYST`
+- `admin` with role `ADMIN`: full dashboard, broad ward/data scope, auth/user admin, system write controls, approval controls, sensitive exports, and required 2FA by default.
+- `supervisor` with role `SUPERVISOR`: dashboard access for ward-scoped operations, alert triggering, preparedness actions, CHV operations, facility readiness, source-data upload/validation/request flows, own approved export download, and required 2FA by default. The Operations Readiness page is hidden in the frontend; backend system status is read-only.
+- `analyst_demo` with role `ANALYST`: broad read and analysis access, including read-only Operations Readiness status. Alert triggering, CHV operations, operational mutations, sensitive exports, source-data writes, approval controls, and auth/user admin are blocked. 2FA is optional by default.
+- `chv_demo` with role `CHV`: field/offline workflow role for CHV endpoints and assigned-ward low-connectivity flows. The dashboard shell and dashboard admin APIs are blocked by default.
 
 These credentials are for local development only. Do not reuse them in shared or deployed environments.
 

@@ -324,19 +324,31 @@ def _apply_snapshot_filters(queryset, filters: dict):
     return queryset
 
 
-def _available_filters() -> dict:
+def _available_filters(filters: dict | None = None) -> dict:
+    filters = filters or {}
+    wards = Ward.objects.filter(is_active=True).order_by("name")
+    snapshot_channels = OperationalMetricSnapshot.objects.exclude(source_channel="")
+
+    ward_id = filters.get("ward_id")
+    sub_county = filters.get("sub_county")
+    if ward_id:
+        wards = wards.filter(id=ward_id)
+        snapshot_channels = snapshot_channels.filter(ward_id=ward_id)
+    if sub_county:
+        wards = wards.filter(sub_county__iexact=sub_county)
+        snapshot_channels = snapshot_channels.filter(sub_county__iexact=sub_county)
+
     return {
-        "wards": list(Ward.objects.filter(is_active=True).order_by("name").values("id", "name", "county", "sub_county")[:250]),
+        "wards": list(wards.values("id", "name", "county", "sub_county")[:250]),
         "sub_counties": list(
-            Ward.objects.filter(is_active=True)
+            wards
             .exclude(sub_county="")
             .order_by("sub_county")
             .values_list("sub_county", flat=True)
             .distinct()
         ),
         "source_channels": list(
-            OperationalMetricSnapshot.objects.exclude(source_channel="")
-            .order_by("source_channel")
+            snapshot_channels.order_by("source_channel")
             .values_list("source_channel", flat=True)
             .distinct()
         ),
@@ -423,7 +435,7 @@ def build_operational_kpi_dashboard(raw_filters: dict | None = None) -> dict:
         "schema_version": OPERATIONAL_KPI_DASHBOARD_SCHEMA_VERSION,
         "generated_at": timezone.now().isoformat(),
         "filters": filters,
-        "available_filters": _available_filters(),
+        "available_filters": _available_filters(filters),
         "summary": {
             "metric_count": len(definitions),
             "snapshot_count": len(snapshots),

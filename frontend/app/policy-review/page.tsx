@@ -51,7 +51,7 @@ function PolicyReviewPageContent() {
     isHydrating,
     logout,
   } = useAuth();
-  const defaultRoute = currentUser ? getDefaultRoute(currentUser.role) : "/overview";
+  const defaultRoute = currentUser ? getDefaultRoute(currentUser) : "/overview";
   const returnTo = useMemo(
     () => getSafePolicyReturnTo(searchParams.get("returnTo"), defaultRoute === "/unauthorized" ? "/unauthorized" : defaultRoute),
     [defaultRoute, searchParams],

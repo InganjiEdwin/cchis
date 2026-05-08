@@ -62,6 +62,11 @@ class InteroperabilityContractsTests(APITestCase):
             role=User.ROLE_SUPERVISOR,
             ward=self.ward,
         )
+        self.analyst_user = User.objects.create_user(
+            username="interop-analyst",
+            password="StrongPass123!",
+            role=User.ROLE_ANALYST,
+        )
 
     def create_external_system(self) -> ExternalSystem:
         return ExternalSystem.objects.create(
@@ -897,3 +902,93 @@ class InteroperabilityContractsTests(APITestCase):
         self.assertEqual(len(detail_response.data["items"]), 30)
         self.assertEqual(len(detail_response.data["errors"]), 30)
         self.assertEqual(detail_response.data["errors"][29]["item_row_number"], 31)
+
+    def test_analyst_interoperability_read_surface_is_summary_only(self):
+        system = self.create_external_system()
+        system.auth_config_reference = "secrets://dhis2/migori-prod"
+        system.api_base_url = "https://dhis2.example.test/api"
+        system.save(update_fields=["auth_config_reference", "api_base_url", "updated_at"])
+        run = InteroperabilityRun.objects.create(
+            direction=InteroperabilityRun.DIRECTION_EXPORT,
+            exchange_type=InteroperabilityRun.EXCHANGE_AGGREGATE_REPORT_EXPORT,
+            system=system,
+            status=InteroperabilityRun.STATUS_PARTIAL,
+            dry_run=True,
+            source_file_name="risk-score-export.csv",
+            endpoint_url="https://dhis2.example.test/api/dataValueSets",
+            records_seen=1,
+            records_accepted=0,
+            records_rejected=1,
+            mapping_coverage=0.0,
+            operator=self.admin_user,
+            error_summary="1 row needs review before this exchange can be trusted.",
+            dry_run_preview={
+                "schema_version": "interoperability-export-preview-v1",
+                "records_seen": 1,
+                "records_accepted": 0,
+                "records_rejected": 1,
+                "mapping_coverage": 0.0,
+                "mapping_coverage_report": {
+                    "records_seen": 1,
+                    "records_with_resolved_mapping": 0,
+                    "records_requiring_review": 1,
+                    "coverage_percent": 0.0,
+                },
+                "source_trace": ["risk_score:42"],
+            },
+            export_payload={
+                "records": [
+                    {
+                        "orgUnit": "DHIS2-OU-SECRET",
+                        "dataValues": [{"dataElement": "DE-RISK-SCORE", "value": 0.82}],
+                    }
+                ]
+            },
+            connector_config={"auth_config_reference": "secrets://dhis2/migori-prod"},
+            completed_at=timezone.now(),
+        )
+        item = InteroperabilityRunItem.objects.create(
+            run=run,
+            row_number=2,
+            external_identifier="DHIS2-OU-SECRET",
+            internal_object_type=ExternalOrgUnitMapping.INTERNAL_WARD,
+            internal_object_code="MISSING-WARD",
+            status=InteroperabilityRunItem.STATUS_UNMAPPED,
+            action=InteroperabilityRunItem.ACTION_NOOP,
+            safe_context={"external_identifier": "DHIS2-OU-SECRET", "risk_score_id": 42},
+            source_record_ref="risk_score:42",
+        )
+        InteroperabilityRunError.objects.create(
+            run=run,
+            item=item,
+            error_code="org_unit_mapping_missing",
+            field_path="orgUnit",
+            safe_message="No active external org unit matched this CCHIS ward.",
+        )
+
+        self.client.force_authenticate(self.analyst_user)
+        dashboard_response = self.client.get(reverse("interoperability-dashboard"))
+        detail_response = self.client.get(reverse("interoperability-run-detail", kwargs={"public_id": run.public_id}))
+        error_file_response = self.client.get(reverse("interoperability-run-error-file", kwargs={"public_id": run.public_id}))
+
+        self.assertEqual(dashboard_response.status_code, status.HTTP_200_OK)
+        system_payload = dashboard_response.data["systems"][0]
+        self.assertEqual(system_payload["auth_config_reference"], "")
+        self.assertEqual(system_payload["api_base_url"], "")
+        run_payload = dashboard_response.data["runs"][0]
+        self.assertEqual(run_payload["source_file_name"], "")
+        self.assertEqual(run_payload["endpoint_url"], "")
+        self.assertEqual(run_payload["source_reference"], "")
+        self.assertEqual(run_payload["operator_username"], "")
+        self.assertEqual(run_payload["export_payload"], {})
+        self.assertEqual(run_payload["items"], [])
+        self.assertEqual(run_payload["errors"], [])
+        self.assertNotIn("source_trace", run_payload["dry_run_preview"])
+        self.assertEqual(
+            run_payload["dry_run_preview"]["mapping_coverage_report"]["records_requiring_review"],
+            1,
+        )
+        self.assertNotIn("DHIS2-OU-SECRET", str(run_payload))
+        self.assertNotIn("secrets://dhis2/migori-prod", str(dashboard_response.data))
+        self.assertEqual(detail_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(error_file_response.status_code, status.HTTP_403_FORBIDDEN)

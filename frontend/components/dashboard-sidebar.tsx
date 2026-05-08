@@ -32,7 +32,7 @@ export function DashboardSidebar() {
     return null;
   }
 
-  const navGroups = getVisibleNavGroups(currentUser.role);
+  const navGroups = getVisibleNavGroups(currentUser);
 
   function isItemActive(item: NavItem) {
     return pathname === item.href || pathname.startsWith(`${item.href}/`);
