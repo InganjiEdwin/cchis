@@ -9,6 +9,7 @@ from django.db.models import Count, Q
 from django.utils import timezone
 
 from risk.climate_records import enrich_rainfall_result_with_climate_contract
+from risk.lead_time_features import LEAD_TIME_FEATURE_SCHEMA_VERSION
 from risk.models import (
     CatchmentPopulationRecord,
     ExposureFeatureRecord,
@@ -40,7 +41,8 @@ WARD_SPATIAL_GRAPH_SCHEMA_VERSION = "ward-spatial-relationship-graph-v1"
 FACILITY_CATCHMENT_SCHEMA_VERSION = "facility-catchment-approximation-v1"
 SPATIAL_GRAPH_AUDIT_SCHEMA_VERSION = "spatial-graph-monitoring-audit-v1"
 SPATIAL_GRAPH_AUDIT_NAME = "spatial_relationship_catchment_graph_phase_5"
-LEAD_TIME_FEATURE_SCHEMA_VERSION_FOR_SPATIAL_AUDIT = "lead-time-feature-v1"
+LEAD_TIME_FEATURE_SCHEMA_VERSION_FOR_SPATIAL_AUDIT = LEAD_TIME_FEATURE_SCHEMA_VERSION
+LEGACY_LEAD_TIME_FEATURE_SCHEMA_VERSIONS_FOR_SPATIAL_AUDIT = ("lead-time-feature-v1",)
 DEFAULT_GEOMETRY_DATASET_SLUG = "migori-ward-boundaries"
 DEFAULT_SPATIAL_COUNTY = "Migori"
 DEFAULT_DISTANCE_UNIT = "source_crs_degrees"
@@ -345,7 +347,12 @@ def _lead_time_feature_rows_for_spatial_audit(
     feature_dataset_ref: str | None = None,
     row_limit: int | None = None,
 ) -> tuple[list[FeatureDatasetRow], list[str]]:
-    datasets = FeatureDataset.objects.filter(schema_version=LEAD_TIME_FEATURE_SCHEMA_VERSION_FOR_SPATIAL_AUDIT)
+    datasets = FeatureDataset.objects.filter(
+        schema_version__in=(
+            LEAD_TIME_FEATURE_SCHEMA_VERSION_FOR_SPATIAL_AUDIT,
+            *LEGACY_LEAD_TIME_FEATURE_SCHEMA_VERSIONS_FOR_SPATIAL_AUDIT,
+        )
+    )
     if feature_dataset_ref:
         datasets = datasets.filter(dataset_ref=feature_dataset_ref)
     dataset_refs = list(datasets.order_by("-created_at", "-id").values_list("dataset_ref", flat=True))

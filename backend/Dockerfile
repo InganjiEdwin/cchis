@@ -10,6 +10,7 @@ RUN rm -rf /var/lib/apt/lists/* && \
     apt-get update --fix-missing && \
     apt-get install -y --no-install-recommends \
         gcc \
+        g++ \
         gdal-bin \
         libgdal-dev \
         binutils \

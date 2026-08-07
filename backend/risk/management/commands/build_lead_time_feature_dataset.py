@@ -2,6 +2,7 @@ from datetime import date, datetime
 
 from django.core.management.base import BaseCommand, CommandError
 
+from risk.climate.connectors.chirps import CHIRPS_DAILY_VARIANTS
 from risk.lead_time_features import build_lead_time_feature_dataset
 
 
@@ -49,6 +50,20 @@ class Command(BaseCommand):
             default=14,
             help="Forecast lead-day coverage claim to verify on every feature row. Must be between 1 and 14.",
         )
+        parser.add_argument(
+            "--retrospective-chirps",
+            action="store_true",
+            help=(
+                "Allow CHIRPS records ingested after the historical cutoff; valid_date must still be "
+                "strictly before prediction_date."
+            ),
+        )
+        parser.add_argument(
+            "--chirps-variant",
+            choices=sorted(CHIRPS_DAILY_VARIANTS),
+            default="sat",
+            help="Pin one CHIRPS daily variant for the feature dataset; sat is the default.",
+        )
 
     def handle(self, *args, **options):
         prediction_dates = [_parse_date(value) for value in options["prediction_date"]]
@@ -66,12 +81,15 @@ class Command(BaseCommand):
                 include_seeded_surveillance=options["include_seeded_surveillance"],
                 heavy_rain_threshold_mm=options["heavy_rain_threshold_mm"],
                 claimed_forecast_horizon_days=options["claimed_forecast_horizon_days"],
+                retrospective_chirps=options["retrospective_chirps"],
+                chirps_variant=options["chirps_variant"],
             )
         except ValueError as error:
             raise CommandError(str(error)) from error
 
         dataset = snapshot.feature_dataset
         coverage = (dataset.lineage_metadata or {}).get("coverage", {})
+        chirps_policy = (dataset.lineage_metadata or {}).get("chirps_historical_feature_policy", {})
         self.stdout.write(
             self.style.SUCCESS(
                 f"Lead-time feature dataset built. dataset_ref={dataset.dataset_ref} "
@@ -79,6 +97,8 @@ class Command(BaseCommand):
                 f"rainfall_rows={coverage.get('rows_with_rainfall_source_records', 0)} "
                 f"forecast_rows={coverage.get('rows_with_forecast_rainfall_records', 0)} "
                 f"climate_coverage_ok={coverage.get('rows_with_sufficient_claimed_climate_coverage', 0)} "
+                f"chirps_rows={coverage.get('rows_with_chirps_observed_rainfall_records', 0)} "
+                f"chirps_variant={chirps_policy.get('daily_variant', options['chirps_variant'])} "
                 f"surveillance_rows={coverage.get('rows_with_surveillance_records', 0)} "
                 f"leakage_checked={coverage.get('rows_passing_leakage_check', 0)}"
             )

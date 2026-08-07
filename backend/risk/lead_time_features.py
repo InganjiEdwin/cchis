@@ -6,9 +6,15 @@ from datetime import date, datetime, time, timedelta
 from typing import Any, Iterable
 from uuid import uuid4
 
+from django.db.models import Q
 from django.utils import timezone
 
 from risk.climate_records import enrich_rainfall_result_with_climate_contract
+from risk.climate.connectors.chirps import (
+    CHIRPS_DAILY_VARIANTS,
+    CHIRPS_PRODUCT_STATUS_FINAL,
+    CHIRPS_PROVIDER,
+)
 from risk.models import (
     ClimateRecord,
     ClimateRecordType,
@@ -37,10 +43,12 @@ from risk.surveillance_labels import record_is_superseded_by_correction
 from risk.truth_policy import require_seeded_truth_allowed
 
 
-LEAD_TIME_FEATURE_SCHEMA_VERSION = "lead-time-feature-v1"
-LEAD_TIME_FEATURE_GENERATION_MODE = "phase_3_spatial_relationship_features_v1"
+LEAD_TIME_FEATURE_SCHEMA_VERSION = "lead-time-feature-v2-chirps-historical"
+LEAD_TIME_FEATURE_GENERATION_MODE = "phase_3_spatial_relationship_features_v2_chirps"
 LEAD_TIME_SOURCE_CUTOFF_POLICY = "exclusive_before_prediction_date_midnight"
 LEAD_TIME_RAINFALL_WINDOWS_DAYS = (3, 7, 14)
+CHIRPS_RAINFALL_WINDOWS_DAYS = (7, 14, 30)
+CHIRPS_DEFAULT_FEATURE_VARIANT = "sat"
 LEAD_TIME_FORECAST_HORIZON_DAYS = tuple(range(1, 15))
 DEFAULT_CLAIMED_FORECAST_HORIZON_DAYS = 14
 LEAD_TIME_CLIMATE_COVERAGE_SCHEMA_VERSION = "lead-time-climate-coverage-v1"
@@ -54,6 +62,9 @@ LEAD_TIME_FEATURE_KEYS = [
     "observed_rainfall_total_3d",
     "observed_rainfall_total_7d",
     "observed_rainfall_total_14d",
+    "chirps_observed_rainfall_total_7d",
+    "chirps_observed_rainfall_total_14d",
+    "chirps_observed_rainfall_total_30d",
     "rainfall_total_3d",
     "rainfall_total_7d",
     "rainfall_total_14d",
@@ -221,6 +232,29 @@ def _normalise_identity(value) -> str:
     return str(value or "").strip().casefold()
 
 
+def _normalise_chirps_variant(value: str) -> str:
+    variant = str(value or "").strip().lower()
+    if variant not in CHIRPS_DAILY_VARIANTS:
+        raise ValueError(
+            f"Unsupported CHIRPS feature variant '{value}'. Choose one of: "
+            f"{', '.join(sorted(CHIRPS_DAILY_VARIANTS))}."
+        )
+    return variant
+
+
+def _chirps_variant_from_record(record: dict) -> str | None:
+    if record.get("source_provider") != CHIRPS_PROVIDER:
+        return None
+    lineage = record.get("lineage_metadata") if isinstance(record.get("lineage_metadata"), dict) else {}
+    variant = lineage.get("daily_variant")
+    if not variant:
+        source_mode = str(record.get("source_mode") or "")
+        prefix = f"{CHIRPS_PRODUCT_STATUS_FINAL}-"
+        if source_mode.startswith(prefix):
+            variant = source_mode[len(prefix):]
+    return str(variant).strip().lower() if variant else None
+
+
 def _combine_feature_source_kinds(source_kinds: Iterable[str | None]) -> str:
     observed = {source_kind for source_kind in source_kinds if source_kind}
     if not observed:
@@ -261,6 +295,13 @@ def _climate_record_from_model(record: ClimateRecord) -> dict:
         "ingestion_completed_at": _parse_datetime(record.ingestion_run.completed_at),
         "record_type": record.record_type,
         "source_provider": record.source_provider,
+        "chirps_daily_variant": _chirps_variant_from_record(
+            {
+                "source_provider": record.source_provider,
+                "source_mode": record.source_mode,
+                "lineage_metadata": record.lineage_metadata,
+            }
+        ),
         "source_kind": record.source_kind,
         "source_mode": record.source_mode,
         "issue_time": _parse_datetime(record.issue_time),
@@ -312,6 +353,13 @@ def _climate_record_from_ingestion_result(
         "ingestion_completed_at": _parse_datetime(ingestion_run.completed_at),
         "record_type": enriched.get("record_type") or canonical.get("record_type") or ClimateRecordType.OBSERVED,
         "source_provider": enriched.get("source") or canonical.get("source_name") or ingestion_run.source_name,
+        "chirps_daily_variant": _chirps_variant_from_record(
+            {
+                "source_provider": enriched.get("source") or canonical.get("source_name") or ingestion_run.source_name,
+                "source_mode": ingestion_run.source_mode,
+                "lineage_metadata": lineage_metadata,
+            }
+        ),
         "source_kind": ingestion_run.source_kind,
         "source_mode": ingestion_run.source_mode,
         "issue_time": _parse_datetime(enriched.get("issue_time") or canonical.get("issue_time")),
@@ -341,23 +389,50 @@ def _climate_record_from_ingestion_result(
 def _climate_records_by_ward_id(
     *,
     ward_ids: set[int],
+    prediction_date: date,
     source_cutoff: datetime,
+    retrospective_chirps: bool = False,
+    chirps_variant: str = CHIRPS_DEFAULT_FEATURE_VARIANT,
 ) -> dict[int, list[dict]]:
+    chirps_variant = _normalise_chirps_variant(chirps_variant)
     records_by_ward_id: dict[int, list[dict]] = defaultdict(list)
     source_refs_seen: set[str] = set()
+    eligible_chirps_variants: set[str] = set()
     ward_names_by_id = dict(Ward.objects.filter(id__in=ward_ids).values_list("id", "name"))
 
+    eligibility = Q(ingestion_run__completed_at__lt=source_cutoff)
+    if retrospective_chirps:
+        eligibility |= Q(
+            source_provider=CHIRPS_PROVIDER,
+            valid_date__lt=prediction_date,
+        )
     climate_records = (
         ClimateRecord.objects.filter(
             ward_id__in=ward_ids,
             ingestion_run__run_type=IngestionRun.RUN_TYPE_RAINFALL,
-            ingestion_run__completed_at__lt=source_cutoff,
         )
+        .filter(eligibility)
         .select_related("ingestion_run", "ward")
         .order_by("ingestion_run__completed_at", "ingestion_run_id", "id")
     )
     for record in climate_records:
         normalized = _climate_record_from_model(record)
+        if normalized["source_provider"] == CHIRPS_PROVIDER:
+            valid_date = _parse_date(normalized.get("valid_date"))
+            if valid_date is None or valid_date >= prediction_date:
+                continue
+            variant = normalized.get("chirps_daily_variant")
+            if variant not in CHIRPS_DAILY_VARIANTS:
+                raise ValueError(
+                    "CHIRPS feature loading requires every eligible CHIRPS record to declare a valid daily variant. "
+                    f"source_ref={normalized['source_ref']}"
+                )
+            eligible_chirps_variants.add(variant)
+            if variant != chirps_variant:
+                raise ValueError(
+                    "CHIRPS feature dataset variant mismatch: requested "
+                    f"'{chirps_variant}' but eligible record {normalized['source_ref']} uses '{variant}'."
+                )
         source_ward_name = _normalise_identity(normalized.get("source_ward_name"))
         if source_ward_name and source_ward_name != _normalise_identity(ward_names_by_id.get(normalized["ward_id"])):
             continue
@@ -382,11 +457,33 @@ def _climate_records_by_ward_id(
                 continue
             if normalized["source_ref"] in source_refs_seen or normalized["ward_id"] not in ward_ids:
                 continue
+            if normalized["source_provider"] == CHIRPS_PROVIDER:
+                valid_date = _parse_date(normalized.get("valid_date"))
+                if valid_date is None or valid_date >= prediction_date:
+                    continue
+                variant = normalized.get("chirps_daily_variant")
+                if variant not in CHIRPS_DAILY_VARIANTS:
+                    raise ValueError(
+                        "CHIRPS feature loading requires every eligible CHIRPS result to declare a valid daily variant. "
+                        f"source_ref={normalized['source_ref']}"
+                    )
+                eligible_chirps_variants.add(variant)
+                if variant != chirps_variant:
+                    raise ValueError(
+                        "CHIRPS feature dataset variant mismatch: requested "
+                        f"'{chirps_variant}' but eligible result {normalized['source_ref']} uses '{variant}'."
+                    )
             source_ward_name = _normalise_identity(normalized.get("source_ward_name") or normalized.get("ward_name"))
             if source_ward_name and source_ward_name != _normalise_identity(ward_names_by_id.get(normalized["ward_id"])):
                 continue
             records_by_ward_id[normalized["ward_id"]].append(normalized)
             source_refs_seen.add(normalized["source_ref"])
+
+    if len(eligible_chirps_variants) > 1:
+        raise ValueError(
+            "CHIRPS feature dataset cannot mix daily variants: "
+            f"{', '.join(sorted(eligible_chirps_variants))}."
+        )
 
     return records_by_ward_id
 
@@ -436,6 +533,7 @@ def _observed_rainfall_observations_from_climate_records(
                 "fallback_reason": (record.get("raw_payload") or {}).get("fallback_reason") or "",
                 "canonical_record_ref": record["source_ref"],
                 "source_record_ref": record.get("source_record_ref"),
+                "valid_date": record.get("valid_date"),
                 "record_type": record["record_type"],
                 "quality_flag": record["quality_flag"],
                 "storage": record["storage"],
@@ -451,7 +549,10 @@ def _rainfall_window_features(
     source_cutoff: datetime,
     heavy_rain_threshold_mm: float,
     source_summary: dict | None = None,
+    retrospective_chirps: bool = False,
+    chirps_variant: str = CHIRPS_DEFAULT_FEATURE_VARIANT,
 ) -> tuple[dict, dict]:
+    chirps_variant = _normalise_chirps_variant(chirps_variant)
     values = {
         "observed_rainfall_total_3d": 0.0,
         "observed_rainfall_total_7d": 0.0,
@@ -463,6 +564,9 @@ def _rainfall_window_features(
         "rainfall_anomaly_against_local_baseline": 0.0,
         "heavy_rain_threshold_exceedance_count_14d": 0,
         "days_since_heavy_rain": None,
+        "chirps_observed_rainfall_total_7d": 0.0,
+        "chirps_observed_rainfall_total_14d": 0.0,
+        "chirps_observed_rainfall_total_30d": 0.0,
     }
     lineage = {
         "window_mode": "trailing_observed_climate_records_before_prediction_date",
@@ -490,6 +594,13 @@ def _rainfall_window_features(
         "source_record_refs": sorted(
             {observation["source_record_ref"] for observation in observations if observation.get("source_record_ref")}
         ),
+        "chirps_source_provider": CHIRPS_PROVIDER,
+        "chirps_daily_variant": chirps_variant,
+        "chirps_variant_selection_policy": "single_variant_per_feature_dataset",
+        "retrospective_chirps_mode": retrospective_chirps,
+        "chirps_source_record_count": 0,
+        "chirps_source_refs": [],
+        "chirps_windows": {},
         "max_source_timestamp": None,
     }
     if observations:
@@ -514,6 +625,65 @@ def _rainfall_window_features(
                 {item["source_record_ref"] for item in window_observations if item.get("source_record_ref")}
             ),
             "source_timestamps": [item["observed_at"].isoformat() for item in window_observations],
+        }
+
+    chirps_observations = [
+        item
+        for item in observations_before_cutoff
+        if (
+            item.get("source") == CHIRPS_PROVIDER
+            and item.get("source_kind") == IngestionRun.SOURCE_KIND_LIVE
+            and item.get("record_type") == ClimateRecordType.OBSERVED
+            and not item.get("fallback_flag")
+            and not item.get("fallback_reason")
+            and _parse_date(item.get("valid_date")) is not None
+            and _parse_date(item.get("valid_date")) < prediction_date
+        )
+    ]
+    lineage["chirps_source_record_count"] = len(chirps_observations)
+    observed_chirps_variants = sorted(
+        {
+            item.get("chirps_daily_variant")
+            for item in chirps_observations
+            if item.get("chirps_daily_variant")
+        }
+    )
+    if observed_chirps_variants and observed_chirps_variants != [chirps_variant]:
+        raise ValueError(
+            "CHIRPS rainfall features cannot mix variants: "
+            f"expected '{chirps_variant}', found {', '.join(observed_chirps_variants)}."
+        )
+    lineage["chirps_variants_observed"] = observed_chirps_variants
+    lineage["chirps_source_refs"] = sorted(
+        {
+            item["canonical_record_ref"]
+            for item in chirps_observations
+            if item.get("canonical_record_ref")
+        }
+    )
+    for window_days in CHIRPS_RAINFALL_WINDOWS_DAYS:
+        window_start = source_cutoff - timedelta(days=window_days)
+        window_observations = [
+            item
+            for item in chirps_observations
+            if window_start <= item["observed_at"] < source_cutoff
+        ]
+        total = round(sum(item["rainfall_mm"] for item in window_observations), 2)
+        values[f"chirps_observed_rainfall_total_{window_days}d"] = total
+        lineage["chirps_windows"][f"{window_days}d"] = {
+            "window_start_inclusive": window_start.isoformat(),
+            "window_end_exclusive": source_cutoff.isoformat(),
+            "record_count": len(window_observations),
+            "source_refs": sorted(
+                {
+                    item["canonical_record_ref"]
+                    for item in window_observations
+                    if item.get("canonical_record_ref")
+                }
+            ),
+            "source_timestamps": [item["observed_at"].isoformat() for item in window_observations],
+            "record_type": ClimateRecordType.OBSERVED,
+            "fallback_excluded": True,
         }
 
     baseline_cutoff = source_cutoff - timedelta(days=max(LEAD_TIME_RAINFALL_WINDOWS_DAYS))
@@ -1408,6 +1578,8 @@ def _row_leakage_proof(
     forecast_lineage: dict,
     surveillance_lineage: dict,
     spatial_lineage: dict | None = None,
+    retrospective_chirps: bool = False,
+    chirps_variant: str = CHIRPS_DEFAULT_FEATURE_VARIANT,
 ) -> dict:
     rainfall_timestamp = _parse_datetime(rainfall_lineage.get("max_source_timestamp"))
     forecast_issue_time = _parse_datetime(forecast_lineage.get("selected_issue_time"))
@@ -1454,6 +1626,9 @@ def _row_leakage_proof(
         ),
         "source_cutoff_timestamp": source_cutoff.isoformat(),
         "source_cutoff_policy": LEAD_TIME_SOURCE_CUTOFF_POLICY,
+        "retrospective_chirps_mode": retrospective_chirps,
+        "chirps_daily_variant": chirps_variant,
+        "chirps_valid_date_policy": "valid_date < prediction_date",
         "population_exposure_as_of": population_as_of.isoformat(),
         "surveillance_filter": {
             "created_at": f"< {source_cutoff.isoformat()}",
@@ -1464,8 +1639,15 @@ def _row_leakage_proof(
             "reporting_period_end": f"< {prediction_date.isoformat()}",
         },
         "rainfall_filter": {
-            "completed_at": f"< {source_cutoff.isoformat()}",
+            "completed_at": (
+                f"< {source_cutoff.isoformat()} for non-CHIRPS records; "
+                "retrospective CHIRPS records are exempt"
+                if retrospective_chirps
+                else f"< {source_cutoff.isoformat()}"
+            ),
             "source_timestamp": f"< {source_cutoff.isoformat()}",
+            "chirps_valid_date": f"< {prediction_date.isoformat()}",
+            "chirps_daily_variant": chirps_variant,
         },
         "max_rainfall_source_timestamp": rainfall_lineage.get("max_source_timestamp"),
         "max_observed_rainfall_timestamp": rainfall_lineage.get("max_source_timestamp"),
@@ -1504,7 +1686,10 @@ def build_lead_time_feature_dataset(
     include_seeded_surveillance: bool = False,
     heavy_rain_threshold_mm: float = DEFAULT_HEAVY_RAIN_THRESHOLD_MM,
     claimed_forecast_horizon_days: int = DEFAULT_CLAIMED_FORECAST_HORIZON_DAYS,
+    retrospective_chirps: bool = False,
+    chirps_variant: str = CHIRPS_DEFAULT_FEATURE_VARIANT,
 ) -> LeadTimeFeatureDatasetSnapshot:
+    chirps_variant = _normalise_chirps_variant(chirps_variant)
     if claimed_forecast_horizon_days not in LEAD_TIME_FORECAST_HORIZON_DAYS:
         raise ValueError("claimed_forecast_horizon_days must be between 1 and 14.")
     require_seeded_truth_allowed(
@@ -1550,7 +1735,10 @@ def build_lead_time_feature_dataset(
         expanded_ward_ids = ward_ids | spatial_neighbor_ward_ids
         climate_records_by_ward_id = _climate_records_by_ward_id(
             ward_ids=expanded_ward_ids,
+            prediction_date=prediction_date,
             source_cutoff=source_cutoff,
+            retrospective_chirps=retrospective_chirps,
+            chirps_variant=chirps_variant,
         )
         surveillance_by_ward_id = _surveillance_records_by_ward_id(
             ward_ids=expanded_ward_ids,
@@ -1580,6 +1768,8 @@ def build_lead_time_feature_dataset(
                 source_cutoff=source_cutoff,
                 heavy_rain_threshold_mm=heavy_rain_threshold_mm,
                 source_summary=observed_source_summary,
+                retrospective_chirps=retrospective_chirps,
+                chirps_variant=chirps_variant,
             )
             forecast_values, forecast_lineage = _forecast_rainfall_features(
                 climate_records=climate_records,
@@ -1684,6 +1874,8 @@ def build_lead_time_feature_dataset(
                 forecast_lineage=forecast_lineage,
                 surveillance_lineage=surveillance_lineage,
                 spatial_lineage=spatial_lineage,
+                retrospective_chirps=retrospective_chirps,
+                chirps_variant=chirps_variant,
             )
             synthetic_rainfall_fallback_used = bool(fallback_values.get("fallback_static_rainfall_used"))
             synthetic_population_fallback_used = population_values.get("population_total") is None
@@ -1691,6 +1883,8 @@ def build_lead_time_feature_dataset(
                 "prediction_date": prediction_date.isoformat(),
                 "source_cutoff_timestamp": source_cutoff.isoformat(),
                 "source_cutoff_policy": LEAD_TIME_SOURCE_CUTOFF_POLICY,
+                "retrospective_chirps_mode": retrospective_chirps,
+                "chirps_daily_variant": chirps_variant,
                 **rainfall_values,
                 **forecast_values,
                 **fallback_values,
@@ -1755,6 +1949,11 @@ def build_lead_time_feature_dataset(
             1
             for row in rows_by_ward_prediction_date.values()
             if row["source_lineage"]["rainfall"]["record_count"] > 0
+        ),
+        "rows_with_chirps_observed_rainfall_records": sum(
+            1
+            for row in rows_by_ward_prediction_date.values()
+            if row["source_lineage"]["rainfall"].get("chirps_source_record_count", 0) > 0
         ),
         "rows_with_forecast_rainfall_records": sum(
             1
@@ -1847,8 +2046,27 @@ def build_lead_time_feature_dataset(
             "source_cutoff_policy": LEAD_TIME_SOURCE_CUTOFF_POLICY,
             "source_cutoff_as_of": source_cutoff_as_of.isoformat() if source_cutoff_as_of else None,
             "source_cutoff_as_of_applied": source_cutoff_as_of is not None,
+            "retrospective_chirps_mode": retrospective_chirps,
+            "chirps_daily_variant": chirps_variant,
             "rainfall_windows_days": list(LEAD_TIME_RAINFALL_WINDOWS_DAYS),
             "rainfall_window_mode": "trailing_observed_climate_records_before_prediction_date",
+            "chirps_historical_feature_policy": {
+                "provider": CHIRPS_PROVIDER,
+                "windows_days": list(CHIRPS_RAINFALL_WINDOWS_DAYS),
+                "daily_variant": chirps_variant,
+                "allowed_daily_variants": [chirps_variant],
+                "reject_mixed_variants": True,
+                "retrospective_mode": retrospective_chirps,
+                "record_type": ClimateRecordType.OBSERVED,
+                "fallback_flag": False,
+                "cutoff": "valid_date and observed daily interval must be strictly before prediction date",
+                "ingestion_completion_policy": (
+                    "retrospective CHIRPS records may be ingested after the historical prediction cutoff; "
+                    "their source valid_date remains strictly before prediction_date"
+                    if retrospective_chirps
+                    else "CHIRPS ingestion completion must be before the source cutoff"
+                ),
+            },
             "climate_coverage_schema_version": LEAD_TIME_CLIMATE_COVERAGE_SCHEMA_VERSION,
             "claimed_forecast_horizon_days": claimed_forecast_horizon_days,
             "forecast_horizon_days_supported_by_feature_builder": list(LEAD_TIME_FORECAST_HORIZON_DAYS),
@@ -1912,7 +2130,9 @@ def build_lead_time_feature_dataset(
             "leakage_proof_contract": {
                 "future_label_data_used": False,
                 "label_windows_used_as_input": False,
-                "feature_inputs_must_be_created_before_source_cutoff": True,
+                "non_chirps_feature_inputs_must_be_created_before_source_cutoff": True,
+                "retrospective_chirps_ingestion_completion_exception": retrospective_chirps,
+                "retrospective_chirps_valid_date_must_be_before_prediction_date": True,
                 "surveillance_reporting_period_end_must_be_before_prediction_date": True,
             },
         },

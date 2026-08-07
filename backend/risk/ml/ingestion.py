@@ -12,7 +12,11 @@ from pathlib import Path
 from decouple import config
 from django.utils import timezone
 
-from risk.climate_records import enrich_rainfall_result_with_climate_contract, persist_climate_records_for_ingestion_run
+from risk.climate_records import (
+    classify_source_kind,
+    enrich_rainfall_result_with_climate_contract,
+    persist_climate_records_for_ingestion_run,
+)
 from risk.etl_records import canonical_record_envelope, climate_record_from_rainfall_observation
 from risk.models import IngestionRun, Ward
 
@@ -329,8 +333,10 @@ def _serialize_observation(ward: Ward | None, observation: RainfallObservation) 
         source_timestamp = observation.source_timestamp
     elif observation.source == "open-meteo-forecast":
         source_timestamp = timezone.now().isoformat()
-    source_kind = (
-        IngestionRun.SOURCE_KIND_LIVE if observation.source == "open-meteo-forecast" else IngestionRun.SOURCE_KIND_SEEDED
+    source_kind = classify_source_kind(
+        observation.source,
+        fallback_flag=bool(observation.fallback_flag),
+        fallback_reason=observation.fallback_reason or "",
     )
     freshness_state = IngestionRun.FRESHNESS_FRESH if source_timestamp else IngestionRun.FRESHNESS_UNKNOWN
     issue_time = _datetime_observation_attr(observation, "issue_time")
@@ -405,10 +411,14 @@ def _source_kind_for_results(results: list[dict]) -> str:
     kinds = set()
     for item in results:
         source = item.get("source", "")
-        if source == "open-meteo-forecast":
-            kinds.add(IngestionRun.SOURCE_KIND_LIVE)
-        elif source:
-            kinds.add(IngestionRun.SOURCE_KIND_SEEDED)
+        if source:
+            kinds.add(
+                classify_source_kind(
+                    source,
+                    fallback_flag=bool(item.get("fallback_flag")),
+                    fallback_reason=item.get("fallback_reason") or "",
+                )
+            )
     if len(kinds) > 1:
         return IngestionRun.SOURCE_KIND_HYBRID
     return next(iter(kinds), IngestionRun.SOURCE_KIND_UNKNOWN)

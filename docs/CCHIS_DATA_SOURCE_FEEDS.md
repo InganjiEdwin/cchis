@@ -1,6 +1,6 @@
 # CCHIS Data Source Feeds
 
-Status date: 2026-05-05
+Status date: 2026-08-08
 
 This is the current source strategy for feeding the CCHIS e2e flow:
 
@@ -12,7 +12,7 @@ Data Sources -> ETL Pipeline -> Feature Engineering -> ML Prediction Layer -> De
 
 | Domain | Best live/API path | Current CCHIS path | E2E fallback |
 | --- | --- | --- | --- |
-| Rainfall | Open-Meteo is already wired. NASA POWER can supplement historical daily point meteorology. HDX HAPI rainfall may help where HAPI coverage fits the admin level. | `ingest_rainfall` plus `ClimateRecord` ledger. | Existing static/fallback rainfall seed path. Keep forecast claims at the audited horizon until 7/14 day coverage is proven. |
+| Rainfall | CHIRPS v3 final daily COGs are the historical gridded rainfall path; Open-Meteo remains the separate forecast connector. NASA POWER can supplement historical daily point meteorology. | `ingest_chirps_rainfall` for bounded historical ward aggregates; `build_lead_time_feature_dataset --retrospective-chirps --chirps-variant sat` for retrospective CHIRPS-backed feature snapshots; `ingest_rainfall` for forecast operation. | CHIRPS has no static fallback and records its `sat`/`rnl` variant and spatial provenance. Each feature dataset pins one variant and rejects mixed `sat`/`rnl` inputs. Keep forecast claims at the audited horizon until 7/14-day coverage is proven. |
 | Flood exposure | No dependable anonymous ward-level flood API should be assumed for the pilot. Longer-term candidates are Copernicus/GloFAS, county flood reports, and humanitarian feeds. | Population/exposure ETL accepts `flood_exposure_layer` or `csv_backfill`. | Synthetic floodplain exposure proxy generated per ward. |
 | Health surveillance | DHIS2 analytics/export API is the preferred institutional path when credentials and data elements are available. OpenMRS REST can support facility-level extracts where facilities use OpenMRS. | `ingest_surveillance` accepts weekly, daily, line-list summary, trusted push, field signal, facility proxy, and CSV backfill feeds. | Synthetic weekly cholera aggregate feed with suspected, confirmed, diarrheal proxy counts, and outbreak labels. |
 | Population | KNBS official releases are the preferred baseline; WorldPop API/data files can provide gridded population for spatial aggregation. | `ingest_population_exposure` accepts population baseline, gridded population, and CSV backfill feeds. | Synthetic ward population baseline and under-five/household proxies. |
@@ -22,17 +22,17 @@ Data Sources -> ETL Pipeline -> Feature Engineering -> ML Prediction Layer -> De
 
 ## Current Local Coverage
 
-As of 2026-05-05, the local e2e dataset is intentionally demo-fed where real source data is still missing.
+As of 2026-08-08, the local e2e dataset is intentionally demo-fed where real source data is still missing; the historical CHIRPS path is now source-backed for the recorded January 2024 window.
 
 | Area | Local count | Current truth state |
 | --- | ---: | --- |
 | Migori wards | 40 | Source-backed from local Migori ward CSV/GeoJSON. |
-| Climate records | 120 | Mixed Open-Meteo forecast and fallback-static records; current audit still does not support 7/14-day climate claims. |
+| Climate records | 2,304 | Includes 1,200 persisted CHIRPS observed records for 2024-01-01 through 2024-01-30, alongside legacy forecast/fallback records; current audit still does not support 7/14-day forecast claims. |
 | Population baselines | 40 | Seeded demo baseline records. |
 | Exposure features | 240 | Seeded demo exposure proxies. |
 | Surveillance records | 1,440 | Seeded demo weekly cholera aggregates. |
 | Surveillance label windows | 960 | Seeded demo label windows. |
-| Feature datasets | 15 | Mostly generated from seeded/demo source records. |
+| Feature datasets | 134 | Includes one persisted 40-row CHIRPS-backed historical lead-time dataset; the remaining local snapshots are mostly seeded/demo source datasets. |
 | Model runs | 4 | No active promoted model registry entry yet. |
 | Facility forecasts | 0 | Facility burden forecasting path exists, but no forecast records have been generated in the current local DB snapshot. |
 
@@ -67,8 +67,32 @@ Implementation record: see `docs/SOURCE_DATA_OPS_SURFACE_IMPLEMENTATION_PLAN.md`
 | Facility burden forecast | Celery beat runs `risk.tasks.run_facility_burden_forecast_task` daily at 06:30. | Daily after risk scoring. | Meaning improves only after real facility readiness/surveillance feeds exist. |
 | Surveillance ingestion | Callable by command/task, not fixed beat schedule. | Weekly after county/DHIS2 reporting; daily if source provides daily aggregate. | Should regenerate label windows after import. |
 | Population/exposure ingestion | Callable by command/task, not fixed beat schedule. | Mostly manual/scheduled around source refreshes. | Population is not a daily source; exposure layers should be refreshed by source cadence. |
-| Lead-time feature dataset build | Callable by command, not fixed beat schedule. | Daily for monitoring/evaluation once real labels exist; on demand during pilot testing. | Must respect source cutoff and leakage rules. |
+| Lead-time feature dataset build | Callable by command, not fixed beat schedule. | Daily for monitoring/evaluation once real labels exist; on demand during pilot testing. | Standard builds enforce ingestion completion before the cutoff. Historical CHIRPS backfills may use explicit `--retrospective-chirps`, which retains `valid_date < prediction_date` and requires one pinned daily variant. |
 | Operational KPI snapshots | Callable by command, not fixed beat schedule in the current settings file. | Daily. | Useful for M&E once real operational activity starts. |
+
+Historical CHIRPS runs are deliberately bounded and operator-triggered:
+
+```bash
+docker compose exec -T backend python manage.py ingest_chirps_rainfall \
+  --start-date YYYY-MM-DD \
+  --end-date YYYY-MM-DD \
+  --variant sat \
+  --product-status final \
+  --resume
+```
+
+Use `--variant rnl` for a whole selected period that begins before 1998; do not mix variants silently. `--dry-run` validates retrieval and aggregation without persistence, while `--force` is required to update an existing stable identity. Missing CHIRPS assets remain explicitly unavailable/failed and never invoke the static rainfall seed path. The run is limited by `CHIRPS_MAX_DATE_RANGE_DAYS` (31 by default) and the ward coverage threshold is controlled by `CHIRPS_MIN_WARD_COVERAGE_FRACTION` (0.95 by default).
+
+For a historical feature snapshot built from a backfill ingested after the historical prediction date, use the explicit retrospective mode and pin the same variant used by the source run:
+
+```bash
+docker compose exec -T backend python manage.py build_lead_time_feature_dataset \
+  --prediction-date 2024-01-31 \
+  --retrospective-chirps \
+  --chirps-variant sat
+```
+
+Retrospective mode exempts CHIRPS ingestion completion time only. Every selected CHIRPS record must still have `valid_date < prediction_date`; the persisted feature lineage records the exception, source references and pinned variant.
 
 ## Model Training And Prediction Cadence
 

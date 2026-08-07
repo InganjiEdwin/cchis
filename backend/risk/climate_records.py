@@ -16,6 +16,25 @@ FORECAST_SOURCE_HINTS = ("forecast", "gfs", "ecmwf", "icpac", "open-meteo")
 OBSERVED_SOURCE_HINTS = ("observed", "observation", "gauge", "station", "imerg", "chirps", "era5")
 STATIC_SOURCE_HINTS = ("static", "seed", "fallback")
 
+# Keep source classification in one place.  A connector must opt into LIVE by
+# using a provider in this registry; unknown providers are never promoted to
+# live merely because they happen to return a value.
+LIVE_SOURCE_PROVIDERS = frozenset({"open-meteo-forecast", "chirps-v3.0"})
+
+
+def classify_source_kind(
+    source_provider: str,
+    *,
+    fallback_flag: bool = False,
+    fallback_reason: str = "",
+) -> str:
+    provider = (source_provider or "").strip().lower()
+    if fallback_flag or fallback_reason or _source_has_hint(provider, STATIC_SOURCE_HINTS):
+        return IngestionRun.SOURCE_KIND_SEEDED
+    if provider in LIVE_SOURCE_PROVIDERS:
+        return IngestionRun.SOURCE_KIND_LIVE
+    return IngestionRun.SOURCE_KIND_SEEDED
+
 
 def _normalise_aware(value: datetime | None) -> datetime | None:
     if value is None:

@@ -24,6 +24,7 @@ from .models import (
     SurveillanceTruthLevel,
     Ward,
 )
+from .lead_time_features import LEAD_TIME_FEATURE_SCHEMA_VERSION
 from .test_step_up_utils import force_authenticate_with_step_up
 
 
@@ -202,7 +203,7 @@ class SourceDataPhaseFiveDownstreamActionTests(APITestCase):
         self.assertEqual(evidence["leakage_check"]["row_count"], evidence["leakage_check"]["rows_passing_leakage_check"])
         self.assertEqual(evidence["source_run_ids"]["population_exposure_ingestion_run_id"], batch.population_exposure_ingestion_run_id)
         self.assertIn("as_of", evidence)
-        dataset = FeatureDataset.objects.get(schema_version="lead-time-feature-v1")
+        dataset = FeatureDataset.objects.get(schema_version=LEAD_TIME_FEATURE_SCHEMA_VERSION)
         self.assertEqual(datetime.fromisoformat(dataset.lineage_metadata["source_cutoff_as_of"]), as_of)
         self.assertTrue(dataset.lineage_metadata["source_cutoff_as_of_applied"])
 

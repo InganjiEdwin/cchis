@@ -67,6 +67,71 @@ The earlier three Phase 5 failures were caused by date-relative fixtures being e
 - Expanded CI to install, audit, lint, type-check, test and build the frontend, smoke-test its production image and compiled origins, validate resolved production Compose, build/validate the backend, run the complete backend suite, run `pip-audit` and fail on production deployment warnings.
 - Added [MODEL_CARD.md](../MODEL_CARD.md), [DATASET_CARD.md](../DATASET_CARD.md), [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md), issue forms and a placeholder-only [production environment template](../deploy/production.env.example).
 
+### CHIRPS v3 historical rainfall correction pass
+
+This correction pass adds a dedicated CHIRPS path without changing the existing Open-Meteo forecast connector or weakening the forecast-horizon audit. The selected product is CHIRPS v3.0 `daily/final/sat`; its daily values use IMERG Late V07 disaggregation and the implementation rejects pre-1998 `sat` requests rather than silently mixing variants. `daily/final/rnl` is available as an explicit whole-period alternative for earlier health-label periods. Preliminary products are out of scope.
+
+Implementation evidence:
+
+- `backend/risk/climate/connectors/chirps.py` builds only the allowlisted official UCSB CHC COG URL, prefers one remote COG window per date, falls back to one bounded full download when range access or provenance metadata is unavailable, and computes fractional-cell, coverage-weighted ward means. It rejects no-data gaps below the configured 0.95 coverage threshold and invalid negative/non-finite values.
+- `backend/risk/chirps_ingestion.py` and `ingest_chirps_rainfall` persist observed `chirps-v3.0` `LIVE` records with stable provider/version/status/variant/date/ward/processing identities, compact payloads, daily UTC interval timestamps and retrieval/spatial/source hashes. Missing or rejected assets produce failed/partial runs without static fallback.
+- Migration `0077_chirps_identity_and_ingestion_lineage` adds durable identity and run lineage storage. `rasterio==1.4.3` and `shapely==2.0.7` are pinned and the Docker image includes the required C++ build toolchain.
+- `backend/risk/lead_time_features.py` now exposes CHIRPS observed 7-, 14- and 30-day rainfall totals with source references and an explicit `--retrospective-chirps` mode. Retrospective mode exempts CHIRPS ingestion completion time only; every selected CHIRPS record still requires `valid_date < prediction_date`. The feature schema is `lead-time-feature-v2-chirps-historical`.
+- Feature datasets pin one CHIRPS daily variant in lineage (`sat` or `rnl`); the loader and audit reject mixed variants rather than silently combining them.
+- `audit_chirps_ingestion --strict` checks genuine LIVE observed records, version/status/variant, complete active-ward coverage, canonical identity, finite non-negative values, no fallback, provenance, coverage, date-range exceptions, persisted CHIRPS-backed feature rows, variant pinning and feature cutoffs.
+
+Verification performed on 2026-08-07, with the live CHIRPS backfill and post-run audit completed on 2026-08-08:
+
+| Check | Result |
+|---|---|
+| `docker compose exec -T backend python manage.py test risk.test_chirps_ingestion -v 1` | **11/11 passed**; includes persisted retrospective loading, mixed-variant rejection, non-vacuous audit failure and strict-audit success. |
+| `docker compose exec -T backend python manage.py test risk.test_lead_time_features -v 1` | **9/9 passed**. |
+| `docker compose exec -T backend python manage.py makemigrations risk --check --dry-run` | Passed; no pending model changes. |
+| Official source HEAD and one-day remote COG window | **Passed** for `chirps-v3.0.sat.2024.01.01.cog`; HTTP content length `17162842`, ETag and Last-Modified were retained, and the extracted window hash was `ab8704666697a0710457d693b6eddc721ac725c337cdc0e0767e58c849decdf1`. |
+| Direct bounded 30-day source/raster verification | **Passed** for 2024-01-01 through 2024-01-30 using managed geometry `migori-ward-boundaries:2026-04-25-backfill-clean`: 30 official COG windows, 40 canonical wards per date, 1,200 valid ward/date aggregates, remote-window mode throughout, and minimum ward coverage above 0.95. No raster artifacts were written to the repository. |
+| Managed geometry repair | **Passed**; the two exact noncanonical rows `Phase9 Other Ward dac83567` and `Phase9 Supervisor Ward dac83567` were deactivated after confirming they had no managed polygons. They were not hard-deleted because protected historical dependencies exist. The active ward set is now 40/40 covered by the managed geometry version. |
+| Live 30-day CHIRPS ingestion | **Passed** with run `36`: 30/30 official assets processed, 1,200 `LIVE` `chirps-v3.0` records created, zero rejected/unavailable assets. Resume run `37` skipped all 1,200 stable identities; normalization rerun `38` updated all 1,200 records without changing identity or row count. |
+| Persisted CHIRPS-backed feature dataset | **Passed**: `build_lead_time_feature_dataset --prediction-date 2024-01-31 --retrospective-chirps --chirps-variant sat` created dataset `lead-time-features-lead-time-feature-v2-chirps-historical-2024-01-31-f941018d` with 40 persisted rows; all 40 rows contain CHIRPS references and nonzero 7/14/30-day windows. |
+| Strict post-ingestion audit | **Passed**: `audit_chirps_ingestion --strict` scanned 1,200 records across 3 ingestion runs and passed all 10 checks, including persisted feature evidence, temporal cutoffs and single-variant pinning. |
+
+The original geometry blocker was resolved by deactivating only those two exact noncanonical rows; their protected historical dependencies remain intact. The requested command then completed against the 40 active canonical wards and persisted 1,200 records for 2024-01-01 through 2024-01-30. The retrospective feature build explicitly permits those 2026-ingested historical records while retaining `valid_date < prediction_date`; it persisted 40 CHIRPS-backed rows for prediction date 2024-01-31. The dataset is pinned to `sat` and the strict audit rejects zero-feature or mixed-variant states.
+
+Independent CHIRPS-backed ward-value spot checks from the persisted dataset (`prediction_date=2024-01-31`, millimetres):
+
+| Ward | 7-day total | 14-day total | 30-day total | CHIRPS source refs |
+|---|---:|---:|---:|---:|
+| Bukira Centrl/Ikerege | 24.51 | 65.27 | 143.42 | 30 |
+| Bukira East | 23.70 | 70.13 | 155.13 | 30 |
+| Central Kamagambo | 36.06 | 87.68 | 198.78 | 30 |
+
+Sanitized lineage example (identifiers intentionally redacted):
+
+```json
+{
+  "dataset_schema": "lead-time-feature-v2-chirps-historical",
+  "prediction_date": "2024-01-31",
+  "retrospective_chirps_mode": true,
+  "chirps_daily_variant": "sat",
+  "source_cutoff_policy": "exclusive_before_prediction_date_midnight",
+  "chirps_valid_date_policy": "valid_date < prediction_date",
+  "source_lineage": {
+    "rainfall": {
+      "chirps_source_provider": "chirps-v3.0",
+      "chirps_daily_variant": "sat",
+      "chirps_source_record_count": 30,
+      "chirps_source_refs": ["chirps:v3.0:final:sat:2024-01-01:ward:<redacted>", "... 29 more ..."]
+    }
+  },
+  "leakage_proof": {
+    "retrospective_chirps_mode": true,
+    "chirps_valid_date_policy": "valid_date < prediction_date",
+    "passes_cutoff_check": true
+  }
+}
+```
+
+CHIRPS is a gridded satellite/station rainfall estimate, not ward rain-gauge ground truth, real-time rainfall or a 7–14-day forecast. The official references are the [CHIRPS v3 overview](https://www.chc.ucsb.edu/data/chirps3), [daily product documentation](https://data.chc.ucsb.edu/products/CHIRPS/v3.0/daily/readme.txt), and [v3.0 release notes](https://data.chc.ucsb.edu/products/CHIRPS/v3.0/README-CHIRPSv3.0.txt), accessed 2026-08-07. No claim of improved prediction accuracy is made.
+
 ## Architecture and runtime capability
 
 | Capability | Status | Evidence and limitation |
@@ -74,7 +139,7 @@ The earlier three Phase 5 failures were caused by date-relative fixtures being e
 | Containerized backend runtime | **Verified working** | backend/Dockerfile, docker-compose.yml, Daphne on port 8000, PostGIS 16/3.4 and Redis 7 started successfully. |
 | Asynchronous processing | **Verified working** | Celery worker and beat are present with scheduled ETL, rainfall, risk, facility forecast, cleanup and connector tasks. The worker responds to `celery inspect ping`; backend readiness checks database/Redis and Compose waits on healthy dependencies. Celery beat intentionally has no application health endpoint. |
 | Frontend runtime | **Verified working** | Next.js 16.3.0 standalone output runs in a Node 22 Alpine, non-root Compose image on port 3000. Native lint/typecheck/test/build and the container build passed. |
-| Database migrations | **Verified working** | 76 risk migration files were applied; migrate --check completed without pending work. |
+| Database migrations | **Verified working** | 77 risk migration files were applied; migrate --check completed without pending work. |
 | PostGIS/geospatial storage | **Verified working** | Django uses the PostGIS engine. The managed migori-ward-boundaries dataset has 40 expected and 40 actual active features, EPSG:4326, with no missing source wards. |
 | County/ward seed | **Verified working** | seed_demo_data refreshed 40 active wards and loaded the scenario bundle decision_layer_full_suite. |
 | Production deployment packaging | **Implemented, partially verified** | Compose now packages backend, worker, beat, frontend, PostGIS and Redis with health-gated dependencies and a production-like validation path. Managed secret storage, TLS termination, external ingress, backups and production orchestration remain deployment responsibilities. |
@@ -116,9 +181,9 @@ The principal backend routes are versioned below /api/v1/; the unversioned /api/
 |---|---|---|
 | Source-data registry and readiness model | **Implemented, partially verified** | The API and source-data screen render feed status, freshness, truth state, missing data and upload state. The earlier local snapshot reported 14 items needing attention, 2 up to date, 3 demo-backed and 0 ready to add; those values remain demo-database observations rather than production readiness evidence. |
 | Rainfall ingestion orchestration | **Partial** | Hybrid Open-Meteo plus static fallback code and scheduled ingestion exist. Static fallback remains useful for local demonstration but is now explicitly blocked from production feature datasets and model runs. |
-| Observed rainfall | **Not ready / Partial** | audit_climate_sources --format=json reported 936 climate records but 0 observed records, 4,394 fallback records and 774 forecast records. The maximum forecast lead was 3 days, so 7- and 14-day horizon support failed. |
+| Observed rainfall | **Implemented, partially verified** | The legacy Open-Meteo climate audit remains a separate path with 936 legacy climate records, 4,394 fallback records and 774 forecast records; its maximum forecast lead remains 3 days, so 7- and 14-day forecast-horizon support still fails. Independently, the CHIRPS path has 1,200 persisted `LIVE` records for 30 dates across 40 canonical wards and a 40-row CHIRPS-backed historical feature dataset, with a passing strict ingestion audit. |
 | Climate data quality | **Partial** | The same audit reported missing/invalid ward values in 4,232 records and 5 invalid rainfall values. Strict mode would fail the audit. audit_climate_horizon also found missing climate evidence fields in 2 risk scores and incomplete climate evidence in 57 of 62 linked alert payloads. |
-| CHIRPS | **Not found** | No verified CHIRPS implementation or live CHIRPS feed was found in the checked repository. |
+| CHIRPS | **Implemented, partially verified** | CHIRPS v3.0 final daily `sat` is implemented as a dedicated official COG connector with bounded ingestion, durable identity, fractional zonal means, provenance and strict audits. The requested backfill persisted 1,200 `LIVE` records for 40 canonical wards; an explicit retrospective feature build persisted 40 CHIRPS-backed rows for 2024-01-31 with `sat` pinned and passed the strict audit. |
 | Surveillance ingestion | **Implemented, partially verified** | Ingestion runs, source records, label windows and feature datasets exist. Production ingestion now preflights inactive/unmapped wards, seeded sources and seeded labels before canonical persistence; local demonstration ingestion remains supported. |
 | Confirmed surveillance truth | **Not ready / Partial** | All local surveillance records and label windows were seeded_demo; the truth audit found no reliable confirmed-case truth basis. It reported 2,400 confirmed-case records without confirmed truth and 60 non-confirmed windows containing confirmed cases. |
 | Correction and supersession lineage | **Partial** | Replay/correction audit failed: 2,880 superseded records were used in label windows, with 1,440 records carrying supersession references. The correction pass adds a stable production blocker and revalidates referenced records at promotion/scoring/alert time; real-source cleanup is still required. |
@@ -144,7 +209,7 @@ The weekly surveillance screen also showed a demo-backed source timestamp 92 day
 |---|---|---|
 | Logistic-regression risk scoring | **Verified working** | run_risk_model --month=8 --model-version=lr-audit2-20260807 --algorithm=logistic_regression completed and created 42 risk scores. The scheduled default is lr-v1. |
 | Random-forest benchmark | **Verified working** | run_random_forest_benchmark --month=8 --model-version=rf-audit2-20260807 completed and created 42 benchmark scores. This is not evidence of production performance. |
-| Model feature generation | **Implemented, partially verified** | Features include rainfall, flood indicator, historical cases, seasonality, population proxies, settlement concentration, floodplain exposure, water-body proximity and WASH vulnerability. Feature provenance and typed population-baseline references are persisted; production blocks seeded labels, static/synthetic fallback rows, invalid geography, missing/unresolved source references, population ward/value mismatches and stale or superseded canonical references. Proxy evidence remains available as caveat context but cannot be asserted as confirmed truth. |
+| Model feature generation | **Implemented, partially verified** | Features include rainfall, CHIRPS observed 7/14/30-day totals, flood indicator, historical cases, seasonality, population proxies, settlement concentration, floodplain exposure, water-body proximity and WASH vulnerability. A persisted 40-row CHIRPS-backed historical dataset now proves the real loader path; feature provenance, retrospective-mode exception and typed population-baseline references are persisted. Production still blocks seeded labels, static/synthetic fallback rows, invalid geography, missing/unresolved source references, population ward/value mismatches and stale or superseded canonical references. |
 | XGBoost | **Planned/documented only** | Catalogued as candidate-only and non-runnable; package/operational path is absent. |
 | LightGBM | **Planned/documented only** | Catalogued as candidate-only and non-runnable; package/operational path is absent. |
 | 7/14-day lead-time forecasting | **Partial** | Date-bounded label-window schemas and 7/14-day validation fields exist, but climate data only reached a 3-day horizon and the lead-time truth is seeded rather than a validated real-outbreak dataset. |
@@ -221,7 +286,7 @@ The browser pass found a hydration warning attributable to a Chrome extension-ad
 | Secure role-based county/ward platform | **Verified working** | Authenticated local platform with role and ward controls, TOTP for privileged roles, step-up for high-risk actions. |
 | PostGIS ward intelligence | **Verified working** | Managed 40-feature Migori ward geometry and GeoJSON/dashboard rendering. |
 | Multi-source public-health ingestion | **Implemented, partially verified** | Registries, adapters, uploads and freshness contracts; no configured DHIS2/OpenMRS/logistics/OSM production source. |
-| Observed rainfall/CHIRPS foundation | **Partial / CHIRPS not found** | Hybrid forecast/static fallback is runnable; observed rainfall is absent in the audited local dataset. |
+| Observed rainfall/CHIRPS foundation | **Implemented, partially verified** | The CHIRPS v3 historical connector and lagged feature contract are implemented; real official COG aggregation and persistence passed for 40 canonical wards across 30 dates, yielding 1,200 audited records, and the retrospective loader persisted 40 CHIRPS-backed feature rows with a pinned `sat` variant. Forecast evidence remains limited to the separately audited three-day path. |
 | Confirmed surveillance truth | **Partial** | Seeded surveillance records and truth-gate logic exist; no verified confirmed-case label source. |
 | Logistic risk model | **Verified working as prototype scoring** | Local scores can be produced; promotion is blocked and performance is not validated. |
 | Random Forest | **Verified working as benchmark** | Manual benchmark command runs; no promotion or out-of-time evidence. |
