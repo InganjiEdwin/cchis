@@ -17,6 +17,7 @@ from risk.source_data.downstream import run_source_data_downstream_action
 from risk.source_data.events import record_source_data_upload_system_event
 from risk.source_data.operations import cleanup_expired_source_data_artifacts
 from risk.source_data.connectors import run_source_data_connector_refresh
+from risk.truth_policy import require_production_alert_eligibility
 from risk.surveillance_ingestion import (
     parse_surveillance_date,
     parse_surveillance_source_timestamp,
@@ -384,6 +385,7 @@ def trigger_alerts_task(
     template_context: dict | None = None,
 ) -> int:
     risk_score = RiskScore.objects.select_related("ward", "model_run").get(id=risk_score_id)
+    require_production_alert_eligibility(risk_score)
     alerts = trigger_alerts_for_riskscore(
         risk_score,
         send_sms_enabled=send_sms,

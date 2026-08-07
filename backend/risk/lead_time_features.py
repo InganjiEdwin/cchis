@@ -79,6 +79,8 @@ LEAD_TIME_FEATURE_KEYS = [
     "fallback_static_rainfall_used",
     "fallback_static_rainfall_mm",
     "fallback_static_record_count",
+    "synthetic_rainfall_fallback_used",
+    "synthetic_population_fallback_used",
     "upstream_or_neighboring_ward_risk_signal",
     "upstream_or_neighboring_ward_count",
     "upstream_or_neighboring_ward_signal_source",
@@ -1674,6 +1676,8 @@ def build_lead_time_feature_dataset(
                 surveillance_lineage=surveillance_lineage,
                 spatial_lineage=spatial_lineage,
             )
+            synthetic_rainfall_fallback_used = bool(fallback_values.get("fallback_static_rainfall_used"))
+            synthetic_population_fallback_used = population_values.get("population_total") is None
             feature_values = {
                 "prediction_date": prediction_date.isoformat(),
                 "source_cutoff_timestamp": source_cutoff.isoformat(),
@@ -1681,6 +1685,8 @@ def build_lead_time_feature_dataset(
                 **rainfall_values,
                 **forecast_values,
                 **fallback_values,
+                "synthetic_rainfall_fallback_used": synthetic_rainfall_fallback_used,
+                "synthetic_population_fallback_used": synthetic_population_fallback_used,
                 **climate_values,
                 **neighbor_values,
                 **neighboring_surveillance_values,
@@ -1745,6 +1751,12 @@ def build_lead_time_feature_dataset(
         "rows_with_fallback_static_rainfall": sum(
             1 for row in rows_by_ward_prediction_date.values() if row["fallback_static_rainfall_used"]
         ),
+        "rows_with_synthetic_rainfall_fallback": sum(
+            1 for row in rows_by_ward_prediction_date.values() if row["synthetic_rainfall_fallback_used"]
+        ),
+        "rows_with_synthetic_population_fallback": sum(
+            1 for row in rows_by_ward_prediction_date.values() if row["synthetic_population_fallback_used"]
+        ),
         "rows_with_7_day_forecast_coverage": sum(
             1 for row in rows_by_ward_prediction_date.values() if row["forecast_horizon_7d_sufficient"]
         ),
@@ -1798,6 +1810,12 @@ def build_lead_time_feature_dataset(
             1 for row in rows_by_ward_prediction_date.values() if row["leakage_proof"]["passes_cutoff_check"]
         ),
     }
+    source_kind = _combine_feature_source_kinds(source_kinds)
+    if source_kind == FeatureDataset.SOURCE_KIND_LIVE and (
+        coverage["rows_with_synthetic_rainfall_fallback"]
+        or coverage["rows_with_synthetic_population_fallback"]
+    ):
+        source_kind = FeatureDataset.SOURCE_KIND_HYBRID
     dataset = FeatureDataset.objects.create(
         dataset_ref=(
             f"lead-time-features-{LEAD_TIME_FEATURE_SCHEMA_VERSION}-"
@@ -1805,7 +1823,7 @@ def build_lead_time_feature_dataset(
         ),
         dataset_kind=FeatureDataset.KIND_INFERENCE,
         schema_version=LEAD_TIME_FEATURE_SCHEMA_VERSION,
-        source_kind=_combine_feature_source_kinds(source_kinds),
+        source_kind=source_kind,
         month=dataset_month,
         feature_keys=LEAD_TIME_FEATURE_KEYS,
         row_count=len(feature_rows),
@@ -1857,6 +1875,18 @@ def build_lead_time_feature_dataset(
                 dataset.id for dataset in population_exposure_feature_datasets
             ],
             "coverage": coverage,
+            "production_truth_policy": {
+                "eligible": not (
+                    coverage["rows_with_synthetic_rainfall_fallback"]
+                    or coverage["rows_with_synthetic_population_fallback"]
+                ),
+                "blocked_reason_codes": (
+                    ["production_synthetic_feature_fallback_blocked"]
+                    if coverage["rows_with_synthetic_rainfall_fallback"]
+                    or coverage["rows_with_synthetic_population_fallback"]
+                    else []
+                ),
+            },
             "leakage_proof_contract": {
                 "future_label_data_used": False,
                 "label_windows_used_as_input": False,

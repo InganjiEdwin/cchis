@@ -242,7 +242,7 @@ from .services import (
     sync_alert_workflows_for_wards,
 )
 from .system_readiness import build_system_readiness_snapshot
-from .truth_policy import ProductionTruthPolicyError
+from .truth_policy import ProductionTruthPolicyError, require_production_alert_eligibility
 
 
 alerts_logger = logging.getLogger("risk.alerts")
@@ -3357,6 +3357,33 @@ class TriggerAlertsAPIView(APIView):
             return Response(
                 {"detail": "No matching risk score found."},
                 status=status.HTTP_404_NOT_FOUND,
+            )
+
+        try:
+            # This must run before workflow state or a Celery task is created.
+            require_production_alert_eligibility(risk_score)
+        except ProductionTruthPolicyError as error:
+            alerts_logger.warning(
+                "alert_trigger_request_rejected",
+                extra={
+                    "actor_user_id": user.id,
+                    "actor_role": user.role,
+                    "requested_ward_id": ward_id,
+                    "risk_score_id": risk_score.id,
+                    "send_sms": send_sms,
+                    "reason": error.code,
+                    "reason_codes": error.reason_codes,
+                    "request_path": request.path,
+                    "request_method": request.method,
+                },
+            )
+            return Response(
+                {
+                    "code": error.code,
+                    "detail": "This score is not eligible for production alerting.",
+                    "reason_codes": error.reason_codes,
+                },
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         estimated_chv_recipient_count = CHV.objects.filter(ward_id=risk_score.ward_id, is_active=True).count()

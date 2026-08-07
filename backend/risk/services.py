@@ -67,7 +67,11 @@ from .population_exposure_features import (
 from .privacy_access import mask_contact_value, redact_direct_identifiers_in_text, user_can_view_direct_identifiers
 from .providers import DeliveryResult, get_sms_provider
 from .surveillance_features import build_surveillance_feature_context_for_ward
-from .truth_policy import production_model_run_blockers, require_demo_data_allowed
+from .truth_policy import (
+    production_model_run_blockers,
+    require_demo_data_allowed,
+    require_production_alert_eligibility,
+)
 
 
 alerts_logger = logging.getLogger("risk.alerts")
@@ -2862,6 +2866,7 @@ def create_alerts_for_riskscore(
     template_channel: str = MessageTemplate.CHANNEL_SMS,
     as_of=None,
 ) -> list[Alert]:
+    require_production_alert_eligibility(risk_score)
     if risk_score.model_run_id:
         truth_blockers = production_model_run_blockers(risk_score.model_run)
         if truth_blockers:
@@ -3293,6 +3298,7 @@ def trigger_alerts_for_riskscore(
     template_language: str | None = None,
     template_context: dict | None = None,
 ) -> list[Alert]:
+    require_production_alert_eligibility(risk_score)
     return create_alerts_for_riskscore(
         risk_score,
         send_sms_enabled=send_sms_enabled,

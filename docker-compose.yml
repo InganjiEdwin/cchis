@@ -1,6 +1,8 @@
 x-backend-environment: &backend-environment
   SECRET_KEY: ${SECRET_KEY:-local-only-development-key-change-before-sharing}
-  DEBUG: ${CCHIS_DEBUG:-True}
+  # DEBUG is read by Django directly. Keep the local default safe when no .env is present;
+  # production/staging values must come from the selected --env-file.
+  DEBUG: ${DEBUG:-False}
   CCHIS_ENVIRONMENT: ${CCHIS_ENVIRONMENT:-local}
   ALLOWED_HOSTS: "${ALLOWED_HOSTS:-127.0.0.1,localhost},backend"
   CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
@@ -24,12 +26,27 @@ x-backend-environment: &backend-environment
   SECURE_SSL_REDIRECT: ${SECURE_SSL_REDIRECT:-False}
   SECURE_SSL_REDIRECT_REVERSE_PROXY_EXEMPTION: ${SECURE_SSL_REDIRECT_REVERSE_PROXY_EXEMPTION:-False}
   SECURE_HSTS_SECONDS: ${SECURE_HSTS_SECONDS:-0}
+  SECURE_HSTS_INCLUDE_SUBDOMAINS: ${SECURE_HSTS_INCLUDE_SUBDOMAINS:-False}
+  SECURE_HSTS_PRELOAD: ${SECURE_HSTS_PRELOAD:-False}
   USE_X_FORWARDED_HOST: ${USE_X_FORWARDED_HOST:-False}
   TRUST_X_FORWARDED_PROTO: ${TRUST_X_FORWARDED_PROTO:-False}
   TRUST_X_FORWARDED_FOR: ${TRUST_X_FORWARDED_FOR:-False}
   TRUSTED_PROXY_CONFIGURED: ${TRUSTED_PROXY_CONFIGURED:-False}
   EMAIL_PROVIDER: ${EMAIL_PROVIDER:-stub}
+  MAILGUN_API_KEY: ${MAILGUN_API_KEY:-}
+  MAILGUN_PASSKEY: ${MAILGUN_PASSKEY:-}
+  MAILGUN_HOST: ${MAILGUN_HOST:-}
+  MAILGUN_DOMAIN: ${MAILGUN_DOMAIN:-}
+  MAILGUN_FROM_EMAIL: ${MAILGUN_FROM_EMAIL:-}
+  MAILGUN_WEBHOOK_SIGNING_KEY: ${MAILGUN_WEBHOOK_SIGNING_KEY:-}
+  MAILERSEND_WEBHOOK_SECRET: ${MAILERSEND_WEBHOOK_SECRET:-}
+  MAILGUN_BASE_URL: ${MAILGUN_BASE_URL:-https://api.mailgun.net/v3}
+  MAILGUN_REPLY_TO: ${MAILGUN_REPLY_TO:-}
   SMS_PROVIDER: ${SMS_PROVIDER:-stub}
+  AFRICASTALKING_USERNAME: ${AFRICASTALKING_USERNAME:-}
+  AFRICASTALKING_API_KEY: ${AFRICASTALKING_API_KEY:-}
+  AFRICASTALKING_SENDER_ID: ${AFRICASTALKING_SENDER_ID:-}
+  AFRICASTALKING_SMS_URL: ${AFRICASTALKING_SMS_URL:-https://api.africastalking.com/version1/messaging}
   DB_NAME: ${DB_NAME:-cchis_db}
   DB_USER: ${DB_USER:-postgres}
   DB_PASSWORD: ${DB_PASSWORD:-postgres}
@@ -147,6 +164,9 @@ services:
   frontend:
     build:
       context: ./frontend
+      args:
+        # NEXT_PUBLIC_* values are compiled into browser bundles at image build time.
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000/api/v1}
     container_name: cchis_frontend
     restart: unless-stopped
     environment:
@@ -155,7 +175,8 @@ services:
       NEXT_PUBLIC_CCHIS_ENVIRONMENT: ${NEXT_PUBLIC_CCHIS_ENVIRONMENT:-local}
       FRONTEND_APP_URL: ${FRONTEND_APP_URL:-http://localhost:3000}
       NEXT_PUBLIC_FRONTEND_APP_URL: ${NEXT_PUBLIC_FRONTEND_APP_URL:-http://localhost:3000}
-      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000/api/v1}
+      # NEXT_PUBLIC_API_BASE_URL is intentionally a build argument above; it is
+      # compiled into browser bundles and cannot be changed reliably at runtime.
       BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://backend:8000/api/v1}
       CCHIS_CSP_ENABLED: ${CCHIS_CSP_ENABLED:-False}
     ports:

@@ -499,7 +499,7 @@ export type AccessRequestResponse = {
 };
 
 const PUBLIC_API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "http://localhost:8000/api/v1";
+  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "";
 const INTERNAL_API_BASE_URL =
   process.env.BACKEND_INTERNAL_URL?.replace(/\/$/, "")
   ?? process.env.CCHIS_BACKEND_INTERNAL_URL?.replace(/\/$/, "");

@@ -72,7 +72,7 @@ const GROUPING_WINDOW_MINUTES = 30;
 const NOTIFICATION_STREAM_SUBPROTOCOL = "cchis.notifications";
 
 function buildNotificationWebsocketUrl(websocketPath: string) {
-  const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "http://localhost:8000/api/v1";
+  const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "";
   const backendOrigin = apiBaseUrl.replace(/\/api\/v\d+$/, "");
   const websocketOrigin = backendOrigin.replace(/^http/, "ws");
   return `${websocketOrigin}${websocketPath}`;

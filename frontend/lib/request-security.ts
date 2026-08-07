@@ -96,7 +96,7 @@ export function validateBffUnsafeRequest({
 }
 
 function getBackendOrigins() {
-  const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "http://localhost:8000/api/v1";
+  const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "";
   const backendOrigin = getOriginFromUrl(apiBaseUrl);
   const websocketOrigin = backendOrigin ? backendOrigin.replace(/^http/, "ws") : "";
   return { backendOrigin, websocketOrigin };

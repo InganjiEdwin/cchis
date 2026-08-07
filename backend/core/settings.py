@@ -731,6 +731,10 @@ EMAIL_PROVIDER = config(
     "EMAIL_PROVIDER",
     default="stub" if not IS_SHARED_ENVIRONMENT else "",
 ).strip().lower()
+SMS_PROVIDER = config(
+    "SMS_PROVIDER",
+    default="stub" if not IS_SHARED_ENVIRONMENT else "",
+).strip().lower()
 MAILGUN_API_KEY = config("MAILGUN_API_KEY", default="").strip()
 MAILGUN_PASSKEY = config("MAILGUN_PASSKEY", default="").strip()
 MAILGUN_HOST = config("MAILGUN_HOST", default="").strip()
@@ -747,8 +751,14 @@ MAILGUN_REPLY_TO = config("MAILGUN_REPLY_TO", default="").strip()
 if EMAIL_PROVIDER not in {"stub", "mailgun"}:
     raise ImproperlyConfigured("EMAIL_PROVIDER must be one of: stub, mailgun.")
 
+if SMS_PROVIDER not in {"stub", "africastalking"}:
+    raise ImproperlyConfigured("SMS_PROVIDER must be one of: stub, africastalking.")
+
 if IS_SHARED_ENVIRONMENT and not EMAIL_PROVIDER:
     raise ImproperlyConfigured("EMAIL_PROVIDER must be explicitly set outside local environments.")
+
+if IS_SHARED_ENVIRONMENT and not SMS_PROVIDER:
+    raise ImproperlyConfigured("SMS_PROVIDER must be explicitly set outside local environments.")
 
 if EMAIL_PROVIDER == "mailgun":
     missing_mailgun_settings = [
@@ -764,6 +774,23 @@ if EMAIL_PROVIDER == "mailgun":
         missing_values = ", ".join(missing_mailgun_settings)
         raise ImproperlyConfigured(
             f"Mailgun email delivery requires these settings: {missing_values}."
+        )
+
+if SMS_PROVIDER == "africastalking":
+    AFRICASTALKING_USERNAME = config("AFRICASTALKING_USERNAME", default="").strip()
+    AFRICASTALKING_API_KEY = config("AFRICASTALKING_API_KEY", default="").strip()
+    missing_africastalking_settings = [
+        name
+        for name, value in (
+            ("AFRICASTALKING_USERNAME", AFRICASTALKING_USERNAME),
+            ("AFRICASTALKING_API_KEY", AFRICASTALKING_API_KEY),
+        )
+        if not value
+    ]
+    if missing_africastalking_settings:
+        missing_values = ", ".join(missing_africastalking_settings)
+        raise ImproperlyConfigured(
+            f"Africa's Talking SMS delivery requires these settings: {missing_values}."
         )
 
 LOGGING = {

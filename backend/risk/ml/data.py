@@ -83,6 +83,8 @@ class WardFeatureRow:
     flood_indicator_source: str = "rainfall_risk_proxy"
     historical_cases_source: str = "seeded_training_baseline"
     rainfall_source_lineage: dict | None = None
+    synthetic_rainfall_fallback_used: bool = False
+    synthetic_population_fallback_used: bool = False
     training_label_source: str = "seeded_mock_baseline"
     training_label_dataset_ref: str | None = None
     training_label_window_id: int | None = None
@@ -180,6 +182,8 @@ def _feature_values_from_row(row: WardFeatureRow) -> dict:
         "flood_indicator_source": row.flood_indicator_source,
         "historical_cases_source": row.historical_cases_source,
         "rainfall_source_lineage": row.rainfall_source_lineage or {},
+        "synthetic_rainfall_fallback_used": row.synthetic_rainfall_fallback_used,
+        "synthetic_population_fallback_used": row.synthetic_population_fallback_used,
         "training_label_source": row.training_label_source,
         "training_label_dataset_ref": row.training_label_dataset_ref,
         "training_label_window_id": row.training_label_window_id,
@@ -342,6 +346,7 @@ def _training_rows_from_surveillance_label_dataset(
                     "source_available": False,
                     "reason": "phase_1_training_labels_only_no_lead_time_rainfall_window",
                 },
+                synthetic_population_fallback_used=population_total is None,
                 training_label_source="surveillance_label_window",
                 training_label_dataset_ref=label_dataset.dataset_ref,
                 training_label_window_id=label_window_id,
@@ -486,6 +491,13 @@ def build_training_feature_dataset(
             else SEEDED_TRAINING_LABEL_USAGE
         )
 
+    synthetic_rainfall_fallback_row_count = sum(row.synthetic_rainfall_fallback_used for row in rows)
+    synthetic_population_fallback_row_count = sum(row.synthetic_population_fallback_used for row in rows)
+    if source_kind == FeatureDataset.SOURCE_KIND_LIVE and (
+        synthetic_rainfall_fallback_row_count or synthetic_population_fallback_row_count
+    ):
+        source_kind = FeatureDataset.SOURCE_KIND_HYBRID
+
     dataset = FeatureDataset.objects.create(
         dataset_ref=f"training-{FEATURE_SCHEMA_VERSION}-month-{month}-{uuid4().hex[:8]}",
         dataset_kind=FeatureDataset.KIND_TRAINING,
@@ -498,6 +510,8 @@ def build_training_feature_dataset(
                     *WARD_RISK_FEATURE_KEYS,
                     *POPULATION_EXPOSURE_FEATURE_KEYS,
                     "rainfall_source_lineage",
+                    "synthetic_rainfall_fallback_used",
+                    "synthetic_population_fallback_used",
                     "training_label_source",
                     "training_label_dataset_ref",
                     "training_label_window_id",
@@ -518,6 +532,18 @@ def build_training_feature_dataset(
                 else "seeded_mock_training_rows"
             ),
             "training_label_seeded_demo_row_count": sum(1 for row in rows if row.training_label_seeded_demo),
+            "synthetic_rainfall_fallback_row_count": synthetic_rainfall_fallback_row_count,
+            "synthetic_population_fallback_row_count": synthetic_population_fallback_row_count,
+            "production_truth_policy": {
+                "eligible": not (
+                    synthetic_rainfall_fallback_row_count or synthetic_population_fallback_row_count
+                ),
+                "blocked_reason_codes": (
+                    ["production_synthetic_feature_fallback_blocked"]
+                    if synthetic_rainfall_fallback_row_count or synthetic_population_fallback_row_count
+                    else []
+                ),
+            },
             "training_label_readiness": label_readiness,
             "population_exposure_dataset_ref": population_exposure_snapshot.feature_dataset.dataset_ref
             if population_exposure_snapshot
@@ -598,6 +624,7 @@ def build_inference_feature_dataset(
 
     for idx, ward in enumerate(ward_list, start=1):
         rainfall = rainfall_rows.get(ward.name)
+        synthetic_rainfall_fallback_used = rainfall is None
         rainfall_mm = rainfall.rainfall_mm if rainfall else round(45 + (ward.current_risk_score * 90), 2)
 
         # Keep flood proxy mock-derived for now, but partially shaped by real rainfall.
@@ -622,6 +649,7 @@ def build_inference_feature_dataset(
             if source_lineage.get("record_count")
             else "fallback_proxy_only"
         )
+        synthetic_population_fallback_used = population_exposure_row.get("population_total") is None
         surveillance_row = surveillance_snapshot.rows_by_ward_id.get(ward.id, {})
         surveillance_recent_total_cases = int(surveillance_row.get("surveillance_recent_total_cases_28d") or 0)
         historical_cases_source = "rainfall_risk_proxy"
@@ -651,6 +679,8 @@ def build_inference_feature_dataset(
                 flood_indicator_source=flood_indicator_source,
                 historical_cases_source=historical_cases_source,
                 rainfall_source_lineage=rainfall_lineage_by_ward_id.get(ward.id),
+                synthetic_rainfall_fallback_used=synthetic_rainfall_fallback_used,
+                synthetic_population_fallback_used=synthetic_population_fallback_used,
                 population_exposure_feature_mode=population_exposure_feature_mode,
                 population_exposure_truth_summary=source_lineage,
                 surveillance_recent_suspected_cases_28d=surveillance_row.get("surveillance_recent_suspected_cases_28d", 0),
@@ -691,6 +721,13 @@ def build_inference_feature_dataset(
         source_kind = FeatureDataset.SOURCE_KIND_LIVE
     elif ingestion_run and ingestion_run.source_kind == IngestionRun.SOURCE_KIND_SEEDED:
         source_kind = FeatureDataset.SOURCE_KIND_SEEDED
+    if source_kind == FeatureDataset.SOURCE_KIND_LIVE and any(
+        row.synthetic_rainfall_fallback_used or row.synthetic_population_fallback_used for row in rows
+    ):
+        source_kind = FeatureDataset.SOURCE_KIND_HYBRID
+
+    synthetic_rainfall_fallback_row_count = sum(row.synthetic_rainfall_fallback_used for row in rows)
+    synthetic_population_fallback_row_count = sum(row.synthetic_population_fallback_used for row in rows)
 
     dataset = FeatureDataset.objects.create(
         dataset_ref=f"inference-{FEATURE_SCHEMA_VERSION}-month-{month}-{uuid4().hex[:8]}",
@@ -706,6 +743,8 @@ def build_inference_feature_dataset(
                     "population_proxy_source",
                     "flood_indicator_source",
                     "rainfall_source_lineage",
+                    "synthetic_rainfall_fallback_used",
+                    "synthetic_population_fallback_used",
                     "population_exposure_feature_mode",
                     "population_exposure_truth_summary",
                     "population_exposure_display_caveat",
@@ -719,6 +758,18 @@ def build_inference_feature_dataset(
             "snapshot_as_of": surveillance_snapshot.as_of.isoformat(),
             "rainfall_ingestion_run_id": ingestion_run.id if ingestion_run else None,
             "rainfall_source_kind": ingestion_run.source_kind if ingestion_run else None,
+            "synthetic_rainfall_fallback_row_count": synthetic_rainfall_fallback_row_count,
+            "synthetic_population_fallback_row_count": synthetic_population_fallback_row_count,
+            "production_truth_policy": {
+                "eligible": not (
+                    synthetic_rainfall_fallback_row_count or synthetic_population_fallback_row_count
+                ),
+                "blocked_reason_codes": (
+                    ["production_synthetic_feature_fallback_blocked"]
+                    if synthetic_rainfall_fallback_row_count or synthetic_population_fallback_row_count
+                    else []
+                ),
+            },
             "population_exposure_dataset_ref": population_exposure_snapshot.feature_dataset.dataset_ref,
             "population_exposure_feature_dataset_id": population_exposure_snapshot.feature_dataset.id,
             "population_exposure_schema_version": population_exposure_snapshot.feature_dataset.schema_version,
