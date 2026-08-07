@@ -129,6 +129,13 @@ def _record_polygon_hash(record) -> str:
 def _source_lineage(records: list) -> dict:
     return {
         "record_count": len(records),
+        "population_baseline_record_refs": sorted(
+            {
+                f"population_baseline_record:{record.id}"
+                for record in records
+                if isinstance(record, PopulationBaselineRecord)
+            }
+        ),
         "source_names": sorted({record.source_name for record in records if record.source_name}),
         "release_versions": sorted({record.release_version for record in records if record.release_version}),
         "source_refs": sorted({record.source_ref for record in records if getattr(record, "source_ref", "")}),
@@ -488,6 +495,12 @@ def _build_row_values(
         "population_under_five": population_record.population_under_five if population_record else None,
         "household_count_proxy": population_record.household_count_proxy if population_record else None,
         "population_baseline_record_id": population_record.id if population_record else None,
+        "population_baseline_record_ref": (
+            f"population_baseline_record:{population_record.id}" if population_record else None
+        ),
+        "population_baseline_record_refs": (
+            [f"population_baseline_record:{population_record.id}"] if population_record else []
+        ),
         "population_density": exposure_values.get(ExposureFeatureRecord.EXPOSURE_POPULATION_DENSITY),
         "settlement_concentration": exposure_values.get(ExposureFeatureRecord.EXPOSURE_SETTLEMENT_CONCENTRATION),
         "floodplain_exposure": exposure_values.get(ExposureFeatureRecord.EXPOSURE_FLOODPLAIN_EXPOSURE),
@@ -585,6 +598,13 @@ def build_population_exposure_feature_dataset(
             "release_version_filter": release_version or "",
             "coverage": coverage,
             "source_lineage": _source_lineage(all_source_records),
+            "population_baseline_record_refs": sorted(
+                {
+                    f"population_baseline_record:{record.id}"
+                    for record in all_source_records
+                    if isinstance(record, PopulationBaselineRecord)
+                }
+            ),
             "truth_assumptions": POPULATION_EXPOSURE_TRUTH_ASSUMPTIONS,
             "dashboard_copy_contract": POPULATION_EXPOSURE_DASHBOARD_CONTRACT,
         },

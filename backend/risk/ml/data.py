@@ -161,6 +161,15 @@ def build_mock_training_rows() -> list[WardFeatureRow]:
 
 
 def _feature_values_from_row(row: WardFeatureRow) -> dict:
+    population_truth_summary = row.population_exposure_truth_summary or {}
+    population_baseline_refs = (
+        population_truth_summary.get("population_baseline_record_refs", [])
+        if isinstance(population_truth_summary, dict)
+        else []
+    )
+    if isinstance(population_baseline_refs, str):
+        population_baseline_refs = [population_baseline_refs]
+    population_baseline_refs = list(population_baseline_refs or [])
     return {
         "rainfall_mm": row.rainfall_mm,
         "flood_indicator": row.flood_indicator,
@@ -179,6 +188,10 @@ def _feature_values_from_row(row: WardFeatureRow) -> dict:
         "exposed_population_proxy_scaled": row.exposed_population_proxy_scaled,
         "catchment_population_estimate_scaled": row.catchment_population_estimate_scaled,
         "population_proxy_source": row.population_proxy_source,
+        "population_baseline_record_ref": (
+            population_baseline_refs[0] if len(population_baseline_refs) == 1 else None
+        ),
+        "population_baseline_record_refs": population_baseline_refs,
         "flood_indicator_source": row.flood_indicator_source,
         "historical_cases_source": row.historical_cases_source,
         "rainfall_source_lineage": row.rainfall_source_lineage or {},
@@ -191,7 +204,7 @@ def _feature_values_from_row(row: WardFeatureRow) -> dict:
         "training_label_source_coverage_summary": row.training_label_source_coverage_summary or {},
         "training_label_seeded_demo": row.training_label_seeded_demo,
         "population_exposure_feature_mode": row.population_exposure_feature_mode,
-        "population_exposure_truth_summary": row.population_exposure_truth_summary or {},
+        "population_exposure_truth_summary": population_truth_summary,
         "population_exposure_display_caveat": (
             "Population and exposure values may be baselines, spatial aggregations, or proxies; "
             "do not present proxy-only fields as exact census or exposure truth."
@@ -509,6 +522,8 @@ def build_training_feature_dataset(
                 [
                     *WARD_RISK_FEATURE_KEYS,
                     *POPULATION_EXPOSURE_FEATURE_KEYS,
+                    "population_baseline_record_ref",
+                    "population_baseline_record_refs",
                     "rainfall_source_lineage",
                     "synthetic_rainfall_fallback_used",
                     "synthetic_population_fallback_used",
@@ -740,6 +755,8 @@ def build_inference_feature_dataset(
                 [
                     *WARD_RISK_FEATURE_KEYS,
                     *POPULATION_EXPOSURE_FEATURE_KEYS,
+                    "population_baseline_record_ref",
+                    "population_baseline_record_refs",
                     "population_proxy_source",
                     "flood_indicator_source",
                     "rainfall_source_lineage",

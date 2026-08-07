@@ -81,6 +81,8 @@ LEAD_TIME_FEATURE_KEYS = [
     "fallback_static_record_count",
     "synthetic_rainfall_fallback_used",
     "synthetic_population_fallback_used",
+    "population_baseline_record_ref",
+    "population_baseline_record_refs",
     "upstream_or_neighboring_ward_risk_signal",
     "upstream_or_neighboring_ward_count",
     "upstream_or_neighboring_ward_signal_source",
@@ -1560,6 +1562,13 @@ def build_lead_time_feature_dataset(
 
         for ward in ward_list:
             population_values = population_snapshot.rows_by_ward_id.get(ward.id, {})
+            population_source_lineage = population_values.get("source_lineage") or {}
+            population_baseline_refs = population_source_lineage.get(
+                "population_baseline_record_refs", []
+            )
+            if isinstance(population_baseline_refs, str):
+                population_baseline_refs = [population_baseline_refs]
+            population_baseline_refs = list(population_baseline_refs or [])
             climate_records = climate_records_by_ward_id.get(ward.id, [])
             observed_observations, observed_source_summary = _observed_rainfall_observations_from_climate_records(
                 climate_records=climate_records,
@@ -1687,6 +1696,10 @@ def build_lead_time_feature_dataset(
                 **fallback_values,
                 "synthetic_rainfall_fallback_used": synthetic_rainfall_fallback_used,
                 "synthetic_population_fallback_used": synthetic_population_fallback_used,
+                "population_baseline_record_ref": (
+                    population_baseline_refs[0] if len(population_baseline_refs) == 1 else None
+                ),
+                "population_baseline_record_refs": population_baseline_refs,
                 **climate_values,
                 **neighbor_values,
                 **neighboring_surveillance_values,
@@ -1701,7 +1714,7 @@ def build_lead_time_feature_dataset(
                     "forecast_rainfall": forecast_lineage,
                     "fallback_static_rainfall": fallback_lineage,
                     "climate_coverage": climate_lineage,
-                    "population_exposure": population_values.get("source_lineage") or {},
+                    "population_exposure": population_source_lineage,
                     "population_exposure_dataset_ref": population_snapshot.feature_dataset.dataset_ref,
                     "surveillance": surveillance_lineage,
                     "upstream_or_neighboring_ward_risk": neighbor_lineage,
@@ -1874,6 +1887,15 @@ def build_lead_time_feature_dataset(
             "population_exposure_feature_dataset_ids": [
                 dataset.id for dataset in population_exposure_feature_datasets
             ],
+            "population_baseline_record_refs": sorted(
+                {
+                    reference
+                    for row in feature_rows
+                    for reference in (row.feature_values or {}).get(
+                        "population_baseline_record_refs", []
+                    )
+                }
+            ),
             "coverage": coverage,
             "production_truth_policy": {
                 "eligible": not (

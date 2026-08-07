@@ -24,6 +24,12 @@ from risk.models import (
     FeatureDatasetRow,
     IngestionRun,
     ModelRun,
+    PopulationBaselineRecord,
+    PopulationExposureFreshness,
+    PopulationExposureIngestionRun,
+    PopulationExposureSource,
+    PopulationExposureSourceKind,
+    PopulationExposureTruth,
     RiskScore,
     SurveillanceCaseClass,
     SurveillanceDiseaseCategory,
@@ -240,6 +246,41 @@ class ProductionAlertEligibilityTestCase(APITestCase):
             source_ref="production-gate-climate-record-v1",
             lineage_metadata={"source_status": "active_success"},
         )
+        self.population_source = PopulationExposureSource.objects.create(
+            source_name="Production gate population baseline",
+            source_type=PopulationExposureSource.SOURCE_TYPE_GRIDDED_POPULATION,
+            source_timestamp=source_timestamp,
+            release_version="production-gate-population-v1",
+            source_ref="production-gate-population-source-v1",
+        )
+        self.population_ingestion_run = PopulationExposureIngestionRun.objects.create(
+            source=self.population_source,
+            status=PopulationExposureIngestionRun.STATUS_SUCCESS,
+            source_name=self.population_source.source_name,
+            source_type=self.population_source.source_type,
+            source_timestamp=source_timestamp,
+            release_version=self.population_source.release_version,
+            source_ref="production-gate-population-run-v1",
+            adapter_key="production_gate_fixture",
+            input_ref="production-gate-population-input-v1",
+            records_seen=1,
+            records_loaded=1,
+            completed_at=source_timestamp,
+        )
+        self.population_record = PopulationBaselineRecord.objects.create(
+            ward=self.ward,
+            ingestion_run=self.population_ingestion_run,
+            source=self.population_source,
+            recorded_at=source_timestamp,
+            population_total=1000,
+            truth_class=PopulationExposureTruth.SPATIALLY_AGGREGATED_SOURCE,
+            source_name=self.population_source.source_name,
+            source_kind=PopulationExposureSourceKind.LIVE,
+            freshness_state=PopulationExposureFreshness.FRESH,
+            release_version=self.population_source.release_version,
+            source_ref="production-gate-population-record-v1",
+            raw_payload={"source_status": "active_success"},
+        )
         self.training_dataset = self._dataset("training")
         self.inference_dataset = self._dataset("inference")
         self.label_dataset = FeatureDataset.objects.create(
@@ -315,27 +356,35 @@ class ProductionAlertEligibilityTestCase(APITestCase):
         surveillance_ref = f"surveillance_record:{self.surveillance_record.id}"
         climate_ref = getattr(self, "climate_record", None)
         climate_ref = f"climate_record:{climate_ref.id}" if climate_ref is not None else None
-        source_record_refs = [surveillance_ref]
+        population_ref = f"population_baseline_record:{self.population_record.id}"
+        source_record_refs = [surveillance_ref, population_ref]
         if include_climate and climate_ref:
             source_record_refs.append(climate_ref)
         return {
             "source_record_refs": source_record_refs,
             "surveillance_record_refs": [surveillance_ref],
+            "population_baseline_record_refs": [population_ref],
             "surveillance_truth_gate": {"proxy_only_as_confirmed_allowed": False},
-            "source_lineage": {"source_record_refs": source_record_refs},
+            "source_lineage": {
+                "source_record_refs": source_record_refs,
+                "population_baseline_record_refs": [population_ref],
+            },
             "rainfall_source_lineage": {"source_record_refs": [climate_ref]} if climate_ref else {},
         }
 
     def _feature_values(self, *, include_label: bool = False) -> dict:
         surveillance_ref = f"surveillance_record:{self.surveillance_record.id}"
         climate_ref = f"climate_record:{self.climate_record.id}"
+        population_ref = f"population_baseline_record:{self.population_record.id}"
         values = {
-            "population_total": 1000,
+            "population_total": self.population_record.population_total,
             "synthetic_rainfall_fallback_used": False,
             "synthetic_population_fallback_used": False,
-            "source_record_refs": [surveillance_ref, climate_ref],
+            "source_record_refs": [surveillance_ref, climate_ref, population_ref],
             "surveillance_record_refs": [surveillance_ref],
             "climate_record_refs": [climate_ref],
+            "population_baseline_record_ref": population_ref,
+            "population_baseline_record_refs": [population_ref],
             "rainfall_source_lineage": {"source_record_refs": [climate_ref]},
         }
         if include_label:
@@ -417,17 +466,76 @@ class ProductionAlertEligibilityTestCase(APITestCase):
         self.assertEqual(Alert.objects.filter(risk_score=self.risk_score).count(), 1)
         self.assertEqual(AlertWorkflowState.objects.filter(ward=self.ward).count(), 1)
 
-    def test_missing_canonical_feature_reference_is_blocked(self):
+    def test_missing_population_reference_is_blocked(self):
         self.inference_row.feature_values = {
-            "population_total": 1000,
+            "population_total": self.population_record.population_total,
             "synthetic_rainfall_fallback_used": False,
             "synthetic_population_fallback_used": False,
+            "source_record_refs": [
+                f"surveillance_record:{self.surveillance_record.id}",
+                f"climate_record:{self.climate_record.id}",
+            ],
+            "surveillance_record_refs": [f"surveillance_record:{self.surveillance_record.id}"],
+            "climate_record_refs": [f"climate_record:{self.climate_record.id}"],
+            "rainfall_source_lineage": {
+                "source_record_refs": [f"climate_record:{self.climate_record.id}"]
+            },
         }
         self.inference_row.save(update_fields=["feature_values"])
 
         blockers = production_model_run_blockers(self.model_run)
 
         self.assertIn(PRODUCTION_CANONICAL_REFERENCE_REQUIRED, blockers)
+
+    def test_cross_ward_population_reference_is_blocked(self):
+        other_ward = Ward.objects.create(
+            name="Other Population Gate Ward",
+            county="Migori",
+            ward_code="PROD-GATE-003",
+        )
+        other_population_record = PopulationBaselineRecord.objects.create(
+            ward=other_ward,
+            ingestion_run=self.population_ingestion_run,
+            source=self.population_source,
+            recorded_at=timezone.now(),
+            population_total=2000,
+            truth_class=PopulationExposureTruth.SPATIALLY_AGGREGATED_SOURCE,
+            source_name=self.population_source.source_name,
+            source_kind=PopulationExposureSourceKind.LIVE,
+            freshness_state=PopulationExposureFreshness.FRESH,
+            release_version=self.population_source.release_version,
+            source_ref="production-gate-population-record-other-ward-v1",
+        )
+        population_ref = f"population_baseline_record:{other_population_record.id}"
+        feature_values = {
+            **self.inference_row.feature_values,
+            "population_total": other_population_record.population_total,
+            "population_baseline_record_ref": population_ref,
+            "population_baseline_record_refs": [population_ref],
+            "source_record_refs": [
+                ref
+                for ref in self.inference_row.feature_values["source_record_refs"]
+                if not ref.startswith("population_baseline_record:")
+            ]
+            + [population_ref],
+        }
+        self.inference_row.feature_values = feature_values
+        self.inference_row.save(update_fields=["feature_values"])
+
+        blockers = production_model_run_blockers(self.model_run)
+
+        self.assertIn(PRODUCTION_CANONICAL_REFERENCE_INVALID, blockers)
+
+    def test_population_feature_value_must_match_canonical_record(self):
+        self.inference_row.feature_values = {
+            **self.inference_row.feature_values,
+            "population_total": self.population_record.population_total + 1,
+        }
+        self.inference_row.save(update_fields=["feature_values"])
+
+        blockers = production_model_run_blockers(self.model_run)
+
+        self.assertIn(PRODUCTION_CANONICAL_REFERENCE_INVALID, blockers)
 
     def test_model_run_without_label_dataset_reference_is_blocked(self):
         self.model_run.metadata = {
@@ -440,6 +548,48 @@ class ProductionAlertEligibilityTestCase(APITestCase):
         blockers = production_model_run_blockers(self.model_run)
 
         self.assertIn(PRODUCTION_CANONICAL_REFERENCE_REQUIRED, blockers)
+
+    def test_cross_dataset_label_window_reference_is_blocked(self):
+        foreign_label_dataset = FeatureDataset.objects.create(
+            dataset_ref="production-gate-foreign-label",
+            dataset_kind=FeatureDataset.KIND_TRAINING,
+            schema_version="production-gate-label-v1",
+            source_kind=FeatureDataset.SOURCE_KIND_LIVE,
+            month=8,
+            row_count=0,
+            lineage_metadata={},
+        )
+        surveillance_ref = f"surveillance_record:{self.surveillance_record.id}"
+        foreign_window = SurveillanceLabelWindow.objects.create(
+            ward=self.ward,
+            feature_dataset=foreign_label_dataset,
+            dataset_ref=foreign_label_dataset.dataset_ref,
+            label_window_start=self.period_start,
+            label_window_end=self.period_end,
+            confirmed_case_count=1,
+            outbreak_label=SurveillanceOutbreakLabel.ACTIVE,
+            label_truth_level=SurveillanceTruthLevel.CONFIRMED_SURVEILLANCE,
+            generation_mode="production_gate_foreign_label_fixture",
+            source_coverage_summary={
+                "coverage_mode": "source_covered",
+                "record_count": 1,
+                "source_record_refs": [surveillance_ref],
+                "record_ids": [self.surveillance_record.id],
+            },
+            generated_from_record_refs=[surveillance_ref],
+            source_record_count=1,
+        )
+        foreign_window_ref = f"surveillance_label_window:{foreign_window.id}"
+        self.training_row.feature_values = {
+            **self.training_row.feature_values,
+            "label_window_id": foreign_window.id,
+            "surveillance_label_window_ref": foreign_window_ref,
+        }
+        self.training_row.save(update_fields=["feature_values"])
+
+        blockers = production_model_run_blockers(self.model_run)
+
+        self.assertIn(PRODUCTION_CANONICAL_REFERENCE_INVALID, blockers)
 
     def test_cross_ward_climate_reference_is_blocked(self):
         other_ward = Ward.objects.create(

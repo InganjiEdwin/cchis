@@ -136,3 +136,14 @@ class MigoriWorldPopFeatureDatasetTestCase(TestCase):
         self.assertTrue(summary["phase5_gates"]["row_population_densities_match_phase1"])
         self.assertTrue(summary["phase5_gates"]["phase1_summary_passed"])
         self.assertTrue(summary["phase5_gates"]["reconciliation_population_total_matches_dataset"])
+        population_ref = (
+            f"population_baseline_record:{snapshot.rows_by_ward_id[ward.id]['population_baseline_record_id']}"
+        )
+        self.assertEqual(
+            snapshot.rows_by_ward_id[ward.id]["population_baseline_record_refs"],
+            [population_ref],
+        )
+        self.assertEqual(
+            snapshot.feature_dataset.lineage_metadata["population_baseline_record_refs"],
+            [population_ref],
+        )
