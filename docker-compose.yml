@@ -1,8 +1,9 @@
 x-backend-environment: &backend-environment
   SECRET_KEY: ${SECRET_KEY:-local-only-development-key-change-before-sharing}
-  # DEBUG is read by Django directly. Keep the local default safe when no .env is present;
-  # production/staging values must come from the selected --env-file.
-  DEBUG: ${DEBUG:-False}
+  # Keep Compose interpolation project-scoped. A host-wide DEBUG value (for
+  # example DEBUG=release) must not override the Django boolean setting.
+  # CCHIS_DJANGO_DEBUG is mapped to the container variable Django reads.
+  DEBUG: ${CCHIS_DJANGO_DEBUG:-False}
   CCHIS_ENVIRONMENT: ${CCHIS_ENVIRONMENT:-local}
   ALLOWED_HOSTS: "${ALLOWED_HOSTS:-127.0.0.1,localhost},backend"
   CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}

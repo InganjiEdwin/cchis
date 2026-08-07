@@ -80,9 +80,8 @@ jobs:
       - name: Run backend test suite
         run: docker compose run --rm backend python manage.py test --noinput
         env:
-          CCHIS_DEBUG: "True"
+          CCHIS_DJANGO_DEBUG: "True"
           SECRET_KEY: ci-local-development-key
-          DEBUG: "True"
           ALLOWED_HOSTS: localhost,127.0.0.1,backend
           DB_NAME: cchis_db
           DB_USER: postgres
@@ -98,6 +97,11 @@ jobs:
       - name: Run production-like Django security check
         run: >-
           docker compose --env-file deploy/ci-production.env run --rm --no-deps
+          backend python manage.py check --deploy --fail-level WARNING
+
+      - name: Verify production Compose ignores ambient DEBUG
+        run: >-
+          DEBUG=release docker compose --env-file deploy/ci-production.env run --rm --no-deps
           backend python manage.py check --deploy --fail-level WARNING
 
       - name: Shut down services

@@ -82,7 +82,7 @@ Safe for demo or local development:
 
 Must change for real deployment:
 
-- `DEBUG=False`
+- `CCHIS_DJANGO_DEBUG=False` for Compose-backed deployments
 - strict `ALLOWED_HOSTS`
 - explicit `CORS_ALLOWED_ORIGINS` and `CSRF_TRUSTED_ORIGINS`
 - secure cookie and proxy settings

@@ -60,7 +60,7 @@ Any future public endpoint should be reviewed with the same questions:
 ## Deployment Checklist
 
 - Set `CCHIS_ENVIRONMENT` explicitly to `staging` or `production` outside isolated local development.
-- Set `DEBUG=False`.
+- In Compose-backed deployments, set `CCHIS_DJANGO_DEBUG=False`; Compose maps it to Django's container `DEBUG` setting.
 - Set strict `ALLOWED_HOSTS`.
 - Set explicit `CORS_ALLOWED_ORIGINS` and `CSRF_TRUSTED_ORIGINS`.
 - Enable `SECURE_SSL_REDIRECT`, `SESSION_COOKIE_SECURE`, and `CSRF_COOKIE_SECURE` for HTTPS deployments.

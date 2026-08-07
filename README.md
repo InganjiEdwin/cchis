@@ -647,7 +647,7 @@ If you leave it unset, the backend defaults to `local`.
 At minimum review and set:
 
 - `CCHIS_ENVIRONMENT`
-- `DEBUG=False`
+- `CCHIS_DJANGO_DEBUG=False` for Compose-backed deployments
 - `ALLOWED_HOSTS`
 - `CORS_ALLOW_ALL_ORIGINS=False`
 - `CORS_ALLOWED_ORIGINS`
@@ -705,7 +705,7 @@ Safe for isolated local development:
 Not acceptable for real deployment without change:
 
 - demo passwords
-- `DEBUG=True`
+- `CCHIS_DJANGO_DEBUG=True` for isolated local Compose development
 - broad `ALLOWED_HOSTS`
 - `CORS_ALLOW_ALL_ORIGINS=True`
 - disabled secure-cookie and SSL redirect settings

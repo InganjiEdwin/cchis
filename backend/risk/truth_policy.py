@@ -15,6 +15,7 @@ PRODUCTION_SYNTHETIC_FEATURE_FALLBACK_BLOCKED = "production_synthetic_feature_fa
 PRODUCTION_SUPERSEDED_TRUTH_BLOCKED = "production_superseded_truth_blocked"
 PRODUCTION_CANONICAL_DATASET_REQUIRED = "production_canonical_dataset_required"
 PRODUCTION_CANONICAL_DATASET_INVALID = "production_canonical_dataset_invalid"
+PRODUCTION_CANONICAL_REFERENCE_REQUIRED = "production_canonical_reference_required"
 PRODUCTION_CANONICAL_REFERENCE_INVALID = "production_canonical_reference_invalid"
 PRODUCTION_INVALID_FEATURE_ROW_BLOCKED = "production_invalid_feature_row_blocked"
 PRODUCTION_ALERT_MODEL_RUN_REQUIRED = "production_alert_model_run_required"
@@ -23,8 +24,12 @@ PRODUCTION_ALERT_ACTIVE_REGISTRY_REQUIRED = "production_alert_active_registry_re
 PRODUCTION_ALERT_ELIGIBILITY_BLOCKED = "production_alert_eligibility_blocked"
 
 
-_SURVEILLANCE_RECORD_REF_PATTERN = re.compile(r"surveillance_record:[^,\s\]}]+")
+_CANONICAL_REFERENCE_PATTERN = re.compile(
+    r"(?:surveillance_record|climate_record|surveillance_label_window):[^,\s\]}]+"
+)
 _SURVEILLANCE_RECORD_ID_PATTERN = re.compile(r"^surveillance_record:(\d+)$")
+_CLIMATE_RECORD_ID_PATTERN = re.compile(r"^climate_record:(\d+)$")
+_LABEL_WINDOW_ID_PATTERN = re.compile(r"^surveillance_label_window:(\d+)$")
 _SURVEILLANCE_RECORD_ID_KEYS = {
     "record_id",
     "record_ids",
@@ -33,6 +38,18 @@ _SURVEILLANCE_RECORD_ID_KEYS = {
     "surveillance_record_id",
     "surveillance_record_ids",
     "generated_from_record_ids",
+}
+_CLIMATE_RECORD_ID_KEYS = {
+    "climate_record_id",
+    "climate_record_ids",
+    "rainfall_record_id",
+    "rainfall_record_ids",
+}
+_LABEL_WINDOW_ID_KEYS = {
+    "label_window_id",
+    "label_window_ids",
+    "surveillance_label_window_id",
+    "surveillance_label_window_ids",
 }
 _SYNTHETIC_FALLBACK_KEYS = {
     "synthetic_rainfall_fallback_used",
@@ -161,83 +178,421 @@ def _contains_proxy_confirmed_claim(value) -> bool:
     return False
 
 
-def _collect_surveillance_record_refs(value, *, numeric_ids: set[int], string_refs: set[str]) -> None:
+def _collect_canonical_record_refs(
+    value,
+    *,
+    surveillance_ids: set[int],
+    climate_ids: set[int],
+    label_window_ids: set[int],
+    string_refs: set[str],
+) -> None:
+    """Collect only typed, resolvable references from persisted lineage JSON."""
+
     if isinstance(value, str):
-        for match in _SURVEILLANCE_RECORD_REF_PATTERN.finditer(value):
+        for match in _CANONICAL_REFERENCE_PATTERN.finditer(value):
             reference = match.group(0).rstrip(".);\"")
             string_refs.add(reference)
-            id_match = _SURVEILLANCE_RECORD_ID_PATTERN.fullmatch(reference)
-            if id_match:
-                numeric_ids.add(int(id_match.group(1)))
+            surveillance_match = _SURVEILLANCE_RECORD_ID_PATTERN.fullmatch(reference)
+            climate_match = _CLIMATE_RECORD_ID_PATTERN.fullmatch(reference)
+            label_window_match = _LABEL_WINDOW_ID_PATTERN.fullmatch(reference)
+            if surveillance_match:
+                surveillance_ids.add(int(surveillance_match.group(1)))
+            elif climate_match:
+                climate_ids.add(int(climate_match.group(1)))
+            elif label_window_match:
+                label_window_ids.add(int(label_window_match.group(1)))
         return
     if isinstance(value, list):
         for item in value:
-            _collect_surveillance_record_refs(item, numeric_ids=numeric_ids, string_refs=string_refs)
+            _collect_canonical_record_refs(
+                item,
+                surveillance_ids=surveillance_ids,
+                climate_ids=climate_ids,
+                label_window_ids=label_window_ids,
+                string_refs=string_refs,
+            )
         return
     if not isinstance(value, dict):
         return
     for key, nested_value in value.items():
+        values = nested_value if isinstance(nested_value, list) else [nested_value]
         if key in _SURVEILLANCE_RECORD_ID_KEYS:
-            values = nested_value if isinstance(nested_value, list) else [nested_value]
             for item in values:
                 try:
                     if item is not None and str(item).strip():
-                        numeric_ids.add(int(item))
+                        surveillance_ids.add(int(item))
                 except (TypeError, ValueError):
                     pass
-        _collect_surveillance_record_refs(nested_value, numeric_ids=numeric_ids, string_refs=string_refs)
-
-
-def _canonical_surveillance_reference_blockers(dataset) -> list[str]:
-    dataset_id = _dataset_id(dataset)
-    if not dataset_id:
-        return []
-
-    from risk.models import FeatureDatasetRow, SurveillanceLabelWindow, SurveillanceRecord
-
-    numeric_ids: set[int] = set()
-    string_refs: set[str] = set()
-    _collect_surveillance_record_refs(
-        getattr(dataset, "lineage_metadata", None) or {},
-        numeric_ids=numeric_ids,
-        string_refs=string_refs,
-    )
-    rows = FeatureDatasetRow.objects.filter(dataset_id=dataset_id).values_list("feature_values", flat=True)
-    for feature_values in rows:
-        _collect_surveillance_record_refs(
-            feature_values or {},
-            numeric_ids=numeric_ids,
+        elif key in _CLIMATE_RECORD_ID_KEYS:
+            for item in values:
+                try:
+                    if item is not None and str(item).strip():
+                        climate_ids.add(int(item))
+                except (TypeError, ValueError):
+                    pass
+        elif key in _LABEL_WINDOW_ID_KEYS:
+            for item in values:
+                try:
+                    if item is not None and str(item).strip():
+                        label_window_ids.add(int(item))
+                except (TypeError, ValueError):
+                    pass
+        _collect_canonical_record_refs(
+            nested_value,
+            surveillance_ids=surveillance_ids,
+            climate_ids=climate_ids,
+            label_window_ids=label_window_ids,
             string_refs=string_refs,
         )
-    for window_values in SurveillanceLabelWindow.objects.filter(feature_dataset_id=dataset_id).values_list(
-        "generated_from_record_refs", "source_coverage_summary"
-    ):
-        for value in window_values:
-            _collect_surveillance_record_refs(value or {}, numeric_ids=numeric_ids, string_refs=string_refs)
+
+
+def _canonical_refs_from_value(value) -> tuple[set[int], set[int], set[int], set[str]]:
+    surveillance_ids: set[int] = set()
+    climate_ids: set[int] = set()
+    label_window_ids: set[int] = set()
+    string_refs: set[str] = set()
+    _collect_canonical_record_refs(
+        value,
+        surveillance_ids=surveillance_ids,
+        climate_ids=climate_ids,
+        label_window_ids=label_window_ids,
+        string_refs=string_refs,
+    )
+    return surveillance_ids, climate_ids, label_window_ids, string_refs
+
+
+def _expected_truth_level_for_records(truth_levels) -> str:
+    from risk.models import SurveillanceTruthLevel
+
+    if truth_levels == {SurveillanceTruthLevel.SEEDED_DEMO}:
+        return SurveillanceTruthLevel.SEEDED_DEMO
+    if SurveillanceTruthLevel.CONFIRMED_SURVEILLANCE in truth_levels:
+        return SurveillanceTruthLevel.CONFIRMED_SURVEILLANCE
+    if SurveillanceTruthLevel.SUSPECTED_SURVEILLANCE in truth_levels:
+        return SurveillanceTruthLevel.SUSPECTED_SURVEILLANCE
+    if SurveillanceTruthLevel.PROXY_DIARRHEAL_SIGNAL in truth_levels:
+        return SurveillanceTruthLevel.PROXY_DIARRHEAL_SIGNAL
+    if SurveillanceTruthLevel.FIELD_SIGNAL_ONLY in truth_levels:
+        return SurveillanceTruthLevel.FIELD_SIGNAL_ONLY
+    return SurveillanceTruthLevel.FIELD_SIGNAL_ONLY
+
+
+def _canonical_dataset_reference_blockers(
+    dataset,
+    *,
+    require_surveillance: bool = False,
+    require_climate: bool = False,
+    require_label_window: bool = False,
+    climate_ingestion_run_id: int | None = None,
+) -> list[str]:
+    """Validate dataset lineage against canonical surveillance and climate rows."""
+
+    dataset_id = _dataset_id(dataset)
+    if not dataset_id:
+        # In-memory policy unit fixtures do not have rows to resolve. Persisted
+        # production datasets always take the database-backed branch below.
+        return []
+
+    from risk.models import (
+        ClimateRecord,
+        ClimateRecordQualityFlag,
+        ClimateRecordType,
+        FeatureDatasetRow,
+        IngestionRun,
+        SurveillanceCaseClass,
+        SurveillanceFreshnessState,
+        SurveillanceIngestionRun,
+        SurveillanceLabelWindow,
+        SurveillanceRecord,
+        SurveillanceSourceKind,
+        SurveillanceTruthLevel,
+    )
+
+    lineage = getattr(dataset, "lineage_metadata", None) or {}
+    surveillance_ids, climate_ids, label_window_ids, string_refs = _canonical_refs_from_value(lineage)
+    rows = list(FeatureDatasetRow.objects.filter(dataset_id=dataset_id).select_related("ward"))
+    for row in rows:
+        row_refs = _canonical_refs_from_value(row.feature_values or {})
+        surveillance_ids.update(row_refs[0])
+        climate_ids.update(row_refs[1])
+        label_window_ids.update(row_refs[2])
+        string_refs.update(row_refs[3])
+
+    attached_windows = list(SurveillanceLabelWindow.objects.filter(feature_dataset_id=dataset_id))
+    label_window_ids.update(window.id for window in attached_windows)
+    for window in attached_windows:
+        window_refs = _canonical_refs_from_value(
+            {
+                "generated_from_record_refs": window.generated_from_record_refs,
+                "source_coverage_summary": window.source_coverage_summary,
+            }
+        )
+        surveillance_ids.update(window_refs[0])
+        climate_ids.update(window_refs[1])
+        label_window_ids.update(window_refs[2])
+        string_refs.update(window_refs[3])
 
     blockers: list[str] = []
-    if any(ref not in {f"surveillance_record:{record_id}" for record_id in numeric_ids} for ref in string_refs):
+    valid_string_refs = {
+        *(f"surveillance_record:{record_id}" for record_id in surveillance_ids),
+        *(f"climate_record:{record_id}" for record_id in climate_ids),
+        *(f"surveillance_label_window:{window_id}" for window_id in label_window_ids),
+    }
+    if any(reference not in valid_string_refs for reference in string_refs):
         _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_INVALID)
 
-    records = {record.id: record for record in SurveillanceRecord.objects.filter(id__in=numeric_ids)}
-    if len(records) != len(numeric_ids):
+    if not surveillance_ids and not climate_ids:
+        _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_REQUIRED)
+    if require_surveillance and not surveillance_ids:
+        _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_REQUIRED)
+    if require_climate and not climate_ids:
+        _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_REQUIRED)
+    if require_label_window and not label_window_ids:
+        _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_REQUIRED)
+
+    surveillance_records = {
+        record.id: record
+        for record in SurveillanceRecord.objects.filter(id__in=surveillance_ids).select_related(
+            "ward", "source", "ingestion_run"
+        )
+    }
+    climate_records = {
+        record.id: record
+        for record in ClimateRecord.objects.filter(id__in=climate_ids).select_related("ward", "ingestion_run")
+    }
+    label_windows = {
+        window.id: window
+        for window in SurveillanceLabelWindow.objects.filter(id__in=label_window_ids).select_related("ward")
+    }
+
+    if len(surveillance_records) != len(surveillance_ids) or len(climate_records) != len(climate_ids):
         _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_INVALID)
-    record_refs = {f"surveillance_record:{record_id}" for record_id in numeric_ids}
+    if len(label_windows) != len(label_window_ids):
+        _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_INVALID)
+
+    surveillance_refs = {f"surveillance_record:{record_id}" for record_id in surveillance_ids}
     superseding_refs = set(
-        SurveillanceRecord.objects.filter(supersedes_record_ref__in=record_refs).values_list(
+        SurveillanceRecord.objects.filter(supersedes_record_ref__in=surveillance_refs).values_list(
             "supersedes_record_ref", flat=True
         )
     )
-    for record in records.values():
+    for record in surveillance_records.values():
         raw_payload = record.raw_payload if isinstance(record.raw_payload, dict) else {}
         if raw_payload.get("superseded_by_record_ref") or f"surveillance_record:{record.id}" in superseding_refs:
             _append_unique(blockers, PRODUCTION_SUPERSEDED_TRUTH_BLOCKED)
-        if str(record.source_kind).upper() == "SEEDED" or str(record.truth_level).lower() == "seeded_demo":
+        if str(record.source_kind).lower() == SurveillanceSourceKind.SEEDED or (
+            str(record.truth_level).lower() == SurveillanceTruthLevel.SEEDED_DEMO
+        ):
             _append_unique(blockers, PRODUCTION_SEEDED_TRUTH_BLOCKED)
+        if (
+            record.source is None
+            or not record.source.is_active
+            or not record.source.source_ref
+            or record.ingestion_run is None
+            or record.ingestion_run.status != SurveillanceIngestionRun.STATUS_SUCCESS
+            or record.ingestion_run.fallback_used
+            or not record.ingestion_run.source_ref
+            or record.source_kind != SurveillanceSourceKind.LIVE
+            or record.freshness_state != SurveillanceFreshnessState.FRESH
+            or not record.source_ref
+            or not raw_payload.get("source_credibility")
+            or not record.reporting_period_start
+            or not record.reporting_period_end
+            or (
+                record.source.reporting_period_start
+                and record.source.reporting_period_start != record.reporting_period_start
+            )
+            or (
+                record.source.reporting_period_end
+                and record.source.reporting_period_end != record.reporting_period_end
+            )
+            or (
+                record.ingestion_run.reporting_period_start
+                and record.ingestion_run.reporting_period_start != record.reporting_period_start
+            )
+            or (
+                record.ingestion_run.reporting_period_end
+                and record.ingestion_run.reporting_period_end != record.reporting_period_end
+            )
+        ):
+            _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_INVALID)
+        if (
+            record.case_class == SurveillanceCaseClass.CONFIRMED
+            and record.truth_level != SurveillanceTruthLevel.CONFIRMED_SURVEILLANCE
+        ) or (
+            record.truth_level == SurveillanceTruthLevel.CONFIRMED_SURVEILLANCE
+            and record.case_class != SurveillanceCaseClass.CONFIRMED
+        ):
+            _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_INVALID)
+        if (
+            record.case_class == SurveillanceCaseClass.PROXY
+            and record.truth_level == SurveillanceTruthLevel.CONFIRMED_SURVEILLANCE
+        ):
+            _append_unique(blockers, PRODUCTION_PROXY_NOT_CONFIRMED)
+
+    for record in climate_records.values():
+        if (
+            record.ward_id is None
+            or record.ingestion_run is None
+            or record.ingestion_run.status != IngestionRun.STATUS_SUCCESS
+            or record.ingestion_run.source_kind != IngestionRun.SOURCE_KIND_LIVE
+            or record.ingestion_run.fallback_used
+            or record.ingestion_run.freshness_state != IngestionRun.FRESHNESS_FRESH
+            or record.source_kind != IngestionRun.SOURCE_KIND_LIVE
+            or record.quality_flag != ClimateRecordQualityFlag.ACCEPTED
+            or record.fallback_flag
+            or record.record_type == ClimateRecordType.FALLBACK_STATIC
+            or not record.source_ref
+            or not record.source_run
+            or not record.valid_date
+            or (
+                record.record_type == ClimateRecordType.OBSERVED and not record.observed_timestamp
+            )
+            or (
+                record.record_type == ClimateRecordType.FORECAST
+                and (not record.issue_time or record.lead_day is None)
+            )
+            or (climate_ingestion_run_id is not None and record.ingestion_run_id != climate_ingestion_run_id)
+        ):
+            _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_INVALID)
+
+    for row in rows:
+        row_surveillance_ids, row_climate_ids, row_window_ids, _ = _canonical_refs_from_value(
+            row.feature_values or {}
+        )
+        if require_surveillance and not row_surveillance_ids:
+            _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_REQUIRED)
+        if require_climate and not row_climate_ids:
+            _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_REQUIRED)
+        if row.ward_id is None:
+            continue
+        for record_id in row_surveillance_ids:
+            record = surveillance_records.get(record_id)
+            if record is not None and record.ward_id != row.ward_id:
+                _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_INVALID)
+        for record_id in row_climate_ids:
+            record = climate_records.get(record_id)
+            if record is not None and record.ward_id != row.ward_id:
+                _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_INVALID)
+        for window_id in row_window_ids:
+            window = label_windows.get(window_id)
+            if window is not None and window.ward_id != row.ward_id:
+                _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_INVALID)
+
+    if require_label_window:
+        actual_row_count = len(rows)
+        if actual_row_count == 0 or int(getattr(dataset, "row_count", 0) or 0) != actual_row_count:
+            _append_unique(blockers, PRODUCTION_CANONICAL_DATASET_INVALID)
+        for window in label_windows.values():
+            generated_refs = window.generated_from_record_refs or []
+            window_surveillance_ids, _, _, window_string_refs = _canonical_refs_from_value(generated_refs)
+            if not window_surveillance_ids:
+                _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_REQUIRED)
+                continue
+            if any(
+                reference not in {f"surveillance_record:{record_id}" for record_id in window_surveillance_ids}
+                for reference in window_string_refs
+            ):
+                _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_INVALID)
+            window_records = [surveillance_records.get(record_id) for record_id in window_surveillance_ids]
+            if any(record is None for record in window_records):
+                _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_INVALID)
+                continue
+            window_records = [record for record in window_records if record is not None]
+            if any(
+                record.ward_id != window.ward_id
+                or record.reporting_period_end < window.label_window_start
+                or record.reporting_period_start > window.label_window_end
+                for record in window_records
+            ):
+                _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_INVALID)
+            expected_counts = {
+                SurveillanceCaseClass.SUSPECTED: sum(
+                    record.count_value
+                    for record in window_records
+                    if record.case_class == SurveillanceCaseClass.SUSPECTED
+                ),
+                SurveillanceCaseClass.CONFIRMED: sum(
+                    record.count_value
+                    for record in window_records
+                    if record.case_class == SurveillanceCaseClass.CONFIRMED
+                ),
+                SurveillanceCaseClass.PROXY: sum(
+                    record.count_value
+                    for record in window_records
+                    if record.case_class == SurveillanceCaseClass.PROXY
+                ),
+            }
+            if (
+                window.source_record_count != len(window_records)
+                or window.suspected_case_count != expected_counts[SurveillanceCaseClass.SUSPECTED]
+                or window.confirmed_case_count != expected_counts[SurveillanceCaseClass.CONFIRMED]
+                or window.proxy_case_count != expected_counts[SurveillanceCaseClass.PROXY]
+            ):
+                _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_INVALID)
+            expected_truth = _expected_truth_level_for_records(
+                {record.truth_level for record in window_records}
+            )
+            if window.label_truth_level != expected_truth:
+                _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_INVALID)
+            if (
+                window.label_truth_level == SurveillanceTruthLevel.CONFIRMED_SURVEILLANCE
+                and not any(
+                    record.truth_level == SurveillanceTruthLevel.CONFIRMED_SURVEILLANCE
+                    for record in window_records
+                )
+            ):
+                if any(record.truth_level == SurveillanceTruthLevel.PROXY_DIARRHEAL_SIGNAL for record in window_records):
+                    _append_unique(blockers, PRODUCTION_PROXY_NOT_CONFIRMED)
+                _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_INVALID)
+            coverage = window.source_coverage_summary if isinstance(window.source_coverage_summary, dict) else {}
+            coverage_refs = coverage.get("source_record_refs") or coverage.get("generated_from_record_refs") or []
+            if coverage and (
+                coverage.get("record_count") not in (None, len(window_records))
+                or (coverage_refs and set(coverage_refs) != {f"surveillance_record:{record.id}" for record in window_records})
+            ):
+                _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_INVALID)
+
+        for row in rows:
+            row_values = row.feature_values if isinstance(row.feature_values, dict) else {}
+            row_window_ids = _canonical_refs_from_value(row_values)[2]
+            row_windows = [label_windows[window_id] for window_id in row_window_ids if window_id in label_windows]
+            if not row_windows:
+                _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_REQUIRED)
+                continue
+            for window in row_windows:
+                if row.label not in (0, 1):
+                    _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_INVALID)
+                expected_label_fields = {
+                    "suspected_case_count": window.suspected_case_count,
+                    "confirmed_case_count": window.confirmed_case_count,
+                    "proxy_case_count": window.proxy_case_count,
+                    "source_record_count": window.source_record_count,
+                    "label_truth_level": window.label_truth_level,
+                    "outbreak_label": window.outbreak_label,
+                }
+                if any(
+                    field not in row_values or row_values.get(field) != expected_value
+                    for field, expected_value in expected_label_fields.items()
+                ):
+                    _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_INVALID)
+                if row.label == 1 and window.outbreak_label != "active":
+                    _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_INVALID)
+
     return blockers
 
 
-def _feature_dataset_row_blockers(dataset) -> list[str]:
+def _canonical_surveillance_reference_blockers(dataset) -> list[str]:
+    return _canonical_dataset_reference_blockers(dataset)
+
+
+def _feature_dataset_row_blockers(
+    dataset,
+    *,
+    require_surveillance: bool = False,
+    require_climate: bool = False,
+    climate_ingestion_run_id: int | None = None,
+) -> list[str]:
     dataset_id = _dataset_id(dataset)
     if not dataset_id:
         return []
@@ -256,7 +611,15 @@ def _feature_dataset_row_blockers(dataset) -> list[str]:
             _append_unique(blockers, PRODUCTION_UNMAPPED_WARD_BLOCKED, PRODUCTION_INVALID_FEATURE_ROW_BLOCKED)
         if _contains_synthetic_fallback(row.feature_values or {}):
             _append_unique(blockers, PRODUCTION_SYNTHETIC_FEATURE_FALLBACK_BLOCKED)
-    _append_unique(blockers, *_canonical_surveillance_reference_blockers(dataset))
+    _append_unique(
+        blockers,
+        *_canonical_dataset_reference_blockers(
+            dataset,
+            require_surveillance=require_surveillance,
+            require_climate=require_climate,
+            climate_ingestion_run_id=climate_ingestion_run_id,
+        ),
+    )
     return blockers
 
 
@@ -289,6 +652,25 @@ def production_feature_dataset_blockers(*, training_dataset=None, inference_data
     if _rainfall_contains_static_fallback(getattr(inference_dataset, "rainfall_ingestion_run", None)):
         _append_unique(blockers, PRODUCTION_STATIC_FALLBACK_BLOCKED)
 
+    rainfall_ingestion_run = getattr(inference_dataset, "rainfall_ingestion_run", None)
+    rainfall_run_blockers: list[str] = []
+    rainfall_run_id = getattr(rainfall_ingestion_run, "pk", None) or getattr(rainfall_ingestion_run, "id", None)
+    if _dataset_id(inference_feature_dataset):
+        if rainfall_ingestion_run is None:
+            _append_unique(rainfall_run_blockers, PRODUCTION_CANONICAL_REFERENCE_REQUIRED)
+        elif rainfall_run_id:
+            from risk.models import ClimateRecord, IngestionRun
+
+            if (
+                rainfall_ingestion_run.status != IngestionRun.STATUS_SUCCESS
+                or rainfall_ingestion_run.source_kind != IngestionRun.SOURCE_KIND_LIVE
+                or rainfall_ingestion_run.freshness_state != IngestionRun.FRESHNESS_FRESH
+                or rainfall_ingestion_run.fallback_used
+                or not ClimateRecord.objects.filter(ingestion_run_id=rainfall_run_id).exists()
+            ):
+                _append_unique(rainfall_run_blockers, PRODUCTION_CANONICAL_REFERENCE_INVALID)
+    _append_unique(blockers, *rainfall_run_blockers)
+
     for dataset, expected_kind in (
         (training_feature_dataset, "TRAINING"),
         (inference_feature_dataset, "INFERENCE"),
@@ -297,7 +679,17 @@ def production_feature_dataset_blockers(*, training_dataset=None, inference_data
             continue
         if str(getattr(dataset, "dataset_kind", "")).upper() != expected_kind:
             _append_unique(blockers, PRODUCTION_CANONICAL_DATASET_INVALID)
-        _append_unique(blockers, *_feature_dataset_row_blockers(dataset))
+        is_training = expected_kind == "TRAINING"
+        is_inference = expected_kind == "INFERENCE"
+        _append_unique(
+            blockers,
+            *_feature_dataset_row_blockers(
+                dataset,
+                require_surveillance=is_training,
+                require_climate=is_inference,
+                climate_ingestion_run_id=rainfall_run_id if is_inference else None,
+            ),
+        )
         if _contains_proxy_confirmed_claim(getattr(dataset, "lineage_metadata", None) or {}):
             _append_unique(blockers, PRODUCTION_PROXY_NOT_CONFIRMED)
 
@@ -326,7 +718,7 @@ def _production_label_dataset_blockers(model_run) -> list[str]:
         if str(metadata.get(key) or "").isdigit()
     }
     if not label_refs and not label_ids:
-        return []
+        return [PRODUCTION_CANONICAL_REFERENCE_REQUIRED]
 
     from risk.models import FeatureDataset
 
@@ -352,7 +744,15 @@ def _production_label_dataset_blockers(model_run) -> list[str]:
             _append_unique(blockers, PRODUCTION_SYNTHETIC_FEATURE_FALLBACK_BLOCKED)
         if _contains_proxy_confirmed_claim(lineage):
             _append_unique(blockers, PRODUCTION_PROXY_NOT_CONFIRMED)
-        _append_unique(blockers, *_feature_dataset_row_blockers(dataset))
+        _append_unique(
+            blockers,
+            *_feature_dataset_row_blockers(dataset, require_surveillance=True),
+            *_canonical_dataset_reference_blockers(
+                dataset,
+                require_surveillance=True,
+                require_label_window=True,
+            ),
+        )
     return blockers
 
 
