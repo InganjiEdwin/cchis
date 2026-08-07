@@ -498,8 +498,11 @@ export type AccessRequestResponse = {
   review_status: "PENDING" | "APPROVED" | "REJECTED";
 };
 
-const API_BASE_URL =
+const PUBLIC_API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "http://localhost:8000/api/v1";
+const INTERNAL_API_BASE_URL =
+  process.env.BACKEND_INTERNAL_URL?.replace(/\/$/, "")
+  ?? process.env.CCHIS_BACKEND_INTERNAL_URL?.replace(/\/$/, "");
 const REQUEST_TIMEOUT_MS = 10000;
 const BFF_REQUEST_TIMEOUT_MS = 30000;
 const USERNAME_PATTERN = /^[\w.@+-]+$/;
@@ -584,7 +587,10 @@ export function isValidUsername(value: string) {
 }
 
 export function getApiBaseUrl() {
-  return API_BASE_URL;
+  if (typeof window === "undefined" && INTERNAL_API_BASE_URL) {
+    return INTERNAL_API_BASE_URL;
+  }
+  return PUBLIC_API_BASE_URL;
 }
 
 export function persistCurrentUser(user: CurrentUser | null) {
@@ -719,7 +725,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   let response: Response;
 
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
+    response = await fetch(`${PUBLIC_API_BASE_URL}${path}`, {
       ...init,
       headers,
       credentials: "include",

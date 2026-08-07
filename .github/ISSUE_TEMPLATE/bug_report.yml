@@ -1,0 +1,36 @@
+name: Bug report
+description: Report a reproducible defect in the application or its workflows.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include secrets, tokens, direct identifiers, phone numbers, or raw health data. Report security vulnerabilities through [SECURITY.md](../../SECURITY.md).
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: What went wrong?
+      placeholder: Short description of the defect
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Include the smallest safe reproduction, expected result, and actual result.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Commit, browser/OS, and local/staging environment.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Safe logs or screenshots
+      description: Remove secrets and personal or health information before attaching anything.

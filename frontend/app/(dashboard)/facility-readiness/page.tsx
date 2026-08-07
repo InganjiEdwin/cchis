@@ -74,11 +74,11 @@ export default function FacilityReadinessPage() {
   const [focusedFacilityId, setFocusedFacilityId] = useState<number | null>(null);
   const matrixRef = useRef<HTMLElement | null>(null);
   const { data, isPending: isLoading, error } = useFacilityReadinessQuery();
-  const facilities = data?.facilities ?? [];
-  const risks = data?.risks ?? [];
-  const alerts = data?.alerts ?? [];
+  const facilities = useMemo(() => data?.facilities ?? [], [data?.facilities]);
+  const risks = useMemo(() => data?.risks ?? [], [data?.risks]);
+  const alerts = useMemo(() => data?.alerts ?? [], [data?.alerts]);
   const decisionSummary = data?.decisionSummary ?? null;
-  const workflowStates = data?.workflowStates ?? [];
+  const workflowStates = useMemo(() => data?.workflowStates ?? [], [data?.workflowStates]);
 
   const latestTimestamp = useMemo(
     () =>
@@ -192,7 +192,7 @@ export default function FacilityReadinessPage() {
     (!decisionSummary && allFacilitiesStale)
       ? "warning"
       : "default";
-  const priorityItems = decisionSummary?.top_priorities ?? [];
+  const priorityItems = useMemo(() => decisionSummary?.top_priorities ?? [], [decisionSummary?.top_priorities]);
   const totalReviewFacilityCount =
     typeof decisionSummary?.total_review_facility_count === "number"
       ? decisionSummary.total_review_facility_count

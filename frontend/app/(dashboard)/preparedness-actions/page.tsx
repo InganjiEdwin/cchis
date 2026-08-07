@@ -260,7 +260,10 @@ function ActionDetailDrawer({
   onClose: () => void;
 }) {
   const updateActionMutation = useUpdatePreparednessActionMutation();
-  const availableTransitions = action ? STATUS_TRANSITIONS[action.status] : [];
+  const availableTransitions = useMemo(
+    () => (action ? STATUS_TRANSITIONS[action.status] : []),
+    [action],
+  );
   const [targetStatus, setTargetStatus] = useState<PreparednessActionStatus | "">("");
   const [detail, setDetail] = useState("");
   const [assignedToTeam, setAssignedToTeam] = useState("");
@@ -277,7 +280,7 @@ function ActionDetailDrawer({
     setCompletionReference("");
     setCancellationReason("");
     setFormError(null);
-  }, [action?.public_id]);
+  }, [action?.assigned_to_team, action?.public_id, availableTransitions]);
 
   if (!action) {
     return null;
@@ -581,7 +584,7 @@ export default function PreparednessActionsPage() {
     filters: actionQueryFilters,
     enabled: Boolean(currentUser),
   });
-  const actions = actionsQuery.data?.results ?? [];
+  const actions = useMemo(() => actionsQuery.data?.results ?? [], [actionsQuery.data?.results]);
   const totalVisibleCount = countFromQuery(totalCountQuery);
   const activeCount = countFromQuery(activeCountQuery);
   const overdueCount = countFromQuery(overdueCountQuery);

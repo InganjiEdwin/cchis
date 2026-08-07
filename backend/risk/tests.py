@@ -261,6 +261,84 @@ class SharedEnvironmentSecuritySettingsTestCase(SimpleTestCase):
         self.assertTrue(any("AUTH_REFRESH_COOKIE_NAME" in error for error in errors))
         self.assertTrue(any("AUTH_ACCESS_COOKIE_NAME" in error for error in errors))
 
+    def test_production_security_profile_rejects_weak_secret_and_untrusted_transport(self):
+        errors = collect_shared_environment_security_errors(
+            environment="production",
+            auth_refresh_cookie_secure=True,
+            auth_access_cookie_secure=True,
+            auth_refresh_cookie_httponly=True,
+            auth_access_cookie_httponly=True,
+            auth_refresh_cookie_samesite="Lax",
+            auth_access_cookie_samesite="Lax",
+            session_cookie_secure=True,
+            csrf_cookie_secure=True,
+            secure_ssl_redirect=True,
+            secure_ssl_redirect_reverse_proxy_exemption=False,
+            secure_hsts_seconds=31536000,
+            allowed_hosts=[],
+            cors_allow_all_origins=False,
+            cors_allowed_origins=["https://app.example"],
+            auth_refresh_cookie_name="__Host-cchis_refresh",
+            auth_refresh_cookie_path="/",
+            auth_access_cookie_name="__Host-cchis_access",
+            auth_access_cookie_path="/",
+            auth_token_response_mode="cookie_only",
+            debug=True,
+            secret_key="short-secret",
+            csrf_trusted_origins=["http://app.example"],
+            use_x_forwarded_host=True,
+            trust_x_forwarded_for=False,
+            trust_x_forwarded_proto=False,
+            secure_proxy_ssl_header=None,
+            trusted_proxy_configured=False,
+            email_provider="",
+            sms_provider="",
+        )
+
+        self.assertTrue(any("DEBUG" in error for error in errors))
+        self.assertTrue(any("SECRET_KEY" in error for error in errors))
+        self.assertTrue(any("ALLOWED_HOSTS" in error for error in errors))
+        self.assertTrue(any("CSRF_TRUSTED_ORIGINS" in error for error in errors))
+        self.assertTrue(any("Forwarded headers" in error for error in errors))
+        self.assertTrue(any("EMAIL_PROVIDER" in error for error in errors))
+        self.assertTrue(any("SMS_PROVIDER" in error for error in errors))
+
+    def test_production_security_profile_accepts_explicit_safe_values(self):
+        errors = collect_shared_environment_security_errors(
+            environment="production",
+            auth_refresh_cookie_secure=True,
+            auth_access_cookie_secure=True,
+            auth_refresh_cookie_httponly=True,
+            auth_access_cookie_httponly=True,
+            auth_refresh_cookie_samesite="Lax",
+            auth_access_cookie_samesite="Strict",
+            session_cookie_secure=True,
+            csrf_cookie_secure=True,
+            secure_ssl_redirect=True,
+            secure_ssl_redirect_reverse_proxy_exemption=False,
+            secure_hsts_seconds=31536000,
+            allowed_hosts=["app.example"],
+            cors_allow_all_origins=False,
+            cors_allowed_origins=["https://app.example"],
+            auth_refresh_cookie_name="__Host-cchis_refresh",
+            auth_refresh_cookie_path="/",
+            auth_access_cookie_name="__Host-cchis_access",
+            auth_access_cookie_path="/",
+            auth_token_response_mode="cookie_only",
+            debug=False,
+            secret_key="a-long-random-ci-secret-0123456789-abcdefghijklmnopqrstuvwxyz",
+            csrf_trusted_origins=["https://app.example"],
+            use_x_forwarded_host=False,
+            trust_x_forwarded_for=False,
+            trust_x_forwarded_proto=False,
+            secure_proxy_ssl_header=None,
+            trusted_proxy_configured=False,
+            email_provider="stub",
+            sms_provider="stub",
+        )
+
+        self.assertEqual(errors, [])
+
 
 class AuthenticatedAPITestCase(APITestCase):
     password = "ChangeMe123!"

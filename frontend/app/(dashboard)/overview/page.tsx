@@ -568,7 +568,7 @@ export default function OverviewPage() {
   const [activeIssuesOnly, setActiveIssuesOnly] = useState(false);
   const actionFocusRef = useRef<HTMLDivElement | null>(null);
 
-  const wardFeatures = overview?.wardMap?.features ?? [];
+  const wardFeatures = useMemo(() => overview?.wardMap?.features ?? [], [overview?.wardMap?.features]);
   const selectedFeature = useMemo(
     () => wardFeatures.find((feature) => feature.properties.backend_ward_id === selectedWardId) ?? null,
     [selectedWardId, wardFeatures],
@@ -606,7 +606,10 @@ export default function OverviewPage() {
   const triggerLinkage = overview?.triggerLinkage ?? null;
   const facilityReadiness = overview?.facilityReadiness ?? null;
   const simulationReadiness = overview?.simulationReadiness ?? null;
-  const triggerReviewQueue = overview?.triggerReviewQueue ?? [];
+  const triggerReviewQueue = useMemo(
+    () => overview?.triggerReviewQueue ?? [],
+    [overview?.triggerReviewQueue],
+  );
   const triggerSurfaceState = useMemo(
     () =>
       deriveTriggerSurfaceState({

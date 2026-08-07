@@ -7,6 +7,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
@@ -22,6 +23,11 @@ from risk.models import (
     SurveillanceSourceKind,
     SurveillanceTruthLevel,
     Ward,
+)
+from .truth_policy import (
+    PRODUCTION_SEEDED_TRUTH_BLOCKED,
+    PRODUCTION_UNMAPPED_WARD_BLOCKED,
+    require_seeded_truth_allowed,
 )
 
 
@@ -943,6 +949,74 @@ def _persist_canonical_surveillance_records_for_run(
     }
 
 
+def _production_truth_rejections_for_accepted_rows(
+    *,
+    run: SurveillanceIngestionRun,
+    spec: SurveillanceAdapterSpec,
+    accepted_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Preflight production mappings before any canonical row can be written."""
+
+    rejections: list[dict[str, Any]] = []
+    for accepted in accepted_rows:
+        row = accepted["row"]
+        row_number = accepted["row_number"]
+        ward = _find_ward(row)
+        facility = _find_facility(row)
+        if accepted.get("truth_level") == SurveillanceTruthLevel.SEEDED_DEMO:
+            rejections.append(
+                {
+                    "row_number": row_number,
+                    "code": PRODUCTION_SEEDED_TRUTH_BLOCKED,
+                    "reason": "seeded_surveillance_truth_is_not_production_eligible",
+                }
+            )
+        if ward is None and facility is not None:
+            ward = facility.ward
+
+        mapping_reason = None
+        if ward is None:
+            mapping_reason = "ward_not_found_for_surveillance_record"
+        elif not ward.is_active:
+            mapping_reason = "ward_is_inactive"
+        elif facility is not None and not facility.is_active:
+            mapping_reason = "facility_is_inactive"
+        elif facility is not None and facility.ward_id != ward.id:
+            mapping_reason = "facility_ward_mismatch"
+        elif facility is not None and facility.ward is not None and not facility.ward.is_active:
+            mapping_reason = "facility_ward_is_inactive"
+
+        if mapping_reason:
+            rejections.append(
+                {
+                    "row_number": row_number,
+                    "code": PRODUCTION_UNMAPPED_WARD_BLOCKED,
+                    "reason": mapping_reason,
+                    "ward_id": ward.id if ward else None,
+                    "facility_id": facility.id if facility else None,
+                }
+            )
+
+        _, canonical_errors = _canonical_records_for_accepted_row(
+            run=run,
+            spec=spec,
+            accepted=accepted,
+        )
+        for error in canonical_errors:
+            if error.get("reason") in {
+                "ward_not_found_for_surveillance_record",
+                "facility_not_found_for_facility_proxy_record",
+                "facility_ward_mismatch",
+            }:
+                rejections.append(
+                    {
+                        **error,
+                        "code": PRODUCTION_UNMAPPED_WARD_BLOCKED,
+                    }
+                )
+    return rejections[:MAX_REJECTED_ROW_DETAILS]
+
+
 def _validated_surveillance_csv(
     file_path: str | Path,
     *,
@@ -1124,6 +1198,10 @@ def run_surveillance_csv_ingestion(
     label_step_days: int = 7,
     include_seeded_labels: bool = False,
 ) -> SurveillanceIngestionRun:
+    require_seeded_truth_allowed(
+        "seeded surveillance label regeneration",
+        requested=include_seeded_labels,
+    )
     spec = adapter_spec_for_surveillance_source_type(source_type)
     feed_contract = _feed_contract_for_source_type(source_type)
     if not source_name.strip():
@@ -1204,6 +1282,75 @@ def run_surveillance_csv_ingestion(
         },
         replay_of=replay_of,
     )
+
+    if settings.CCHIS_ENVIRONMENT == "production":
+        production_inspection = _validated_surveillance_csv(
+            file_path,
+            source_type=source_type,
+            source_name=source_name,
+        )
+        production_rejections = _production_truth_rejections_for_accepted_rows(
+            run=run,
+            spec=spec,
+            accepted_rows=production_inspection["accepted_rows"],
+        )
+        supplied_seeded_source = "seed" in source_name.lower() or any(
+            _normalize_choice(_first_nonempty(item["row"], "source_kind")) == SurveillanceSourceKind.SEEDED
+            for item in production_inspection["accepted_rows"]
+        )
+        if supplied_seeded_source:
+            production_rejections.append(
+                {
+                    "row_number": None,
+                    "code": PRODUCTION_SEEDED_TRUTH_BLOCKED,
+                    "reason": "seeded_surveillance_source_feed_is_not_production_eligible",
+                }
+            )
+        if production_rejections:
+            derived_period_start = parsed_period_start or production_inspection["period_start"]
+            derived_period_end = parsed_period_end or production_inspection["period_end"]
+            source.reporting_period_start = derived_period_start
+            source.reporting_period_end = derived_period_end
+            source.save(update_fields=["reporting_period_start", "reporting_period_end", "updated_at"])
+            run.records_seen = production_inspection["records_seen"]
+            run.records_loaded = 0
+            run.records_rejected = production_inspection["records_rejected"] + production_inspection["records_loaded"]
+            run.reporting_period_start = derived_period_start
+            run.reporting_period_end = derived_period_end
+            run.rejected_rows = (
+                production_inspection["rejected_rows"] + production_rejections
+            )[:MAX_REJECTED_ROW_DETAILS]
+            run.results = {
+                "adapter_key": production_inspection["adapter_key"],
+                "source_rows_accepted_by_contract": production_inspection["records_loaded"],
+                "source_rows_rejected_by_contract": production_inspection["records_rejected"],
+                "production_truth_policy": {
+                    "fail_closed": True,
+                    "blocked_reason_codes": list(
+                        dict.fromkeys(item["code"] for item in production_rejections if item.get("code"))
+                    ),
+                    "rejections": production_rejections,
+                },
+                "canonical_records_persisted": False,
+            }
+            run.status = SurveillanceIngestionRun.STATUS_FAILED
+            run.error_summary = production_rejections[0].get("code", PRODUCTION_UNMAPPED_WARD_BLOCKED)
+            run.completed_at = timezone.now()
+            run.save(
+                update_fields=[
+                    "status",
+                    "records_seen",
+                    "records_loaded",
+                    "records_rejected",
+                    "reporting_period_start",
+                    "reporting_period_end",
+                    "rejected_rows",
+                    "results",
+                    "error_summary",
+                    "completed_at",
+                ]
+            )
+            return run
 
     try:
         with transaction.atomic():
@@ -1350,6 +1497,11 @@ def regenerate_surveillance_label_windows_for_run(
     step_days: int = 7,
     include_seeded: bool = False,
 ) -> dict[str, Any]:
+    require_seeded_truth_allowed(
+        "seeded surveillance label regeneration",
+        requested=include_seeded,
+    )
+
     def store(summary: dict[str, Any]) -> dict[str, Any]:
         run.results = {
             **(run.results or {}),

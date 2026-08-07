@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import uuid4
 
 import numpy as np
@@ -747,18 +748,23 @@ def run_facility_burden_forecast_pipeline(
     horizon_days: int = FACILITY_FORECAST_HORIZON_DAYS,
     execution_context: str = "manual_command",
     run_purpose: str = "forecast_scoring",
+    as_of: datetime | None = None,
 ) -> FacilityForecastRun:
     facilities = list(HealthFacility.objects.filter(is_active=True).select_related("ward").order_by("ward__name", "name"))
     if not facilities:
         raise RuntimeError("No active facilities are available for facility burden forecasting.")
 
-    dataset_month = timezone.now().month
+    snapshot_as_of = as_of or timezone.now()
+    if timezone.is_naive(snapshot_as_of):
+        snapshot_as_of = timezone.make_aware(snapshot_as_of, timezone.get_current_timezone())
+    dataset_month = snapshot_as_of.month
     forecast_wards = list({facility.ward_id: facility.ward for facility in facilities}.values())
     population_exposure_dataset = build_population_exposure_feature_dataset(
         forecast_wards,
+        as_of=snapshot_as_of,
         month=dataset_month,
     )
-    surveillance_snapshot = build_surveillance_feature_snapshot(forecast_wards)
+    surveillance_snapshot = build_surveillance_feature_snapshot(forecast_wards, as_of=snapshot_as_of)
     base_rows = _build_base_training_rows(
         facilities,
         population_exposure_rows_by_ward_id=population_exposure_dataset.rows_by_ward_id,
@@ -795,6 +801,7 @@ def run_facility_burden_forecast_pipeline(
         metadata={
             "execution_context": execution_context,
             "run_purpose": run_purpose,
+            "snapshot_as_of": snapshot_as_of.isoformat(),
             "promotion_target": FACILITY_FORECAST_PROMOTION_TARGET_PREVIEW,
             "retraining_policy": "manual_promotion_only",
             "model_family": "facility_burden_forecasting",

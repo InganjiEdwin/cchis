@@ -1,24 +1,65 @@
+x-backend-environment: &backend-environment
+  SECRET_KEY: ${SECRET_KEY:-local-only-development-key-change-before-sharing}
+  DEBUG: ${CCHIS_DEBUG:-True}
+  CCHIS_ENVIRONMENT: ${CCHIS_ENVIRONMENT:-local}
+  ALLOWED_HOSTS: "${ALLOWED_HOSTS:-127.0.0.1,localhost},backend"
+  CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+  CORS_ALLOW_ALL_ORIGINS: ${CORS_ALLOW_ALL_ORIGINS:-False}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+  CORS_ALLOW_CREDENTIALS: ${CORS_ALLOW_CREDENTIALS:-True}
+  FRONTEND_APP_URL: ${FRONTEND_APP_URL:-http://localhost:3000}
+  AUTH_TOKEN_RESPONSE_MODE: ${AUTH_TOKEN_RESPONSE_MODE:-body_and_cookie}
+  AUTH_ACCESS_COOKIE_NAME: ${AUTH_ACCESS_COOKIE_NAME:-cchis_access}
+  AUTH_REFRESH_COOKIE_NAME: ${AUTH_REFRESH_COOKIE_NAME:-cchis_refresh}
+  AUTH_ACCESS_COOKIE_PATH: ${AUTH_ACCESS_COOKIE_PATH:-/}
+  AUTH_REFRESH_COOKIE_PATH: ${AUTH_REFRESH_COOKIE_PATH:-/}
+  AUTH_ACCESS_COOKIE_SECURE: ${AUTH_ACCESS_COOKIE_SECURE:-False}
+  AUTH_REFRESH_COOKIE_SECURE: ${AUTH_REFRESH_COOKIE_SECURE:-False}
+  AUTH_ACCESS_COOKIE_HTTPONLY: ${AUTH_ACCESS_COOKIE_HTTPONLY:-True}
+  AUTH_REFRESH_COOKIE_HTTPONLY: ${AUTH_REFRESH_COOKIE_HTTPONLY:-True}
+  AUTH_ACCESS_COOKIE_SAMESITE: ${AUTH_ACCESS_COOKIE_SAMESITE:-Lax}
+  AUTH_REFRESH_COOKIE_SAMESITE: ${AUTH_REFRESH_COOKIE_SAMESITE:-Lax}
+  SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-False}
+  CSRF_COOKIE_SECURE: ${CSRF_COOKIE_SECURE:-False}
+  SECURE_SSL_REDIRECT: ${SECURE_SSL_REDIRECT:-False}
+  SECURE_SSL_REDIRECT_REVERSE_PROXY_EXEMPTION: ${SECURE_SSL_REDIRECT_REVERSE_PROXY_EXEMPTION:-False}
+  SECURE_HSTS_SECONDS: ${SECURE_HSTS_SECONDS:-0}
+  USE_X_FORWARDED_HOST: ${USE_X_FORWARDED_HOST:-False}
+  TRUST_X_FORWARDED_PROTO: ${TRUST_X_FORWARDED_PROTO:-False}
+  TRUST_X_FORWARDED_FOR: ${TRUST_X_FORWARDED_FOR:-False}
+  TRUSTED_PROXY_CONFIGURED: ${TRUSTED_PROXY_CONFIGURED:-False}
+  EMAIL_PROVIDER: ${EMAIL_PROVIDER:-stub}
+  SMS_PROVIDER: ${SMS_PROVIDER:-stub}
+  DB_NAME: ${DB_NAME:-cchis_db}
+  DB_USER: ${DB_USER:-postgres}
+  DB_PASSWORD: ${DB_PASSWORD:-postgres}
+  DB_HOST: ${DB_HOST:-db}
+  DB_PORT: ${DB_PORT:-5432}
+  CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+  CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+  CHANNEL_REDIS_URL: ${CHANNEL_REDIS_URL:-redis://redis:6379/0}
+  SOURCE_DATA_UPLOAD_ROOT: ${SOURCE_DATA_UPLOAD_ROOT:-/var/lib/cchis/source_uploads}
+
 services:
   db:
     image: postgis/postgis:16-3.4-alpine
     platform: linux/amd64
     container_name: cchis_db
     restart: unless-stopped
-    env_file:
-      - ./.env
     environment:
-      POSTGRES_DB: ${DB_NAME}
-      POSTGRES_USER: ${DB_USER}
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME:-cchis_db}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 5s
 
   redis:
     image: redis:7-alpine
@@ -26,6 +67,11 @@ services:
     restart: unless-stopped
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   backend:
     build:
@@ -33,21 +79,26 @@ services:
     container_name: cchis_backend
     restart: unless-stopped
     command: sh -c "daphne -b 0.0.0.0 -p 8000 core.asgi:application"
+    environment: *backend-environment
     volumes:
       - ./backend:/app
       - ./frontend:/frontend:ro
       - ./docs:/docs:ro
       - ./docker-compose.yml:/docker-compose.yml:ro
       - source_uploads:/var/lib/cchis/source_uploads
-    env_file:
-      - ./.env
     ports:
       - "8000:8000"
     depends_on:
       db:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready/', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
 
   celery_worker:
     build:
@@ -55,39 +106,71 @@ services:
     container_name: cchis_celery_worker
     restart: unless-stopped
     command: sh -c "celery -A core worker --loglevel=INFO"
+    environment: *backend-environment
     volumes:
       - ./backend:/app
       - ./frontend:/frontend:ro
       - ./docs:/docs:ro
       - ./docker-compose.yml:/docker-compose.yml:ro
       - source_uploads:/var/lib/cchis/source_uploads
-    env_file:
-      - ./.env
     depends_on:
       db:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A core inspect ping --timeout=5 | grep -q pong"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 20s
 
   celery_beat:
     build:
       context: ./backend
     container_name: cchis_celery_beat
     restart: unless-stopped
-    command: sh -c "celery -A core beat --loglevel=INFO"
+    command: sh -c "mkdir -p /var/run/cchis/celerybeat && celery -A core beat --loglevel=INFO --schedule=/var/run/cchis/celerybeat/celerybeat-schedule"
+    environment: *backend-environment
     volumes:
       - ./backend:/app
       - ./frontend:/frontend:ro
       - ./docs:/docs:ro
       - ./docker-compose.yml:/docker-compose.yml:ro
-    env_file:
-      - ./.env
+      - celerybeat_runtime:/var/run/cchis/celerybeat
     depends_on:
       db:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: cchis_frontend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      CCHIS_ENVIRONMENT: ${CCHIS_ENVIRONMENT:-local}
+      NEXT_PUBLIC_CCHIS_ENVIRONMENT: ${NEXT_PUBLIC_CCHIS_ENVIRONMENT:-local}
+      FRONTEND_APP_URL: ${FRONTEND_APP_URL:-http://localhost:3000}
+      NEXT_PUBLIC_FRONTEND_APP_URL: ${NEXT_PUBLIC_FRONTEND_APP_URL:-http://localhost:3000}
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000/api/v1}
+      BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://backend:8000/api/v1}
+      CCHIS_CSP_ENABLED: ${CCHIS_CSP_ENABLED:-False}
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
 
 volumes:
   postgres_data:
   source_uploads:
+  celerybeat_runtime:

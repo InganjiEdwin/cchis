@@ -4,6 +4,10 @@ CCHIS is an open-source, AI-assisted public health platform focused on predictin
 
 This repository currently contains the backend foundation for that platform: authenticated APIs, risk data workflows, async processing, CHV support endpoints, and low-connectivity access patterns.
 
+## Safety and evidence documentation
+
+The implementation is decision-support software, not a diagnostic or autonomous public-health authority. Read [MODEL_CARD.md](MODEL_CARD.md) for model scope, evaluation limits, truth gates, and human oversight; [DATASET_CARD.md](DATASET_CARD.md) for source provenance, privacy, proxy, freshness, and production-eligibility contracts; and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations. Security reports belong in [SECURITY.md](SECURITY.md), not public issues.
+
 ## Why This Matters
 
 Flood-prone regions such as Migori County in Kenya face recurring cholera outbreaks driven by climate variability and extreme weather events. In many settings, response systems are still reactive, fragmented, and slow to act.

@@ -1,0 +1,14 @@
+node_modules
+.next
+coverage
+dist
+build
+test-artifacts
+tsconfig.tsbuildinfo
+.npm-cache
+.npm
+.git
+.env
+.env.*
+!.env.example
+npm-debug.log*

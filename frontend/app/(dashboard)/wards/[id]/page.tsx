@@ -681,7 +681,10 @@ export default function WardDetailPage() {
   const falseMissedReview = operationalEvidence?.false_missed_review ?? null;
   const chvActionStatus = operationalEvidence?.chv_action_status ?? null;
   const outcomeFeedback = operationalEvidence?.outcome_feedback ?? null;
-  const preparednessActions = detail?.preparednessActions ?? [];
+  const preparednessActions = useMemo(
+    () => detail?.preparednessActions ?? [],
+    [detail?.preparednessActions],
+  );
   const preparednessActionSummary = useMemo(
     () => getPreparednessActionSummary(preparednessActions),
     [preparednessActions],

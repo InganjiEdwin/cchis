@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from uuid import uuid4
 
 from django.db import transaction
@@ -27,6 +28,7 @@ from .model import (
 )
 from .decision_policy import current_ward_risk_decision_policy, evaluate_ward_risk_decision_policy
 from .trust import alerts_allowed_for_snapshot, build_operational_trust_snapshot, predictions_blocked_for_snapshot
+from ..truth_policy import production_feature_dataset_blockers
 
 
 ml_logger = logging.getLogger("risk.ml")
@@ -65,8 +67,11 @@ def _persist_blocked_model_run(
     execution_context: str,
     run_purpose: str,
     decision_policy: dict,
+    blocked_reason_codes: list[str] | None = None,
+    blocked_by_trust_policy: bool = True,
 ) -> ModelRun:
     blocked_at = timezone.now()
+    blocked_reason_codes = list(blocked_reason_codes or [])
     surveillance_label_metadata = _surveillance_label_metadata(training_dataset)
     requested_alert_eligible = alert_eligible
     live_promotion_policy = _live_promotion_policy(
@@ -85,7 +90,8 @@ def _persist_blocked_model_run(
         training_row_count=len(training_rows),
         inference_row_count=len(inference_rows),
         evaluation_metrics={
-            "blocked_by_trust_policy": True,
+            "blocked_by_trust_policy": blocked_by_trust_policy,
+            "blocked_reason_codes": blocked_reason_codes,
             "blocked_at": blocked_at.isoformat(),
             "surveillance_lead_time_validation": surveillance_label_metadata["surveillance_lead_time_validation"],
             "decision_policy_version": decision_policy["policy_version"],
@@ -114,7 +120,12 @@ def _persist_blocked_model_run(
             "operational_trust": operational_trust,
             "automatic_alerts_blocked_by_trust_policy": requested_trigger_alerts,
             "automatic_alerts_blocked_by_promotion_policy": requested_trigger_alerts and requested_alert_eligible,
-            "scoring_blocked_by_trust_policy": True,
+            "scoring_blocked_by_trust_policy": blocked_by_trust_policy,
+            "scoring_blocked_by_truth_policy": bool(blocked_reason_codes),
+            "production_truth_policy": {
+                "blocked_reason_codes": blocked_reason_codes,
+                "fail_closed": bool(blocked_reason_codes),
+            },
             "decision_policy": {
                 "schema_version": decision_policy["schema_version"],
                 "policy_version": decision_policy["policy_version"],
@@ -467,9 +478,10 @@ def run_mock_prediction_pipeline(
     execution_context: str = "manual_command",
     run_purpose: str | None = None,
     include_seeded_training_labels: bool = False,
+    as_of: datetime | None = None,
 ) -> list[RiskScore]:
     wards = Ward.objects.filter(is_active=True).order_by("name")
-    inference_dataset = build_inference_feature_dataset(wards, month=month)
+    inference_dataset = build_inference_feature_dataset(wards, month=month, as_of=as_of)
     inference_rows = inference_dataset.rows
     training_dataset = build_training_feature_dataset(
         month=month,
@@ -482,6 +494,11 @@ def run_mock_prediction_pipeline(
     alert_algorithm = _default_alert_algorithm(algorithm, alert_algorithm)
     run_purpose = _default_run_purpose(algorithm, run_purpose)
     operational_trust = build_operational_trust_snapshot(inference_dataset.rainfall_ingestion_run)
+    trust_blocked = predictions_blocked_for_snapshot(operational_trust)
+    production_truth_blockers = production_feature_dataset_blockers(
+        training_dataset=training_dataset,
+        inference_dataset=inference_dataset,
+    )
     decision_policy = current_ward_risk_decision_policy()
 
     ml_logger.info(
@@ -497,7 +514,11 @@ def run_mock_prediction_pipeline(
         },
     )
 
-    if predictions_blocked_for_snapshot(operational_trust):
+    if trust_blocked or production_truth_blockers:
+        blocked_reason_codes = [
+            *(["operational_etl_trust_policy"] if trust_blocked else []),
+            *production_truth_blockers,
+        ]
         ml_logger.warning(
             "risk_model_run_blocked_by_etl_trust_policy",
             extra={
@@ -524,6 +545,8 @@ def run_mock_prediction_pipeline(
                 execution_context=execution_context,
                 run_purpose=run_purpose,
                 decision_policy=decision_policy,
+                blocked_reason_codes=blocked_reason_codes,
+                blocked_by_trust_policy=trust_blocked,
             )
             if dual_model:
                 _persist_blocked_model_run(
@@ -542,6 +565,8 @@ def run_mock_prediction_pipeline(
                     execution_context=execution_context,
                     run_purpose="benchmark_scoring",
                     decision_policy=decision_policy,
+                    blocked_reason_codes=blocked_reason_codes,
+                    blocked_by_trust_policy=trust_blocked,
                 )
         return []
 

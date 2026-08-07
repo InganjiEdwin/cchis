@@ -35,6 +35,7 @@ from risk.surveillance_labels import (
     SURVEILLANCE_LABEL_SCHEMA_VERSION,
     build_surveillance_label_dataset,
 )
+from risk.truth_policy import require_seeded_truth_allowed
 
 
 SOURCE_DATA_DOWNSTREAM_SCHEMA_VERSION = "source-data-downstream-actions-v1"
@@ -303,6 +304,10 @@ def _run_surveillance_label_action(
         raise ValueError("No canonical surveillance records are linked to this ingestion run.")
 
     as_of = _require_explicit_as_of(options, action_label="Surveillance label regeneration")
+    require_seeded_truth_allowed(
+        "seeded surveillance label regeneration",
+        requested=bool(options.get("include_seeded", False)),
+    )
     wards = Ward.objects.filter(id__in=ward_ids).order_by("name")
     snapshot = build_surveillance_label_dataset(
         wards=wards,
@@ -343,6 +348,10 @@ def _run_feature_rebuild_action(
     *,
     options: dict[str, Any],
 ) -> dict[str, Any]:
+    require_seeded_truth_allowed(
+        "seeded surveillance lead-time feature generation",
+        requested=bool(options.get("include_seeded_surveillance", False)),
+    )
     as_of = _require_explicit_as_of(options, action_label="Lead-time feature rebuild")
     _require_explicit_prediction_window(options, action_label="Lead-time feature rebuild")
     prediction_dates = _normalise_prediction_dates(options)

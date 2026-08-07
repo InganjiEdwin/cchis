@@ -3,7 +3,7 @@ from datetime import date
 from io import StringIO
 
 from django.core.management import call_command
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from risk.models import (
     FeatureDataset,
@@ -75,6 +75,31 @@ class SurveillanceIngestionPhaseTwoTestCase(TestCase):
         self.assertEqual(inspection["unknown_columns"], ["unexpected_note"])
         self.assertEqual(SurveillanceSource.objects.count(), 0)
         self.assertEqual(SurveillanceIngestionRun.objects.count(), 0)
+
+    @override_settings(CCHIS_ENVIRONMENT="production")
+    def test_production_unmapped_or_inactive_ward_fails_before_canonical_persistence(self):
+        self.ward.is_active = False
+        self.ward.save(update_fields=["is_active"])
+        with tempfile.NamedTemporaryFile("w", suffix=".csv") as csv_file:
+            csv_file.write(
+                "ward_code,reporting_period_start,reporting_period_end,suspected_cholera_count,source_ref\n"
+                "KE-MIG-NK,2026-04-01,2026-04-07,5,production.csv\n"
+            )
+            csv_file.flush()
+            run = run_surveillance_csv_ingestion(
+                file_path=csv_file.name,
+                source_name="county-weekly-report",
+                source_type=SurveillanceSource.SOURCE_TYPE_WEEKLY_AGGREGATE,
+            )
+
+        self.assertEqual(run.status, SurveillanceIngestionRun.STATUS_FAILED)
+        self.assertEqual(run.error_summary, "production_unmapped_ward_blocked")
+        self.assertFalse(run.results["canonical_records_persisted"])
+        self.assertEqual(
+            run.results["production_truth_policy"]["blocked_reason_codes"],
+            ["production_unmapped_ward_blocked"],
+        )
+        self.assertEqual(SurveillanceRecord.objects.count(), 0)
 
     def test_run_surveillance_csv_ingestion_persists_source_run_and_correction_metadata(self):
         with tempfile.NamedTemporaryFile("w", suffix=".csv") as csv_file:

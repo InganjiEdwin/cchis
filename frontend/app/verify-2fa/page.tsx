@@ -3,7 +3,7 @@
 import { ArrowLeft, CircleAlert, KeyRound, ShieldAlert } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ClipboardEvent, FormEvent, useEffect, useRef, useState } from "react";
+import { ClipboardEvent, FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
@@ -60,7 +60,7 @@ export default function VerifyTwoFactorPage() {
     return () => window.cancelAnimationFrame(frame);
   }, [isHydrating, pendingTwoFactor]);
 
-  async function submitCode(codeToVerify: string, mode: VerificationMode = verificationMode) {
+  const submitCode = useCallback(async (codeToVerify: string, mode: VerificationMode = verificationMode) => {
     const isCompleteCode =
       mode === "totp" ? codeToVerify.length === 6 : getRecoveryCodeLength(codeToVerify) === RECOVERY_CODE_NORMALIZED_LENGTH;
     const submissionKey = `${mode}:${codeToVerify}`;
@@ -100,7 +100,7 @@ export default function VerifyTwoFactorPage() {
     } finally {
       setIsSubmitting(false);
     }
-  }
+  }, [isSubmitting, pendingTwoFactor, router, verificationMode, verifyTwoFactor]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -129,7 +129,7 @@ export default function VerifyTwoFactorPage() {
     }
 
     lastSubmittedCodeRef.current = null;
-  }, [code, pendingTwoFactor, verificationMode]);
+  }, [code, pendingTwoFactor, submitCode, verificationMode]);
 
   function handleModeChange(nextMode: VerificationMode) {
     setVerificationMode(nextMode);

@@ -1,7 +1,8 @@
 import tempfile
-from datetime import date
+from datetime import timedelta
 
 from django.test import TestCase
+from django.utils import timezone
 
 from risk.facility_forecasting import run_facility_burden_forecast_pipeline
 from risk.ml.data import SURVEILLANCE_REFERENCE_ONLY_LABEL_USAGE, build_inference_feature_dataset
@@ -17,11 +18,14 @@ from risk.models import (
 )
 from risk.services import build_alert_intelligence_snapshot, create_alerts_for_riskscore, sync_alert_workflow_for_ward
 from risk.surveillance_ingestion import run_surveillance_csv_ingestion
+from risk.surveillance_features import build_surveillance_feature_snapshot
 from risk.surveillance_labels import build_surveillance_label_dataset
 
 
 class SurveillancePhaseFiveIntegrationTestCase(TestCase):
     def setUp(self):
+        self.reference_date = timezone.localdate() - timedelta(days=1)
+        self.as_of = None
         self.ward = Ward.objects.create(
             name="North Kamagambo",
             county="Migori",
@@ -70,28 +74,31 @@ class SurveillancePhaseFiveIntegrationTestCase(TestCase):
                 "suspected_cholera_count,confirmed_cholera_count,diarrheal_count,source_ref\n"
             )
             csv_file.write(
-                f"KE-MIG-NK,2026-04-20,2026-04-26,{suspected_cell},{confirmed_cell},{proxy_cell},phase5.csv\n"
+                f"KE-MIG-NK,{self.reference_date - timedelta(days=6)},{self.reference_date},"
+                f"{suspected_cell},{confirmed_cell},{proxy_cell},phase5.csv\n"
             )
             csv_file.flush()
             return run_surveillance_csv_ingestion(
                 file_path=csv_file.name,
                 source_name=source_name,
                 source_type=SurveillanceSource.SOURCE_TYPE_WEEKLY_AGGREGATE,
-                source_timestamp="2026-04-27T00:00:00+03:00",
+                source_timestamp=f"{self.reference_date + timedelta(days=1)}T00:00:00+03:00",
             )
 
     def _build_labels(self, *, dataset_role="evaluation"):
-        return build_surveillance_label_dataset(
-            start_date=date(2026, 4, 20),
-            end_date=date(2026, 4, 26),
+        dataset = build_surveillance_label_dataset(
+            start_date=self.reference_date - timedelta(days=6),
+            end_date=self.reference_date,
             dataset_role=dataset_role,
         )
+        self.as_of = timezone.now()
+        return dataset
 
     def test_inference_feature_dataset_exposes_surveillance_context_and_truth_gate(self):
         self._ingest_surveillance_csv(suspected=7, confirmed=2, proxy=5)
         self._build_labels(dataset_role="evaluation")
 
-        snapshot = build_inference_feature_dataset([self.ward], month=4)
+        snapshot = build_inference_feature_dataset([self.ward], month=4, as_of=self.as_of)
 
         row = FeatureDatasetRow.objects.get(dataset=snapshot.feature_dataset)
         self.assertEqual(row.feature_values["surveillance_recent_suspected_cases_28d"], 7)
@@ -110,11 +117,26 @@ class SurveillancePhaseFiveIntegrationTestCase(TestCase):
             snapshot.feature_dataset.lineage_metadata["surveillance_truth_gate"]["proxy_only_as_confirmed_allowed"]
         )
 
+    def test_surveillance_snapshot_uses_reference_date_and_ages_out_after_calendar_advance(self):
+        self._ingest_surveillance_csv(suspected=7, confirmed=2, proxy=5)
+        self._build_labels(dataset_role="evaluation")
+
+        current_snapshot = build_surveillance_feature_snapshot([self.ward], as_of=self.as_of)
+        advanced_snapshot = build_surveillance_feature_snapshot(
+            [self.ward],
+            as_of=self.as_of + timedelta(days=180),
+        )
+
+        self.assertEqual(current_snapshot.coverage["record_count"], 3)
+        self.assertEqual(current_snapshot.coverage["label_window_count"], 1)
+        self.assertEqual(advanced_snapshot.coverage["record_count"], 0)
+        self.assertEqual(advanced_snapshot.coverage["label_window_count"], 0)
+
     def test_model_run_records_surveillance_lead_time_validation_gate(self):
         self._ingest_surveillance_csv(suspected=4, confirmed=1)
         self._build_labels(dataset_role="training")
 
-        run_mock_prediction_pipeline(month=4, model_version="lr-phase5-surveillance-v1")
+        run_mock_prediction_pipeline(month=4, model_version="lr-phase5-surveillance-v1", as_of=self.as_of)
 
         model_run = ModelRun.objects.get(model_version="lr-phase5-surveillance-v1")
         validation = model_run.evaluation_metrics["surveillance_lead_time_validation"]
@@ -134,7 +156,10 @@ class SurveillancePhaseFiveIntegrationTestCase(TestCase):
         self._ingest_surveillance_csv(suspected=9, confirmed=1, proxy=4)
         self._build_labels(dataset_role="evaluation")
 
-        run = run_facility_burden_forecast_pipeline(model_version="fnb-phase5-surveillance-v1")
+        run = run_facility_burden_forecast_pipeline(
+            model_version="fnb-phase5-surveillance-v1",
+            as_of=self.as_of,
+        )
 
         forecast = FacilityForecast.objects.get(forecast_run=run, facility=self.facility)
         factor_sources = {factor["source"] for factor in forecast.forecast_factors}
@@ -151,7 +176,7 @@ class SurveillancePhaseFiveIntegrationTestCase(TestCase):
         )
         self._build_labels(dataset_role="evaluation")
 
-        workflow = sync_alert_workflow_for_ward(self.ward)
+        workflow = sync_alert_workflow_for_ward(self.ward, as_of=self.as_of)
         labels = {item["label"] for item in workflow.trigger_reason_items}
         self.assertIn("Proxy-only surveillance evidence", labels)
         self.assertEqual(
@@ -159,7 +184,7 @@ class SurveillancePhaseFiveIntegrationTestCase(TestCase):
             "proxy_only_not_confirmed",
         )
 
-        alert = create_alerts_for_riskscore(self.risk_score)[0]
+        alert = create_alerts_for_riskscore(self.risk_score, as_of=self.as_of)[0]
         snapshot = build_alert_intelligence_snapshot(alert)
 
         self.assertEqual(snapshot["surveillance_evidence"]["label_truth_state"], "proxy_only_not_confirmed")

@@ -2182,7 +2182,7 @@ function SourceDataContent() {
   const activeUploadId = selectedUploadId ?? latestUploadId;
   const selectedUploadQuery = useSourceDataUploadQuery(activeUploadId);
   const contractErrors = data?.template_contract_errors ?? [];
-  const mvpFeeds = data?.feeds ?? [];
+  const mvpFeeds = useMemo(() => data?.feeds ?? [], [data?.feeds]);
   const selectedUpload = selectedUploadQuery.data ?? uploadsQuery.data?.results.find((item) => item.public_id === activeUploadId);
   const canManageImports = hasActionCapability(currentUser, "manage_source_data_imports");
   const canApproveRiskyImports = hasActionCapability(currentUser, "approve_source_data_risky_imports");

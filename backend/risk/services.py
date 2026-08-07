@@ -67,6 +67,7 @@ from .population_exposure_features import (
 from .privacy_access import mask_contact_value, redact_direct_identifiers_in_text, user_can_view_direct_identifiers
 from .providers import DeliveryResult, get_sms_provider
 from .surveillance_features import build_surveillance_feature_context_for_ward
+from .truth_policy import production_model_run_blockers, require_demo_data_allowed
 
 
 alerts_logger = logging.getLogger("risk.alerts")
@@ -1438,8 +1439,8 @@ def _why_this_might_need_an_alert(workflow: AlertWorkflowState) -> list[str]:
     return reasons
 
 
-def _surveillance_alert_evidence_for_ward(ward: Ward) -> dict:
-    context = build_surveillance_feature_context_for_ward(ward)
+def _surveillance_alert_evidence_for_ward(ward: Ward, *, as_of=None) -> dict:
+    context = build_surveillance_feature_context_for_ward(ward, as_of=as_of)
     return {
         "schema_version": context["schema_version"],
         "ward_id": ward.id,
@@ -1512,7 +1513,14 @@ def _surveillance_trigger_reason_items(evidence: dict) -> list[dict]:
     return items
 
 
-def _workflow_payload_for_ward(ward: Ward, latest_risk: RiskScore | None, alerts: list[Alert], *, manual_request_queued_at=None) -> dict:
+def _workflow_payload_for_ward(
+    ward: Ward,
+    latest_risk: RiskScore | None,
+    alerts: list[Alert],
+    *,
+    manual_request_queued_at=None,
+    as_of=None,
+) -> dict:
     delivery_state = _workflow_alert_delivery_state(alerts)
     active_alert_count = len(alerts)
     delivered_alert_count = sum(1 for alert in alerts if alert.status == Alert.STATUS_DELIVERED)
@@ -1528,7 +1536,7 @@ def _workflow_payload_for_ward(ward: Ward, latest_risk: RiskScore | None, alerts
     has_decision_policy_trace = bool(
         decision_policy.get("policy_version") or decision_policy.get("schema_version") or alert_decision
     )
-    surveillance_evidence = _surveillance_alert_evidence_for_ward(ward)
+    surveillance_evidence = _surveillance_alert_evidence_for_ward(ward, as_of=as_of)
 
     timestamps = [value for value in [manual_request_queued_at, latest_risk.generated_at if latest_risk else None, *(alert.created_at for alert in alerts)] if value]
     triggered_at = max(timestamps) if timestamps else None
@@ -1819,10 +1827,17 @@ def sync_alert_workflow_for_ward(
     manual_request_queued_at=None,
     record_event: bool = True,
     event_metadata: dict | None = None,
+    as_of=None,
 ) -> AlertWorkflowState:
     latest_risk = latest_promoted_riskscore_for_ward(ward)
     alerts = list(ward.alerts.select_related("risk_score").order_by("-created_at")[:12])
-    payload = _workflow_payload_for_ward(ward, latest_risk, alerts, manual_request_queued_at=manual_request_queued_at)
+    payload = _workflow_payload_for_ward(
+        ward,
+        latest_risk,
+        alerts,
+        manual_request_queued_at=manual_request_queued_at,
+        as_of=as_of,
+    )
     workflow, created = AlertWorkflowState.objects.get_or_create(ward=ward, defaults=payload)
     old_status = workflow.status
     if not created:
@@ -1850,10 +1865,10 @@ def sync_alert_workflow_for_ward(
     return workflow
 
 
-def sync_alert_workflows_for_wards(wards) -> list[AlertWorkflowState]:
+def sync_alert_workflows_for_wards(wards, *, as_of=None) -> list[AlertWorkflowState]:
     workflows: list[AlertWorkflowState] = []
     for ward in wards:
-        workflow = sync_alert_workflow_for_ward(ward)
+        workflow = sync_alert_workflow_for_ward(ward, as_of=as_of)
         if workflow.status != AlertWorkflowState.STATUS_RESOLVED or workflow.active_alert_count > 0:
             workflows.append(workflow)
     return workflows
@@ -2845,7 +2860,12 @@ def create_alerts_for_riskscore(
     template_context: dict | None = None,
     template_audience_type: str = MessageTemplate.AUDIENCE_CHV,
     template_channel: str = MessageTemplate.CHANNEL_SMS,
+    as_of=None,
 ) -> list[Alert]:
+    if risk_score.model_run_id:
+        truth_blockers = production_model_run_blockers(risk_score.model_run)
+        if truth_blockers:
+            raise ValueError(f"production_truth_policy_blocked:{','.join(truth_blockers)}")
     if risk_score.model_run_id and not is_promoted_model_run(risk_score.model_run):
         raise ValueError("Alerts can only be created for the active promoted model run.")
 
@@ -2854,7 +2874,7 @@ def create_alerts_for_riskscore(
     request_metadata = {
         **(guided_request_metadata or {}),
         "surveillance_evidence": (guided_request_metadata or {}).get("surveillance_evidence")
-        or _surveillance_alert_evidence_for_ward(ward),
+        or _surveillance_alert_evidence_for_ward(ward, as_of=as_of),
         "model_run_evidence": (guided_request_metadata or {}).get("model_run_evidence")
         or _model_run_alert_evidence_for_riskscore(risk_score),
         "climate_evidence": (guided_request_metadata or {}).get("climate_evidence")
@@ -3031,7 +3051,7 @@ def create_alerts_for_riskscore(
         },
     )
 
-    sync_alert_workflow_for_ward(ward)
+    sync_alert_workflow_for_ward(ward, as_of=as_of)
     return alerts_created
 
 
@@ -3372,6 +3392,7 @@ def build_alert_intelligence_snapshot(
     ward_detail: Ward | None = None,
     stale_threshold_minutes: int = 30,
     user=None,
+    as_of=None,
 ) -> dict:
     request_metadata = alert.guided_request_metadata or {}
     if not request_metadata:
@@ -3519,7 +3540,10 @@ def build_alert_intelligence_snapshot(
             "trigger_type": "",
             "preview_text": "",
         }
-    surveillance_evidence = request_metadata.get("surveillance_evidence") or _surveillance_alert_evidence_for_ward(alert.ward)
+    surveillance_evidence = request_metadata.get("surveillance_evidence") or _surveillance_alert_evidence_for_ward(
+        alert.ward,
+        as_of=as_of,
+    )
     climate_evidence = request_metadata.get("climate_evidence") or (
         _climate_alert_evidence_for_riskscore(alert.risk_score) if alert.risk_score_id else {}
     )
@@ -8919,6 +8943,7 @@ def cancel_chv_assignment(assignment: CHVAssignment, *, actor, notes: str = "") 
 
 
 def run_dashboard_scenario_simulation(*, scenario_id: str, created_by, rainfall_uplift_percent: int = 20, response_delay_hours: int = 12) -> ScenarioSimulationRun:
+    require_demo_data_allowed("dashboard scenario simulation")
     wards = list(Ward.objects.filter(is_active=True).order_by("name"))
     ward_results: list[dict] = []
     facility_results: list[dict] = []

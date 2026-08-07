@@ -25,6 +25,7 @@ from risk.models import (
     SurveillanceTruthLevel,
     Ward,
 )
+from risk.truth_policy import require_seeded_truth_allowed
 
 
 SURVEILLANCE_LABEL_SCHEMA_VERSION = "surveillance-label-v1"
@@ -394,6 +395,10 @@ def build_surveillance_label_dataset(
 ) -> SurveillanceLabelDatasetSnapshot:
     if dataset_role not in {"training", "evaluation"}:
         raise ValueError("dataset_role must be either 'training' or 'evaluation'.")
+    require_seeded_truth_allowed(
+        "seeded surveillance label generation",
+        requested=include_seeded,
+    )
 
     as_of = _normalise_as_of(as_of)
     ward_list = list(wards) if wards is not None else list(Ward.objects.filter(is_active=True).order_by("name"))
@@ -543,6 +548,10 @@ def build_surveillance_lead_time_label_dataset(
 ) -> SurveillanceLeadTimeLabelDatasetSnapshot:
     if dataset_role not in {"training", "evaluation"}:
         raise ValueError("dataset_role must be either 'training' or 'evaluation'.")
+    require_seeded_truth_allowed(
+        "seeded surveillance lead-time label generation",
+        requested=include_seeded,
+    )
     if lead_time_start_days < 0:
         raise ValueError("lead_time_start_days cannot be negative.")
     if lead_time_end_days < lead_time_start_days:

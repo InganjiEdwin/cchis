@@ -181,8 +181,10 @@ SOURCE_DATA_CONNECTOR_REFRESH_MINUTE = config("SOURCE_DATA_CONNECTOR_REFRESH_MIN
 
 USE_X_FORWARDED_HOST = config("USE_X_FORWARDED_HOST", cast=bool, default=False)
 TRUST_X_FORWARDED_FOR = config("TRUST_X_FORWARDED_FOR", cast=bool, default=False)
+TRUST_X_FORWARDED_PROTO = config("TRUST_X_FORWARDED_PROTO", cast=bool, default=False)
+TRUSTED_PROXY_CONFIGURED = config("TRUSTED_PROXY_CONFIGURED", cast=bool, default=False)
 
-if config("TRUST_X_FORWARDED_PROTO", cast=bool, default=False):
+if TRUST_X_FORWARDED_PROTO:
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 else:
     SECURE_PROXY_SSL_HEADER = None
@@ -502,11 +504,50 @@ def collect_shared_environment_security_errors(
     auth_access_cookie_name: str,
     auth_access_cookie_path: str,
     auth_token_response_mode: str,
+    debug: bool | None = None,
+    secret_key: str | None = None,
+    csrf_trusted_origins: list[str] | None = None,
+    use_x_forwarded_host: bool | None = None,
+    trust_x_forwarded_for: bool | None = None,
+    trust_x_forwarded_proto: bool | None = None,
+    secure_proxy_ssl_header: tuple | None = None,
+    trusted_proxy_configured: bool | None = None,
+    email_provider: str | None = None,
+    sms_provider: str | None = None,
 ) -> list[str]:
     if environment not in {"staging", "production"}:
         return []
 
     errors = []
+    if environment == "production" and debug is True:
+        errors.append("DEBUG must be False in production.")
+    if secret_key is not None:
+        normalized_secret = secret_key.strip().lower()
+        weak_secret_placeholders = {
+            "change-me",
+            "change_me",
+            "replace-me",
+            "replace_me",
+            "secret",
+            "secret-key",
+            "your-secret-key",
+        }
+        placeholder_markers = (
+            "change",
+            "replace",
+            "your-",
+            "example",
+            "placeholder",
+            "random-characters",
+        )
+        if (
+            len(secret_key.strip()) < 50
+            or len(set(secret_key.strip())) < 5
+            or normalized_secret in weak_secret_placeholders
+            or normalized_secret.startswith("django-insecure")
+            or any(marker in normalized_secret for marker in placeholder_markers)
+        ):
+            errors.append("SECRET_KEY must be a long, non-placeholder secret in shared environments.")
     if not auth_refresh_cookie_secure:
         errors.append("AUTH_REFRESH_COOKIE_SECURE must be True.")
     if not auth_access_cookie_secure:
@@ -535,14 +576,36 @@ def collect_shared_environment_security_errors(
         )
     if secure_hsts_seconds <= 0:
         errors.append("SECURE_HSTS_SECONDS must be greater than 0.")
+    if not allowed_hosts:
+        errors.append("ALLOWED_HOSTS must contain at least one explicit host.")
     if any("*" in host or host.startswith(".") for host in allowed_hosts):
         errors.append("ALLOWED_HOSTS must not contain wildcard hosts.")
+    if csrf_trusted_origins is not None:
+        if not csrf_trusted_origins:
+            errors.append("CSRF_TRUSTED_ORIGINS must contain at least one explicit HTTPS origin.")
+        for origin in csrf_trusted_origins:
+            parsed_origin = urlparse(origin)
+            if parsed_origin.scheme != "https" or not parsed_origin.netloc or "*" in origin:
+                errors.append("CSRF_TRUSTED_ORIGINS must contain explicit HTTPS origins without wildcards.")
+                break
     if cors_allow_all_origins or any("*" in origin for origin in cors_allowed_origins):
         errors.append("CORS must not allow wildcard origins.")
     if auth_refresh_cookie_name.startswith("__Host-") and auth_refresh_cookie_path != "/":
         errors.append("__Host- refresh cookies must use AUTH_REFRESH_COOKIE_PATH=/.")
     if auth_access_cookie_name.startswith("__Host-") and auth_access_cookie_path != "/":
         errors.append("__Host- access cookies must use AUTH_ACCESS_COOKIE_PATH=/.")
+    forwarded_headers_enabled = any(
+        value is True
+        for value in (use_x_forwarded_host, trust_x_forwarded_for, trust_x_forwarded_proto)
+    )
+    if forwarded_headers_enabled and trusted_proxy_configured is not True:
+        errors.append("Forwarded headers require TRUSTED_PROXY_CONFIGURED=True for an explicit trusted proxy.")
+    if trust_x_forwarded_proto is True and secure_proxy_ssl_header != ("HTTP_X_FORWARDED_PROTO", "https"):
+        errors.append("TRUST_X_FORWARDED_PROTO requires SECURE_PROXY_SSL_HEADER to be configured explicitly.")
+    if email_provider is not None and not email_provider:
+        errors.append("EMAIL_PROVIDER must be explicitly configured outside local environments.")
+    if sms_provider is not None and not sms_provider:
+        errors.append("SMS_PROVIDER must be explicitly configured outside local environments.")
 
     return errors
 
@@ -569,6 +632,16 @@ def enforce_shared_environment_security() -> None:
         auth_access_cookie_name=AUTH_ACCESS_COOKIE_NAME,
         auth_access_cookie_path=AUTH_ACCESS_COOKIE_PATH,
         auth_token_response_mode=AUTH_TOKEN_RESPONSE_MODE,
+        debug=DEBUG,
+        secret_key=SECRET_KEY,
+        csrf_trusted_origins=CSRF_TRUSTED_ORIGINS,
+        use_x_forwarded_host=USE_X_FORWARDED_HOST,
+        trust_x_forwarded_for=TRUST_X_FORWARDED_FOR,
+        trust_x_forwarded_proto=TRUST_X_FORWARDED_PROTO,
+        secure_proxy_ssl_header=SECURE_PROXY_SSL_HEADER,
+        trusted_proxy_configured=TRUSTED_PROXY_CONFIGURED,
+        email_provider=config("EMAIL_PROVIDER", default="stub" if not IS_SHARED_ENVIRONMENT else "").strip().lower(),
+        sms_provider=config("SMS_PROVIDER", default="stub" if not IS_SHARED_ENVIRONMENT else "").strip().lower(),
     )
     if errors:
         raise ImproperlyConfigured(

@@ -242,6 +242,7 @@ from .services import (
     sync_alert_workflows_for_wards,
 )
 from .system_readiness import build_system_readiness_snapshot
+from .truth_policy import ProductionTruthPolicyError
 
 
 alerts_logger = logging.getLogger("risk.alerts")
@@ -3626,12 +3627,18 @@ class ScenarioSimulationRunAPIView(APIView):
         serializer = ScenarioSimulationRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        scenario_run = run_dashboard_scenario_simulation(
-            scenario_id=serializer.validated_data["scenario_id"],
-            created_by=request.user,
-            rainfall_uplift_percent=serializer.validated_data.get("rainfall_uplift_percent", 20),
-            response_delay_hours=serializer.validated_data.get("response_delay_hours", 12),
-        )
+        try:
+            scenario_run = run_dashboard_scenario_simulation(
+                scenario_id=serializer.validated_data["scenario_id"],
+                created_by=request.user,
+                rainfall_uplift_percent=serializer.validated_data.get("rainfall_uplift_percent", 20),
+                response_delay_hours=serializer.validated_data.get("response_delay_hours", 12),
+            )
+        except ProductionTruthPolicyError as error:
+            return Response(
+                {"code": error.code, "detail": error.detail},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         return Response(ScenarioSimulationRunSerializer(scenario_run).data, status=status.HTTP_201_CREATED)
 
 

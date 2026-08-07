@@ -56,9 +56,10 @@ export function StepUpDialogProvider({ children }: { children: React.ReactNode }
   }, [openNextRequest]);
 
   useEffect(() => {
+    const queue = queueRef.current;
     const unregister = registerStepUpHandler((purpose) => (
       new Promise<void>((resolve, reject) => {
-        queueRef.current.push({
+        queue.push({
           id: nextRequestId,
           purpose,
           resolve,
@@ -73,7 +74,7 @@ export function StepUpDialogProvider({ children }: { children: React.ReactNode }
       unregister();
       const cancelError = new StepUpCancelledError();
       activeRequestRef.current?.reject(cancelError);
-      queueRef.current.splice(0).forEach((request) => request.reject(cancelError));
+      queue.splice(0).forEach((request) => request.reject(cancelError));
       activeRequestRef.current = null;
     };
   }, [openNextRequest]);

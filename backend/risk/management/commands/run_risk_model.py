@@ -1,3 +1,5 @@
+from django.conf import settings
+from django.core.management.base import CommandError
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
@@ -78,6 +80,11 @@ class Command(BaseCommand):
             dual_model=dual_model,
         )
         run_purpose = self._default_run_purpose(algorithm=algorithm, dual_model=dual_model)
+
+        if settings.CCHIS_ENVIRONMENT == "production" and include_seeded_training_labels:
+            raise CommandError(
+                "production_seeded_truth_blocked: --include-seeded-training-labels is disabled in production."
+            )
 
         if run_async:
             task = run_risk_model_task.delay(

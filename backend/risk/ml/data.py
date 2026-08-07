@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import uuid4
 from typing import Iterable
 
@@ -577,12 +578,21 @@ def build_training_feature_dataset(
     return TrainingDataset(rows=rows, feature_dataset=dataset, surveillance_label_dataset=surveillance_label_dataset)
 
 
-def build_inference_feature_dataset(wards: Iterable[Ward], month: int) -> InferenceDataset:
+def build_inference_feature_dataset(
+    wards: Iterable[Ward],
+    month: int,
+    *,
+    as_of: datetime | None = None,
+) -> InferenceDataset:
     ward_list = list(wards)
     rainfall_rows, ingestion_run = fetch_rainfall_for_wards(ward_list, return_ingestion_run=True)
     rainfall_lineage_by_ward_id = _rainfall_source_lineage_by_ward_id(ingestion_run)
-    population_exposure_snapshot = build_population_exposure_feature_dataset(ward_list, month=month)
-    surveillance_snapshot = build_surveillance_feature_snapshot(ward_list)
+    population_exposure_snapshot = build_population_exposure_feature_dataset(
+        ward_list,
+        as_of=as_of,
+        month=month,
+    )
+    surveillance_snapshot = build_surveillance_feature_snapshot(ward_list, as_of=as_of)
 
     rows: list[WardFeatureRow] = []
 
@@ -706,6 +716,7 @@ def build_inference_feature_dataset(wards: Iterable[Ward], month: int) -> Infere
         row_count=len(rows),
         lineage_metadata={
             "builder": "build_inference_feature_dataset",
+            "snapshot_as_of": surveillance_snapshot.as_of.isoformat(),
             "rainfall_ingestion_run_id": ingestion_run.id if ingestion_run else None,
             "rainfall_source_kind": ingestion_run.source_kind if ingestion_run else None,
             "population_exposure_dataset_ref": population_exposure_snapshot.feature_dataset.dataset_ref,

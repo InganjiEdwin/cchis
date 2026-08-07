@@ -253,7 +253,7 @@ export default function AlertsPage() {
   const alertsQuery = useAlertsQuery({ enabled: Boolean(currentUser) });
   const createFromAlertMutation = useCreateChvCoverageRequestFromAlertMutation();
   const createCoverageRequestMutation = useCreateChvCoverageRequestMutation();
-  const alerts = alertsQuery.data ?? [];
+  const alerts = useMemo(() => alertsQuery.data ?? [], [alertsQuery.data]);
   const isLoading = alertsQuery.isPending;
   const isRefreshing = alertsQuery.isFetching;
   const error = alertsQuery.error instanceof Error ? alertsQuery.error.message : null;

@@ -433,11 +433,11 @@ export default function ChvsPage() {
   });
   const createCoverageRequestMutation = useCreateChvCoverageRequestMutation();
   const assignCoverageRequestMutation = useAssignChvCoverageRequestMutation();
-  const chvs = data?.chvs ?? [];
-  const latestRisks = data?.latestRisks ?? [];
-  const alerts = data?.alerts ?? [];
+  const chvs = useMemo(() => data?.chvs ?? [], [data?.chvs]);
+  const latestRisks = useMemo(() => data?.latestRisks ?? [], [data?.latestRisks]);
+  const alerts = useMemo(() => data?.alerts ?? [], [data?.alerts]);
   const wardMap = data?.wardMap ?? null;
-  const coverageRequests = data?.coverageRequests ?? [];
+  const coverageRequests = useMemo(() => data?.coverageRequests ?? [], [data?.coverageRequests]);
   const coverageByWard = data?.coverageByWard ?? {};
   const offlineMonitoring = data?.offlineMonitoring ?? null;
   const offlineMetrics = offlineMonitoring?.metrics ?? null;
@@ -445,7 +445,7 @@ export default function ChvsPage() {
   const offlineSyncHealthByWard = offlineMonitoring?.sync_health_by_ward ?? [];
   const recentSyncDecisions = offlineMonitoring?.recent_sync_decisions ?? [];
   const recentRejectedSubmissionAudits = offlineMonitoring?.recent_rejected_submission_audits ?? [];
-  const mapFeatures = wardMap?.features ?? [];
+  const mapFeatures = useMemo(() => wardMap?.features ?? [], [wardMap?.features]);
 
   const latestTimestamp = useMemo(
     () =>
@@ -1491,7 +1491,7 @@ export default function ChvsPage() {
                 <div className="rounded-[1.25rem] border border-panel-table-wrap bg-[color-mix(in_srgb,var(--dashboard-icon-button-surface)_74%,transparent)] px-4 py-3">
                   <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-panel-subtle">Current view</span>
                   <p className="mt-2 text-xs leading-5 text-panel-muted">
-                    Gap means no active CHV coverage, or only 1 active CHV in a high-risk ward. Low means coverage is below the rule for the ward's risk.
+                    Gap means no active CHV coverage, or only 1 active CHV in a high-risk ward. Low means coverage is below the rule for the ward&apos;s risk.
                   </p>
                   <div className="mt-3 space-y-2 text-sm text-panel-copy">
                     <div className="flex items-center justify-between gap-3">

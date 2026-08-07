@@ -1,0 +1,36 @@
+name: Data quality or truth provenance
+description: Report mapping, freshness, correction, proxy, label, or lineage concerns.
+title: "[Data quality]: "
+labels: ["data-quality"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not attach raw line lists or direct identifiers. Use safe references and report sensitive disclosures through [SECURITY.md](../../SECURITY.md).
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - Mapping or inactive geography
+        - Freshness or reporting lag
+        - Correction or supersession
+        - Truth classification or proxy caveat
+        - Source schema or contract
+        - Leakage or cutoff concern
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Safe evidence
+      description: Provide non-sensitive source/run references, dates, and observed lineage metadata.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Downstream impact
+      description: Explain which feature, label, evaluation, alert, or dashboard contract is affected.
+    validations:
+      required: true

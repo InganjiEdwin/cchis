@@ -635,7 +635,10 @@ export function DashboardTopbar({
 
   const themeToggleLabel = effectiveTheme === "DARK" ? "Switch to light mode" : "Switch to dark mode";
   const ThemeToggleIcon = effectiveTheme === "DARK" ? Sun : Moon;
-  const notifications = topbarQuery.data?.notifications ?? [];
+  const notifications = useMemo(
+    () => topbarQuery.data?.notifications ?? [],
+    [topbarQuery.data?.notifications],
+  );
   const unreadCount = topbarQuery.data?.unread_count ?? 0;
   const backendSystemStatus = topbarQuery.data?.system_status;
   const feedStatuses = topbarQuery.data?.feeds ?? [];

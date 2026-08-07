@@ -87,6 +87,10 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        if settings.CCHIS_ENVIRONMENT == "production":
+            raise CommandError(
+                "production_seeded_truth_blocked: seed_e2e_source_feeds is categorically disabled in production."
+            )
         as_of = self._parse_as_of(options["as_of"])
         weeks = options["weeks"]
         if weeks < 2:

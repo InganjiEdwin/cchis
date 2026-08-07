@@ -20,6 +20,7 @@ from .alignment import (
     model_run_has_phase_4_promotion_metadata,
     registry_entry_has_promotion_event_provenance,
 )
+from ..truth_policy import production_model_run_blockers
 
 
 MODEL_REGISTRY_SCHEMA_VERSION = "ward-risk-model-registry-v1"
@@ -108,6 +109,11 @@ def ensure_registry_entry_for_promoted_run(
     source: str = "phase_4_temporal_backtest",
     metadata: dict | None = None,
 ) -> ModelRegistryEntry:
+    truth_blockers = production_model_run_blockers(model_run)
+    if truth_blockers:
+        raise ValueError(
+            f"production_truth_policy_blocked:{','.join(truth_blockers)}"
+        )
     if not model_run_has_phase_4_promotion_metadata(model_run):
         raise ValueError("model_run_not_phase_4_promoted")
 

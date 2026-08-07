@@ -85,6 +85,11 @@ class Command(BaseCommand):
                 self.stdout.write(f"- {item}")
             return
 
+        if settings.CCHIS_ENVIRONMENT == "production":
+            raise CommandError(
+                "production_seeded_truth_blocked: seed_demo_data is categorically disabled in production."
+            )
+
         allow_non_local_seed = env_bool("SEED_ALLOW_NON_LOCAL", False)
         if settings.CCHIS_ENVIRONMENT != "local" and not allow_non_local_seed:
             raise CommandError(

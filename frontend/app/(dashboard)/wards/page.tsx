@@ -351,7 +351,7 @@ export default function WardsPage() {
     ordering: getWardOrderingParam(sortBy),
     enabled: Boolean(currentUser),
   });
-  const items = wardsQuery.data?.items ?? [];
+  const items = useMemo(() => wardsQuery.data?.items ?? [], [wardsQuery.data?.items]);
   const isLoading = wardsQuery.isPending;
   const isRefreshing = wardsQuery.isFetching;
   const error = wardsQuery.error instanceof Error ? wardsQuery.error.message : null;

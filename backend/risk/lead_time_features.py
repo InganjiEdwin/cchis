@@ -34,6 +34,7 @@ from risk.population_exposure_features import (
     build_population_exposure_feature_dataset,
 )
 from risk.surveillance_labels import record_is_superseded_by_correction
+from risk.truth_policy import require_seeded_truth_allowed
 
 
 LEAD_TIME_FEATURE_SCHEMA_VERSION = "lead-time-feature-v1"
@@ -1502,6 +1503,10 @@ def build_lead_time_feature_dataset(
 ) -> LeadTimeFeatureDatasetSnapshot:
     if claimed_forecast_horizon_days not in LEAD_TIME_FORECAST_HORIZON_DAYS:
         raise ValueError("claimed_forecast_horizon_days must be between 1 and 14.")
+    require_seeded_truth_allowed(
+        "seeded surveillance lead-time feature generation",
+        requested=include_seeded_surveillance,
+    )
 
     prediction_date_list = _normalise_prediction_dates(
         prediction_dates=prediction_dates,

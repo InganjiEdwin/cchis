@@ -1,7 +1,7 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 import {
   acceptPoliciesViaBff,
@@ -114,7 +114,7 @@ export function AuthProvider({
     initialSession,
   });
 
-  async function adoptEstablishedSession() {
+  const adoptEstablishedSession = useCallback(async () => {
     queryClient.removeQueries({ queryKey: queryKeys.auth.me() });
 
     const session = await queryClient.fetchQuery({
@@ -137,7 +137,7 @@ export function AuthProvider({
     setPendingEnrollment(null);
 
     return user;
-  }
+  }, [queryClient]);
 
   useEffect(() => {
     if (currentUserQuery.isPending && !currentUser) {
@@ -408,7 +408,7 @@ export function AuthProvider({
         }
       },
     }),
-    [currentUser, isHydrating, pendingEnrollment, pendingTwoFactor, queryClient],
+    [adoptEstablishedSession, currentUser, isHydrating, pendingEnrollment, pendingTwoFactor, queryClient],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

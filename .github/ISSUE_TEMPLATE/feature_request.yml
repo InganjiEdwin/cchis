@@ -1,0 +1,30 @@
+name: Feature request
+description: Propose a scoped improvement that fits the current product and safety boundaries.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please describe the operational need, affected users, and safety or data-governance implications. Avoid proposing automatic clinical or eligibility decisions.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and users
+      description: Who needs this and what decision or workflow is currently difficult?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the smallest useful change and how it would be verified.
+    validations:
+      required: true
+  - type: textarea
+    id: data
+    attributes:
+      label: Data, privacy, and truth considerations
+      description: Identify new sources, sensitive fields, proxy limitations, or truth-gate changes.
+    validations:
+      required: true
