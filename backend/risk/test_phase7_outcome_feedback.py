@@ -21,6 +21,7 @@ from risk.models import (
     SurveillanceTruthLevel,
     Ward,
 )
+from risk.registry_test_fixtures import seed_approved_active_registry_entry
 from risk.services import build_ward_intelligence_snapshot
 
 
@@ -38,6 +39,11 @@ class WardOutcomeFeedbackPhaseSevenTestCase(TestCase):
                 "alert_eligible": True,
             },
             completed_at=timezone.now(),
+        )
+        seed_approved_active_registry_entry(
+            self,
+            self.model_run,
+            reason="Phase seven outcome feedback fixture represents a governed live run",
         )
 
     def _create_ward(self, name: str, ward_code: str) -> Ward:

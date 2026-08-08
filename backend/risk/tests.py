@@ -107,6 +107,7 @@ from risk.interoperability import (
 from risk.providers import DeliveryResult, StubSmsProvider, get_sms_provider
 from risk.admin import CHVCoverageRequestAdmin, CHVCoverageRequestAlertLinkInline
 from risk.population_exposure_features import POPULATION_EXPOSURE_FEATURE_SCHEMA_VERSION
+from risk.registry_test_fixtures import seed_approved_active_registry_entry
 from risk.serializers import IngestionRunSerializer
 from risk.services import create_alerts_for_riskscore, deliver_alert
 from risk.services import build_facility_intelligence_snapshot, build_facility_readiness_decision_summary
@@ -4218,6 +4219,14 @@ class RecoveryDisciplineTestCase(APITestCase):
 
 
 class RiskPermissionsTestCase(AuthenticatedAPITestCase):
+    def setUp(self):
+        super().setUp()
+        seed_approved_active_registry_entry(
+            self,
+            self.model_run,
+            reason="Authenticated operational API fixture represents a governed live run",
+        )
+
     def authenticate(self, username: str, password: str | None = None) -> str:
         token = super().authenticate(username, password=password)
         user = User.objects.get(username=username)
@@ -7795,6 +7804,7 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertEqual(response.data["detail"], "No matching risk score found.")
 
+    @override_settings(SMS_PROVIDER="stub")
     def test_create_alerts_for_riskscore_creates_dashboard_and_queued_sms_alerts(self):
         alerts = create_alerts_for_riskscore(
             self.risk_score,
@@ -10257,7 +10267,14 @@ class CanonicalETLNormalizationTestCase(AuthenticatedAPITestCase):
 class ZZZNotificationWebsocketLifecycleIsolationTest(APITransactionTestCase):
     password = AuthenticatedAPITestCase.password
     _client_counter = 1
-    setUp = AuthenticatedAPITestCase.setUp
+    def setUp(self):
+        AuthenticatedAPITestCase.setUp(self)
+        seed_approved_active_registry_entry(
+            self,
+            self.model_run,
+            reason="Notification websocket fixture represents a governed live run",
+        )
+
     import_active_migori_geometry = AuthenticatedAPITestCase.import_active_migori_geometry
     _create_user = AuthenticatedAPITestCase._create_user
     authenticate = AuthenticatedAPITestCase.authenticate

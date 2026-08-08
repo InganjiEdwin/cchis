@@ -16,6 +16,7 @@ from risk.models import (
     SurveillanceTruthLevel,
     Ward,
 )
+from risk.registry_test_fixtures import seed_approved_active_registry_entry
 from risk.services import build_ward_intelligence_snapshot
 
 
@@ -50,6 +51,11 @@ class WardFrontendAlignmentPhaseSixTestCase(TestCase):
                 "alert_eligible": True,
             },
             completed_at=timezone.now(),
+        )
+        seed_approved_active_registry_entry(
+            self,
+            self.model_run,
+            reason="Phase six frontend evidence fixture represents a governed live run",
         )
 
     def test_ward_intelligence_exposes_phase_six_operational_evidence(self):

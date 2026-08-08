@@ -18,6 +18,7 @@ from risk.models import (
     SurveillanceDiseaseCategory,
     SurveillanceFreshnessState,
     SurveillanceIngestionRun,
+    SurveillanceLabelWindow,
     SurveillanceOutbreakLabel,
     SurveillanceRecord,
     SurveillanceSource,
