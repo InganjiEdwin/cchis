@@ -6,7 +6,6 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from accounts.models import StepUpGrant, User
-from risk.ml.registry import ensure_registry_entry_for_promoted_run
 from risk.providers import DeliveryResult
 
 from .models import (
@@ -23,6 +22,7 @@ from .models import (
     RiskScore,
     Ward,
 )
+from .registry_test_fixtures import seed_approved_active_registry_entry
 from .services import (
     MESSAGE_PURPOSE_HOUSEHOLD_PREVENTION,
     assert_contact_message_allowed,
@@ -86,10 +86,10 @@ class ContactPreferenceGovernanceTests(APITestCase):
             },
             completed_at=timezone.now(),
         )
-        ensure_registry_entry_for_promoted_run(
-            model_run=self.model_run,
-            owner="message-governance",
-            promoted_by="contact-preference-test",
+        seed_approved_active_registry_entry(
+            self,
+            self.model_run,
+            reason="Contact-preference workflow fixture uses an approved active model registry entry",
         )
         self.risk_score = RiskScore.objects.create(
             ward=self.ward,
