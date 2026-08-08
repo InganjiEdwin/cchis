@@ -1,18 +1,28 @@
-# CCHIS Technical Capability Audit — Post-remediation rerun
+# CCHIS Technical Capability Audit — Current-state post-remediation rerun
 
 Audit date: 2026-08-08<br>
 Repository: cchis<br>
-Audited commit: 02b3a049e3ceebbce7b9b32d1f14b6e1a4cc191e (main, local; origin/main remains c2629a53b5bc7594ee0fe5f1e8a937cde900f863)<br>
-Previous audit commit: 51249097f40ce23a201ce1cb341cbc2f0a1d3822<br>
+Audited implementation commit: 02b3a049e3ceebbce7b9b32d1f14b6e1a4cc191e (main; origin/main remains c2629a53b5bc7594ee0fe5f1e8a937cde900f863)<br>
+Audit document revision: current-state update after document commit 3126b6a; document-only change<br>
+Previous implementation baseline: c2629a53b5bc7594ee0fe5f1e8a937cde900f863<br>
+Earlier audit baseline: 51249097f40ce23a201ce1cb341cbc2f0a1d3822<br>
 Environment: existing healthy local Docker Compose stack, Africa/Nairobi timezone, seeded development database
 
-This rerun verifies the strict-audit geography and Source Data Phase 7 remediation, then closes and retests the AlertSerializer provider-message privacy/schema regression. It supersedes the previous report’s claims that the fake Mobitech ward existed, strict CHIRPS failed, Phase 7 had two open evidence gaps, and the alert serializer remained broken.
+This current-state rerun considers all implementation fixes through 02b3a049 and the committed audit update at 3126b6a. It verifies the strict-audit geography and Source Data Phase 7 remediation, then closes and retests the AlertSerializer provider-message privacy/schema regression. It supersedes the previous report’s claims that the fake Mobitech ward existed, strict CHIRPS failed, Phase 7 had two open evidence gaps, and the alert serializer remained broken.
 
-The AlertSerializer correction and focused regression tests are committed in the audited commit. The model registry was not changed: zero models are approved for operational use.
+The latest implementation change is the AlertSerializer correction and focused regression tests in 02b3a049; 3126b6a changes this audit document only. The model registry was not changed: zero models are approved for operational use.
+
+## Latest fixes considered
+
+| Commit | Fix/evidence considered |
+|---|---|
+| c2629a5 | Canonical Migori geography cleanup, CHIRPS strict-ingestion reconciliation, Source Data Phase 7 evidence closure, and canonical Mobitech test geography |
+| 02b3a04 | `AlertSerializer.provider_message_id` field-list correction plus privileged/redacted privacy regression assertions |
+| 3126b6a | Previous audit-document update; no application or database implementation change |
 
 ## Executive verdict
 
-The completed tranche is successful:
+The completed tranche remains successful on the latest rerun:
 
 - The fake Mobitech-controlled ward is absent from the seeded database.
 - Exactly 40 canonical active Migori wards remain, and all 40 have valid, non-empty polygons.
@@ -24,6 +34,7 @@ The completed tranche is successful:
 - Affected backend tests pass 41/41: Mobitech SMS 19/19, CHIRPS 16/16, and Source Data Phase 7 6/6.
 - The focused Source Data frontend test passes 19/19.
 - The model registry remains empty and fail-closed: 0 registered entries, 0 active models, NOT_APPROVED_FOR_OPERATIONAL_USE.
+- No new implementation or database mutation was made during this current-state audit update.
 
 This does not make CCHIS production-ready. The complete backend suite was not rerun locally. The clean-database climate-source, climate-horizon, and surveillance strict audits still report the exact residual gaps recorded below; external providers, model validation, and operational deployment evidence also remain open.
 
@@ -31,7 +42,7 @@ The current posture is therefore **AlertSerializer/privacy closure complete; ove
 
 ## Verification scope
 
-The requested focused verification limits were followed. This pass ran only:
+The requested focused verification limits were followed. This current-state pass reran only:
 
 - canonical geography and polygon state checks;
 - migration application;
@@ -45,13 +56,13 @@ The requested focused verification limits were followed. This pass ran only:
 - the focused Source Data frontend test;
 - repository status/diff checks.
 
-Full backend/frontend suites, builds, container rebuilds, and unrelated audits were not rerun locally in this pass. They remain CI responsibilities.
+Full backend/frontend suites, builds, container rebuilds, and unrelated audits were not rerun locally in this pass. They remain CI responsibilities. The strict-audit counts and gap keys below are from this latest rerun, not inherited without verification.
 
 ## Verification results
 
 | Check | Result |
 |---|---|
-| Commit state | Passed: HEAD is 02b3a049e3ceebbce7b9b32d1f14b6e1a4cc191e; local main is one commit ahead of origin/main |
+| Commit state | Passed: application implementation is 02b3a049; audit-document changes are document-only and tracked after 3126b6a |
 | Existing Compose stack | Passed: backend, worker, frontend, database, Redis, and Beat are running; backend/worker/frontend/database health is healthy |
 | Database migrations | Passed: migrations 0084 and 0085 are applied; migrate reports no pending work |
 | Canonical geography query | Passed: 40 expected geometry wards, 40 active Migori wards, exact code-set match, 0 invalid polygons |
@@ -72,6 +83,7 @@ Full backend/frontend suites, builds, container rebuilds, and unrelated audits w
 | Combined affected backend tests | **Passed: 41/41** |
 | Focused Source Data frontend test | **Passed: 1 file, 19 tests** |
 | Strict model registry audit | **Passed: 5/5 structural checks; 0 entries; 0 active models** |
+| Latest strict-audit rerun | **Completed against the current seeded database; results and exact residual keys below are unchanged from the prior closure pass** |
 
 ## 1. Fake Mobitech ward remediation
 
@@ -224,7 +236,7 @@ The previous broader audit at commit 5124909 discovered 1,013 backend tests and 
 
 ### Clean-database strict audit results
 
-The requested rerun used the current seeded development database rather than the older contaminated snapshot. These are the exact remaining keys:
+The latest current-state rerun used the current seeded development database rather than the older contaminated snapshot. These are the exact remaining keys:
 
 | Audit | Result | Remaining keys/evidence |
 |---|---|---|
