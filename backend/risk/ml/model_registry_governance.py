@@ -36,6 +36,7 @@ from .model_governance_identity import (
     resolve_governance_actor,
 )
 from .registry import _lock_deployment_target, default_review_due_date
+from risk.surveillance_lineage import dataset_is_currently_eligible
 
 
 OPERATIONAL_DEPLOYMENT_TARGET = "live_baseline"
@@ -364,6 +365,8 @@ def model_artifact_approval_blockers(entry: ModelRegistryEntry) -> list[str]:
         if label_dataset is None:
             blockers.append("training_label_dataset_not_found")
         else:
+            if not dataset_is_currently_eligible(label_dataset):
+                blockers.append("training_label_dataset_not_current_eligible")
             if label_dataset.dataset_kind != FeatureDataset.KIND_TRAINING:
                 blockers.append("training_label_dataset_wrong_kind")
             if label_dataset.source_kind != FeatureDataset.SOURCE_KIND_LIVE:

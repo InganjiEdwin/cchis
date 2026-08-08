@@ -289,6 +289,33 @@ class SurveillanceLeadTimeLabelPhaseThreeTestCase(TestCase):
         )
         self.assertTrue(model_run.metadata["surveillance_7_to_14_day_replayable_after_corrections"])
 
+    def test_retired_lead_time_dataset_is_not_latest_and_cannot_be_evaluated(self):
+        prediction_date = date(2026, 5, 1)
+        self._record(
+            case_class=SurveillanceCaseClass.CONFIRMED,
+            count_value=1,
+            period_start=prediction_date + timedelta(days=7),
+            period_end=prediction_date + timedelta(days=7),
+        )
+        snapshot = build_surveillance_lead_time_label_dataset(
+            [self.ward],
+            prediction_dates=[prediction_date],
+            as_of=timezone.now() + timedelta(seconds=1),
+        )
+        dataset = snapshot.feature_dataset
+        dataset.eligibility_state = FeatureDataset.ELIGIBILITY_SUPERSEDED
+        dataset.save(update_fields=["eligibility_state"])
+
+        self.assertIsNone(latest_surveillance_lead_time_label_dataset())
+        validation = build_surveillance_lead_time_validation_summary(label_dataset=dataset)
+        self.assertEqual(validation["status"], "blocked")
+        self.assertEqual(validation["validation_mode"], "superseded_surveillance_label_dataset")
+        with self.assertRaisesRegex(ValueError, "superseded_label_dataset_not_current_evidence"):
+            evaluate_model_run_against_surveillance_lead_time_labels(
+                self._model_run_with_prediction(prediction_date=prediction_date),
+                label_dataset=dataset,
+            )
+
     def test_build_surveillance_lead_time_labels_command_creates_snapshot(self):
         prediction_date = date(2026, 5, 1)
         output = StringIO()

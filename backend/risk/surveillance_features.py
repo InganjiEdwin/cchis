@@ -22,6 +22,7 @@ from risk.surveillance_labels import (
     SURVEILLANCE_LEAD_TIME_LABEL_GENERATION_MODE,
     record_is_superseded_by_correction,
 )
+from risk.surveillance_lineage import dataset_is_currently_eligible, label_window_is_currently_eligible
 
 
 SURVEILLANCE_FEATURE_SCHEMA_VERSION = "surveillance-feature-v1"
@@ -221,7 +222,7 @@ def build_surveillance_feature_snapshot(
         created_at__lte=as_of,
         label_window_start__lte=as_of_date,
         label_window_end__gte=lookback_start,
-    ).order_by("ward_id", "label_window_start", "id")
+    ).select_related("feature_dataset").order_by("ward_id", "label_window_start", "id")
     if not include_seeded:
         records_queryset = records_queryset.exclude(truth_level=SurveillanceTruthLevel.SEEDED_DEMO)
         windows_queryset = windows_queryset.exclude(label_truth_level=SurveillanceTruthLevel.SEEDED_DEMO)
@@ -232,7 +233,11 @@ def build_surveillance_feature_snapshot(
             continue
         records_by_ward_id[record.ward_id].append(record)
 
-    candidate_windows = list(windows_queryset)
+    candidate_windows = [
+        window
+        for window in windows_queryset
+        if label_window_is_currently_eligible(window)
+    ]
     latest_window_by_key: dict[tuple[int, object, object], SurveillanceLabelWindow] = {}
     for window in candidate_windows:
         key = (window.ward_id, window.label_window_start, window.label_window_end)
@@ -323,6 +328,17 @@ def build_surveillance_lead_time_validation_summary(
             "status": "not_available",
             "validation_mode": "surveillance_label_dataset_missing",
             "label_dataset_ref": None,
+            "horizons": list(horizons),
+            "truth_gate": {
+                "proxy_only_as_confirmed_allowed": False,
+                "confirmed_truth_required_for_confirmed_outbreak_claims": True,
+            },
+        }
+    if not dataset_is_currently_eligible(label_dataset):
+        return {
+            "status": "blocked",
+            "validation_mode": "superseded_surveillance_label_dataset",
+            "label_dataset_ref": label_dataset.dataset_ref,
             "horizons": list(horizons),
             "truth_gate": {
                 "proxy_only_as_confirmed_allowed": False,

@@ -68,6 +68,7 @@ from .population_exposure_features import (
 from .privacy_access import mask_contact_value, redact_direct_identifiers_in_text, user_can_view_direct_identifiers
 from .providers import DeliveryResult, get_sms_provider
 from .surveillance_features import build_surveillance_feature_context_for_ward
+from .surveillance_lineage import label_window_is_currently_eligible
 from .truth_policy import (
     production_model_run_blockers,
     require_demo_data_allowed,
@@ -4358,12 +4359,13 @@ def _prediction_label_history(risk_history: list[RiskScore]) -> tuple[list[dict]
     min_prediction_date = min(risk.generated_at.date() + timedelta(days=7) for risk in risk_history)
     max_prediction_date = max(risk.generated_at.date() + timedelta(days=14) for risk in risk_history)
     label_windows = list(
-        SurveillanceLabelWindow.objects.filter(
+        SurveillanceLabelWindow.objects.select_related("feature_dataset").filter(
             ward=ward,
             label_window_start__lte=max_prediction_date,
             label_window_end__gte=min_prediction_date,
         ).order_by("label_window_start", "label_window_end", "id")
     )
+    label_windows = [label for label in label_windows if label_window_is_currently_eligible(label)]
 
     rows: list[dict] = []
     counts = {

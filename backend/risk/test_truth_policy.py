@@ -889,6 +889,19 @@ class ProductionAlertEligibilityTestCase(APITestCase):
 
         self.assertIn(PRODUCTION_SUPERSEDED_TRUTH_BLOCKED, blockers)
 
+    def test_retired_label_dataset_is_blocked_as_current_truth_evidence(self):
+        self.label_dataset.eligibility_state = FeatureDataset.ELIGIBILITY_SUPERSEDED
+        self.label_dataset.lineage_metadata = {
+            "eligibility_state": FeatureDataset.ELIGIBILITY_SUPERSEDED,
+            "replacement_dataset_ref": "production-gate-label-replacement",
+            "superseded_record_refs": [f"surveillance_record:{self.surveillance_record.id}"],
+        }
+        self.label_dataset.save(update_fields=["eligibility_state", "lineage_metadata"])
+
+        blockers = production_model_run_blockers(self.model_run)
+
+        self.assertIn(PRODUCTION_SUPERSEDED_TRUTH_BLOCKED, blockers)
+
     def test_blocked_production_pipeline_persists_failed_run_without_scores_or_alerts(self):
         self.inference_row.feature_values = {
             **self.inference_row.feature_values,

@@ -1521,6 +1521,7 @@ class FeatureDatasetSerializer(serializers.ModelSerializer):
             "dataset_kind",
             "schema_version",
             "source_kind",
+            "eligibility_state",
             "month",
             "feature_keys",
             "row_count",

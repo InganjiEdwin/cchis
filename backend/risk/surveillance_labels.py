@@ -26,6 +26,7 @@ from risk.models import (
     Ward,
 )
 from risk.truth_policy import require_seeded_truth_allowed
+from risk.surveillance_lineage import dataset_is_currently_eligible
 
 
 SURVEILLANCE_LABEL_SCHEMA_VERSION = "surveillance-label-v1"
@@ -750,11 +751,19 @@ def build_surveillance_lead_time_label_dataset(
 def latest_surveillance_lead_time_label_dataset(*, dataset_role: str | None = "evaluation") -> FeatureDataset | None:
     queryset = FeatureDataset.objects.filter(
         schema_version=SURVEILLANCE_LABEL_SCHEMA_VERSION,
+        eligibility_state=FeatureDataset.ELIGIBILITY_ACTIVE,
         lineage_metadata__generation_mode=SURVEILLANCE_LEAD_TIME_LABEL_GENERATION_MODE,
     )
     if dataset_role:
         queryset = queryset.filter(lineage_metadata__dataset_role=dataset_role)
-    return queryset.order_by("-created_at", "-id").first()
+    return next(
+        (
+            dataset
+            for dataset in queryset.order_by("-created_at", "-id")
+            if dataset_is_currently_eligible(dataset)
+        ),
+        None,
+    )
 
 
 def _parse_iso_date_value(value) -> date | None:
@@ -805,6 +814,8 @@ def evaluate_model_run_against_surveillance_lead_time_labels(
     persist: bool = True,
 ) -> dict:
     label_dataset = label_dataset or latest_surveillance_lead_time_label_dataset(dataset_role="evaluation")
+    if label_dataset is not None and not dataset_is_currently_eligible(label_dataset):
+        raise ValueError("superseded_label_dataset_not_current_evidence")
     if label_dataset is None:
         return {
             "status": "not_available",
@@ -968,7 +979,17 @@ def evaluate_model_run_against_surveillance_lead_time_labels(
 
 
 def latest_surveillance_label_dataset(*, dataset_role: str | None = None) -> FeatureDataset | None:
-    queryset = FeatureDataset.objects.filter(schema_version=SURVEILLANCE_LABEL_SCHEMA_VERSION)
+    queryset = FeatureDataset.objects.filter(
+        schema_version=SURVEILLANCE_LABEL_SCHEMA_VERSION,
+        eligibility_state=FeatureDataset.ELIGIBILITY_ACTIVE,
+    )
     if dataset_role:
         queryset = queryset.filter(lineage_metadata__dataset_role=dataset_role)
-    return queryset.order_by("-created_at", "-id").first()
+    return next(
+        (
+            dataset
+            for dataset in queryset.order_by("-created_at", "-id")
+            if dataset_is_currently_eligible(dataset)
+        ),
+        None,
+    )

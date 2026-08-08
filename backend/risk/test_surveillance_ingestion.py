@@ -8,6 +8,7 @@ from django.test import TestCase, override_settings
 from risk.models import (
     FeatureDataset,
     HealthFacility,
+    ModelRun,
     SurveillanceCaseClass,
     SurveillanceFreshnessState,
     SurveillanceIngestionRun,
@@ -27,8 +28,13 @@ from risk.surveillance_ingestion import (
     replay_surveillance_ingestion_run,
     run_surveillance_csv_ingestion,
 )
-from risk.surveillance_labels import SURVEILLANCE_LABEL_SCHEMA_VERSION
-from risk.surveillance_labels import build_surveillance_label_dataset
+from risk.surveillance_audit import build_surveillance_pipeline_audit
+from risk.surveillance_labels import (
+    SURVEILLANCE_LABEL_SCHEMA_VERSION,
+    build_surveillance_label_dataset,
+    latest_surveillance_label_dataset,
+)
+from risk.surveillance_lineage import reconcile_surveillance_label_lineage
 
 
 class SurveillanceIngestionPhaseTwoTestCase(TestCase):
@@ -376,6 +382,143 @@ class SurveillanceIngestionPhaseTwoTestCase(TestCase):
         self.assertEqual(window.source_record_count, 1)
         self.assertEqual(window.generated_from_record_refs, [f"surveillance_record:{amendment_record.id}"])
         self.assertEqual(window.source_coverage_summary["source_credibility_counts"], {"medium": 1})
+
+    def test_amendment_retires_existing_dataset_rebuilds_current_evidence_and_is_idempotent(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".csv") as original_file:
+            original_file.write(
+                "ward_code,reporting_period_start,reporting_period_end,suspected_cholera_count,source_ref\n"
+            )
+            original_file.write("KE-MIG-NK,2026-04-01,2026-04-07,5,weekly-row-001\n")
+            original_file.flush()
+            original_run = run_surveillance_csv_ingestion(
+                file_path=original_file.name,
+                source_name="county-weekly-original",
+                source_type=SurveillanceSource.SOURCE_TYPE_WEEKLY_AGGREGATE,
+                source_timestamp="2026-04-08T00:00:00+03:00",
+            )
+
+        original_record = SurveillanceRecord.objects.get(ingestion_run=original_run)
+        first_snapshot = build_surveillance_label_dataset(
+            start_date=date(2026, 4, 1),
+            end_date=date(2026, 4, 7),
+            dataset_role="training",
+            include_seeded=False,
+        )
+        old_dataset = first_snapshot.feature_dataset
+        old_window = first_snapshot.label_windows[0]
+        old_ref = old_dataset.dataset_ref
+        old_counts = (old_window.suspected_case_count, old_window.generated_from_record_refs)
+        model_run = ModelRun.objects.create(
+            model_version="lineage-test-model",
+            status=ModelRun.STATUS_SUCCESS,
+            training_dataset_ref=old_ref,
+            evaluation_metrics={
+                "surveillance_7_to_14_day_evaluation": {
+                    "label_dataset_ref": old_ref,
+                    "matched_prediction_count": 1,
+                }
+            },
+            metadata={
+                "surveillance_label_dataset_ref": old_ref,
+                "surveillance_label_feature_dataset_id": old_dataset.id,
+            },
+        )
+
+        with tempfile.NamedTemporaryFile("w", suffix=".csv") as amendment_file:
+            amendment_file.write(
+                "ward_code,reporting_period_start,reporting_period_end,"
+                "suspected_cholera_count,source_ref,supersedes_record_ref\n"
+            )
+            amendment_file.write(
+                f"KE-MIG-NK,2026-04-01,2026-04-07,9,weekly-row-001-v2,"
+                f"surveillance_record:{original_record.id}\n"
+            )
+            amendment_file.flush()
+            amendment_run = run_surveillance_csv_ingestion(
+                file_path=amendment_file.name,
+                source_name="county-weekly-amendment",
+                source_type=SurveillanceSource.SOURCE_TYPE_WEEKLY_AGGREGATE,
+                source_timestamp="2026-04-09T00:00:00+03:00",
+                correction_mode=SurveillanceIngestionRun.CORRECTION_AMENDMENT,
+                correction_reason="Corrected county weekly suspected count.",
+            )
+
+        amended_record = SurveillanceRecord.objects.get(ingestion_run=amendment_run)
+        self.assertEqual(
+            amendment_run.status,
+            SurveillanceIngestionRun.STATUS_SUCCESS,
+            amendment_run.error_summary or str(amendment_run.results),
+        )
+        old_dataset.refresh_from_db()
+        old_window.refresh_from_db()
+        model_run.refresh_from_db()
+        self.assertIn(
+            "replacement_dataset_ref",
+            old_dataset.lineage_metadata,
+            str(amendment_run.results),
+        )
+        replacement_ref = old_dataset.lineage_metadata["replacement_dataset_ref"]
+        replacement = FeatureDataset.objects.get(dataset_ref=replacement_ref)
+        replacement_window = SurveillanceLabelWindow.objects.get(feature_dataset=replacement)
+
+        self.assertEqual(old_dataset.eligibility_state, FeatureDataset.ELIGIBILITY_SUPERSEDED)
+        self.assertEqual(old_window.suspected_case_count, old_counts[0])
+        self.assertEqual(old_window.generated_from_record_refs, old_counts[1])
+        self.assertEqual(replacement.lineage_metadata["superseded_dataset_ref"], old_ref)
+        self.assertEqual(
+            old_dataset.lineage_metadata["superseded_by_ingestion_run_ref"],
+            f"surveillance_ingestion_run:{amendment_run.id}",
+        )
+        self.assertIn(f"surveillance_record:{original_record.id}", old_dataset.lineage_metadata["superseded_record_refs"])
+        self.assertEqual(
+            replacement_window.generated_from_record_refs,
+            [f"surveillance_record:{amended_record.id}"],
+        )
+        self.assertEqual(replacement_window.suspected_case_count, 9)
+        self.assertEqual(replacement_window.label_truth_level, SurveillanceTruthLevel.SUSPECTED_SURVEILLANCE)
+        self.assertEqual(replacement_window.outbreak_label, SurveillanceOutbreakLabel.WATCH)
+        self.assertEqual(latest_surveillance_label_dataset(dataset_role="training"), replacement)
+        self.assertEqual(model_run.training_dataset_ref, replacement_ref)
+        self.assertEqual(
+            model_run.metadata["surveillance_label_dataset_ref"],
+            replacement_ref,
+        )
+        self.assertEqual(
+            model_run.evaluation_metrics["surveillance_7_to_14_day_evaluation"]["label_dataset_ref"],
+            replacement_ref,
+        )
+        self.assertEqual(
+            model_run.evaluation_metrics["surveillance_7_to_14_day_evaluation_history"][0]["label_dataset_ref"],
+            old_ref,
+        )
+
+        dataset_count = FeatureDataset.objects.count()
+        second_summary = reconcile_surveillance_label_lineage(
+            superseded_record_ids=[original_record.id],
+            apply=True,
+        )
+        self.assertTrue(second_summary["applied"])
+        self.assertEqual(FeatureDataset.objects.count(), dataset_count)
+        self.assertEqual(
+            FeatureDataset.objects.get(pk=old_dataset.id).lineage_metadata["replacement_dataset_ref"],
+            replacement_ref,
+        )
+
+        audit = build_surveillance_pipeline_audit()
+        questions = {item["id"]: item for item in audit["verification_questions"]}
+        all_gaps = {gap for item in questions.values() for gap in item["gaps"]}
+        self.assertNotIn("superseded_records_used_in_label_windows", all_gaps)
+        self.assertNotIn("label_windows_reference_superseded_records", all_gaps)
+        self.assertEqual(
+            questions["replay_and_corrections"]["evidence"]["active_windows_referencing_superseded_records_count"],
+            0,
+        )
+        self.assertGreater(
+            questions["replay_and_corrections"]["evidence"][
+                "retired_historical_windows_containing_corrected_lineage_count"
+            ],
+            0,
+        )
 
     def test_inspect_management_command_does_not_create_ingestion_run(self):
         output = StringIO()

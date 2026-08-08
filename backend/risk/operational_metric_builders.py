@@ -33,6 +33,7 @@ from .models import (
     UssdSessionLog,
 )
 from .operational_metrics import OPERATIONAL_KPI_DEFINITIONS, sync_operational_metric_catalog
+from .surveillance_lineage import label_window_is_currently_eligible
 
 
 OPERATIONAL_KPI_SNAPSHOT_SCHEMA_VERSION = "operational-kpi-snapshot-v1"
@@ -589,12 +590,15 @@ def _build_false_alerts_per_completed_response(period_start: datetime, period_en
     )
     false_alerts = 0
     for action in responses:
-        label_exists = SurveillanceLabelWindow.objects.filter(
-            ward=action.ward,
-            label_window_start__lte=period_end.date(),
-            label_window_end__gte=rolling_start.date(),
-            outbreak_label__in=[SurveillanceOutbreakLabel.ACTIVE, SurveillanceOutbreakLabel.WATCH],
-        ).exists()
+        label_exists = any(
+            label_window_is_currently_eligible(label)
+            for label in SurveillanceLabelWindow.objects.select_related("feature_dataset").filter(
+                ward=action.ward,
+                label_window_start__lte=period_end.date(),
+                label_window_end__gte=rolling_start.date(),
+                outbreak_label__in=[SurveillanceOutbreakLabel.ACTIVE, SurveillanceOutbreakLabel.WATCH],
+            )
+        )
         if not label_exists:
             false_alerts += 1
     metric_key = "false_alerts_per_completed_response"
@@ -621,7 +625,7 @@ def _build_false_alerts_per_completed_response(period_start: datetime, period_en
 def _build_missed_outbreak_without_action_count(period_start: datetime, period_end: datetime) -> MetricSnapshotDraft:
     rolling_start = period_end.date() - timedelta(days=28)
     active_labels = list(
-        SurveillanceLabelWindow.objects.select_related("ward")
+        SurveillanceLabelWindow.objects.select_related("ward", "feature_dataset")
         .filter(
             outbreak_label=SurveillanceOutbreakLabel.ACTIVE,
             label_window_end__gte=rolling_start,
@@ -629,6 +633,7 @@ def _build_missed_outbreak_without_action_count(period_start: datetime, period_e
         )
         .order_by("id")
     )
+    active_labels = [label for label in active_labels if label_window_is_currently_eligible(label)]
     missed = 0
     for label in active_labels:
         lead_start = timezone.make_aware(datetime.combine(label.label_window_start - timedelta(days=14), time.min), timezone.get_current_timezone())

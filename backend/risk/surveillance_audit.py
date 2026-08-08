@@ -33,6 +33,11 @@ from risk.surveillance_labels import (
     SURVEILLANCE_LABEL_SCHEMA_VERSION,
     SURVEILLANCE_LABEL_TRUTH_ASSUMPTIONS,
 )
+from risk.surveillance_lineage import (
+    current_model_run_dataset_refs,
+    dataset_is_currently_eligible,
+    dataset_is_superseded,
+)
 
 
 PHASE_6_VERIFICATION_QUESTIONS = [
@@ -158,6 +163,32 @@ def _label_window_record_ref_ids() -> dict[int, list[int]]:
     }
 
 
+def _window_dataset_is_current(
+    window: SurveillanceLabelWindow,
+    dataset: FeatureDataset | None = None,
+) -> bool:
+    dataset = dataset if dataset is not None else window.feature_dataset
+    if dataset is None:
+        return True
+    return dataset_is_currently_eligible(dataset)
+
+
+def _dataset_has_complete_replacement_evidence(dataset: FeatureDataset) -> bool:
+    lineage = dataset.lineage_metadata or {}
+    replacement_ref = lineage.get("replacement_dataset_ref")
+    if not replacement_ref or not lineage.get("affected_window_refs") or not lineage.get(
+        "superseded_record_refs"
+    ):
+        return False
+    replacement = FeatureDataset.objects.filter(dataset_ref=replacement_ref).first()
+    return bool(
+        replacement
+        and dataset_is_currently_eligible(replacement)
+        and replacement.row_count > 0
+        and SurveillanceLabelWindow.objects.filter(feature_dataset=replacement).exists()
+    )
+
+
 def _expected_truth_level_for_records(records: list[SurveillanceRecord]) -> str:
     truth_levels = {record.truth_level for record in records}
     if truth_levels == {SurveillanceTruthLevel.SEEDED_DEMO}:
@@ -272,6 +303,7 @@ def _truth_level_question(record_totals: dict) -> dict:
 
 def _replay_and_correction_question(record_totals: dict) -> dict:
     command_available = _management_command_exists("ingest_surveillance")
+    reconciliation_command_available = _management_command_exists("reconcile_surveillance_label_lineage")
     replay_run_count = SurveillanceIngestionRun.objects.filter(
         execution_mode=SurveillanceIngestionRun.EXECUTION_REPLAY,
     ).count()
@@ -308,9 +340,10 @@ def _replay_and_correction_question(record_totals: dict) -> dict:
             freshness_state=SurveillanceFreshnessState.REPLAY_DIAGNOSTIC,
         ).values_list("id", flat=True)
     )
+    window_record_refs = _label_window_record_ref_ids()
     used_record_ids = {
         record_id
-        for ref_ids in _label_window_record_ref_ids().values()
+        for ref_ids in window_record_refs.values()
         for record_id in ref_ids
     }
     superseded_record_ids = {
@@ -331,7 +364,60 @@ def _replay_and_correction_question(record_totals: dict) -> dict:
         ingestion_run__correction_mode=SurveillanceIngestionRun.CORRECTION_AMENDMENT,
         supersedes_record_ref="",
     ).count()
-    superseded_records_used_in_labels_count = len(superseded_record_ids.intersection(used_record_ids))
+    label_windows_with_superseded_records = list(
+        SurveillanceLabelWindow.objects.only(
+            "id",
+            "feature_dataset_id",
+            "generated_from_record_refs",
+        ).order_by("id")
+    )
+    label_datasets_by_id = FeatureDataset.objects.in_bulk(
+        {window.feature_dataset_id for window in label_windows_with_superseded_records if window.feature_dataset_id}
+    )
+    active_record_ids_used_by_labels: set[int] = set()
+    retired_record_ids_used_by_labels: set[int] = set()
+    retired_historical_window_ids: list[int] = []
+    for window in label_windows_with_superseded_records:
+        overlap = window_record_refs.get(window.id, [])
+        overlap = set(overlap).intersection(superseded_record_ids)
+        if not overlap:
+            continue
+        if _window_dataset_is_current(window, label_datasets_by_id.get(window.feature_dataset_id)):
+            active_record_ids_used_by_labels.update(overlap)
+        else:
+            retired_record_ids_used_by_labels.update(overlap)
+            retired_historical_window_ids.append(window.id)
+    superseded_dataset_refs = {
+        dataset.dataset_ref
+        for dataset in FeatureDataset.objects.filter(schema_version=SURVEILLANCE_LABEL_SCHEMA_VERSION)
+        if dataset_is_superseded(dataset)
+    }
+    superseded_datasets_lacking_replacement_evidence = [
+        dataset.id
+        for dataset in FeatureDataset.objects.filter(
+            schema_version=SURVEILLANCE_LABEL_SCHEMA_VERSION,
+        ).order_by("id")
+        if dataset_is_superseded(dataset)
+        and any(
+            window.feature_dataset_id == dataset.id
+            and set(window_record_refs.get(window.id, [])).intersection(superseded_record_ids)
+            for window in label_windows_with_superseded_records
+        )
+        and not _dataset_has_complete_replacement_evidence(dataset)
+    ]
+    current_model_evaluation_refs = []
+    for model_run in ModelRun.objects.order_by("id"):
+        current_refs = current_model_run_dataset_refs(model_run)
+        affected_refs = sorted(current_refs.intersection(superseded_dataset_refs))
+        if affected_refs:
+            current_model_evaluation_refs.append(
+                {
+                    "model_run_id": model_run.id,
+                    "model_version": model_run.model_version,
+                    "dataset_refs": affected_refs,
+                }
+            )
+    superseded_records_used_in_labels_count = len(active_record_ids_used_by_labels)
     replay_records_used_in_labels_count = len(replay_record_ids_used_by_labels.intersection(used_record_ids))
     replay_label_regeneration_not_skipped_count = sum(
         1
@@ -364,12 +450,15 @@ def _replay_and_correction_question(record_totals: dict) -> dict:
         "status": _status_from_checks(
             fail=(
                 not command_available
+                or not reconciliation_command_available
                 or replay_runs_missing_parent_count > 0
                 or non_replay_runs_with_parent_count > 0
                 or replay_parent_metadata_mismatch_count > 0
                 or replay_records_not_diagnostic_count > 0
                 or replay_records_used_in_labels_count > 0
                 or superseded_records_used_in_labels_count > 0
+                or superseded_datasets_lacking_replacement_evidence
+                or current_model_evaluation_refs
                 or unresolved_supersedes_ref_count > 0
                 or replay_label_regeneration_not_skipped_count > 0
             ),
@@ -403,6 +492,11 @@ def _replay_and_correction_question(record_totals: dict) -> dict:
             "unresolved_supersedes_ref_count": unresolved_supersedes_ref_count,
             "superseded_record_count": len(superseded_record_ids),
             "superseded_records_used_in_label_windows_count": superseded_records_used_in_labels_count,
+            "active_windows_referencing_superseded_records_count": len(active_record_ids_used_by_labels),
+            "retired_historical_windows_containing_corrected_lineage_count": len(retired_historical_window_ids),
+            "retired_historical_window_ids": retired_historical_window_ids[:25],
+            "superseded_datasets_lacking_replacement_evidence": superseded_datasets_lacking_replacement_evidence[:25],
+            "current_model_evaluations_referencing_superseded_datasets": current_model_evaluation_refs[:25],
             "replay_records_not_diagnostic_count": replay_records_not_diagnostic_count,
             "replay_records_used_in_label_windows_count": replay_records_used_in_labels_count,
             "replay_label_regeneration_not_skipped_count": replay_label_regeneration_not_skipped_count,
@@ -411,12 +505,14 @@ def _replay_and_correction_question(record_totals: dict) -> dict:
             "execution_modes": [choice[0] for choice in SurveillanceIngestionRun.EXECUTION_MODE_CHOICES],
             "excluded_label_freshness_states": sorted(EXCLUDED_LABEL_FRESHNESS_STATES),
             "management_command_available": command_available,
+            "reconciliation_management_command_available": reconciliation_command_available,
             "replay_command_template": "python manage.py ingest_surveillance --replay-of <run_id>",
         },
         "gaps": [
             gap
             for gap, present in [
                 ("ingest_surveillance_command_missing", not command_available),
+                ("reconciliation_command_missing", not reconciliation_command_available),
                 ("amendment_without_reason", amendment_without_reason_count > 0),
                 ("replay_run_missing_parent", replay_runs_missing_parent_count > 0),
                 ("non_replay_run_has_replay_parent", non_replay_runs_with_parent_count > 0),
@@ -426,6 +522,14 @@ def _replay_and_correction_question(record_totals: dict) -> dict:
                 ("amendment_records_without_supersedes_ref", amendment_records_without_supersedes_ref_count > 0),
                 ("supersedes_record_refs_unresolved", unresolved_supersedes_ref_count > 0),
                 ("superseded_records_used_in_label_windows", superseded_records_used_in_labels_count > 0),
+                (
+                    "superseded_datasets_lack_replacement_evidence",
+                    bool(superseded_datasets_lacking_replacement_evidence),
+                ),
+                (
+                    "current_model_evaluations_reference_superseded_datasets",
+                    bool(current_model_evaluation_refs),
+                ),
                 ("replay_records_not_marked_diagnostic", replay_records_not_diagnostic_count > 0),
                 ("replay_records_used_in_label_windows", replay_records_used_in_labels_count > 0),
                 ("replay_label_regeneration_not_skipped", replay_label_regeneration_not_skipped_count > 0),
@@ -452,11 +556,38 @@ def _label_window_lineage_question(record_totals: dict) -> dict:
     windows_with_case_count_mismatch = []
     windows_with_truth_level_mismatch = []
     windows_with_superseded_record_refs = []
+    retired_historical_windows_with_corrected_lineage = []
+    retired_historical_windows_missing_replacement_evidence = []
+    replacement_evidence_by_dataset_id = {}
     windows_missing_source_credibility_counts = []
     windows_missing_dataset_link = []
     windows_with_dataset_ref_mismatch = []
 
-    for window in SurveillanceLabelWindow.objects.select_related("feature_dataset").order_by("id"):
+    label_windows = list(
+        SurveillanceLabelWindow.objects.only(
+            "id",
+            "ward_id",
+            "feature_dataset_id",
+            "schema_version",
+            "dataset_ref",
+            "label_window_start",
+            "label_window_end",
+            "suspected_case_count",
+            "confirmed_case_count",
+            "proxy_case_count",
+            "outbreak_label",
+            "label_truth_level",
+            "source_coverage_summary",
+            "generated_from_record_refs",
+            "source_record_count",
+        ).order_by("id")
+    )
+    label_datasets_by_id = FeatureDataset.objects.in_bulk(
+        {window.feature_dataset_id for window in label_windows if window.feature_dataset_id}
+    )
+
+    for window in label_windows:
+        dataset = label_datasets_by_id.get(window.feature_dataset_id)
         ref_payload = refs_by_window_id.get(window.id, {"record_ids": [], "malformed_refs": []})
         refs = ref_payload["record_ids"]
         unique_ref_ids = set(refs)
@@ -486,7 +617,19 @@ def _label_window_lineage_question(record_totals: dict) -> dict:
         ):
             windows_with_refs_outside_ward_or_window.append(window.id)
         if any((record.raw_payload or {}).get("superseded_by_record_ref") for record in existing_ref_records):
-            windows_with_superseded_record_refs.append(window.id)
+            if _window_dataset_is_current(window, dataset):
+                windows_with_superseded_record_refs.append(window.id)
+            else:
+                dataset_id = window.feature_dataset_id
+                if dataset_id not in replacement_evidence_by_dataset_id:
+                    replacement_evidence_by_dataset_id[dataset_id] = bool(
+                        dataset and _dataset_has_complete_replacement_evidence(dataset)
+                    )
+                if replacement_evidence_by_dataset_id[dataset_id]:
+                    retired_historical_windows_with_corrected_lineage.append(window.id)
+                else:
+                    retired_historical_windows_missing_replacement_evidence.append(window.id)
+                    windows_with_superseded_record_refs.append(window.id)
         if window.source_record_count > 0 and not (window.source_coverage_summary or {}).get(
             "source_credibility_counts"
         ):
@@ -519,7 +662,7 @@ def _label_window_lineage_question(record_totals: dict) -> dict:
                 windows_with_truth_level_mismatch.append(window.id)
         if not window.dataset_ref or window.feature_dataset_id is None:
             windows_missing_dataset_link.append(window.id)
-        elif window.feature_dataset and window.dataset_ref != window.feature_dataset.dataset_ref:
+        elif dataset and window.dataset_ref != dataset.dataset_ref:
             windows_with_dataset_ref_mismatch.append(window.id)
 
     label_datasets_with_row_count_mismatch = []
@@ -582,6 +725,9 @@ def _label_window_lineage_question(record_totals: dict) -> dict:
             "windows_with_case_count_mismatch": windows_with_case_count_mismatch[:25],
             "windows_with_truth_level_mismatch": windows_with_truth_level_mismatch[:25],
             "windows_with_superseded_record_refs": windows_with_superseded_record_refs[:25],
+            "active_windows_referencing_superseded_records": windows_with_superseded_record_refs[:25],
+            "retired_historical_windows_containing_corrected_lineage": retired_historical_windows_with_corrected_lineage[:25],
+            "retired_historical_windows_missing_replacement_evidence": retired_historical_windows_missing_replacement_evidence[:25],
             "windows_missing_source_credibility_counts": windows_missing_source_credibility_counts[:25],
             "windows_missing_dataset_ref_or_feature_dataset": windows_missing_dataset_link[:25],
             "windows_with_dataset_ref_mismatch": windows_with_dataset_ref_mismatch[:25],
@@ -605,6 +751,10 @@ def _label_window_lineage_question(record_totals: dict) -> dict:
                 ("label_window_counts_do_not_match_referenced_records", bool(windows_with_case_count_mismatch)),
                 ("label_window_truth_level_does_not_match_referenced_records", bool(windows_with_truth_level_mismatch)),
                 ("label_windows_reference_superseded_records", bool(windows_with_superseded_record_refs)),
+                (
+                    "retired_historical_lineage_missing_replacement_evidence",
+                    bool(retired_historical_windows_missing_replacement_evidence),
+                ),
                 ("label_windows_missing_source_credibility_counts", bool(windows_missing_source_credibility_counts)),
                 ("label_windows_missing_dataset_linkage", bool(windows_missing_dataset_link)),
                 ("label_windows_dataset_ref_mismatch", bool(windows_with_dataset_ref_mismatch)),

@@ -7,6 +7,8 @@ from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
 
+from risk.surveillance_lineage import dataset_is_currently_eligible
+
 
 PRODUCTION_SEEDED_TRUTH_BLOCKED = "production_seeded_truth_blocked"
 PRODUCTION_STATIC_FALLBACK_BLOCKED = "production_static_fallback_blocked"
@@ -375,11 +377,15 @@ def _canonical_dataset_reference_blockers(
 ) -> list[str]:
     """Validate dataset lineage against canonical source-backed rows."""
 
+    blockers: list[str] = []
     dataset_id = _dataset_id(dataset)
     if not dataset_id:
         # In-memory policy unit fixtures do not have rows to resolve. Persisted
         # production datasets always take the database-backed branch below.
         return []
+
+    if not dataset_is_currently_eligible(dataset):
+        _append_unique(blockers, PRODUCTION_SUPERSEDED_TRUTH_BLOCKED)
 
     from risk.models import (
         ClimateRecord,
@@ -431,7 +437,9 @@ def _canonical_dataset_reference_blockers(
         label_window_ids.update(window_refs[2])
         string_refs.update(window_refs[3])
 
-    blockers: list[str] = []
+    # Keep the explicit eligibility blocker even when the rest of the
+    # canonical-reference checks also find historical superseded records.
+    blockers = list(dict.fromkeys(blockers))
     valid_string_refs = {
         *(f"surveillance_record:{record_id}" for record_id in surveillance_ids),
         *(f"climate_record:{record_id}" for record_id in climate_ids),
@@ -944,6 +952,8 @@ def _production_label_dataset_blockers(model_run) -> list[str]:
         _append_unique(blockers, PRODUCTION_CANONICAL_REFERENCE_INVALID)
 
     for dataset in datasets.values():
+        if not dataset_is_currently_eligible(dataset):
+            _append_unique(blockers, PRODUCTION_SUPERSEDED_TRUTH_BLOCKED)
         if str(getattr(dataset, "dataset_kind", "")).upper() != "TRAINING":
             _append_unique(blockers, PRODUCTION_CANONICAL_DATASET_INVALID)
         if str(getattr(dataset, "source_kind", "")).upper() == "SEEDED":

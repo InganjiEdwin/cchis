@@ -22,6 +22,7 @@ from risk.models import (
 )
 
 from .registry import active_model_registry_entry
+from .surveillance_lineage import label_window_is_currently_eligible
 
 
 MODEL_RETRAINING_POLICY_SCHEMA_VERSION = "ward-risk-model-retraining-policy-v1"
@@ -200,10 +201,10 @@ def _stale_model_trigger(*, registry_entry: ModelRegistryEntry, active_from, now
 
 
 def _new_label_volume_trigger(*, active_from, threshold: int) -> dict:
-    queryset = SurveillanceLabelWindow.objects.all()
+    queryset = SurveillanceLabelWindow.objects.select_related("feature_dataset").all()
     if active_from is not None:
         queryset = queryset.filter(created_at__gte=active_from)
-    count = queryset.count()
+    count = sum(1 for label in queryset if label_window_is_currently_eligible(label))
     return {
         "triggered": count >= threshold,
         "observed_count": count,
@@ -297,11 +298,15 @@ def _miss_trigger(*, registry_entry: ModelRegistryEntry, active_from, threshold:
     risk_scores_by_ward = {}
     for risk_score in RiskScore.objects.filter(model_run=registry_entry.model_run).order_by("-generated_at", "-id"):
         risk_scores_by_ward.setdefault(risk_score.ward_id, risk_score)
-    labels = SurveillanceLabelWindow.objects.filter(outbreak_label=SurveillanceOutbreakLabel.ACTIVE).select_related("ward")
+    labels = SurveillanceLabelWindow.objects.filter(
+        outbreak_label=SurveillanceOutbreakLabel.ACTIVE,
+    ).select_related("ward", "feature_dataset")
     if active_from is not None:
         labels = labels.filter(created_at__gte=active_from)
     misses = []
     for label in labels:
+        if not label_window_is_currently_eligible(label):
+            continue
         risk_score = risk_scores_by_ward.get(label.ward_id)
         delivered_alert_exists = (
             risk_score is not None
@@ -330,11 +335,10 @@ def _label_for_risk_score(risk_score: RiskScore | None) -> SurveillanceLabelWind
     if risk_score is None:
         return None
     start_date = (risk_score.generated_at + timedelta(days=7)).date()
-    return (
-        SurveillanceLabelWindow.objects.filter(
-            ward=risk_score.ward,
-            label_window_end__gte=start_date,
-        )
-        .order_by("label_window_start", "id")
-        .first()
-    )
+    for label in SurveillanceLabelWindow.objects.select_related("feature_dataset").filter(
+        ward=risk_score.ward,
+        label_window_end__gte=start_date,
+    ).order_by("label_window_start", "id"):
+        if label_window_is_currently_eligible(label):
+            return label
+    return None

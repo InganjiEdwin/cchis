@@ -12,6 +12,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from risk.models import (
+    FeatureDataset,
     HealthFacility,
     SurveillanceCaseClass,
     SurveillanceDiseaseCategory,
@@ -29,6 +30,7 @@ from .truth_policy import (
     PRODUCTION_UNMAPPED_WARD_BLOCKED,
     require_seeded_truth_allowed,
 )
+from .surveillance_lineage import reconcile_surveillance_label_lineage
 
 
 MAX_REJECTED_ROW_DETAILS = 25
@@ -921,7 +923,8 @@ def _mark_superseded_surveillance_records(
     return {
         "records_with_supersedes_ref": sum(1 for record in new_records if record.supersedes_record_ref),
         "superseded_record_count": len(marked_record_ids),
-        "superseded_record_ids": sorted(marked_record_ids)[:MAX_REJECTED_ROW_DETAILS],
+        "superseded_record_ids": sorted(marked_record_ids),
+        "superseded_record_ids_sample": sorted(marked_record_ids)[:MAX_REJECTED_ROW_DETAILS],
         "unresolved_supersedes_refs": unresolved_refs[:MAX_REJECTED_ROW_DETAILS],
     }
 
@@ -1464,6 +1467,16 @@ def run_surveillance_csv_ingestion(
                 },
             }
 
+            supersession_summary = canonical_summary.get("supersession_summary") or {}
+            superseded_record_ids = supersession_summary.get("superseded_record_ids") or []
+            if superseded_record_ids:
+                run.results["label_lineage_reconciliation"] = reconcile_surveillance_label_lineage(
+                    superseding_ingestion_run=run,
+                    superseded_record_ids=superseded_record_ids,
+                    apply=True,
+                    now=timezone.now(),
+                )
+
             if run.records_seen == 0:
                 run.status = SurveillanceIngestionRun.STATUS_FAILED
                 run.error_summary = "No source rows were found in the surveillance import file."
@@ -1564,6 +1577,54 @@ def regenerate_surveillance_label_windows_for_run(
                 "skipped": True,
                 "reason": "missing_reporting_period_bounds",
                 "run_id": run.id,
+            }
+        )
+
+    lineage_reconciliation = (run.results or {}).get("label_lineage_reconciliation") or {}
+    replacement_candidates = list(lineage_reconciliation.get("replacement_datasets") or [])
+    for affected_dataset in lineage_reconciliation.get("affected_datasets") or []:
+        if affected_dataset.get("replacement_dataset_ref") and not any(
+            item.get("dataset_ref") == affected_dataset.get("replacement_dataset_ref")
+            for item in replacement_candidates
+        ):
+            replacement_candidates.append(
+                {
+                    "dataset_ref": affected_dataset["replacement_dataset_ref"],
+                    "row_count": None,
+                }
+            )
+    for replacement_candidate in replacement_candidates:
+        replacement = FeatureDataset.objects.filter(
+            dataset_ref=replacement_candidate.get("dataset_ref"),
+        ).first()
+        if replacement is None:
+            continue
+        replacement_lineage = replacement.lineage_metadata or {}
+        if replacement_lineage.get("dataset_role") != dataset_role:
+            continue
+        return store(
+            {
+                "requested": True,
+                "regenerated": True,
+                "skipped": False,
+                "run_id": run.id,
+                "dataset_ref": replacement.dataset_ref,
+                "schema_version": replacement.schema_version,
+                "dataset_role": dataset_role,
+                "window_days": replacement_lineage.get("window_days", window_days),
+                "step_days": replacement_lineage.get("step_days", step_days),
+                "include_seeded": replacement_lineage.get("include_seeded", include_seeded),
+                "ward_ids": list(
+                    SurveillanceLabelWindow.objects.filter(feature_dataset=replacement)
+                    .order_by()
+                    .values_list("ward_id", flat=True)
+                    .distinct()
+                ),
+                "label_window_count": SurveillanceLabelWindow.objects.filter(
+                    feature_dataset=replacement,
+                ).count(),
+                "feature_dataset_row_count": replacement.row_count,
+                "supersession_replacement": True,
             }
         )
 

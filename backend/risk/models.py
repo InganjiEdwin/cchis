@@ -4172,10 +4172,24 @@ class FeatureDataset(models.Model):
         (SOURCE_KIND_HYBRID, "Hybrid"),
     ]
 
+    ELIGIBILITY_ACTIVE = "active"
+    ELIGIBILITY_SUPERSEDED = "superseded"
+    ELIGIBILITY_NON_ELIGIBLE = "non_eligible"
+    ELIGIBILITY_STATE_CHOICES = [
+        (ELIGIBILITY_ACTIVE, "Active"),
+        (ELIGIBILITY_SUPERSEDED, "Superseded"),
+        (ELIGIBILITY_NON_ELIGIBLE, "Non-eligible"),
+    ]
+
     dataset_ref = models.CharField(max_length=160, unique=True)
     dataset_kind = models.CharField(max_length=20, choices=KIND_CHOICES)
     schema_version = models.CharField(max_length=50, default="baseline-v1")
     source_kind = models.CharField(max_length=20, choices=SOURCE_KIND_CHOICES, default=SOURCE_KIND_SEEDED)
+    eligibility_state = models.CharField(
+        max_length=24,
+        choices=ELIGIBILITY_STATE_CHOICES,
+        default=ELIGIBILITY_ACTIVE,
+    )
     month = models.PositiveSmallIntegerField(null=True, blank=True)
     feature_keys = models.JSONField(default=list, blank=True)
     row_count = models.PositiveIntegerField(default=0)
@@ -4187,6 +4201,10 @@ class FeatureDataset(models.Model):
         indexes = [
             models.Index(fields=["dataset_kind", "created_at"]),
             models.Index(fields=["schema_version", "created_at"]),
+            models.Index(
+                fields=["schema_version", "eligibility_state", "created_at"],
+                name="risk_featds_schema_elig_idx",
+            ),
         ]
 
     def __str__(self) -> str:

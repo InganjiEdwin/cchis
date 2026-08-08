@@ -18,6 +18,7 @@ from risk.models import (
 
 from .alignment import model_run_has_phase_4_promotion_metadata
 from .model_artifacts import sanitized_artifact_evidence, verify_registry_artifact
+from risk.surveillance_lineage import dataset_is_currently_eligible
 
 
 MODEL_REGISTRY_AUDIT_SCHEMA_VERSION = "model-artifact-registry-audit-v1"
@@ -251,8 +252,12 @@ def _entry_issues(entry: ModelRegistryEntry) -> list[str]:
     label_ref = (entry.training_label_dataset_ref or "").strip()
     if not label_ref:
         issues.append("training_label_dataset_reference_missing")
-    elif not FeatureDataset.objects.filter(dataset_ref=label_ref).exists():
-        issues.append("training_label_dataset_not_found")
+    else:
+        label_dataset = FeatureDataset.objects.filter(dataset_ref=label_ref).first()
+        if label_dataset is None:
+            issues.append("training_label_dataset_not_found")
+        elif not dataset_is_currently_eligible(label_dataset):
+            issues.append("training_label_dataset_not_current_eligible")
     run_contract = list(model_run.feature_keys or [])
     if entry.feature_schema_version != model_run.feature_schema_version:
         issues.append("feature_schema_version_mismatch")
