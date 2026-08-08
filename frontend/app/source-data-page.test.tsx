@@ -13,6 +13,7 @@ import { buildDashboardUser } from "@/test/dashboard-user";
 
 const dashboardMocks = vi.hoisted(() => ({
   runSourceDataDownstreamActionViaBff: vi.fn(),
+  invalidateQueries: vi.fn(),
 }));
 const mockUseSourceDataFeedTypesQuery = vi.fn();
 const mockUseSourceDataOverviewQuery = vi.fn();
@@ -21,28 +22,54 @@ const mockUseSourceDataUploadsQuery = vi.fn();
 const mockUseSourceDataUploadQuery = vi.fn();
 const mockUseAuth = vi.fn();
 const mockRefetch = vi.fn();
+const mockFeedTypesRefetch = vi.fn();
+const mockOverviewRefetch = vi.fn();
+const mockOperationsRefetch = vi.fn();
+const mockUploadsRefetch = vi.fn();
+const mockSelectedUploadRefetch = vi.fn();
 const mockMutationRecords: Array<{ mutate: ReturnType<typeof vi.fn>; isPending: boolean; error: Error | null }> = [];
 
 vi.mock("@/components/dashboard-topbar", () => ({
   DashboardTopbar: ({
     title,
     subtitle,
+    onRefresh,
     children,
   }: {
     title: string;
     subtitle: string;
+    onRefresh?: () => void;
     children?: React.ReactNode;
   }) =>
     React.createElement(
       "div",
       null,
       `${title} | ${subtitle}`,
+      React.createElement("button", { type: "button", "data-testid": "mock-topbar-refresh", onClick: onRefresh }, "Refresh all"),
       children,
     ),
 }));
 
 vi.mock("@/components/role-gate", () => ({
-  RoleGate: ({ children }: { children: React.ReactNode }) => React.createElement(React.Fragment, null, children),
+  RoleGate: ({
+    children,
+    pageCapability,
+    title,
+    message,
+  }: {
+    children: React.ReactNode;
+    pageCapability?: string;
+    title: string;
+    message: string;
+  }) => {
+    const currentUser = mockUseAuth().currentUser;
+    const hasAccess = pageCapability
+      ? Boolean(currentUser?.dashboard_capabilities?.pages?.[pageCapability as "source_data"])
+      : true;
+    return hasAccess
+      ? React.createElement(React.Fragment, null, children)
+      : React.createElement("section", null, React.createElement("h3", null, title), React.createElement("p", null, message));
+  },
 }));
 
 vi.mock("@/components/auth-provider", () => ({
@@ -59,7 +86,7 @@ vi.mock("@tanstack/react-query", () => ({
     mockMutationRecords.push(record);
     return record;
   },
-  useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+  useQueryClient: () => ({ invalidateQueries: dashboardMocks.invalidateQueries }),
 }));
 
 vi.mock("@/lib/dashboard", async (importOriginal) => {
@@ -356,7 +383,7 @@ describe("SourceDataPage", () => {
       isLoading: false,
       isError: false,
       error: null,
-      refetch: mockRefetch,
+      refetch: mockFeedTypesRefetch,
       isFetching: false,
     });
     mockUseSourceDataOverviewQuery.mockReturnValue({
@@ -364,7 +391,7 @@ describe("SourceDataPage", () => {
       isLoading: false,
       isError: false,
       error: null,
-      refetch: mockRefetch,
+      refetch: mockOverviewRefetch,
       isFetching: false,
     });
     mockUseSourceDataOperationsQuery.mockReturnValue({
@@ -372,18 +399,20 @@ describe("SourceDataPage", () => {
       isLoading: false,
       isError: false,
       error: null,
-      refetch: mockRefetch,
+      refetch: mockOperationsRefetch,
       isFetching: false,
     });
     mockUseSourceDataUploadsQuery.mockReturnValue({
       data: { schema_version: "source-data-upload-batch-list-v1", count: 0, results: [] },
       isLoading: false,
       isError: false,
+      refetch: mockUploadsRefetch,
     });
     mockUseSourceDataUploadQuery.mockReturnValue({
       data: undefined,
       isLoading: false,
       isError: false,
+      refetch: mockSelectedUploadRefetch,
     });
   });
 
@@ -393,8 +422,8 @@ describe("SourceDataPage", () => {
     expect(screen.getByText("Data Readiness | Check which data is up to date, upload new files, and safely add them to the dashboard")).toBeInTheDocument();
     expect(screen.getByText("What Needs Attention")).toBeInTheDocument();
     expect(screen.getByText("Add Data Safely")).toBeInTheDocument();
-    expect(screen.getByText("System Readiness")).toBeInTheDocument();
-    expect(screen.getByText("Ready for uploads")).toBeInTheDocument();
+    expect(screen.getByText("Source Data Operations")).toBeInTheDocument();
+    expect(screen.getByText("Degraded/review needed")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /overview/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /review update/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /templates/i })).toBeInTheDocument();
@@ -414,6 +443,244 @@ describe("SourceDataPage", () => {
     const hrefs = links.map((link) => link.getAttribute("href"));
     expect(hrefs).toContain("/api/dashboard/source-data/templates/surveillance_weekly_aggregate");
     expect(hrefs).toContain("/api/dashboard/source-data/templates/facility_readiness_snapshot");
+    expect(screen.getByRole("button", { name: /pause manual upload/i })).toBeEnabled();
+  });
+
+  it("surfaces backend feed provenance, freshness and connector evidence", () => {
+    const overview = buildOverview();
+    overview.freshness.sources.push({
+      ...overview.freshness.sources[0],
+      key: "feed:surveillance_weekly_aggregate",
+      feed_key: "surveillance_weekly_aggregate",
+      label: "Weekly surveillance aggregate",
+      domain: "health_surveillance",
+      source_type: "weekly_aggregate",
+      status: "current",
+      truth_state: "csv_backed",
+      expected_cadence: "weekly_minimum",
+      last_source_timestamp: "2026-05-05T08:00:00Z",
+      recommended_action: "No immediate action required for the weekly file.",
+    });
+    mockUseSourceDataOverviewQuery.mockReturnValue({
+      data: overview,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: mockRefetch,
+      isFetching: false,
+    });
+
+    render(<SourceDataPage />);
+    fireEvent.click(screen.getByRole("tab", { name: /sources & templates/i }));
+
+    expect(screen.getAllByText("Source truth").length).toBeGreaterThan(0);
+    expect(screen.getByText("Manual file")).toBeInTheDocument();
+    expect(screen.getAllByText("Up to date").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Last source timestamp").length).toBeGreaterThan(0);
+    expect(screen.getByText("Automatic update: DHIS2 weekly surveillance")).toBeInTheDocument();
+    expect(screen.getByText("Enabled")).toBeInTheDocument();
+    expect(screen.getByText("Configured")).toBeInTheDocument();
+    expect(screen.getByText("Last run status: Updated")).toBeInTheDocument();
+    expect(screen.getAllByText("No immediate action required for the weekly file.").length).toBeGreaterThan(0);
+  });
+
+  it("keeps unconfigured and demo-backed feeds truthfully labelled", () => {
+    const response = buildFeedTypes();
+    response.feeds = [
+      {
+        ...response.feeds[0],
+        feed_key: "unconfigured_surveillance",
+        label: "Unconfigured surveillance feed",
+        feed_mode: "api",
+        connector_status: {
+          ...response.feeds[0].connector_status!,
+          connector_key: "dhis2_unconfigured",
+          configured: false,
+          status: "not_configured",
+          last_run_status: "skipped",
+        },
+      },
+      {
+        ...response.feeds[1],
+        feed_key: "demo_facility_feed",
+        label: "Demo facility feed",
+        feed_mode: "demo",
+        csv_upload_enabled: false,
+        connector_status: undefined,
+      },
+    ];
+    mockUseSourceDataFeedTypesQuery.mockReturnValue({
+      data: response,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: mockFeedTypesRefetch,
+      isFetching: false,
+    });
+
+    render(<SourceDataPage />);
+    fireEvent.click(screen.getByRole("tab", { name: /sources & templates/i }));
+
+    expect(screen.getByText("Needs setup")).toBeInTheDocument();
+    expect(screen.getByText("Not configured")).toBeInTheDocument();
+    expect(screen.getAllByText("Demo data").length).toBeGreaterThan(0);
+    expect(screen.getByText("Connector: Not registered")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /pause manual upload/i })).toBeDisabled();
+  });
+
+  it("renders partial feed metadata without undefined values or crashes", () => {
+    const response = buildFeedTypes();
+    response.feed_count = 1;
+    response.feeds = [
+      {
+        ...response.feeds[0],
+        feed_key: undefined,
+        label: undefined,
+        domain: undefined,
+        adapter_notes: undefined,
+        downstream_action: undefined,
+        accepted_columns: undefined,
+        required_metadata: undefined,
+        feed_mode: undefined,
+        csv_upload_enabled: undefined,
+        connector_status: undefined,
+      },
+    ] as unknown as SourceDataFeedTypesResponse["feeds"];
+    mockUseSourceDataFeedTypesQuery.mockReturnValue({
+      data: response,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: mockFeedTypesRefetch,
+      isFetching: false,
+    });
+
+    render(<SourceDataPage />);
+    fireEvent.click(screen.getByRole("tab", { name: /sources & templates/i }));
+
+    expect(screen.getByText("Unnamed data feed")).toBeInTheDocument();
+    expect(screen.getAllByText("Unclassified").length).toBeGreaterThan(0);
+    expect(screen.getByText("No required metadata returned.")).toBeInTheDocument();
+    expect(screen.getByText("Template not available")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^add data$/i }));
+    expect(screen.getByLabelText("Data type")).toBeInTheDocument();
+    expect(screen.queryByText("undefined")).not.toBeInTheDocument();
+    expect(screen.queryByText("NaN")).not.toBeInTheDocument();
+  });
+
+  it("keeps operations failure scoped to its panel and does not claim overall production health", () => {
+    mockUseSourceDataOperationsQuery.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error("Operations endpoint unavailable"),
+      refetch: mockRefetch,
+      isFetching: false,
+    });
+
+    render(<SourceDataPage />);
+
+    expect(screen.getByText("Source Data Operations")).toBeInTheDocument();
+    expect(screen.getByText("Operations endpoint unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Unavailable / not loaded")).toBeInTheDocument();
+    expect(screen.getByText("What Needs Attention")).toBeInTheDocument();
+    expect(screen.queryByText(/production health/i)).not.toBeInTheDocument();
+  });
+
+  it("shows healthy only when the backend heartbeat is current and blocking counts are clear", () => {
+    const operations = buildOperations();
+    operations.metrics.stale_feed_count = 0;
+    mockUseSourceDataOperationsQuery.mockReturnValue({
+      data: operations,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: mockRefetch,
+      isFetching: false,
+    });
+
+    render(<SourceDataPage />);
+
+    expect(screen.getByText("Healthy/current")).toBeInTheDocument();
+    expect(screen.queryByText("Ready for uploads")).not.toBeInTheDocument();
+  });
+
+  it("treats partial operations evidence as degraded instead of green", () => {
+    const operations = { ...buildOperations(), metrics: undefined } as unknown as SourceDataOperationsResponse;
+    mockUseSourceDataOperationsQuery.mockReturnValue({
+      data: operations,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: mockRefetch,
+      isFetching: false,
+    });
+
+    render(<SourceDataPage />);
+
+    expect(screen.getByText("Degraded/review needed")).toBeInTheDocument();
+    expect(screen.queryByText("Healthy/current")).not.toBeInTheDocument();
+  });
+
+  it("never reports healthy when any required operations metric is missing", () => {
+    const requiredMetricKeys = [
+      "upload_count",
+      "recent_upload_count",
+      "validation_failure_count",
+      "import_failure_count",
+      "stale_feed_count",
+      "duplicate_attempt_count",
+      "status_counts",
+    ];
+
+    for (const metricKey of requiredMetricKeys) {
+      const operations = buildOperations();
+      const metrics = { ...operations.metrics } as Record<string, unknown>;
+      delete metrics[metricKey];
+      mockUseSourceDataOperationsQuery.mockReturnValue({
+        data: { ...operations, metrics } as unknown as SourceDataOperationsResponse,
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: mockOperationsRefetch,
+        isFetching: false,
+      });
+
+      const view = render(<SourceDataPage />);
+      expect(screen.getByText("Degraded/review needed"), metricKey).toBeInTheDocument();
+      expect(screen.queryByText("Healthy/current"), metricKey).not.toBeInTheDocument();
+      view.unmount();
+    }
+  });
+
+  it("refreshes the feed registry, overview, operations and upload queries together", () => {
+    const upload = buildImportedUpload();
+    mockUseSourceDataUploadsQuery.mockReturnValue({
+      data: { schema_version: "source-data-upload-batch-list-v1", count: 1, results: [upload] },
+      isLoading: false,
+      isError: false,
+      refetch: mockUploadsRefetch,
+      isFetching: false,
+    });
+    mockUseSourceDataUploadQuery.mockReturnValue({
+      data: upload,
+      isLoading: false,
+      isError: false,
+      refetch: mockSelectedUploadRefetch,
+      isFetching: false,
+    });
+
+    render(<SourceDataPage />);
+
+    fireEvent.click(screen.getByTestId("mock-topbar-refresh"));
+
+    expect(dashboardMocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["source-data"] });
+    expect(mockFeedTypesRefetch).toHaveBeenCalledTimes(1);
+    expect(mockOverviewRefetch).toHaveBeenCalledTimes(1);
+    expect(mockOperationsRefetch).toHaveBeenCalledTimes(1);
+    expect(mockUploadsRefetch).toHaveBeenCalledTimes(1);
+    expect(mockSelectedUploadRefetch).toHaveBeenCalledTimes(1);
   });
 
   it("renders safe downstream actions after an imported upload", () => {
@@ -437,6 +704,7 @@ describe("SourceDataPage", () => {
     expect(screen.queryByRole("button", { name: /use this file on dashboard/i })).not.toBeInTheDocument();
     expect(screen.queryByText("Reason for cancelling")).not.toBeInTheDocument();
     expect(screen.getByText("Related dashboard updates")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /download full error csv/i })).toBeInTheDocument();
     expect(screen.getByText("Daily refresh 06:00")).toBeInTheDocument();
     expect(screen.getByText("No messages sent")).toBeInTheDocument();
     expect(screen.getByText("No risk score changes")).toBeInTheDocument();
@@ -510,6 +778,37 @@ describe("SourceDataPage", () => {
     expect(screen.getByText("Disruptions")).toBeInTheDocument();
   });
 
+  it("does not render undefined, NaN or misleading zero values for missing validation fields", () => {
+    const upload = {
+      ...buildImportedUpload(),
+      status: "validation_failed" as const,
+      validation_status: "failed" as const,
+      row_count: undefined,
+      accepted_count: undefined,
+      rejected_count: undefined,
+      warning_count: undefined,
+      validation_issues: [],
+    };
+    mockUseSourceDataUploadsQuery.mockReturnValue({
+      data: { schema_version: "source-data-upload-batch-list-v1", count: 1, results: [upload] },
+      isLoading: false,
+      isError: false,
+    });
+    mockUseSourceDataUploadQuery.mockReturnValue({
+      data: upload,
+      isLoading: false,
+      isError: false,
+    });
+
+    render(<SourceDataPage />);
+    fireEvent.click(screen.getByRole("tab", { name: /review update/i }));
+
+    expect(screen.getAllByText("Not available").length).toBeGreaterThan(0);
+    expect(screen.queryByText("undefined")).not.toBeInTheDocument();
+    expect(screen.queryByText("NaN")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /download full error csv/i })).toBeInTheDocument();
+  });
+
   it("validates required fields and rejected files before upload", () => {
     render(<SourceDataPage />);
 
@@ -557,6 +856,27 @@ describe("SourceDataPage", () => {
 
     expect(screen.getAllByRole("link", { name: /download template/i }).length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: /upload file/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /pause manual upload/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /allow manual upload/i })).not.toBeInTheDocument();
+  });
+
+  it("denies CHV access to the Source Data workspace", () => {
+    mockUseAuth.mockReturnValue({
+      currentUser: buildDashboardUser("CHV", {
+        username: "chv",
+        email: "chv@example.com",
+        full_name: "Community Health Volunteer",
+        theme_preference: "LIGHT",
+        ward: 7,
+        ward_name: "North Kadem",
+      }),
+    });
+
+    render(<SourceDataPage />);
+
+    expect(screen.getByText("Data readiness access is restricted")).toBeInTheDocument();
+    expect(screen.queryByText("Source Data Operations")).not.toBeInTheDocument();
+    expect(screen.queryByText("Data Readiness | Check which data is up to date, upload new files, and safely add them to the dashboard")).not.toBeInTheDocument();
   });
 
   it("lets supervisors request risky source-data review without admin approval controls", () => {

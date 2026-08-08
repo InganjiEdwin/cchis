@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -56,7 +56,7 @@ const DATA_READINESS_TABS: Array<{ id: DataReadinessTab; label: string; descript
   { id: "overview", label: "Overview", description: "Main priorities" },
   { id: "review", label: "Review update", description: "Check and add" },
   { id: "history", label: "Recent updates", description: "Previous files" },
-  { id: "templates", label: "Templates", description: "File templates" },
+  { id: "templates", label: "Sources & templates", description: "Registered feeds" },
 ];
 
 type UploadFormErrors = Partial<
@@ -111,15 +111,37 @@ const ISSUE_FIX_COPY: Record<string, string> = {
   unsafe_text_value_detected: "Remove names, contacts, identifiers, exact locations, and clinical notes from the CSV.",
 };
 
-function formatLabel(value: string) {
+function formatLabel(value: string | null | undefined) {
+  if (!value) {
+    return "Not reported";
+  }
   return value
     .toLowerCase()
     .replaceAll("_", " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function cadenceLabel(value: string) {
-  return value.replaceAll("_", " ");
+function feedBackendKey(feed: Partial<SourceDataFeedDefinition> | null | undefined) {
+  const value = typeof feed?.feed_key === "string" ? feed.feed_key.trim() : "";
+  return value || null;
+}
+
+function feedKeyValue(feed: Partial<SourceDataFeedDefinition> | null | undefined, fallback = "unkeyed-feed") {
+  return feedBackendKey(feed) ?? fallback;
+}
+
+function feedLabelValue(feed: Partial<SourceDataFeedDefinition> | null | undefined) {
+  const value = typeof feed?.label === "string" ? feed.label.trim() : "";
+  return value || "Unnamed data feed";
+}
+
+function feedDomainValue(feed: Partial<SourceDataFeedDefinition> | null | undefined) {
+  const value = typeof feed?.domain === "string" ? feed.domain.trim() : "";
+  return value || "unclassified";
+}
+
+function cadenceLabel(value: string | null | undefined) {
+  return value ? value.replaceAll("_", " ") : "Not reported";
 }
 
 function FeedMetric({ label, value }: { label: string; value: string | number }) {
@@ -214,22 +236,25 @@ const METADATA_COPY: Record<string, string> = {
 };
 
 function friendlyStatusLabel(status: string) {
-  return SOURCE_STATUS_COPY[status] ?? formatLabel(status);
+  return status ? SOURCE_STATUS_COPY[status] ?? formatLabel(status) : "Not reported";
 }
 
 function friendlyTruthLabel(value: string) {
-  return SOURCE_TRUTH_COPY[value] ?? formatLabel(value);
+  return value ? SOURCE_TRUTH_COPY[value] ?? formatLabel(value) : "Not reported";
 }
 
 function friendlyUpdateStatusLabel(value: string) {
-  return UPDATE_STATUS_COPY[value] ?? formatLabel(value);
+  return value ? UPDATE_STATUS_COPY[value] ?? formatLabel(value) : "Not reported";
 }
 
 function friendlyFieldLabel(value: string) {
-  return METADATA_COPY[value] ?? formatLabel(value);
+  return value ? METADATA_COPY[value] ?? formatLabel(value) : "Not reported";
 }
 
-function friendlyModeLabel(value?: string, csvUploadEnabled = true) {
+function friendlyModeLabel(value?: string, csvUploadEnabled?: boolean) {
+  if (!value) {
+    return "Not reported";
+  }
   if (value === "api") {
     return "Automatic updates";
   }
@@ -240,12 +265,18 @@ function friendlyModeLabel(value?: string, csvUploadEnabled = true) {
     return "Manual upload";
   }
   if (value === "fallback") {
-    return csvUploadEnabled ? "Manual backup" : "Manual upload paused";
+    return csvUploadEnabled === false ? "Manual upload paused" : "Manual backup";
   }
-  return csvUploadEnabled ? "Manual upload" : "Manual upload paused";
+  if (value === "manual" || value === "csv") {
+    return csvUploadEnabled === false ? "Manual upload paused" : "Manual upload";
+  }
+  return formatLabel(value);
 }
 
-function friendlyActionText(value: string) {
+function friendlyActionText(value: string | null | undefined) {
+  if (!value) {
+    return "Not available from the backend.";
+  }
   return value
     .replaceAll("source-data feeds", "data items")
     .replaceAll("Source-data feeds", "Data items")
@@ -274,14 +305,20 @@ function friendlyActionText(value: string) {
     .replace(/\.$/, ".");
 }
 
-function friendlyAlertTitle(value: string) {
+function friendlyAlertTitle(value: string | null | undefined) {
+  if (!value) {
+    return "Operational alert";
+  }
   if (value.toLowerCase().includes("overdue critical")) {
     return "Important data needs update";
   }
   return friendlyActionText(value);
 }
 
-function friendlyActionLabel(value: string) {
+function friendlyActionLabel(value: string | null | undefined) {
+  if (!value) {
+    return "Not available from the backend.";
+  }
   if (value.includes("surveillance")) {
     return "Refresh risk labels and dashboard inputs";
   }
@@ -341,15 +378,19 @@ const DOWNSTREAM_ACTION_COPY: Record<
 };
 
 function friendlyDownstreamActionLabel(action: SourceDataDownstreamActionDefinition) {
-  if (action.action_key.toLowerCase().includes("audit") || action.label.toLowerCase().includes("audit")) {
+  const actionKey = action.action_key ?? "";
+  const actionLabel = action.label ?? "";
+  if (actionKey.toLowerCase().includes("audit") || actionLabel.toLowerCase().includes("audit")) {
     return "Run quality review";
   }
-  return DOWNSTREAM_ACTION_COPY[action.action_key]?.label ?? friendlyActionText(action.label);
+  return DOWNSTREAM_ACTION_COPY[actionKey]?.label ?? friendlyActionText(actionLabel);
 }
 
 function friendlyDownstreamActionDetail(action: SourceDataDownstreamActionDefinition) {
-  const copy = DOWNSTREAM_ACTION_COPY[action.action_key];
-  if (action.action_key.toLowerCase().includes("audit") || action.label.toLowerCase().includes("audit")) {
+  const actionKey = action.action_key ?? "";
+  const actionLabel = action.label ?? "";
+  const copy = DOWNSTREAM_ACTION_COPY[actionKey];
+  if (actionKey.toLowerCase().includes("audit") || actionLabel.toLowerCase().includes("audit")) {
     return "Checks this update and saves a review note. It will not change dashboard data.";
   }
   if (action.availability_status === "available") {
@@ -359,6 +400,9 @@ function friendlyDownstreamActionDetail(action: SourceDataDownstreamActionDefini
 }
 
 function connectorStatusLabel(status: string) {
+  if (!status) {
+    return "Not reported";
+  }
   if (status === "not_configured") {
     return "Needs setup";
   }
@@ -382,7 +426,7 @@ function connectorStatusLabel(status: string) {
 
 function scopeLabel(scope?: string) {
   if (!scope) {
-    return "Loading";
+    return "Not loaded";
   }
   if (scope === "mvp") {
     return "Pilot set";
@@ -401,7 +445,7 @@ function inferredRiskCategory(upload?: SourceDataUploadBatchRecord) {
   if (upload.approval_risk_category) {
     return upload.approval_risk_category;
   }
-  if (upload.metadata.duplicate_file_sha256 && upload.metadata.duplicate_metadata_upload_public_id) {
+  if (upload.metadata?.duplicate_file_sha256 && upload.metadata?.duplicate_metadata_upload_public_id) {
     return "replay_import";
   }
   if (upload.replaces_upload_public_id || upload.replacement_reason || upload.correction_mode === "release_replacement") {
@@ -417,14 +461,65 @@ function inferredRiskCategory(upload?: SourceDataUploadBatchRecord) {
 }
 
 function numberFromRecord(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function hasRequiredOperationsMetrics(metrics: unknown) {
+  if (!metrics || typeof metrics !== "object" || Array.isArray(metrics)) {
+    return false;
+  }
+  const record = metrics as Record<string, unknown>;
+  const requiredNumericKeys = [
+    "upload_count",
+    "recent_upload_count",
+    "validation_failure_count",
+    "import_failure_count",
+    "stale_feed_count",
+    "duplicate_attempt_count",
+  ];
+  return requiredNumericKeys.every((key) => numberFromRecord(record[key]) !== null)
+    && Boolean(record.status_counts && typeof record.status_counts === "object" && !Array.isArray(record.status_counts));
+}
+
+function metricValue(value: unknown, fallback = "Not available"): string | number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    return value;
+  }
+  return fallback;
+}
+
+function timestampValue(value: string | null | undefined) {
+  if (!value || !hasValidTimestamp(value)) {
+    return "Not available";
+  }
+  return formatRelativeTimestamp(value);
+}
+
+function hasValidTimestamp(value: string | null | undefined) {
+  return Boolean(value && !Number.isNaN(new Date(value).getTime()));
+}
+
+function periodValue(start: string | null | undefined, end: string | null | undefined) {
+  if (start && end) {
+    return `${start} to ${end}`;
+  }
+  if (start) {
+    return `From ${start}`;
+  }
+  if (end) {
+    return `Through ${end}`;
+  }
+  return "Not available";
 }
 
 function readinessValidationSummary(upload?: SourceDataUploadBatchRecord) {
   if (!upload || upload.feed_key !== "facility_readiness_snapshot") {
     return null;
   }
-  const validationSummary = upload.metadata.validation_summary as Record<string, unknown> | undefined;
+  const validationSummary = upload.metadata?.validation_summary as Record<string, unknown> | undefined;
   const summary = validationSummary?.readiness_summary as Record<string, unknown> | undefined;
   return summary ?? null;
 }
@@ -446,9 +541,13 @@ function issueFixCopy(code: string) {
   return ISSUE_FIX_COPY[code] ?? "Review the row, compare it with the template, and validate again after correcting the CSV.";
 }
 
-function percent(value: number, total: number) {
-  if (!total) {
-    return 0;
+function percent(value: unknown, total: unknown) {
+  if (
+    typeof value !== "number" || !Number.isFinite(value)
+    || typeof total !== "number" || !Number.isFinite(total)
+    || total <= 0
+  ) {
+    return null;
   }
   return Math.max(0, Math.min(100, Math.round((value / total) * 100)));
 }
@@ -465,23 +564,28 @@ function toDatetimeLocalValue(value: string | null | undefined) {
   return local.toISOString().slice(0, 16);
 }
 
-function ProgressBar({ label, value }: { label: string; value: number }) {
-  const boundedValue = Math.max(0, Math.min(100, value));
+function ProgressBar({ label, value }: { label: string; value: number | null }) {
+  const hasValue = typeof value === "number" && Number.isFinite(value);
+  const boundedValue = hasValue ? Math.max(0, Math.min(100, value)) : 0;
   return (
     <div className="grid gap-1">
       <div className="flex items-center justify-between gap-3 text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">
         <span>{label}</span>
-        <span>{boundedValue}%</span>
+        <span>{hasValue ? `${boundedValue}%` : "Not available"}</span>
       </div>
       <div
         className="h-2 overflow-hidden rounded-pill bg-[color-mix(in_srgb,var(--dashboard-table-line)_70%,transparent)]"
-        role="progressbar"
-        aria-label={label}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={boundedValue}
+        {...(hasValue
+          ? {
+              role: "progressbar",
+              "aria-label": label,
+              "aria-valuemin": 0,
+              "aria-valuemax": 100,
+              "aria-valuenow": boundedValue,
+            }
+          : { "aria-label": `${label}: Not available` })}
       >
-        <div className="h-full rounded-pill bg-brand" style={{ width: `${boundedValue}%` }} />
+        {hasValue ? <div className="h-full rounded-pill bg-brand" style={{ width: `${boundedValue}%` }} /> : null}
       </div>
     </div>
   );
@@ -560,9 +664,18 @@ function validateUploadForm({
 }
 
 function TemplateDownloadButton({ feed }: { feed: SourceDataFeedDefinition }) {
+  const feedKey = feedBackendKey(feed);
+  if (!feed.template_url || !feedKey) {
+    return (
+      <span className="inline-flex h-10 items-center justify-center rounded-pill border border-[var(--dashboard-table-line)] px-3 text-sm font-semibold text-panel-muted">
+        Template not available
+      </span>
+    );
+  }
+
   return (
     <a
-      href={`/api/dashboard/source-data/templates/${encodeURIComponent(feed.feed_key)}`}
+      href={`/api/dashboard/source-data/templates/${encodeURIComponent(feedKey)}`}
       className="inline-flex h-10 items-center justify-center gap-2 rounded-pill border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-3 text-sm font-semibold text-panel-copy transition hover:border-[var(--dashboard-icon-button-border)] hover:text-[var(--dashboard-icon-button-ink-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
     >
       <Download className="size-4" aria-hidden="true" />
@@ -572,7 +685,7 @@ function TemplateDownloadButton({ feed }: { feed: SourceDataFeedDefinition }) {
 }
 
 function templateHelpText(feed: SourceDataFeedDefinition) {
-  const columns = new Set(feed.accepted_columns);
+  const columns = new Set(feed.accepted_columns ?? []);
   if (columns.has("ward_code") && columns.has("ward_name") && !columns.has("facility_code")) {
     return "The downloaded file already lists all 40 Migori wards. Fill the blank cells for each ward.";
   }
@@ -594,12 +707,17 @@ function DataReadinessTabs({
       <div className="grid min-w-[720px] grid-cols-4 gap-1">
         {DATA_READINESS_TABS.map((tab) => {
           const isActive = activeTab === tab.id;
+          const tabId = `source-data-tab-${tab.id}`;
+          const panelId = `source-data-panel-${tab.id}`;
           return (
             <button
               key={tab.id}
+              id={tabId}
               type="button"
               role="tab"
               aria-selected={isActive}
+              aria-controls={panelId}
+              tabIndex={isActive ? 0 : -1}
               className={`rounded-[0.6rem] px-3 py-3 text-left transition ${
                 isActive
                   ? "bg-[var(--dashboard-nav-hover)] text-panel-strong shadow-sm"
@@ -632,24 +750,31 @@ function connectorTone(status: string): "success" | "warning" | "danger" | "info
 
 function FeedCard({
   feed,
+  freshness,
   canUseSourceDataAdminControls,
 }: {
   feed: SourceDataFeedDefinition;
+  freshness?: SourceDataFreshnessSource;
   canUseSourceDataAdminControls: boolean;
 }) {
   const queryClient = useQueryClient();
   const connector = feed.connector_status;
-  const csvUploadEnabled = feed.csv_upload_enabled ?? true;
+  const csvUploadEnabled = feed.csv_upload_enabled;
+  const feedKey = feedBackendKey(feed);
   const feedModeMutation = useMutation({
-    mutationFn: () =>
-      updateSourceDataFeedModeViaBff(feed.feed_key, {
+    mutationFn: () => {
+      if (!feedKey) {
+        throw new Error("Feed mode cannot be changed because the feed key was not returned.");
+      }
+      return updateSourceDataFeedModeViaBff(feedKey, {
         feed_mode: csvUploadEnabled ? "api" : "fallback",
         csv_upload_enabled: !csvUploadEnabled,
         authoritative_connector_key: connector?.connector_key || undefined,
         reason: csvUploadEnabled
           ? "API connector marked authoritative for routine source refresh."
           : "CSV fallback re-enabled for corrections and source-gap recovery.",
-      }),
+      });
+    },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.sourceData.root() });
     },
@@ -660,79 +785,118 @@ function FeedCard({
       <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-start">
         <div className="min-w-0">
           <div className="mb-2 flex flex-wrap items-center gap-2">
-            <StatusBadge tone="info">{formatLabel(feed.domain)}</StatusBadge>
-            <StatusBadge tone={feed.feed_mode === "api" ? "success" : csvUploadEnabled ? "info" : "warning"}>
+            <StatusBadge tone="info">{formatLabel(feedDomainValue(feed))}</StatusBadge>
+            <StatusBadge tone={feed.feed_mode === "api" ? "success" : csvUploadEnabled === false ? "warning" : "info"}>
               {friendlyModeLabel(feed.feed_mode, csvUploadEnabled)}
+            </StatusBadge>
+            <StatusBadge tone={freshness ? sourceStatusTone(freshness.status) : "default"}>
+              {freshness ? friendlyStatusLabel(freshness.status) : "Freshness not loaded"}
             </StatusBadge>
             {feed.requires_new_ingestion_path ? <StatusBadge tone="warning">Needs setup</StatusBadge> : null}
           </div>
-          <h2 className="text-lg font-semibold text-panel-strong">{feed.label}</h2>
-          <p className="mt-1 text-sm leading-6 text-panel-muted">{feed.adapter_notes}</p>
+          <h2 className="text-lg font-semibold text-panel-strong">{feedLabelValue(feed)}</h2>
+          <p className="mt-1 text-sm leading-6 text-panel-muted">{feed.adapter_notes || "Feed description not returned."}</p>
+          <p className="mt-2 text-sm leading-6 text-panel-copy">
+            {freshness?.recommended_action || "The backend has not returned a corrective action for this feed."}
+          </p>
           <p className="mt-2 text-sm leading-6 text-panel-copy">{templateHelpText(feed)}</p>
         </div>
         <TemplateDownloadButton feed={feed} />
       </div>
 
-      <details className="group rounded-[0.5rem] border border-[var(--dashboard-table-line)] p-3">
+      <details open className="group rounded-[0.5rem] border border-[var(--dashboard-table-line)] p-3">
         <summary className="cursor-pointer text-sm font-semibold text-panel-copy marker:text-panel-muted">
-          Template details
+          Source and template details
         </summary>
 
         <div className="mt-3 grid gap-4">
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <FeedMetric label="Domain" value={formatLabel(feedDomainValue(feed))} />
             <FeedMetric label="Update rhythm" value={cadenceLabel(feed.cadence)} />
-            <FeedMetric label="Columns to fill" value={feed.accepted_columns.length} />
-            <FeedMetric label="File details" value={feed.required_metadata.length} />
+            <FeedMetric label="Update mode" value={friendlyModeLabel(feed.feed_mode, csvUploadEnabled)} />
+            <FeedMetric label="Source truth" value={freshness ? friendlyTruthLabel(freshness.truth_state) : "Not loaded"} />
+            <FeedMetric label="Freshness" value={freshness ? friendlyStatusLabel(freshness.status) : "Not loaded"} />
+            <FeedMetric
+              label="Last source timestamp"
+              value={timestampValue(freshness?.last_source_timestamp)}
+            />
+            <FeedMetric label="Template" value={feed.template_url ? "Available" : "Not available"} />
+            <FeedMetric label="Columns to fill" value={metricValue(feed.accepted_columns?.length)} />
           </div>
 
           <div className="grid gap-3 lg:grid-cols-2">
             <div className="rounded-[0.5rem] border border-[var(--dashboard-table-line)] p-3">
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Details to include</p>
               <div className="mt-2 flex flex-wrap gap-2">
-                {feed.required_metadata.map((field) => (
+                {feed.required_metadata?.length ? feed.required_metadata.map((field) => (
                   <span
                     key={field}
                     className="rounded-pill bg-[color-mix(in_srgb,var(--dashboard-table-line)_68%,transparent)] px-2.5 py-1 text-xs font-semibold text-panel-copy"
                   >
                     {friendlyFieldLabel(field)}
                   </span>
-                ))}
+                )) : <span className="text-sm text-panel-muted">No required metadata returned.</span>}
               </div>
             </div>
             <div className="rounded-[0.5rem] border border-[var(--dashboard-table-line)] p-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">After upload</p>
-              <p className="mt-2 text-sm font-semibold text-panel-strong">{friendlyActionLabel(feed.downstream_action)}</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">Recommended corrective action</p>
+              <p className="mt-2 text-sm font-semibold text-panel-strong">
+                {freshness?.recommended_action || "Not available from the backend."}
+              </p>
+              <p className="mt-3 text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">After dashboard use</p>
+              <p className="mt-1 text-sm text-panel-copy">{friendlyActionLabel(feed.downstream_action)}</p>
             </div>
           </div>
 
-          {connector?.connector_key ? (
-            <div className="grid gap-3 rounded-[0.5rem] border border-[var(--dashboard-table-line)] p-3 md:grid-cols-[1fr_auto] md:items-center">
+          <div className="grid gap-3 rounded-[0.5rem] border border-[var(--dashboard-table-line)] p-3 md:grid-cols-[1fr_auto] md:items-center">
+            {connector?.connector_key ? (
               <div className="grid gap-2">
                 <div className="flex flex-wrap items-center gap-2">
                   <p className="font-semibold text-panel-strong">Automatic update: {connector.label}</p>
                   <StatusBadge tone={connectorTone(connector.status)}>{connectorStatusLabel(connector.status)}</StatusBadge>
-                  {!connector.enabled ? <StatusBadge tone="warning">Paused</StatusBadge> : null}
-                  {connector.configured ? <StatusBadge tone="success">Ready</StatusBadge> : <StatusBadge tone="warning">Needs setup</StatusBadge>}
+                  <StatusBadge tone={connector.enabled ? "success" : "warning"}>
+                    {connector.enabled ? "Enabled" : "Disabled"}
+                  </StatusBadge>
+                  <StatusBadge tone={connector.configured ? "success" : "warning"}>
+                    {connector.configured ? "Configured" : "Not configured"}
+                  </StatusBadge>
                 </div>
                 <p className="text-sm leading-6 text-panel-muted">{connector.notes}</p>
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">
-                  Last successful update{" "}
-                  {connector.last_successful_fetch_at ? formatRelativeTimestamp(connector.last_successful_fetch_at) : "not recorded"}
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">
+                  <span>Last run: {timestampValue(connector.last_run_at)}</span>
+                  <span>Last run status: {connectorStatusLabel(connector.last_run_status)}</span>
+                  <span>Last successful run: {timestampValue(connector.last_successful_fetch_at)}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="grid gap-1">
+                <p className="font-semibold text-panel-strong">Connector: Not registered</p>
+                <p className="text-sm leading-6 text-panel-muted">
+                  The backend did not return a connector for this feed. Use the manual file path if it is enabled.
                 </p>
               </div>
-              {canUseSourceDataAdminControls ? (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="md"
-                  disabled={!connector.enabled || !connector.configured || feedModeMutation.isPending}
-                  onClick={() => feedModeMutation.mutate()}
-                >
-                  {csvUploadEnabled ? "Pause manual upload" : "Allow manual upload"}
-                </Button>
-              ) : null}
-            </div>
-          ) : null}
+            )}
+            {canUseSourceDataAdminControls && feedKey && connector?.connector_key ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="md"
+                disabled={
+                  csvUploadEnabled === undefined
+                  || !connector.enabled
+                  || !connector.configured
+                  || feedModeMutation.isPending
+                }
+                onClick={() => feedModeMutation.mutate()}
+              >
+                {csvUploadEnabled === undefined
+                  ? "Manual upload status unavailable"
+                  : csvUploadEnabled
+                  ? "Pause manual upload"
+                  : "Allow manual upload"}
+              </Button>
+            ) : null}
+          </div>
         </div>
       </details>
     </Card>
@@ -755,7 +919,7 @@ function UploadWizard({
   onCompleted?: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [feedKey, setFeedKey] = useState(feeds[0]?.feed_key ?? "");
+  const [feedKey, setFeedKey] = useState(feedBackendKey(feeds[0]) ?? "");
   const [sourceName, setSourceName] = useState("");
   const [sourceTimestamp, setSourceTimestamp] = useState("");
   const [reportingPeriodStart, setReportingPeriodStart] = useState("");
@@ -765,10 +929,10 @@ function UploadWizard({
   const [replacementMode, setReplacementMode] = useState(false);
   const [replacementReason, setReplacementReason] = useState("");
 
-  const selectedFeed = feeds.find((feed) => feed.feed_key === feedKey) ?? feeds[0];
-  const requiresReportingPeriod = Boolean(selectedFeed?.required_metadata.some((field) =>
+  const selectedFeed = feeds.find((feed) => feedBackendKey(feed) === feedKey) ?? feeds[0];
+  const requiresReportingPeriod = selectedFeed?.required_metadata?.some((field) =>
     ["reporting_period_start", "reporting_period_end"].includes(field),
-  ));
+  ) ?? false;
   const lastUploadForFeed = useMemo(
     () => recentUploads.find((upload) => upload.feed_key === feedKey),
     [feedKey, recentUploads],
@@ -855,9 +1019,13 @@ function UploadWizard({
               aria-describedby="source-data-feed-error"
               className="h-11 w-full min-w-0 rounded-[0.5rem] border border-panel-table-wrap bg-panel px-3 text-sm text-panel-strong outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
             >
-              {feeds.map((feed) => (
-                <option key={feed.feed_key} value={feed.feed_key}>
-                  {feed.label}
+              {feeds.map((feed, index) => (
+                <option
+                  key={feedKeyValue(feed, `unkeyed-feed-${index}`)}
+                  value={feedBackendKey(feed) ?? ""}
+                  disabled={!feedBackendKey(feed)}
+                >
+                  {feedLabelValue(feed)}
                 </option>
               ))}
             </select>
@@ -905,7 +1073,7 @@ function UploadWizard({
           <div className="flex flex-wrap items-center gap-3 rounded-[0.5rem] border border-[var(--dashboard-table-line)] px-3 py-2 text-sm text-panel-muted">
             <span className="font-semibold text-panel-strong">Last used details</span>
             <span>{lastUploadForFeed.source_name}</span>
-            <span>{lastUploadForFeed.source_timestamp ? formatRelativeTimestamp(lastUploadForFeed.source_timestamp) : "No file date"}</span>
+            <span>{timestampValue(lastUploadForFeed.source_timestamp)}</span>
             <Button type="button" variant="secondary" size="sm" onClick={applyLastMetadata}>
               Use last details
             </Button>
@@ -973,25 +1141,41 @@ function UploadWizard({
         ) : null}
 
         <div className="flex flex-wrap items-center gap-3">
-          <Button type="submit" variant="primary" size="md" disabled={uploadMutation.isPending}>
+          <Button
+            type="submit"
+            variant="primary"
+            size="md"
+            disabled={uploadMutation.isPending || validateMutation.isPending}
+          >
             <Upload className="size-4" aria-hidden="true" />
-            Upload file
+            {uploadMutation.isPending ? "Uploading…" : "Upload file"}
           </Button>
           <Button
             type="button"
             variant="secondary"
             size="md"
-            disabled={!selectedUpload || validateMutation.isPending}
+            disabled={!selectedUpload || uploadMutation.isPending || validateMutation.isPending}
             onClick={() => selectedUpload && validateMutation.mutate(selectedUpload.public_id)}
           >
             <ShieldCheck className="size-4" aria-hidden="true" />
-            Check file
+            {validateMutation.isPending ? "Checking…" : "Check file"}
           </Button>
           {selectedFeed ? <TemplateDownloadButton feed={selectedFeed} /> : null}
         </div>
 
+        <p className="rounded-[0.5rem] border border-[var(--dashboard-table-line)] px-3 py-2 text-sm leading-6 text-panel-muted">
+          Upload and Check file are separate steps. Checking only validates the file; it does not send alerts, change
+          model approval, or alter risk scores. Dashboard use requires a separate review and confirmation.
+        </p>
+
+        {uploadMutation.isPending || validateMutation.isPending ? (
+          <p className="text-sm font-semibold text-panel-copy" role="status" aria-live="polite">
+            {uploadMutation.isPending ? "Uploading the file. It will not be added to the dashboard automatically." : "Checking the file. Keep this panel open while validation runs."}
+          </p>
+        ) : null}
+
         {uploadMutation.error || validateMutation.error ? (
-          <p className="text-sm font-semibold text-[color:var(--danger)]">
+          <p className="text-sm font-semibold text-[color:var(--danger)]" role="alert">
             {(uploadMutation.error ?? validateMutation.error) instanceof Error
               ? (uploadMutation.error ?? validateMutation.error)?.message
               : "We could not upload or check this file."}
@@ -1019,30 +1203,48 @@ function UploadDrawer({
   onUploadSelected: (publicId: string) => void;
   onClose: () => void;
 }) {
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   useEffect(() => {
     if (!isOpen) {
       return undefined;
     }
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const previousOverflow = document.body.style.overflow;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        onClose();
+        onCloseRef.current();
       }
     };
     document.body.style.overflow = "hidden";
     document.addEventListener("keydown", handleKeyDown);
+    closeButtonRef.current?.focus();
     return () => {
       document.body.style.overflow = previousOverflow;
       document.removeEventListener("keydown", handleKeyDown);
+      if (previouslyFocused?.isConnected) {
+        previouslyFocused.focus();
+      }
     };
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   if (!isOpen) {
     return null;
   }
 
   return (
-    <div className="fixed inset-0 z-[100001] flex justify-end bg-black/40 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="source-data-drawer-title">
+    <div
+      className="fixed inset-0 z-[100001] flex justify-end bg-black/40 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="source-data-drawer-title"
+      aria-describedby="source-data-drawer-description"
+    >
       <button type="button" className="absolute inset-0 cursor-default" aria-label="Close add data panel" onClick={onClose} />
       <aside className="relative z-10 h-full w-full max-w-[720px] overflow-y-auto border-l border-[var(--dashboard-table-line)] bg-panel p-4 shadow-2xl sm:p-6">
         <div className="mb-4 flex items-start justify-between gap-4">
@@ -1051,12 +1253,13 @@ function UploadDrawer({
             <h2 id="source-data-drawer-title" className="mt-1 text-xl font-semibold text-panel-strong">
               Add New Data
             </h2>
-            <p className="mt-1 text-sm leading-6 text-panel-muted">
+            <p id="source-data-drawer-description" className="mt-1 text-sm leading-6 text-panel-muted">
               Upload one trusted file, check it, then review the result before adding it to the dashboard.
             </p>
           </div>
           <button
             type="button"
+            ref={closeButtonRef}
             className="inline-flex size-10 items-center justify-center rounded-pill border border-panel-table-wrap text-panel-copy transition hover:bg-[var(--dashboard-nav-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
             aria-label="Close add data panel"
             onClick={onClose}
@@ -1079,7 +1282,7 @@ function UploadDrawer({
 }
 
 function UploadProgressTimeline({ upload }: { upload: SourceDataUploadBatchRecord }) {
-  const latestDownstreamAction = (upload.metadata.latest_downstream_action ?? {}) as Record<string, unknown>;
+  const latestDownstreamAction = (upload.metadata?.latest_downstream_action ?? {}) as Record<string, unknown>;
   const latestDownstreamStatus =
     typeof latestDownstreamAction.action_status === "string" ? latestDownstreamAction.action_status : "";
   const steps = [
@@ -1131,19 +1334,34 @@ function UploadProgressTimeline({ upload }: { upload: SourceDataUploadBatchRecor
 }
 
 function RowCountVisuals({ upload }: { upload: SourceDataUploadBatchRecord }) {
+  const rowCount = numberFromRecord(upload.row_count);
+  const acceptedCount = numberFromRecord(upload.accepted_count);
+  const rejectedCount = numberFromRecord(upload.rejected_count);
+  const warningCount = numberFromRecord(upload.warning_count);
+
   return (
     <div className="grid gap-3 rounded-[0.5rem] border border-[var(--dashboard-table-line)] p-3 sm:grid-cols-3">
-      <ProgressBar label="Rows ready" value={percent(upload.accepted_count, upload.row_count)} />
-      <ProgressBar label="Rows to fix" value={percent(upload.rejected_count, upload.row_count)} />
-      <ProgressBar label="Warnings" value={percent(upload.warning_count, Math.max(upload.row_count, upload.warning_count))} />
+      <ProgressBar label="Rows ready" value={percent(acceptedCount, rowCount)} />
+      <ProgressBar label="Rows to fix" value={percent(rejectedCount, rowCount)} />
+      <ProgressBar
+        label="Warnings"
+        value={percent(warningCount, rowCount !== null && warningCount !== null ? Math.max(rowCount, warningCount) : null)}
+      />
     </div>
   );
 }
 
 function ValidationSummary({ upload }: { upload?: SourceDataUploadBatchRecord }) {
-  const issues = upload?.validation_issues ?? [];
+  const issues = Array.isArray(upload?.validation_issues) ? upload.validation_issues : [];
   const topIssues = issues.slice(0, 6);
   const readinessSummary = readinessValidationSummary(upload);
+  const riskCategory = inferredRiskCategory(upload);
+  const validationStatus = upload?.validation_status ?? "";
+  const rowCount = numberFromRecord(upload?.row_count);
+  const acceptedCount = numberFromRecord(upload?.accepted_count);
+  const rejectedCount = numberFromRecord(upload?.rejected_count);
+  const warningCount = numberFromRecord(upload?.warning_count);
+  const hasValidationResult = Boolean(upload && validationStatus && validationStatus !== "not_started");
 
   return (
     <Card className="p-5">
@@ -1155,20 +1373,34 @@ function ValidationSummary({ upload }: { upload?: SourceDataUploadBatchRecord })
       {upload ? (
         <div className="grid gap-4">
           <div className="flex flex-wrap items-center gap-2">
-            <StatusBadge tone={statusTone(upload.status)}>{friendlyUpdateStatusLabel(upload.status)}</StatusBadge>
-            <StatusBadge tone={statusTone(upload.validation_status)}>
-              {friendlyUpdateStatusLabel(upload.validation_status)}
+            <StatusBadge tone={statusTone(upload.status ?? "")}>{friendlyUpdateStatusLabel(upload.status ?? "")}</StatusBadge>
+            <StatusBadge tone={statusTone(validationStatus)}>
+              {friendlyUpdateStatusLabel(validationStatus)}
             </StatusBadge>
             {upload.duplicate_of_public_id ? <StatusBadge tone="warning">Repeated file</StatusBadge> : null}
           </div>
 
           <UploadProgressTimeline upload={upload} />
 
-          <div className="grid gap-3 sm:grid-cols-4">
-            <FeedMetric label="Rows checked" value={upload.row_count} />
-            <FeedMetric label="Rows ready" value={upload.accepted_count} />
-            <FeedMetric label="Rows to fix" value={upload.rejected_count} />
-            <FeedMetric label="Warnings" value={upload.warning_count} />
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <FeedMetric label="Source name" value={metricValue(upload.source_name)} />
+            <FeedMetric label="File timestamp" value={timestampValue(upload.source_timestamp)} />
+            <FeedMetric label="Reporting period" value={periodValue(upload.reporting_period_start, upload.reporting_period_end)} />
+            <FeedMetric label="Import status" value={friendlyUpdateStatusLabel(upload.import_status ?? "")} />
+            <FeedMetric label="Rows checked" value={metricValue(rowCount)} />
+            <FeedMetric label="Rows ready" value={metricValue(acceptedCount)} />
+            <FeedMetric label="Rows to fix" value={metricValue(rejectedCount)} />
+            <FeedMetric label="Warnings" value={metricValue(warningCount)} />
+            <FeedMetric
+              label="Approval requirement"
+              value={riskCategory || upload.approval_status !== "not_required" ? "Review required" : "No extra review"}
+            />
+            <FeedMetric label="Risk category" value={riskCategory ? formatLabel(riskCategory) : "Not reported"} />
+            <FeedMetric
+              label="Duplicate / replacement"
+              value={upload.duplicate_of_public_id ? "Repeated file" : upload.replaces_upload_public_id ? "Replacement" : "Original upload"}
+            />
+            <FeedMetric label="Confirmation status" value={friendlyUpdateStatusLabel(upload.status ?? "")} />
           </div>
 
           <RowCountVisuals upload={upload} />
@@ -1178,7 +1410,9 @@ function ValidationSummary({ upload }: { upload?: SourceDataUploadBatchRecord })
               <div className="flex flex-wrap items-center gap-2">
                 <p className="font-semibold text-panel-strong">Facility Coverage</p>
                 <StatusBadge tone="info">
-                  {numberFromRecord(readinessSummary.facility_coverage_percent)}% facilities
+                  {numberFromRecord(readinessSummary.facility_coverage_percent) !== null
+                    ? `${numberFromRecord(readinessSummary.facility_coverage_percent)}% facilities`
+                    : "Coverage not reported"}
                 </StatusBadge>
               </div>
               <ProgressBar
@@ -1186,10 +1420,10 @@ function ValidationSummary({ upload }: { upload?: SourceDataUploadBatchRecord })
                 value={numberFromRecord(readinessSummary.facility_coverage_percent)}
               />
               <div className="grid gap-3 sm:grid-cols-4">
-                <FeedMetric label="Facilities" value={numberFromRecord(readinessSummary.facilities_reported)} />
-                <FeedMetric label="Old reports" value={numberFromRecord(readinessSummary.stale_report_count)} />
-                <FeedMetric label="Stockouts" value={numberFromRecord(readinessSummary.stockout_facility_count)} />
-                <FeedMetric label="Disruptions" value={numberFromRecord(readinessSummary.service_disruption_count)} />
+                <FeedMetric label="Facilities" value={metricValue(numberFromRecord(readinessSummary.facilities_reported))} />
+                <FeedMetric label="Old reports" value={metricValue(numberFromRecord(readinessSummary.stale_report_count))} />
+                <FeedMetric label="Stockouts" value={metricValue(numberFromRecord(readinessSummary.stockout_facility_count))} />
+                <FeedMetric label="Disruptions" value={metricValue(numberFromRecord(readinessSummary.service_disruption_count))} />
               </div>
             </div>
           ) : null}
@@ -1224,18 +1458,20 @@ function ValidationSummary({ upload }: { upload?: SourceDataUploadBatchRecord })
               </table>
             </div>
           ) : (
-            <p className="text-sm leading-6 text-panel-muted">
-              No file issues are stored for the selected update. Upload a file, then run Check file to refresh this panel.
-            </p>
+              <p className="text-sm leading-6 text-panel-muted">
+              {hasValidationResult
+                ? "No file issues were returned for this check. The backend did not report rows needing correction."
+                : "No file issues are stored for the selected update. Upload a file, then run Check file to refresh this panel."}
+              </p>
           )}
 
-          {issues.length ? (
+          {hasValidationResult ? (
             <a
               href={`/api/dashboard/source-data/uploads/${encodeURIComponent(upload.public_id)}/errors.csv`}
               className="inline-flex h-10 w-fit items-center justify-center gap-2 rounded-pill border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-3 text-sm font-semibold text-panel-copy transition hover:border-[var(--dashboard-icon-button-border)] hover:text-[var(--dashboard-icon-button-ink-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
             >
               <Download className="size-4" aria-hidden="true" />
-              Download rows to fix
+              Download full error CSV{issues.length ? ` (${issues.length} issues)` : ""}
             </a>
           ) : null}
         </div>
@@ -1264,7 +1500,7 @@ function FreshnessPanel({
         </div>
         {generatedAt ? (
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">
-            {formatRelativeTimestamp(generatedAt)}
+            {timestampValue(generatedAt)}
           </p>
         ) : null}
       </div>
@@ -1293,15 +1529,17 @@ function FreshnessPanel({
                 </td>
                 <td className="px-3 py-2 text-panel-muted">{friendlyTruthLabel(source.truth_state)}</td>
                 <td className="px-3 py-2 text-panel-muted">
-                  {source.last_source_timestamp ? formatRelativeTimestamp(source.last_source_timestamp) : "Missing"}
+                  {timestampValue(source.last_source_timestamp)}
                 </td>
-                <td className="px-3 py-2 text-panel-muted">{source.recommended_action}</td>
+                <td className="px-3 py-2 text-panel-muted">
+                  {source.recommended_action || "Not available from the backend."}
+                </td>
               </tr>
             ))}
             {!sources.length ? (
               <tr>
                 <td className="px-3 py-4 text-panel-muted" colSpan={5}>
-                  Source freshness has not loaded yet.
+                  No source freshness records were returned.
                 </td>
               </tr>
             ) : null}
@@ -1337,14 +1575,20 @@ function SourceGapsPanel({
               <StatusBadge tone={sourceStatusTone(gap.status)}>{formatLabel(gap.status)}</StatusBadge>
               <StatusBadge tone="info">{formatLabel(gap.truth_state)}</StatusBadge>
             </div>
-            <p className="text-sm text-panel-muted">{gap.recommended_action}</p>
-            <a
-              href={`/api/dashboard/source-data/templates/${encodeURIComponent(gap.feed_key)}`}
-              className="inline-flex h-9 w-fit items-center justify-center gap-2 rounded-pill border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-3 text-sm font-semibold text-panel-copy transition hover:border-[var(--dashboard-icon-button-border)] hover:text-[var(--dashboard-icon-button-ink-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
-            >
-              <Download className="size-4" aria-hidden="true" />
-              Template
-            </a>
+            <p className="text-sm text-panel-muted">
+              {gap.recommended_action || "No corrective action was returned by the backend."}
+            </p>
+            {gap.feed_key ? (
+              <a
+                href={`/api/dashboard/source-data/templates/${encodeURIComponent(gap.feed_key)}`}
+                className="inline-flex h-9 w-fit items-center justify-center gap-2 rounded-pill border border-panel-table-wrap bg-[var(--dashboard-icon-button-surface)] px-3 text-sm font-semibold text-panel-copy transition hover:border-[var(--dashboard-icon-button-border)] hover:text-[var(--dashboard-icon-button-ink-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+              >
+                <Download className="size-4" aria-hidden="true" />
+                Template
+              </a>
+            ) : (
+              <span className="text-sm text-panel-muted">Template not available.</span>
+            )}
           </div>
         ))}
         {!gaps.length ? (
@@ -1381,11 +1625,17 @@ function ReadinessSummaryCards({
   sources,
   uploads,
   feedCount,
+  sourceState,
+  uploadState,
 }: {
   sources: SourceDataFreshnessSource[];
   uploads: SourceDataUploadBatchRecord[];
-  feedCount: number;
+  feedCount: string | number;
+  sourceState: "loading" | "error" | "ready";
+  uploadState: "loading" | "error" | "ready";
 }) {
+  const sourceDataLoaded = sourceState === "ready";
+  const uploadsLoaded = uploadState === "ready";
   const attentionCount = sources.filter((source) => needsAttention(source.status)).length;
   const currentCount = sources.filter((source) => source.status === "current").length;
   const demoCount = sources.filter((source) => source.status === "demo_backed").length;
@@ -1395,27 +1645,27 @@ function ReadinessSummaryCards({
     <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Data readiness summary">
       <SummaryTile
         label="Needs attention"
-        value={attentionCount}
-        tone={attentionCount ? "danger" : "success"}
-        detail={attentionCount ? "Start with the items below." : "All listed data is ready."}
+        value={sourceDataLoaded ? attentionCount : "Not loaded"}
+        tone={!sourceDataLoaded ? "default" : attentionCount ? "danger" : "success"}
+        detail={!sourceDataLoaded ? "Source status is still loading or unavailable." : attentionCount ? "Start with the items below." : "All listed data is ready."}
       />
       <SummaryTile
         label="Up to date"
-        value={currentCount}
-        tone="success"
-        detail="Ready for dashboard use."
+        value={sourceDataLoaded ? currentCount : "Not loaded"}
+        tone={sourceDataLoaded ? "success" : "default"}
+        detail={sourceDataLoaded ? "Ready for dashboard use." : "Source status is still loading or unavailable."}
       />
       <SummaryTile
         label="Using demo data"
-        value={demoCount}
-        tone={demoCount ? "warning" : "success"}
-        detail={demoCount ? "Replace when trusted data is available." : "No demo data is active."}
+        value={sourceDataLoaded ? demoCount : "Not loaded"}
+        tone={!sourceDataLoaded ? "default" : demoCount ? "warning" : "success"}
+        detail={!sourceDataLoaded ? "Source status is still loading or unavailable." : demoCount ? "Replace when trusted data is available." : "No demo data is active."}
       />
       <SummaryTile
         label="Ready to add"
-        value={readyUploadCount}
-        tone={readyUploadCount ? "warning" : "info"}
-        detail={`${feedCount} templates available.`}
+        value={uploadsLoaded ? readyUploadCount : "Not loaded"}
+        tone={!uploadsLoaded ? "default" : readyUploadCount ? "warning" : "info"}
+        detail={uploadsLoaded ? `${feedCount} registered sources available.` : "Upload history is still loading or unavailable."}
       />
     </section>
   );
@@ -1455,8 +1705,8 @@ function AttentionPanel({
             </p>
           </div>
         </div>
-        <StatusBadge tone={attentionSources.length ? "warning" : "success"}>
-          {attentionSources.length ? `${attentionSources.length} to review` : "All clear"}
+        <StatusBadge tone={attentionSources.length ? "warning" : sources.length ? "success" : "default"}>
+          {attentionSources.length ? `${attentionSources.length} to review` : sources.length ? "All clear" : "No status records"}
         </StatusBadge>
       </div>
 
@@ -1475,7 +1725,7 @@ function AttentionPanel({
               <p className="mt-1 text-sm leading-6 text-panel-muted">{friendlyActionText(source.recommended_action)}</p>
               <p className="mt-1 text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">
                 {formatLabel(source.domain)} · Last data{" "}
-                {source.last_source_timestamp ? formatRelativeTimestamp(source.last_source_timestamp) : "not available"}
+                {timestampValue(source.last_source_timestamp)}
               </p>
             </div>
             {source.feed_key || gapFeedKeys.has(source.feed_key) ? (
@@ -1492,9 +1742,13 @@ function AttentionPanel({
 
         {!visibleSources.length ? (
           <div className="rounded-[0.5rem] border border-[var(--dashboard-table-line)] p-4">
-            <p className="font-semibold text-panel-strong">All listed data is ready.</p>
+            <p className="font-semibold text-panel-strong">
+              {sources.length ? "All listed data is ready." : "No source status records were returned."}
+            </p>
             <p className="mt-1 text-sm leading-6 text-panel-muted">
-              New updates can still be added when a trusted source file is available.
+              {sources.length
+                ? "New updates can still be added when a trusted source file is available."
+                : "The backend returned a valid but empty source status set."}
             </p>
           </div>
         ) : null}
@@ -1578,45 +1832,114 @@ function QuickUpdateGuide({
   );
 }
 
-function OperationsHealthPanel({ operations }: { operations?: SourceDataOperationsResponse }) {
+function OperationsHealthPanel({
+  operations,
+  isLoading,
+  isError,
+  error,
+  isFetching,
+}: {
+  operations?: SourceDataOperationsResponse;
+  isLoading?: boolean;
+  isError?: boolean;
+  error?: unknown;
+  isFetching?: boolean;
+}) {
   const metrics = operations?.metrics;
   const worker = operations?.worker_health;
-  const stuckImportCount = operations?.stuck_tasks.imports.length ?? 0;
-  const stuckValidationCount = operations?.stuck_tasks.validations.length ?? 0;
-  const hasSystemAttention = Boolean(
-    operations?.alerts.length || worker?.status !== "current" || stuckImportCount || stuckValidationCount,
+  const alerts = Array.isArray(operations?.alerts) ? operations.alerts : null;
+  const stuckImports = Array.isArray(operations?.stuck_tasks?.imports) ? operations.stuck_tasks.imports : null;
+  const stuckValidations = Array.isArray(operations?.stuck_tasks?.validations) ? operations.stuck_tasks.validations : null;
+  const validationFailureCount = numberFromRecord(metrics?.validation_failure_count);
+  const importFailureCount = numberFromRecord(metrics?.import_failure_count);
+  const staleFeedCount = numberFromRecord(metrics?.stale_feed_count);
+  const hasRequiredMetrics = hasRequiredOperationsMetrics(metrics);
+  const hasFailureEvidence = validationFailureCount !== null && importFailureCount !== null
+    ? validationFailureCount > 0 || importFailureCount > 0
+    : true;
+  const hasBlockingCondition = Boolean(
+    alerts === null
+    || alerts.length
+    || worker?.status !== "current"
+    || stuckImports === null
+    || stuckValidations === null
+    || stuckImports.length
+    || stuckValidations.length
+    || hasFailureEvidence
+    || staleFeedCount === null
+    || staleFeedCount > 0
+    || !hasRequiredMetrics,
   );
+  const hasRequiredEvidence = Boolean(
+    hasValidTimestamp(operations?.generated_at)
+    && worker
+    && hasValidTimestamp(worker.latest_heartbeat_at)
+    && metrics
+    && hasRequiredMetrics
+    && operations.stuck_tasks
+    && Array.isArray(operations.alerts),
+  );
+  const isUnavailable = Boolean(isError && !operations) || (!operations && !isLoading);
+  const isHealthy = Boolean(operations && !isError && !isUnavailable && hasRequiredEvidence && !hasBlockingCondition);
+  const statusLabel = isLoading && !operations
+    ? "Loading"
+    : isUnavailable
+    ? "Unavailable / not loaded"
+    : isHealthy
+    ? "Healthy/current"
+    : "Degraded/review needed";
+  const statusToneValue: "success" | "warning" | "default" = isHealthy ? "success" : isUnavailable ? "default" : "warning";
+  const failureCount = validationFailureCount !== null && importFailureCount !== null
+    ? validationFailureCount + importFailureCount
+    : null;
 
   return (
     <Card className="p-5">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <ShieldCheck className="size-5 text-brand" aria-hidden="true" />
-          <h2 className="text-lg font-semibold text-panel-strong">System Readiness</h2>
+          <h2 className="text-lg font-semibold text-panel-strong">Source Data Operations</h2>
         </div>
-        <StatusBadge tone={hasSystemAttention ? "warning" : "success"}>
-          {hasSystemAttention ? "Review needed" : "Ready for uploads"}
-        </StatusBadge>
+        <StatusBadge tone={statusToneValue}>{statusLabel}</StatusBadge>
       </div>
+
+      {isError ? (
+        <div className="mb-4 rounded-[0.5rem] border border-[color-mix(in_srgb,var(--danger)_24%,white)] px-3 py-2 text-sm text-[color:var(--danger)]" role="alert">
+          {error instanceof Error ? error.message : "Source Data Operations could not be loaded. The feed registry remains available."}
+        </div>
+      ) : null}
 
       {operations ? (
         <div className="grid gap-4">
+          {isFetching ? (
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted" role="status" aria-live="polite">
+              Refreshing operations snapshot…
+            </p>
+          ) : null}
           <p className="text-sm leading-6 text-panel-muted">
-            {hasSystemAttention
-              ? "Some data update checks need review before teams rely on new uploads."
-              : "File checks and dashboard updates are available."}
+            This status covers Source Data upload and validation operations. It does not indicate that CCHIS, its external
+            connectors or its models are production ready.
           </p>
 
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <FeedMetric label="All updates" value={metrics?.upload_count ?? 0} />
-            <FeedMetric label="Recent updates" value={metrics?.recent_upload_count ?? 0} />
-            <FeedMetric label="Needs update" value={metrics?.stale_feed_count ?? 0} />
-            <FeedMetric label="Failed updates" value={(metrics?.validation_failure_count ?? 0) + (metrics?.import_failure_count ?? 0)} />
+            <FeedMetric label="Worker heartbeat" value={worker?.status ? formatLabel(worker.status) : "Not available"} />
+            <FeedMetric label="Stuck validations" value={metricValue(stuckValidations?.length)} />
+            <FeedMetric label="Stuck imports" value={metricValue(stuckImports?.length)} />
+            <FeedMetric label="Recent failures" value={metricValue(failureCount)} />
+            <FeedMetric label="Stale feeds" value={metricValue(staleFeedCount)} />
+            <FeedMetric label="All updates" value={metricValue(metrics?.upload_count)} />
+            <FeedMetric label="Recent updates" value={metricValue(metrics?.recent_upload_count)} />
+            <FeedMetric label="Last heartbeat" value={timestampValue(worker?.latest_heartbeat_at)} />
           </div>
 
-          {operations.alerts.length ? (
+          <div className="grid gap-2 rounded-[0.5rem] border border-[var(--dashboard-table-line)] px-3 py-2 text-sm text-panel-muted">
+            <p><span className="font-semibold text-panel-copy">Snapshot generated:</span> {timestampValue(operations.generated_at)}</p>
+            <p><span className="font-semibold text-panel-copy">Latest worker task:</span> {worker?.latest_task_name || "Not available"}</p>
+          </div>
+
+          {alerts?.length ? (
             <div className="grid gap-2">
-              {operations.alerts.map((alert) => (
+              {alerts.map((alert) => (
                 <div
                   key={alert.key}
                   className="grid gap-1 rounded-[0.5rem] border border-[var(--dashboard-table-line)] px-3 py-2"
@@ -1629,15 +1952,23 @@ function OperationsHealthPanel({ operations }: { operations?: SourceDataOperatio
                 </div>
               ))}
             </div>
+          ) : alerts ? (
+            <p className="text-sm leading-6 text-panel-muted">
+              No operational alerts were returned by the backend.
+            </p>
           ) : (
             <p className="text-sm leading-6 text-panel-muted">
-              No repeated file-check failures or blocked dashboard updates are active.
+              Operational alert details were not returned by the backend.
             </p>
           )}
         </div>
+      ) : isLoading ? (
+        <p className="text-sm leading-6 text-panel-muted" role="status" aria-live="polite">
+          Loading Source Data Operations…
+        </p>
       ) : (
         <p className="text-sm leading-6 text-panel-muted">
-          System readiness will appear after data checks load.
+          Source Data Operations evidence is unavailable. Refresh when the operations endpoint is available.
         </p>
       )}
     </Card>
@@ -1858,7 +2189,8 @@ function ImportConfirmation({
 }
 
 function ImportResult({ upload }: { upload?: SourceDataUploadBatchRecord }) {
-  const importSummary = (upload?.metadata.import_summary ?? {}) as Record<string, unknown>;
+  const importSummary = (upload?.metadata?.import_summary ?? {}) as Record<string, unknown>;
+  const events = Array.isArray(upload?.events) ? upload.events : [];
 
   return (
     <Card className="p-5">
@@ -1886,18 +2218,18 @@ function ImportResult({ upload }: { upload?: SourceDataUploadBatchRecord }) {
           <div className="grid gap-2">
             <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-panel-muted">Activity</h3>
             <div className="grid gap-2">
-              {upload.events.slice(0, 8).map((event) => (
+              {events.slice(0, 8).map((event) => (
                 <div
                   key={event.id}
                   className="grid gap-1 rounded-[0.5rem] border border-[var(--dashboard-table-line)] px-3 py-2 sm:grid-cols-[1fr_auto]"
                 >
                   <p className="text-sm font-semibold text-panel-strong">{formatLabel(event.event_type)}</p>
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">
-                    {formatRelativeTimestamp(event.event_at)}
+                    {timestampValue(event.event_at)}
                   </p>
                 </div>
               ))}
-              {!upload.events.length ? (
+              {!events.length ? (
                 <p className="text-sm text-panel-muted">No activity has been recorded yet.</p>
               ) : null}
             </div>
@@ -2060,6 +2392,10 @@ function UploadHistory({
   filters,
   selectedPublicId,
   canFilterSourceName,
+  isLoading,
+  isError,
+  error,
+  isFetching,
   onSelect,
   onFiltersChange,
 }: {
@@ -2068,6 +2404,10 @@ function UploadHistory({
   filters: SourceDataUploadFilters;
   selectedPublicId: string | null;
   canFilterSourceName: boolean;
+  isLoading?: boolean;
+  isError?: boolean;
+  error?: unknown;
+  isFetching?: boolean;
   onSelect: (publicId: string) => void;
   onFiltersChange: (filters: SourceDataUploadFilters) => void;
 }) {
@@ -2081,6 +2421,16 @@ function UploadHistory({
         <FileSpreadsheet className="size-5 text-brand" aria-hidden="true" />
         <h2 className="text-lg font-semibold text-panel-strong">Recent Data Updates</h2>
       </div>
+      {isFetching ? (
+        <p className="mb-4 text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted" role="status" aria-live="polite">
+          Refreshing upload history…
+        </p>
+      ) : null}
+      {isError ? (
+        <div className="mb-4 rounded-[0.5rem] border border-[color-mix(in_srgb,var(--danger)_24%,white)] px-3 py-2 text-sm text-[color:var(--danger)]" role="alert">
+          {error instanceof Error ? error.message : "Upload history could not be loaded."}
+        </div>
+      ) : null}
       <div className="mb-4 grid gap-3 md:grid-cols-4">
         <label className="grid gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-panel-muted">
           Data type
@@ -2090,9 +2440,13 @@ function UploadHistory({
             className="h-10 rounded-[0.5rem] border border-panel-table-wrap bg-panel px-3 text-sm normal-case tracking-normal text-panel-strong outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
           >
             <option value="">All feeds</option>
-            {feeds.map((feed) => (
-              <option key={feed.feed_key} value={feed.feed_key}>
-                {feed.label}
+            {feeds.map((feed, index) => (
+              <option
+                key={feedKeyValue(feed, `unkeyed-feed-${index}`)}
+                value={feedBackendKey(feed) ?? ""}
+                disabled={!feedBackendKey(feed)}
+              >
+                {feedLabelValue(feed)}
               </option>
             ))}
           </select>
@@ -2145,16 +2499,34 @@ function UploadHistory({
                 }`}
                 onClick={() => onSelect(upload.public_id)}
               >
-                <td className="px-3 py-2 font-semibold text-panel-strong">{formatLabel(upload.feed_key)}</td>
-                <td className="px-3 py-2 text-panel-muted">{upload.source_name}</td>
+                <td className="px-3 py-2 font-semibold text-panel-strong">
+                  <button
+                    type="button"
+                    className="text-left underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+                    aria-current={upload.public_id === selectedPublicId ? "true" : undefined}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onSelect(upload.public_id);
+                    }}
+                  >
+                    {formatLabel(upload.feed_key)}
+                  </button>
+                </td>
+                <td className="px-3 py-2 text-panel-muted">{metricValue(upload.source_name)}</td>
                 <td className="px-3 py-2">
                   <StatusBadge tone={statusTone(upload.status)}>{friendlyUpdateStatusLabel(upload.status)}</StatusBadge>
                 </td>
-                <td className="px-3 py-2 text-panel-muted">{upload.row_count}</td>
-                <td className="px-3 py-2 text-panel-muted">{formatRelativeTimestamp(upload.created_at)}</td>
+                <td className="px-3 py-2 text-panel-muted">{metricValue(upload.row_count)}</td>
+                <td className="px-3 py-2 text-panel-muted">{timestampValue(upload.created_at)}</td>
               </tr>
             ))}
-            {!uploads.length ? (
+            {isLoading ? (
+              <tr>
+                <td className="px-3 py-4 text-panel-muted" colSpan={5}>
+                  Loading upload history…
+                </td>
+              </tr>
+            ) : !uploads.length && !isError ? (
               <tr>
                 <td className="px-3 py-4 text-panel-muted" colSpan={5}>
                   No data updates yet. Download a template, fill it, then upload the file above.
@@ -2170,6 +2542,7 @@ function UploadHistory({
 
 function SourceDataContent() {
   const { currentUser } = useAuth();
+  const queryClient = useQueryClient();
   const { data, isLoading, isError, error, refetch, isFetching } = useSourceDataFeedTypesQuery();
   const overviewQuery = useSourceDataOverviewQuery();
   const operationsQuery = useSourceDataOperationsQuery();
@@ -2186,33 +2559,71 @@ function SourceDataContent() {
   const selectedUpload = selectedUploadQuery.data ?? uploadsQuery.data?.results.find((item) => item.public_id === activeUploadId);
   const canManageImports = hasActionCapability(currentUser, "manage_source_data_imports");
   const canApproveRiskyImports = hasActionCapability(currentUser, "approve_source_data_risky_imports");
+  const canManageSourceDataFeedModes = currentUser?.role === "ADMIN";
   const canTriggerDownstreamActions = hasActionCapability(currentUser, "trigger_source_data_downstream_actions");
   const groupedFeeds = useMemo(() => {
     return mvpFeeds.reduce<Record<string, SourceDataFeedDefinition[]>>((groups, feed) => {
-      groups[feed.domain] = [...(groups[feed.domain] ?? []), feed];
+      const domain = feedDomainValue(feed);
+      groups[domain] = [...(groups[domain] ?? []), feed];
       return groups;
     }, {});
   }, [mvpFeeds]);
   const recentUploads = uploadsQuery.data?.results ?? [];
+  const freshnessByFeedKey = useMemo(() => {
+    const sourceMap = new Map<string, SourceDataFreshnessSource>();
+    for (const source of [
+      ...(overviewQuery.data?.feed_statuses ?? []),
+      ...(overviewQuery.data?.freshness?.sources ?? []),
+    ]) {
+      if (source.feed_key) {
+        sourceMap.set(source.feed_key, source);
+      }
+    }
+    return sourceMap;
+  }, [overviewQuery.data?.feed_statuses, overviewQuery.data?.freshness?.sources]);
+  const sourceState: "loading" | "error" | "ready" = overviewQuery.isError
+    ? "error"
+    : overviewQuery.data
+    ? "ready"
+    : "loading";
+  const uploadState: "loading" | "error" | "ready" = uploadsQuery.isError
+    ? "error"
+    : uploadsQuery.data
+    ? "ready"
+    : "loading";
+  const canAddData = canManageImports && !isLoading && mvpFeeds.length > 0;
   const handleUploadSelected = (publicId: string) => {
     setSelectedUploadId(publicId);
     setActiveTab("review");
   };
+  const refreshSourceData = () => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.sourceData.root() });
+    void Promise.allSettled([
+      refetch(),
+      overviewQuery.refetch?.(),
+      operationsQuery.refetch?.(),
+      uploadsQuery.refetch?.(),
+      activeUploadId ? selectedUploadQuery.refetch?.() : undefined,
+    ]);
+  };
+  const isRefreshing = Boolean(
+    isFetching
+    || overviewQuery.isFetching
+    || operationsQuery.isFetching
+    || uploadsQuery.isFetching
+    || selectedUploadQuery.isFetching,
+  );
 
   return (
     <div className="grid gap-6">
       <DashboardTopbar
         title="Data Readiness"
         subtitle="Check which data is up to date, upload new files, and safely add them to the dashboard"
-        lastUpdatedLabel={data?.generated_at ? formatRelativeTimestamp(data.generated_at) : "Not loaded"}
+        lastUpdatedLabel={timestampValue(data?.generated_at)}
         lastUpdatedTone={contractErrors.length ? "stale" : "default"}
-        onRefresh={() => {
-          void refetch();
-          void overviewQuery.refetch();
-          void operationsQuery.refetch();
-        }}
+        onRefresh={refreshSourceData}
       >
-        {canManageImports ? (
+        {canAddData ? (
           <Button
             type="button"
             variant="primary"
@@ -2227,11 +2638,9 @@ function SourceDataContent() {
           variant="secondary"
           size="md"
           onClick={() => {
-            void refetch();
-            void overviewQuery.refetch();
-            void operationsQuery.refetch();
+            refreshSourceData();
           }}
-          disabled={isFetching || overviewQuery.isFetching || operationsQuery.isFetching}
+          disabled={isRefreshing}
         >
           <RefreshCcw className="size-4" aria-hidden="true" />
           Refresh
@@ -2239,45 +2648,99 @@ function SourceDataContent() {
       </DashboardTopbar>
 
       <ReadinessSummaryCards
-        sources={overviewQuery.data?.freshness.sources ?? []}
+        sources={overviewQuery.data?.freshness?.sources ?? []}
         uploads={uploadsQuery.data?.results ?? []}
-        feedCount={data?.feed_count ?? 0}
+        feedCount={metricValue(data?.feed_count)}
+        sourceState={sourceState}
+        uploadState={uploadState}
       />
 
       <DataReadinessTabs activeTab={activeTab} onTabChange={setActiveTab} />
 
       {activeTab === "overview" ? (
-        <div className="grid gap-6" role="tabpanel" aria-label="Overview">
+        <div
+          id="source-data-panel-overview"
+          className="grid gap-6"
+          role="tabpanel"
+          aria-labelledby="source-data-tab-overview"
+          tabIndex={0}
+        >
+          {overviewQuery.isLoading && !overviewQuery.data ? (
+            <Card className="p-5" role="status" aria-live="polite">
+              <p className="text-sm font-semibold text-panel-muted">Loading source freshness and gaps…</p>
+            </Card>
+          ) : null}
+          {overviewQuery.isError ? (
+            <Card className="p-5" role="alert">
+              <div className="flex items-start gap-3 text-sm text-[color:var(--danger)]">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                <p>
+                  {overviewQuery.error instanceof Error
+                    ? overviewQuery.error.message
+                    : "Source status could not be loaded. The feed registry and operations status remain available."}
+                </p>
+              </div>
+            </Card>
+          ) : null}
           <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
-            <AttentionPanel
-              sources={overviewQuery.data?.freshness.sources ?? []}
-              gaps={overviewQuery.data?.source_gaps ?? []}
-              onTemplates={() => setActiveTab("templates")}
-            />
+            {overviewQuery.data ? (
+              <AttentionPanel
+                sources={overviewQuery.data.freshness?.sources ?? []}
+                gaps={overviewQuery.data.source_gaps ?? []}
+                onTemplates={() => setActiveTab("templates")}
+              />
+            ) : (
+              <Card className="p-5">
+                <p className="text-sm leading-6 text-panel-muted">
+                  Attention items will appear when the Source Data overview is available.
+                </p>
+              </Card>
+            )}
             <QuickUpdateGuide
               selectedUpload={selectedUpload}
-              canManageImports={canManageImports}
+              canManageImports={canAddData}
               onAddData={() => setIsUploadDrawerOpen(true)}
               onReviewData={() => setActiveTab("review")}
             />
           </section>
-          <OperationsHealthPanel operations={operationsQuery.data} />
+          {overviewQuery.data ? (
+            <>
+              <FreshnessPanel
+                sources={overviewQuery.data.freshness?.sources ?? []}
+                generatedAt={overviewQuery.data.freshness?.generated_at}
+              />
+              <SourceGapsPanel gaps={overviewQuery.data.source_gaps ?? []} />
+            </>
+          ) : null}
+          <OperationsHealthPanel
+            operations={operationsQuery.data}
+            isLoading={operationsQuery.isLoading}
+            isError={operationsQuery.isError}
+            error={operationsQuery.error}
+            isFetching={operationsQuery.isFetching}
+          />
         </div>
       ) : null}
 
       {activeTab === "review" ? (
-        <div className="grid gap-4" role="tabpanel" aria-label="Review update">
+        <div
+          id="source-data-panel-review"
+          className="grid gap-4"
+          role="tabpanel"
+          aria-labelledby="source-data-tab-review"
+          tabIndex={0}
+        >
           <Card className="p-5">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <h2 className="text-lg font-semibold text-panel-strong">Selected update</h2>
                 <p className="mt-1 text-sm leading-6 text-panel-muted">
                   {selectedUpload
-                    ? `${formatLabel(selectedUpload.feed_key)} from ${selectedUpload.source_name}`
+                    ? `${formatLabel(selectedUpload.feed_key)} from ${metricValue(selectedUpload.source_name)}`
                     : "Choose a recent update or add a new file to begin."}
                 </p>
               </div>
-              {canManageImports ? (
+              {canAddData ? (
                 <Button type="button" variant="primary" size="md" onClick={() => setIsUploadDrawerOpen(true)}>
                   <Upload className="size-4" aria-hidden="true" />
                   Add data
@@ -2285,6 +2748,21 @@ function SourceDataContent() {
               ) : null}
             </div>
           </Card>
+
+          {activeUploadId && selectedUploadQuery.isLoading && !selectedUpload ? (
+            <Card className="p-5" role="status" aria-live="polite">
+              <p className="text-sm font-semibold text-panel-muted">Loading the selected update…</p>
+            </Card>
+          ) : null}
+          {selectedUploadQuery.isError ? (
+            <Card className="p-5" role="alert">
+              <p className="text-sm text-[color:var(--danger)]">
+                {selectedUploadQuery.error instanceof Error
+                  ? selectedUploadQuery.error.message
+                  : "The selected update could not be loaded. Recent history remains available."}
+              </p>
+            </Card>
+          ) : null}
 
           <ValidationSummary upload={selectedUpload} />
 
@@ -2302,13 +2780,22 @@ function SourceDataContent() {
       ) : null}
 
       {activeTab === "history" ? (
-        <div role="tabpanel" aria-label="Recent updates">
+        <div
+          id="source-data-panel-history"
+          role="tabpanel"
+          aria-labelledby="source-data-tab-history"
+          tabIndex={0}
+        >
           <UploadHistory
             uploads={recentUploads}
             feeds={mvpFeeds}
             filters={uploadFilters}
             selectedPublicId={activeUploadId}
             canFilterSourceName={canManageImports}
+            isLoading={uploadsQuery.isLoading}
+            isError={uploadsQuery.isError}
+            error={uploadsQuery.error}
+            isFetching={uploadsQuery.isFetching}
             onSelect={(publicId) => {
               setSelectedUploadId(publicId);
               setActiveTab("review");
@@ -2319,16 +2806,22 @@ function SourceDataContent() {
       ) : null}
 
       {activeTab === "templates" ? (
-        <div className="grid gap-6" role="tabpanel" aria-label="Templates">
+        <div
+          id="source-data-panel-templates"
+          className="grid gap-6"
+          role="tabpanel"
+          aria-labelledby="source-data-tab-templates"
+          tabIndex={0}
+        >
           <section className="grid gap-4 lg:grid-cols-[1fr_0.8fr]">
             <Card className="p-5">
               <div className="mb-4 flex items-center gap-3">
                 <Database className="size-5 text-brand" aria-hidden="true" />
-                <h1 className="text-xl font-semibold text-panel-strong">Available Templates</h1>
+                <h1 className="text-xl font-semibold text-panel-strong">Sources &amp; Templates</h1>
               </div>
               <div className="grid gap-3 sm:grid-cols-3">
-                <FeedMetric label="Templates" value={data?.feed_count ?? 0} />
-                <FeedMetric label="Issues" value={contractErrors.length} />
+                <FeedMetric label="Registered sources" value={metricValue(data?.feed_count)} />
+                <FeedMetric label="Contract issues" value={metricValue(data ? contractErrors.length : null)} />
                 <FeedMetric label="Template set" value={scopeLabel(data?.scope)} />
               </div>
             </Card>
@@ -2356,11 +2849,12 @@ function SourceDataContent() {
                 <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-panel-muted">
                   {formatLabel(domain)}
                 </h2>
-                {feeds.map((feed) => (
+                {feeds.map((feed, index) => (
                   <FeedCard
-                    key={feed.feed_key}
+                    key={feedKeyValue(feed, `${domain}-feed-${index}`)}
                     feed={feed}
-                    canUseSourceDataAdminControls={canApproveRiskyImports}
+                    freshness={freshnessByFeedKey.get(feedBackendKey(feed) ?? "")}
+                    canUseSourceDataAdminControls={canManageSourceDataFeedModes}
                   />
                 ))}
               </div>
@@ -2374,7 +2868,7 @@ function SourceDataContent() {
         </div>
       ) : null}
 
-      {isLoading ? (
+      {activeTab === "templates" && isLoading ? (
         <Card className="p-5">
           <div className="flex items-center gap-3 text-sm font-semibold text-panel-muted">
             <FileSpreadsheet className="size-4" aria-hidden="true" />
@@ -2383,7 +2877,7 @@ function SourceDataContent() {
         </Card>
       ) : null}
 
-      {isError ? (
+      {activeTab === "templates" && isError ? (
         <Card className="p-5">
           <div className="flex items-start gap-3 text-sm text-[color:var(--danger)]">
             <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
