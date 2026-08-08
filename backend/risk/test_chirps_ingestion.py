@@ -360,6 +360,44 @@ class ChirpsIngestionTests(DjangoTestCase):
         self.assertEqual(quality_check["status"], "fail")
         self.assertEqual(identity_check["status"], "fail")
 
+    def test_audit_requires_each_run_to_reference_all_active_canonical_wards(self):
+        summary = ingest_chirps_rainfall(
+            start_date=date(2020, 1, 1),
+            end_date=date(2020, 1, 1),
+            variant="sat",
+            connector=StubConnector(_window(np.array([[1, 2], [3, 4]], dtype=np.float32))),
+        )
+        run = IngestionRun.objects.get(pk=summary["run_id"])
+        run.requested_wards = [str(self.ward_a.public_id)]
+        run.lineage_metadata["requested_ward_public_ids"] = [str(self.ward_a.public_id)]
+        run.save(update_fields=["requested_wards", "lineage_metadata"])
+
+        audit = build_chirps_ingestion_audit()
+        reference_check = next(
+            check for check in audit["checks"] if check["id"] == "chirps_runs_reference_all_canonical_wards"
+        )
+
+        self.assertEqual(reference_check["status"], "fail")
+        self.assertEqual(reference_check["evidence"]["active_migori_ward_count"], 2)
+        self.assertTrue(reference_check["issues"])
+
+    def test_audit_rejects_successful_run_without_persisted_observations(self):
+        summary = ingest_chirps_rainfall(
+            start_date=date(2020, 1, 1),
+            end_date=date(2020, 1, 1),
+            variant="sat",
+            connector=StubConnector(_window(np.array([[1, 2], [3, 4]], dtype=np.float32))),
+        )
+        ClimateRecord.objects.filter(ingestion_run_id=summary["run_id"]).delete()
+
+        audit = build_chirps_ingestion_audit()
+        observation_check = next(
+            check for check in audit["checks"] if check["id"] == "chirps_accepted_runs_have_complete_observations"
+        )
+
+        self.assertEqual(observation_check["status"], "fail")
+        self.assertEqual(observation_check["evidence"]["accepted_run_count"], 1)
+
     def test_retrospective_mode_persists_chirps_backed_feature_rows(self):
         source_date = date(2020, 1, 1)
         ingest_chirps_rainfall(

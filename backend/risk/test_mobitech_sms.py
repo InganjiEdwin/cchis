@@ -3,6 +3,7 @@ import json
 import urllib.error
 from unittest.mock import MagicMock, patch
 
+from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -14,6 +15,7 @@ from core.mobitech_config import (
     is_valid_mobitech_polling_configuration,
 )
 from risk.models import Alert, AlertDeliveryEvent, RiskScore, Ward
+from risk.map_data import load_migori_ward_geometry
 from risk.providers import (
     AfricasTalkingSmsProvider,
     MobitechSmsProvider,
@@ -28,15 +30,21 @@ from risk.tasks import trigger_alerts_task
 
 
 class MobitechSmsTests(TestCase):
-    def setUp(self):
-        self.ward = Ward.objects.create(
-            name="Mobitech Test Ward",
-            county="Migori",
-            sub_county="Rongo",
-            current_risk_level=Ward.RISK_HIGH,
-            current_risk_score=0.9,
-            is_active=True,
+    """Mobitech coverage uses only canonical, transaction-isolated test geography."""
+
+    @classmethod
+    def setUpTestData(cls):
+        call_command("seed_kenya_administrative_areas", counties=["Migori"], verbosity=0)
+        call_command(
+            "import_ward_geometry",
+            version_label="mobitech-test-fixture",
+            strict=True,
+            activate=True,
+            verbosity=0,
         )
+
+    def setUp(self):
+        self.ward = Ward.objects.get(county="Migori", ward_code="KE-WARD-1261")
         self.risk_score = RiskScore.objects.create(
             ward=self.ward,
             score=0.9,
@@ -44,6 +52,31 @@ class MobitechSmsTests(TestCase):
             predicted_cases=8,
             model_version="mobitech-test-v1",
         )
+
+    def test_mobitech_fixture_has_exactly_40_canonical_polygon_backed_wards(self):
+        expected_codes = {
+            feature["properties"]["ward_code"]
+            for feature in load_migori_ward_geometry()["features"]
+        }
+        active_wards = list(
+            Ward.objects.filter(county__iexact="Migori", is_active=True).order_by("ward_code")
+        )
+
+        self.assertEqual(len(expected_codes), 40)
+        self.assertEqual(len(active_wards), 40)
+        self.assertEqual({ward.ward_code for ward in active_wards}, expected_codes)
+        self.assertEqual(Ward.objects.filter(county__iexact="Migori").count(), 40)
+        self.assertFalse(
+            [
+                ward.ward_code
+                for ward in active_wards
+                if ward.boundary is None
+                or ward.boundary.empty
+                or not ward.boundary.valid
+                or ward.boundary.area <= 0
+            ]
+        )
+        self.assertFalse(Ward.objects.filter(name__icontains="Mobitech").exists())
 
     @override_settings(SMS_PROVIDER="mobitech", AFRICAS_TALKING_ENABLED=False)
     def test_active_route_selects_mobitech_and_africas_talking_is_parked(self):

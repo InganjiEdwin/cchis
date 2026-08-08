@@ -125,6 +125,142 @@ def _date_list(start_date: date, end_date: date) -> list[str]:
     ]
 
 
+def _canonical_run_ward_reference_check(runs: list[IngestionRun], active_wards: list[Ward]) -> dict:
+    expected_ward_public_ids = {str(ward.public_id) for ward in active_wards}
+    issues: list[dict] = []
+
+    for run in runs:
+        requested_wards = {str(value) for value in (run.requested_wards or [])}
+        lineage = run.lineage_metadata if isinstance(run.lineage_metadata, dict) else {}
+        lineage_requested_wards = {
+            str(value) for value in (lineage.get("requested_ward_public_ids") or [])
+        }
+        if requested_wards != expected_ward_public_ids or lineage_requested_wards != expected_ward_public_ids:
+            issues.append(
+                _issue(
+                    severity="fail",
+                    message="CHIRPS run does not reference every active canonical Migori ward.",
+                    context={
+                        "run_id": run.id,
+                        "expected_ward_count": len(expected_ward_public_ids),
+                        "requested_ward_count": len(requested_wards),
+                        "lineage_requested_ward_count": len(lineage_requested_wards),
+                        "missing_requested_ward_public_ids": sorted(
+                            expected_ward_public_ids - requested_wards
+                        ),
+                        "missing_lineage_ward_public_ids": sorted(
+                            expected_ward_public_ids - lineage_requested_wards
+                        ),
+                        "unexpected_requested_ward_public_ids": sorted(
+                            requested_wards - expected_ward_public_ids
+                        ),
+                        "unexpected_lineage_ward_public_ids": sorted(
+                            lineage_requested_wards - expected_ward_public_ids
+                        ),
+                    },
+                )
+            )
+
+    return _check(
+        "chirps_runs_reference_all_canonical_wards",
+        "fail" if issues else "pass" if runs and active_wards else "warning",
+        evidence={
+            "run_count": len(runs),
+            "active_migori_ward_count": len(active_wards),
+            "expected_ward_public_id_count": len(expected_ward_public_ids),
+        },
+        issues=issues,
+    )
+
+
+def _accepted_run_observation_check(
+    records: list[ClimateRecord],
+    runs: list[IngestionRun],
+    active_wards: list[Ward],
+) -> dict:
+    expected_ward_public_ids = {str(ward.public_id) for ward in active_wards}
+    accepted_runs = [run for run in runs if run.status == IngestionRun.STATUS_SUCCESS]
+    records_by_run_date_ward_mode = Counter(
+        (
+            record.ingestion_run_id,
+            record.valid_date.isoformat(),
+            str(record.ward.public_id),
+            record.source_mode,
+        )
+        for record in records
+        if record.ingestion_run_id and record.valid_date and record.ward_id
+    )
+    issues: list[dict] = []
+
+    for run in accepted_runs:
+        lineage = run.lineage_metadata if isinstance(run.lineage_metadata, dict) else {}
+        run_variant = f"{lineage.get('product_status', CHIRPS_PRODUCT_STATUS_FINAL)}-{lineage.get('daily_variant', '')}"
+        processed_dates = [str(value) for value in lineage.get("processed_dates", [])]
+        attached_record_count = sum(
+            count
+            for (run_id, _source_date, ward_public_id, source_mode), count in records_by_run_date_ward_mode.items()
+            if run_id == run.id
+            and ward_public_id in expected_ward_public_ids
+            and source_mode == run_variant
+        )
+        expected_record_count = len(processed_dates) * len(expected_ward_public_ids)
+        if (
+            attached_record_count != expected_record_count
+            or run.records_loaded != attached_record_count
+            or lineage.get("unavailable_dates")
+            or lineage.get("rejected_dates")
+        ):
+            issues.append(
+                _issue(
+                    severity="fail",
+                    message="Accepted CHIRPS run does not have its complete persisted observations.",
+                    context={
+                        "run_id": run.id,
+                        "processed_date_count": len(processed_dates),
+                        "expected_record_count": expected_record_count,
+                        "attached_record_count": attached_record_count,
+                        "run_records_loaded": run.records_loaded,
+                        "unavailable_dates": [str(value) for value in lineage.get("unavailable_dates", [])],
+                        "rejected_dates": [str(value) for value in lineage.get("rejected_dates", [])],
+                    },
+                )
+            )
+
+        for source_date in processed_dates:
+            ward_count = sum(
+                count
+                for (run_id, record_date, ward_public_id, source_mode), count in records_by_run_date_ward_mode.items()
+                if run_id == run.id
+                and record_date == source_date
+                and ward_public_id in expected_ward_public_ids
+                and source_mode == run_variant
+            )
+            if ward_count != len(expected_ward_public_ids):
+                issues.append(
+                    _issue(
+                        severity="fail",
+                        message="Accepted CHIRPS date does not have one persisted observation for every canonical ward.",
+                        context={
+                            "run_id": run.id,
+                            "source_date": source_date,
+                            "expected_ward_count": len(expected_ward_public_ids),
+                            "actual_record_count": ward_count,
+                        },
+                    )
+                )
+
+    return _check(
+        "chirps_accepted_runs_have_complete_observations",
+        "fail" if issues else "pass" if accepted_runs and active_wards else "warning",
+        evidence={
+            "accepted_run_count": len(accepted_runs),
+            "active_migori_ward_count": len(active_wards),
+            "records_scanned": len(records),
+        },
+        issues=issues,
+    )
+
+
 def _completeness_check(records: list[ClimateRecord], active_wards: list[Ward], runs: list[IngestionRun]) -> dict:
     records_by_date_ward = Counter(
         (record.valid_date.isoformat(), str(record.ward.public_id))
@@ -926,6 +1062,8 @@ def build_chirps_ingestion_audit() -> dict:
             evidence={"active_migori_ward_count": len(active_wards), "records_scanned": len(records)},
             issues=canonical_issues,
         ),
+        _canonical_run_ward_reference_check(runs, active_wards),
+        _accepted_run_observation_check(records, runs, active_wards),
         _check(
             "finite_non_negative_rainfall",
             "fail" if invalid_values else "pass" if records else "warning",
