@@ -4,7 +4,7 @@ Phase 9 adds connector hooks that reduce manual CSV burden while keeping CSV as 
 
 ## Connector Model
 
-Each connector fetches or receives a canonical CSV payload, creates a normal source-data upload batch, and runs the same dry-validation checks used by operator uploads. Clean connector batches can then follow the same confirmation, history, freshness, approval, and downstream governance surfaces as CSV batches.
+Each connector fetches or receives a canonical CSV payload, creates a normal source-data upload batch, and runs the same dry-validation checks used by operator uploads. The DHIS2 connector additionally performs a genuine authenticated read-only API discovery/query, transforms the response through an explicit UID crosswalk, and sends the resulting CSV envelope through the normal validation and surveillance ingestion path. Clean connector batches can then follow the same confirmation, history, freshness, approval, and downstream governance surfaces as CSV batches.
 
 Current connector keys:
 
@@ -23,7 +23,11 @@ Examples:
 - `SOURCE_DATA_DHIS2_BASE_URL`
 - `SOURCE_DATA_DHIS2_USERNAME`
 - `SOURCE_DATA_DHIS2_PASSWORD`
+- `SOURCE_DATA_DHIS2_API_TOKEN` (preferred; alternative to username/password)
 - `SOURCE_DATA_DHIS2_MAPPING_JSON`
+- `SOURCE_DATA_DHIS2_QUERY_JSON`
+- `SOURCE_DATA_DHIS2_TIMEOUT_SECONDS`
+- `SOURCE_DATA_DHIS2_MAX_RETRIES`
 - `SOURCE_DATA_DHIS2_CANONICAL_CSV_URL`
 
 For tests and deployment rehearsals, `SOURCE_DATA_CONNECTOR_FIXTURE_DIR` may point at canonical CSV fixtures named `<connector_key>.csv`.
@@ -51,6 +55,16 @@ Scheduled connector refreshes are controlled by:
 - `SOURCE_DATA_CONNECTOR_REFRESH_MINUTE`
 
 The default schedule includes `dhis2_surveillance_weekly`. Unconfigured connector runs skip safely and leave CSV upload available as fallback.
+
+## DHIS2 API Boundary
+
+`dhis2_surveillance_weekly` uses `risk.source_data.dhis2.Dhis2Client` for GET-only calls. It verifies `/api/me`, reads `/api/system/info`, retrieves the explicitly configured organisation-unit and data-element/indicator metadata, and executes the explicitly configured `analytics` or `dataValueSets` query. PAT authentication uses `Authorization: ApiToken ...`; basic authentication is accepted only over HTTPS outside local DEBUG mode.
+
+`SOURCE_DATA_DHIS2_MAPPING_JSON` is a versioned UID crosswalk. It must contain explicit DHIS2 organisation-unit UIDs, explicit data-element/indicator UIDs, canonical CCHIS fields, and (when relevant) category-option-combo UIDs. A CCHIS ward is resolved by its stable public ID or ward code; display-name matching is never used. Unknown UIDs, ambiguous duplicate values, malformed periods, and invalid counts are rejected into the interoperability run.
+
+The mapping and query must be labelled for their actual scope. A Play proof should use a label such as `DHIS2_PLAY_DEMO_CROSSWALK_V1`, a non-operational reviewer status, and the JSON boolean `operational_eligible=false`. The persisted mapping version remains `DRAFT` and each individual mapping remains `NEEDS_REVIEW`; it is not an approved operational crosswalk. Queries are bounded to one explicit period and mapped UIDs with small page/result limits. Resulting canonical records carry `seeded_demo` truth, `DEMO` and `NON_OPERATIONAL` classifications, complete DHIS2 provenance, and are excluded by the existing production model-training, confirmed-truth, and alerting gates.
+
+The API transport is preferred when fully configured. If it is unavailable, `SOURCE_DATA_DHIS2_CANONICAL_CSV_URL` remains an optional correction/fallback transport and its run metadata reports `canonical_csv_url`, never `dhis2_api`. Fixtures report `fixture_csv`.
 
 ## Feed Modes
 

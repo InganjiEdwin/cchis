@@ -46,6 +46,7 @@ class SourceDataConnectorDefinition:
     fixture_filenames: tuple[str, ...] = ()
     default_release_version_setting: str = ""
     default_source_ref_setting: str = ""
+    optional_settings: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -61,6 +62,7 @@ class SourceDataConnectorDefinition:
             "fixture_filenames": list(self.fixture_filenames),
             "default_release_version_setting": self.default_release_version_setting,
             "default_source_ref_setting": self.default_source_ref_setting,
+            "optional_settings": list(self.optional_settings),
         }
 
 
@@ -77,9 +79,19 @@ SOURCE_DATA_CONNECTORS: tuple[SourceDataConnectorDefinition, ...] = (
             "SOURCE_DATA_DHIS2_USERNAME",
             "SOURCE_DATA_DHIS2_PASSWORD",
             "SOURCE_DATA_DHIS2_MAPPING_JSON",
+            "SOURCE_DATA_DHIS2_QUERY_JSON",
         ),
         canonical_csv_url_setting="SOURCE_DATA_DHIS2_CANONICAL_CSV_URL",
-        notes="Scheduled DHIS2 acquisition after org-unit and data-element mappings are approved.",
+        notes=(
+            "Read-only DHIS2 API acquisition with explicit UID mappings and an explicit analytics/data-value-set query. "
+            "SOURCE_DATA_DHIS2_API_TOKEN is an alternative to the basic-auth settings; canonical CSV remains a labelled fallback."
+        ),
+        optional_settings=(
+            "SOURCE_DATA_DHIS2_API_TOKEN",
+            "SOURCE_DATA_DHIS2_CANONICAL_CSV_URL",
+            "SOURCE_DATA_DHIS2_TIMEOUT_SECONDS",
+            "SOURCE_DATA_DHIS2_MAX_RETRIES",
+        ),
     ),
     SourceDataConnectorDefinition(
         connector_key="openmrs_facility_surveillance",
@@ -187,6 +199,14 @@ def _connector_is_configured(definition: SourceDataConnectorDefinition) -> bool:
         return False
     if _connector_fixture_path(definition):
         return True
+    if definition.connector_key == "dhis2_surveillance_weekly":
+        from risk.source_data.dhis2 import dhis2_api_configured
+
+        if dhis2_api_configured():
+            return True
+        # Keep the old canonical CSV route available, but do not describe it
+        # as a DHIS2 API transport.
+        return _canonical_url_configured(definition)
     return all(_configured_settings(definition).values()) and _canonical_url_configured(definition)
 
 
@@ -389,6 +409,28 @@ def run_source_data_connector_refresh(
         run.completed_at = timezone.now()
         run.save(update_fields=["status", "error_summary", "completed_at"])
         return run
+
+    if definition.connector_key == "dhis2_surveillance_weekly" and not _connector_fixture_path(definition):
+        from risk.source_data.dhis2 import dhis2_api_configured, run_dhis2_connector_refresh
+
+        if dhis2_api_configured():
+            try:
+                return run_dhis2_connector_refresh(connector_run=run, actor=actor, options=options)
+            except Exception as error:
+                from risk.source_data.dhis2 import dhis2_failure_summary
+
+                failure = dhis2_failure_summary(error)
+                run.status = SourceDataConnectorRun.STATUS_FAILED
+                run.error_summary = failure["code"]
+                run.completed_at = timezone.now()
+                run.safe_metadata = {
+                    **(run.safe_metadata or {}),
+                    "transport": "dhis2_api",
+                    "failure": failure,
+                    "credential_material_present_in_persisted_evidence": False,
+                }
+                run.save(update_fields=["status", "error_summary", "completed_at", "safe_metadata"])
+                return run
 
     try:
         from risk.source_data.uploads import create_source_data_upload_batch

@@ -142,6 +142,16 @@ BASE_ACCEPTED_COLUMNS = _columns(
     "dhis2_data_element",
     "dhis2_data_element_id",
     "dhis2_category_option_combo",
+    "dhis2_instance_hostname",
+    "dhis2_api_resource",
+    "dhis2_query_hash",
+    "dhis2_source_reference_hash",
+    "dhis2_query_identity_hash",
+    "dhis2_response_payload_hash",
+    "dhis2_row_identity_hash",
+    "dhis2_retrieved_at",
+    "dhis2_mapping_version",
+    "dhis2_connector_run_id",
     "notes",
 )
 
@@ -472,6 +482,16 @@ PROVIDER_CONTRACT_COLUMNS = _columns(
     "dhis2_data_element",
     "dhis2_data_element_id",
     "dhis2_category_option_combo",
+    "dhis2_instance_hostname",
+    "dhis2_api_resource",
+    "dhis2_query_hash",
+    "dhis2_source_reference_hash",
+    "dhis2_query_identity_hash",
+    "dhis2_response_payload_hash",
+    "dhis2_row_identity_hash",
+    "dhis2_retrieved_at",
+    "dhis2_mapping_version",
+    "dhis2_connector_run_id",
 )
 
 

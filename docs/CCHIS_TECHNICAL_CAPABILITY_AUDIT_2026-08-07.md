@@ -536,6 +536,23 @@ docker compose exec -T backend python manage.py run_facility_burden_forecast --m
 
 ## Final assessment
 
+### Post-audit DHIS2 correction — 2026-08-08
+
+The DHIS2 tranche was completed after this audit snapshot. The implementation
+now includes a genuine read-only DHIS2 Play adapter, explicit bounded query
+validation, separate query/response identity hashes, correction/supersession
+handling, actual HTTP GET receipts, demo-only `DRAFT`/`NEEDS_REVIEW` mapping
+persistence, accountable-operator checks, stable failure codes, and focused
+regression coverage. A controlled two-read proof against `play.im.dhis2.org`
+was recorded in `backend/risk/data/source_feeds/dhis2_play_proof_evidence.json`:
+both aggregate reads returned HTTP 200, the normalized response hashes matched,
+the second read replayed the prior ingestion, and the canonical-record delta
+was zero.
+
+This is limited to official Play demonstration data. It is not Kenya or Migori
+production surveillance, does not approve the crosswalk for operations, and
+does not change the production-readiness conclusion below.
+
 The prototype is technically credible as a local, seeded decision-support demonstration and is now materially better hardened for a future pilot. Its strongest evidence is the working identity/RBAC boundary, managed geospatial foundation, deterministic surveillance feature propagation, explicit production truth blockers, runnable risk/forecast commands, guarded alert workflow, CHV offline contract and replay handling, public USSD state machine, health-gated Compose stack and live dashboard surfaces.
 
 Its release posture remains **pilot-readiness work in progress, not production readiness**. The hardening program remains open: the correction pass strengthens production truth guards, Compose/provider wiring, frontend image provenance, scheduler hygiene and repository evidence, but does not create real-world evidence. The next milestone is real observed climate/surveillance feeds, corrected lineage, strict data-quality gates, time-based model validation, active registry/monitoring, external integration contract tests, authenticated browser smoke tests and deployment-specific operations. Until then, outputs should be labelled demo/proxy/calculated/preview-only wherever the UI and API already provide those caveats.

@@ -1,0 +1,176 @@
+{
+  "api_resource": "analytics",
+  "canonical_record_count_after_first": 7202,
+  "canonical_record_count_after_second": 7202,
+  "canonical_record_count_before": 7202,
+  "correction_path_demonstrated": false,
+  "credential_material_present_in_persisted_evidence": false,
+  "dhis2_server_version": "2.43.1",
+  "duplicate_record_delta": 0,
+  "evidence_schema_version": "dhis2-play-proof-evidence-v2",
+  "exact_replay_detected": true,
+  "failure_code": "",
+  "first_connector_run_id": 14,
+  "first_counts": {
+    "canonical_grouped_row_count": 1,
+    "mapped_source_data_value_count": 1,
+    "persisted_surveillance_record_count": 1,
+    "rejected_source_data_value_count": 0,
+    "source_data_value_count": 1,
+    "validated_canonical_row_count": 1
+  },
+  "first_interoperability_run_id": "ddbc98e2-8769-4a43-8ab8-9047b9b102bc",
+  "first_response_payload_hash": "6cf3da9975d870af91c79954954d6f0451c281776306082fec8d0b0d59753ad6",
+  "http_evidence": {
+    "actual_get_only": true,
+    "first": {
+      "discovery_http_receipts": [
+        {
+          "instance_hostname": "play.im.dhis2.org",
+          "method": "GET",
+          "page_count": null,
+          "resource": "me",
+          "retrieved_at": "2026-08-08T12:08:21.707725+00:00",
+          "status_code": 200
+        },
+        {
+          "instance_hostname": "play.im.dhis2.org",
+          "method": "GET",
+          "page_count": null,
+          "resource": "system/info",
+          "retrieved_at": "2026-08-08T12:08:21.908160+00:00",
+          "status_code": 200
+        },
+        {
+          "instance_hostname": "play.im.dhis2.org",
+          "method": "GET",
+          "page_count": null,
+          "resource": "organisationUnits/ImspTQPwCqd",
+          "retrieved_at": "2026-08-08T12:08:22.132173+00:00",
+          "status_code": 200
+        },
+        {
+          "instance_hostname": "play.im.dhis2.org",
+          "method": "GET",
+          "page_count": null,
+          "resource": "dataElements/fbfJHSPpUQD",
+          "retrieved_at": "2026-08-08T12:08:22.386134+00:00",
+          "status_code": 200
+        }
+      ],
+      "http_receipts": [
+        {
+          "instance_hostname": "play.im.dhis2.org",
+          "method": "GET",
+          "page_count": 1,
+          "resource": "analytics",
+          "retrieved_at": "2026-08-08T12:08:22.591644+00:00",
+          "status_code": 200
+        }
+      ],
+      "http_status": 200,
+      "page_count": 1,
+      "page_size": 10,
+      "params": {
+        "dimension": [
+          "dx:fbfJHSPpUQD",
+          "ou:ImspTQPwCqd",
+          "pe:2026"
+        ],
+        "displayProperty": "NAME",
+        "pageSize": 10,
+        "skipMeta": "false"
+      },
+      "record_count": 1,
+      "resource": "analytics"
+    },
+    "second": {
+      "discovery_http_receipts": [
+        {
+          "instance_hostname": "play.im.dhis2.org",
+          "method": "GET",
+          "page_count": null,
+          "resource": "me",
+          "retrieved_at": "2026-08-08T12:08:24.372619+00:00",
+          "status_code": 200
+        },
+        {
+          "instance_hostname": "play.im.dhis2.org",
+          "method": "GET",
+          "page_count": null,
+          "resource": "system/info",
+          "retrieved_at": "2026-08-08T12:08:24.570428+00:00",
+          "status_code": 200
+        },
+        {
+          "instance_hostname": "play.im.dhis2.org",
+          "method": "GET",
+          "page_count": null,
+          "resource": "organisationUnits/ImspTQPwCqd",
+          "retrieved_at": "2026-08-08T12:08:25.380442+00:00",
+          "status_code": 200
+        },
+        {
+          "instance_hostname": "play.im.dhis2.org",
+          "method": "GET",
+          "page_count": null,
+          "resource": "dataElements/fbfJHSPpUQD",
+          "retrieved_at": "2026-08-08T12:08:25.605230+00:00",
+          "status_code": 200
+        }
+      ],
+      "http_receipts": [
+        {
+          "instance_hostname": "play.im.dhis2.org",
+          "method": "GET",
+          "page_count": 1,
+          "resource": "analytics",
+          "retrieved_at": "2026-08-08T12:08:25.810013+00:00",
+          "status_code": 200
+        }
+      ],
+      "http_status": 200,
+      "page_count": 1,
+      "page_size": 10,
+      "params": {
+        "dimension": [
+          "dx:fbfJHSPpUQD",
+          "ou:ImspTQPwCqd",
+          "pe:2026"
+        ],
+        "displayProperty": "NAME",
+        "pageSize": 10,
+        "skipMeta": "false"
+      },
+      "record_count": 1,
+      "resource": "analytics"
+    }
+  },
+  "http_result": 200,
+  "mapped_count": 1,
+  "mapping_scope": "DEMO_ONLY",
+  "mapping_version": "DHIS2_PLAY_DEMO_CROSSWALK_V1",
+  "passed": true,
+  "play_instance_hostname": "play.im.dhis2.org",
+  "previous_ingestion_reference": 7,
+  "production_eligible": false,
+  "query_identity_hash": "7e46f7bc4d86f2052f6433fd0683fa2044fec78c2370fbc31720f5a057514afc",
+  "rejected_count": 0,
+  "second_connector_run_id": 15,
+  "second_counts": {
+    "canonical_grouped_row_count": 1,
+    "mapped_source_data_value_count": 1,
+    "persisted_surveillance_record_count": 1,
+    "rejected_source_data_value_count": 0,
+    "source_data_value_count": 1,
+    "validated_canonical_row_count": 1
+  },
+  "second_http_result": 200,
+  "second_interoperability_run_id": "a9573ecb-df00-4509-bd38-03a152e7b97a",
+  "second_response_payload_hash": "6cf3da9975d870af91c79954954d6f0451c281776306082fec8d0b0d59753ad6",
+  "source_count": 1,
+  "truth_classification": [
+    "DEMO",
+    "NON_OPERATIONAL"
+  ]
+}

@@ -26,6 +26,15 @@ class SourceDataPhaseNineConnectorIntegrationTests(APITestCase):
             SOURCE_DATA_CONNECTOR_FIXTURE_DIR=Path(self.fixture_root.name),
             SOURCE_DATA_MAX_UPLOAD_SIZE_BYTES=1024 * 1024,
             SOURCE_DATA_MAX_UPLOAD_ROWS=20,
+            # Keep this legacy connector-surface test independent of a local
+            # developer's live DHIS2 proof configuration.
+            SOURCE_DATA_DHIS2_BASE_URL="",
+            SOURCE_DATA_DHIS2_USERNAME="",
+            SOURCE_DATA_DHIS2_PASSWORD="",
+            SOURCE_DATA_DHIS2_API_TOKEN="",
+            SOURCE_DATA_DHIS2_MAPPING_JSON="",
+            SOURCE_DATA_DHIS2_QUERY_JSON="",
+            SOURCE_DATA_DHIS2_CANONICAL_CSV_URL="",
         )
         self.settings_override.enable()
         self.addCleanup(self.settings_override.disable)
