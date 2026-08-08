@@ -86,6 +86,7 @@ class PrivacyAccessSafeViewTests(APITestCase):
             status=Alert.STATUS_QUEUED,
             delivery_backend="stub",
             external_id="provider-alert-privacy-access",
+            provider_message_id="provider-message-privacy-access",
             error_message="Provider retry path mentions +254700111098.",
             governance_metadata={
                 "schema_version": "message-audience-governance-phase-2-v1",
@@ -132,6 +133,7 @@ class PrivacyAccessSafeViewTests(APITestCase):
         self.assertNotIn("+254700111099", list_alert["message"])
         self.assertIn("[redacted phone]", list_alert["message"])
         self.assertEqual(list_alert["external_id"], "")
+        self.assertEqual(list_alert["provider_message_id"], "")
         self.assertNotIn("+254700111098", list_alert["error_message"])
         self.assertNotIn(str(self.chv.public_id), str(list_alert["governance_metadata"]))
         self.assertNotIn("privacy-access-consent-source", str(list_alert["governance_metadata"]))
@@ -142,6 +144,7 @@ class PrivacyAccessSafeViewTests(APITestCase):
         self.assertEqual(detail_response.data["recipient"], "+254******1001")
         self.assertNotIn("+254700111099", detail_response.data["message"])
         self.assertEqual(detail_response.data["external_id"], "")
+        self.assertEqual(detail_response.data["provider_message_id"], "")
         self.assertNotIn(str(self.chv.public_id), str(detail_response.data["governance_metadata"]))
         self.assertEqual(detail_response.data["privacy_context"]["classification"], "sensitive_contact_data")
 
@@ -154,6 +157,7 @@ class PrivacyAccessSafeViewTests(APITestCase):
         self.assertEqual(response.data["recipient"], "+254700111001")
         self.assertIn("+254700111099", response.data["message"])
         self.assertEqual(response.data["external_id"], "provider-alert-privacy-access")
+        self.assertEqual(response.data["provider_message_id"], "provider-message-privacy-access")
         self.assertIn("+254700111098", response.data["error_message"])
         self.assertEqual(
             response.data["governance_metadata"]["audience_decision"]["contact_reference"],
@@ -677,6 +681,7 @@ class PrivacyAccessSafeViewTests(APITestCase):
         self.assertEqual(alert_payload["recipient"], "+254******1001")
         self.assertNotIn("+254700111099", alert_payload["message"])
         self.assertEqual(alert_payload["external_id"], "")
+        self.assertEqual(alert_payload["provider_message_id"], "")
         self.assertTrue(alert_payload["privacy_context"]["redacted"])
         self.assertEqual(assignment_payload["chv_phone_number"], "+254******1001")
         self.assertEqual(triage_payload["phone_number"], "+254******1002")

@@ -1655,6 +1655,7 @@ class AlertSerializer(serializers.ModelSerializer):
             "last_attempted_at",
             "next_retry_at",
             "external_id",
+            "provider_message_id",
             "sent_at",
             "created_at",
             "error_message",
