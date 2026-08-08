@@ -78,7 +78,9 @@ jobs:
         run: docker compose run --rm backend python -m compileall core risk accounts
 
       - name: Run backend test suite
-        run: docker compose run --rm backend python manage.py test --noinput
+        run: |
+          set -o pipefail
+          docker compose run --rm backend python manage.py test --noinput 2>&1 | tee backend-test.log
         env:
           CCHIS_DJANGO_DEBUG: "True"
           SECRET_KEY: ci-local-development-key
@@ -90,6 +92,16 @@ jobs:
           DB_PORT: "5432"
           CELERY_BROKER_URL: redis://redis:6379/0
           CELERY_RESULT_BACKEND: redis://redis:6379/1
+
+      - name: Surface backend test failure names
+        if: failure()
+        run: |
+          if test -f backend-test.log; then
+            while IFS= read -r line; do
+              encoded_line="$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g' -e 's/\n/%0A/g')"
+              echo "::error title=Backend test suite::$encoded_line"
+            done < <(grep -E '^(ERROR|FAIL):|^FAILED \(|^Ran [0-9]+ test' backend-test.log || true)
+          fi
 
       - name: Run Python dependency audit
         run: docker compose run --rm backend sh -c "python -m pip install --no-cache-dir pip-audit && pip-audit -r requirements.txt"
