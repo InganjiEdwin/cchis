@@ -5083,6 +5083,7 @@ class RiskPermissionsTestCase(AuthenticatedAPITestCase):
         self.assertEqual(assignment_event["title"], "Assigned to coverage request")
         self.assertEqual(assignment_event["source"], "Coverage request workflow")
 
+    @override_settings(SMS_PROVIDER="stub")
     @patch("risk.services.send_sms")
     def test_admin_can_send_chv_message_via_existing_sms_service(self, mock_send_sms):
         mock_send_sms.return_value = DeliveryResult(

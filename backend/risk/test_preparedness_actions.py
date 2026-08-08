@@ -27,6 +27,7 @@ from .models import (
     Ward,
 )
 from .preparedness_action_audit import build_preparedness_action_ledger_audit
+from .registry_test_fixtures import seed_approved_active_registry_entry
 from .services import get_or_create_preparedness_action, sync_alert_workflow_for_ward, transition_preparedness_action
 from .test_step_up_utils import force_authenticate_with_step_up
 
@@ -68,6 +69,11 @@ class PreparednessActionLedgerTestCase(APITestCase):
                 "execution_context": "test",
             },
             completed_at=timezone.now(),
+        )
+        seed_approved_active_registry_entry(
+            self,
+            self.model_run,
+            reason="Preparedness action audit fixture represents a governed live run",
         )
         self.risk_score = RiskScore.objects.create(
             ward=self.ward,

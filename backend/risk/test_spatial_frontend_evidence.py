@@ -37,6 +37,7 @@ from risk.models import (
     WardSpatialRelationshipType,
 )
 from risk.services import build_ward_intelligence_snapshot
+from risk.registry_test_fixtures import seed_approved_active_registry_entry
 
 
 class WardSpatialFrontendEvidenceTestCase(TestCase):
@@ -70,6 +71,11 @@ class WardSpatialFrontendEvidenceTestCase(TestCase):
                 "alert_eligible": True,
             },
             completed_at=timezone.now(),
+        )
+        seed_approved_active_registry_entry(
+            self,
+            self.model_run,
+            reason="Spatial frontend evidence fixture represents a governed live run",
         )
 
     def _create_population_exposure(self, recorded_at):
