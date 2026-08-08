@@ -751,8 +751,8 @@ MAILGUN_REPLY_TO = config("MAILGUN_REPLY_TO", default="").strip()
 if EMAIL_PROVIDER not in {"stub", "mailgun"}:
     raise ImproperlyConfigured("EMAIL_PROVIDER must be one of: stub, mailgun.")
 
-if SMS_PROVIDER not in {"stub", "africastalking"}:
-    raise ImproperlyConfigured("SMS_PROVIDER must be one of: stub, africastalking.")
+if SMS_PROVIDER not in {"stub", "mobitech", "africastalking"}:
+    raise ImproperlyConfigured("SMS_PROVIDER must be one of: stub, mobitech, africastalking.")
 
 if IS_SHARED_ENVIRONMENT and not EMAIL_PROVIDER:
     raise ImproperlyConfigured("EMAIL_PROVIDER must be explicitly set outside local environments.")
@@ -776,7 +776,21 @@ if EMAIL_PROVIDER == "mailgun":
             f"Mailgun email delivery requires these settings: {missing_values}."
         )
 
+AFRICAS_TALKING_ENABLED = config("AFRICAS_TALKING_ENABLED", default="false", cast=bool)
+MOBITECH_API_URL = config(
+    "MOBITECH_API_URL",
+    default="https://app.mobitechtechnologies.com//sms/sendmultiple",
+).strip()
+MOBITECH_API_KEY = config("MOBITECH_API_KEY", default="").strip()
+MOBITECH_SENDER_ID = config("MOBITECH_SENDER_ID", default="").strip()
+MOBITECH_SERVICE_ID = config("MOBITECH_SERVICE_ID", default="0").strip() or "0"
+MOBITECH_DELIVERY_CALLBACK_URL = config("MOBITECH_DELIVERY_CALLBACK_URL", default="").strip()
+MOBITECH_DELIVERY_CALLBACK_TOKEN = config("MOBITECH_DELIVERY_CALLBACK_TOKEN", default="").strip()
+MOBITECH_HTTP_TIMEOUT_SECONDS = config("MOBITECH_HTTP_TIMEOUT_SECONDS", default=20, cast=int)
+
 if SMS_PROVIDER == "africastalking":
+    if not AFRICAS_TALKING_ENABLED and IS_SHARED_ENVIRONMENT:
+        raise ImproperlyConfigured("Africa's Talking is parked and disabled; use SMS_PROVIDER=mobitech.")
     AFRICASTALKING_USERNAME = config("AFRICASTALKING_USERNAME", default="").strip()
     AFRICASTALKING_API_KEY = config("AFRICASTALKING_API_KEY", default="").strip()
     missing_africastalking_settings = [
@@ -791,6 +805,22 @@ if SMS_PROVIDER == "africastalking":
         missing_values = ", ".join(missing_africastalking_settings)
         raise ImproperlyConfigured(
             f"Africa's Talking SMS delivery requires these settings: {missing_values}."
+        )
+
+if SMS_PROVIDER == "mobitech" and IS_SHARED_ENVIRONMENT:
+    missing_mobitech_settings = [
+        name
+        for name, value in (
+            ("MOBITECH_API_URL", MOBITECH_API_URL),
+            ("MOBITECH_API_KEY", MOBITECH_API_KEY),
+            ("MOBITECH_SENDER_ID", MOBITECH_SENDER_ID),
+        )
+        if not value
+    ]
+    if missing_mobitech_settings:
+        missing_values = ", ".join(missing_mobitech_settings)
+        raise ImproperlyConfigured(
+            f"Mobitech SMS delivery requires these settings: {missing_values}."
         )
 
 LOGGING = {

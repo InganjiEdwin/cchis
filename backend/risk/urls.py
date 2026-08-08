@@ -50,6 +50,7 @@ from .views import (
     InteroperabilityRunErrorFileAPIView,
     InteroperabilityRunRetryAPIView,
     LatestWardRiskAPIView,
+    MobitechDeliveryCallbackAPIView,
     MigoriWardMapAPIView,
     FacilityForecastingStatusAPIView,
     FacilityForecastingEvaluationAPIView,
@@ -111,6 +112,7 @@ from .views import (
 )
 
 urlpatterns = [
+    path("sms/mobitech/callback/", MobitechDeliveryCallbackAPIView.as_view(), name="mobitech-delivery-callback"),
     path("wards/", WardListAPIView.as_view(), name="ward-list"),
     path("wards/<int:pk>/", WardDetailAPIView.as_view(), name="ward-detail"),
     path("wards/<int:pk>/intelligence/", WardIntelligenceAPIView.as_view(), name="ward-intelligence"),

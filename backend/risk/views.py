@@ -1,7 +1,9 @@
 import logging
+import hmac
 from datetime import datetime
 import uuid
 
+from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
 from django.db.models import Q
@@ -22,6 +24,7 @@ from accounts.step_up import RequireFreshStepUp
 from accounts.throttles import AuthScopedRateThrottle
 
 from .tasks import deliver_alert_task, run_risk_model_task, trigger_alerts_task
+from .sms_delivery import process_mobitech_delivery_callback
 
 from .facility_forecasting import (
     build_facility_forecast_promotion_summary,
@@ -3255,6 +3258,28 @@ class UssdMenuVersionApprovalAPIView(APIView):
             )
 
         return Response(build_ussd_menu_version_record(updated_menu_version), status=status.HTTP_200_OK)
+
+
+class MobitechDeliveryCallbackAPIView(APIView):
+    """Public, token-gated Mobitech callback endpoint with idempotent reconciliation."""
+
+    authentication_classes = []
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        expected_token = str(getattr(settings, "MOBITECH_DELIVERY_CALLBACK_TOKEN", "") or "")
+        if expected_token:
+            supplied_token = request.headers.get("X-Mobitech-Callback-Token", "")
+            if not hmac.compare_digest(str(supplied_token), expected_token):
+                return Response({"detail": "Invalid callback token."}, status=status.HTTP_403_FORBIDDEN)
+
+        payload = request.data if isinstance(request.data, dict) else dict(request.data)
+        result = process_mobitech_delivery_callback(payload)
+        if result["status"] == "ignored":
+            return Response({"status": "ignored"}, status=status.HTTP_400_BAD_REQUEST)
+        if result["status"] == "unmatched":
+            return Response({"status": "unmatched"}, status=status.HTTP_202_ACCEPTED)
+        return Response({"status": result["status"]}, status=status.HTTP_200_OK)
 
 
 class TriggerAlertContextAPIView(APIView):

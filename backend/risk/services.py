@@ -2,6 +2,7 @@ import logging
 from datetime import timedelta
 
 from decouple import config
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Count, Max, Q
 from django.utils import timezone
@@ -2172,9 +2173,27 @@ def build_alert_message(
     )
 
 
-def send_sms(phone_number: str, message: str, provider_name: str | None = None) -> DeliveryResult:
+def send_sms(
+    phone_number: str,
+    message: str,
+    provider_name: str | None = None,
+    *,
+    idempotency_key: str = "",
+    metadata: dict | None = None,
+) -> DeliveryResult:
     provider = get_sms_provider(provider_name=provider_name)
-    return provider.send(phone_number, message)
+    return provider.send(
+        phone_number,
+        message,
+        idempotency_key=idempotency_key,
+        metadata=metadata,
+    )
+
+
+def _configured_sms_provider_name() -> str:
+    return str(
+        getattr(settings, "SMS_PROVIDER", config("SMS_PROVIDER", default="stub")) or "stub"
+    ).strip().lower()
 
 
 def _template_context_for_chv(chv: CHV, extra_context: dict | None = None) -> dict:
@@ -2720,29 +2739,45 @@ def authorize_contact_message(
 
 
 def resolve_chv_message_mode() -> str:
-    provider_name = config("SMS_PROVIDER", default="stub").strip().lower() or "stub"
+    provider_name = _configured_sms_provider_name()
 
     if provider_name == "stub":
         return "SEND"
 
     if provider_name == "africastalking":
+        if not getattr(settings, "AFRICAS_TALKING_ENABLED", False):
+            return "QUEUE_ONLY"
         username = config("AFRICASTALKING_USERNAME", default="").strip()
         api_key = config("AFRICASTALKING_API_KEY", default="").strip()
         return "SEND" if username and api_key else "QUEUE_ONLY"
+
+    if provider_name == "mobitech":
+        return (
+            "SEND"
+            if getattr(settings, "MOBITECH_API_KEY", "")
+            and getattr(settings, "MOBITECH_API_URL", "")
+            and getattr(settings, "MOBITECH_SENDER_ID", "")
+            else "QUEUE_ONLY"
+        )
 
     return "QUEUE_ONLY"
 
 
 def resolve_chv_message_delivery_kind() -> str:
-    provider_name = config("SMS_PROVIDER", default="stub").strip().lower() or "stub"
+    provider_name = _configured_sms_provider_name()
 
     if provider_name == "stub":
         return "SIMULATED"
 
     if provider_name == "africastalking":
+        if not getattr(settings, "AFRICAS_TALKING_ENABLED", False):
+            return "QUEUE_ONLY"
         username = config("AFRICASTALKING_USERNAME", default="").strip()
         api_key = config("AFRICASTALKING_API_KEY", default="").strip()
         return "LIVE" if username and api_key else "QUEUE_ONLY"
+
+    if provider_name == "mobitech":
+        return "LIVE" if resolve_chv_message_mode() == "SEND" else "QUEUE_ONLY"
 
     return "QUEUE_ONLY"
 
@@ -2769,7 +2804,7 @@ def create_chv_message(
         delivery_kind = CHVMessage.DELIVERY_KIND_QUEUE_ONLY
     else:
         delivery_kind = resolved_delivery_kind
-    delivery_backend = config("SMS_PROVIDER", default="stub").strip().lower() or "stub"
+    delivery_backend = _configured_sms_provider_name()
     audience_scope = _assert_chv_operational_scope(chv, sent_by)
     rendered_template = None
     resolved_message_body = (message_body or "").strip()
@@ -2972,6 +3007,8 @@ def create_alerts_for_riskscore(
 
     if send_sms_enabled:
         chvs = CHV.objects.filter(ward=ward, is_active=True)
+        sms_delivery_backend = _configured_sms_provider_name()
+        sms_delivery_kind = resolve_chv_message_delivery_kind()
 
         for chv in chvs:
             audience_scope = _assert_chv_operational_scope(chv, None)
@@ -3029,7 +3066,8 @@ def create_alerts_for_riskscore(
                 recipient=chv.phone_number,
                 message=sms_message,
                 status=Alert.STATUS_QUEUED,
-                delivery_backend=config("SMS_PROVIDER", default="stub").strip().lower() or "stub",
+                delivery_backend=sms_delivery_backend,
+                delivery_kind=sms_delivery_kind,
                 guided_request_metadata=sms_request_metadata,
                 max_attempts=config("ALERT_MAX_ATTEMPTS", cast=int, default=3),
                 **_message_template_snapshot(sms_rendered_template),
@@ -3247,28 +3285,78 @@ def deliver_alert(alert: Alert) -> Alert:
         sync_alert_workflow_for_ward(alert.ward)
         return alert
 
+    if (
+        alert.delivery_backend == "mobitech"
+        and alert.provider_acceptance_status == Alert.PROVIDER_ACCEPTANCE_ACCEPTED
+        and alert.provider_message_id
+    ):
+        # A previously accepted request must be reconciled by callback, not submitted again.
+        sync_alert_workflow_for_ward(alert.ward)
+        return alert
+
     attempted_at = timezone.now()
+    if alert.idempotency_key is None:
+        alert.save(update_fields=["idempotency_key"])
     alert.attempt_count += 1
     alert.last_attempted_at = attempted_at
 
     provider_name = alert.delivery_backend or None
-    result = send_sms(alert.recipient, alert.message, provider_name=provider_name)
+    result = send_sms(
+        alert.recipient,
+        alert.message,
+        provider_name=provider_name,
+        idempotency_key=str(alert.idempotency_key or ""),
+        metadata=alert.provider_request_metadata or {},
+    )
     alert.external_id = result.external_id
+    alert.provider_message_id = result.external_id if result.external_delivery else ""
     alert.error_message = result.error
     alert.delivery_backend = result.provider
+    alert.provider_request_metadata = result.request_metadata or alert.provider_request_metadata or {}
+    alert.provider_response_metadata = result.response_metadata or {}
+    if not result.success and result.provider == "mobitech":
+        alert.provider_acceptance_status = Alert.PROVIDER_ACCEPTANCE_REJECTED
+    else:
+        alert.provider_acceptance_status = result.provider_acceptance_status or (
+            Alert.PROVIDER_ACCEPTANCE_REJECTED if not result.success else Alert.PROVIDER_ACCEPTANCE_PENDING
+        )
+    alert.provider_accepted_at = result.provider_accepted_at
+    alert.last_error_classification = result.error_code if not result.success else ""
 
     if result.success:
-        alert.status = Alert.STATUS_DELIVERED
-        alert.sent_at = attempted_at
-        alert.next_retry_at = None
-    elif alert.attempt_count < alert.max_attempts:
+        if result.external_delivery and result.provider == "mobitech":
+            # The send endpoint acknowledges acceptance; final delivery is callback-driven.
+            alert.status = Alert.STATUS_QUEUED
+            alert.provider_delivery_status = Alert.PROVIDER_DELIVERY_PENDING
+            alert.sent_at = attempted_at
+            alert.next_retry_at = None
+        elif not result.external_delivery:
+            alert.status = Alert.STATUS_DELIVERED
+            alert.delivery_kind = Alert.DELIVERY_KIND_SIMULATED
+            alert.provider_delivery_status = Alert.PROVIDER_DELIVERY_SIMULATED
+            alert.sent_at = attempted_at
+            alert.next_retry_at = None
+        else:
+            # Preserve the legacy contract for explicitly injected non-Mobitech providers.
+            alert.status = Alert.STATUS_DELIVERED
+            alert.provider_delivery_status = Alert.PROVIDER_DELIVERY_DELIVERED
+            alert.sent_at = attempted_at
+            alert.next_retry_at = None
+        alert.error_message = ""
+        alert.last_error_classification = ""
+    elif (
+        (result.retryable or result.provider not in {"mobitech", "africastalking"})
+        and alert.attempt_count < alert.max_attempts
+    ):
         alert.status = Alert.STATUS_RETRY_PENDING
         alert.next_retry_at = attempted_at + alert_retry_delay()
         alert.sent_at = None
+        alert.provider_delivery_status = Alert.PROVIDER_DELIVERY_UNKNOWN
     else:
         alert.status = Alert.STATUS_FAILED
         alert.next_retry_at = None
         alert.sent_at = None
+        alert.provider_delivery_status = Alert.PROVIDER_DELIVERY_FAILED
 
     alert.save(
         update_fields=[
@@ -3276,6 +3364,15 @@ def deliver_alert(alert: Alert) -> Alert:
             "last_attempted_at",
             "delivery_backend",
             "external_id",
+            "provider_message_id",
+            "delivery_kind",
+            "provider_request_metadata",
+            "provider_response_metadata",
+            "provider_acceptance_status",
+            "provider_accepted_at",
+            "provider_delivery_status",
+            "provider_delivered_at",
+            "last_error_classification",
             "error_message",
             "status",
             "next_retry_at",

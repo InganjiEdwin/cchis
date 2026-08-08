@@ -1616,6 +1616,7 @@ class AlertSerializer(serializers.ModelSerializer):
     message = serializers.SerializerMethodField()
     governance_metadata = serializers.SerializerMethodField()
     external_id = serializers.SerializerMethodField()
+    provider_message_id = serializers.SerializerMethodField()
     error_message = serializers.SerializerMethodField()
     privacy_context = serializers.SerializerMethodField()
 
@@ -1639,8 +1640,18 @@ class AlertSerializer(serializers.ModelSerializer):
             "governance_metadata",
             "status",
             "delivery_backend",
+            "delivery_kind",
             "attempt_count",
             "max_attempts",
+            "provider_request_metadata",
+            "provider_response_metadata",
+            "provider_acceptance_status",
+            "provider_accepted_at",
+            "provider_delivery_status",
+            "provider_delivered_at",
+            "last_error_classification",
+            "callback_payload_hash",
+            "idempotency_key",
             "last_attempted_at",
             "next_retry_at",
             "external_id",
@@ -1674,6 +1685,12 @@ class AlertSerializer(serializers.ModelSerializer):
     def get_external_id(self, obj: Alert) -> str:
         return redact_provider_identifier(
             obj.external_id,
+            can_view=self._can_view_direct_identifiers(),
+        )
+
+    def get_provider_message_id(self, obj: Alert) -> str:
+        return redact_provider_identifier(
+            obj.provider_message_id,
             can_view=self._can_view_direct_identifiers(),
         )
 

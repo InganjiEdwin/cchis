@@ -4063,6 +4063,41 @@ class Alert(models.Model):
         (STATUS_FAILED, "Failed"),
     ]
 
+    DELIVERY_KIND_LIVE = "LIVE"
+    DELIVERY_KIND_SIMULATED = "SIMULATED"
+    DELIVERY_KIND_QUEUE_ONLY = "QUEUE_ONLY"
+    DELIVERY_KIND_CHOICES = [
+        (DELIVERY_KIND_LIVE, "Live provider"),
+        (DELIVERY_KIND_SIMULATED, "Simulated"),
+        (DELIVERY_KIND_QUEUE_ONLY, "Queue only"),
+    ]
+
+    PROVIDER_ACCEPTANCE_PENDING = "pending"
+    PROVIDER_ACCEPTANCE_ACCEPTED = "accepted"
+    PROVIDER_ACCEPTANCE_REJECTED = "rejected"
+    PROVIDER_ACCEPTANCE_SIMULATED = "simulated"
+    PROVIDER_ACCEPTANCE_NOT_APPLICABLE = "not_applicable"
+    PROVIDER_ACCEPTANCE_CHOICES = [
+        (PROVIDER_ACCEPTANCE_PENDING, "Pending"),
+        (PROVIDER_ACCEPTANCE_ACCEPTED, "Accepted"),
+        (PROVIDER_ACCEPTANCE_REJECTED, "Rejected"),
+        (PROVIDER_ACCEPTANCE_SIMULATED, "Simulated"),
+        (PROVIDER_ACCEPTANCE_NOT_APPLICABLE, "Not applicable"),
+    ]
+
+    PROVIDER_DELIVERY_PENDING = "pending"
+    PROVIDER_DELIVERY_DELIVERED = "delivered"
+    PROVIDER_DELIVERY_FAILED = "failed"
+    PROVIDER_DELIVERY_SIMULATED = "simulated"
+    PROVIDER_DELIVERY_UNKNOWN = "unknown"
+    PROVIDER_DELIVERY_CHOICES = [
+        (PROVIDER_DELIVERY_PENDING, "Pending"),
+        (PROVIDER_DELIVERY_DELIVERED, "Delivered"),
+        (PROVIDER_DELIVERY_FAILED, "Failed"),
+        (PROVIDER_DELIVERY_SIMULATED, "Simulated"),
+        (PROVIDER_DELIVERY_UNKNOWN, "Unknown"),
+    ]
+
     public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     ward = models.ForeignKey(Ward, on_delete=models.CASCADE, related_name="alerts")
     risk_score = models.ForeignKey(
@@ -4094,12 +4129,35 @@ class Alert(models.Model):
     governance_metadata = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_QUEUED)
     delivery_backend = models.CharField(max_length=50, blank=True)
+    delivery_kind = models.CharField(
+        max_length=20,
+        choices=DELIVERY_KIND_CHOICES,
+        default=DELIVERY_KIND_LIVE,
+    )
     attempt_count = models.PositiveSmallIntegerField(default=0)
     max_attempts = models.PositiveSmallIntegerField(default=3)
     guided_request_metadata = models.JSONField(default=dict, blank=True)
+    provider_request_metadata = models.JSONField(default=dict, blank=True)
+    provider_response_metadata = models.JSONField(default=dict, blank=True)
+    provider_acceptance_status = models.CharField(
+        max_length=24,
+        choices=PROVIDER_ACCEPTANCE_CHOICES,
+        default=PROVIDER_ACCEPTANCE_PENDING,
+    )
+    provider_accepted_at = models.DateTimeField(null=True, blank=True)
+    provider_delivery_status = models.CharField(
+        max_length=24,
+        choices=PROVIDER_DELIVERY_CHOICES,
+        default=PROVIDER_DELIVERY_PENDING,
+    )
+    provider_delivered_at = models.DateTimeField(null=True, blank=True)
+    last_error_classification = models.CharField(max_length=80, blank=True)
+    callback_payload_hash = models.CharField(max_length=64, blank=True)
+    idempotency_key = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, null=True)
     last_attempted_at = models.DateTimeField(null=True, blank=True)
     next_retry_at = models.DateTimeField(null=True, blank=True)
     external_id = models.CharField(max_length=120, blank=True)
+    provider_message_id = models.CharField(max_length=120, blank=True)
     sent_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     error_message = models.TextField(blank=True)
@@ -4118,6 +4176,8 @@ class Alert(models.Model):
         ]
 
     def save(self, *args, **kwargs):
+        if self.idempotency_key is None:
+            self.idempotency_key = uuid.uuid4()
         self.requested_language = normalize_language_code(self.requested_language) or DEFAULT_CHV_LANGUAGE
         self.resolved_language = supported_language_or_default(self.resolved_language or self.requested_language)
         self.fallback_used = bool(self.fallback_used or self.requested_language != self.resolved_language)
@@ -4125,6 +4185,35 @@ class Alert(models.Model):
 
     def __str__(self) -> str:
         return f"{self.channel} to {self.recipient} [{self.status}]"
+
+
+class AlertDeliveryEvent(models.Model):
+    alert = models.ForeignKey(
+        Alert,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="delivery_events",
+    )
+    provider = models.CharField(max_length=50)
+    provider_event_id = models.CharField(max_length=160, blank=True)
+    provider_message_id = models.CharField(max_length=120, blank=True)
+    event_key = models.CharField(max_length=128, unique=True)
+    status = models.CharField(max_length=40)
+    payload_hash = models.CharField(max_length=64)
+    sanitized_payload = models.JSONField(default=dict, blank=True)
+    received_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["-received_at", "-id"]
+        indexes = [
+            models.Index(fields=["provider", "provider_message_id"], name="risk_alertde_msg_idx"),
+            models.Index(fields=["provider", "provider_event_id"], name="risk_alertde_evt_idx"),
+            models.Index(fields=["status", "received_at"], name="risk_alertde_status_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.provider} {self.provider_message_id or self.provider_event_id} [{self.status}]"
 
 
 class TriageSession(models.Model):
