@@ -59,7 +59,7 @@ class MobitechSmsTests(TestCase):
         MOBITECH_HTTP_TIMEOUT_SECONDS=7,
     )
     @patch("risk.providers._post_mobitech_json")
-    def test_mobitech_request_matches_linda_payload_and_normalizes_kenyan_number(self, post_json):
+    def test_mobitech_request_matches_provider_confirmed_multisend_payload(self, post_json):
         post_json.return_value = (
             200,
             json.dumps(
@@ -77,6 +77,7 @@ class MobitechSmsTests(TestCase):
             "+254 712-345-678",
             "Test alert body",
             idempotency_key="4ab6a311-1d75-4fd0-8f04-9bbf8f9e0f29",
+            metadata={"mobitech_client_ref": 6481},
         )
 
         self.assertTrue(result.success)
@@ -86,9 +87,9 @@ class MobitechSmsTests(TestCase):
         payload = post_json.call_args.args[1]
         self.assertEqual(payload["serviceId"], "0")
         self.assertEqual(payload["shortcode"], "CCHIS")
-        self.assertEqual(payload["messages"][0]["mobile"], "254712345678")
+        self.assertEqual(payload["messages"][0]["mobile"], "+254712345678")
         self.assertEqual(payload["messages"][0]["message"], "Test alert body")
-        self.assertEqual(payload["messages"][0]["client_ref"], "4ab6a311-1d75-4fd0-8f04-9bbf8f9e0f29")
+        self.assertEqual(payload["messages"][0]["client_ref"], 6481)
         self.assertEqual(post_json.call_args.kwargs["api_key"], "fixture-api-key")
         self.assertEqual(post_json.call_args.kwargs["timeout_seconds"], 7)
         self.assertNotIn("712345678", json.dumps(result.request_metadata))
@@ -201,6 +202,7 @@ class MobitechSmsTests(TestCase):
         self.assertTrue(alert.idempotency_key)
         send_sms.assert_called_once()
         self.assertEqual(send_sms.call_args.kwargs["idempotency_key"], str(alert.idempotency_key))
+        self.assertEqual(send_sms.call_args.kwargs["metadata"]["mobitech_client_ref"], alert.id)
 
     @override_settings(
         MOBITECH_DELIVERY_CALLBACK_URL=(
@@ -274,6 +276,25 @@ class MobitechSmsTests(TestCase):
         )
         self.assertEqual(response.status_code, 403)
         self.assertFalse(AlertDeliveryEvent.objects.exists())
+
+    def test_numeric_mobitech_client_ref_reconciles_to_persisted_alert(self):
+        alert = self._alert(
+            status=Alert.STATUS_QUEUED,
+            provider_acceptance_status=Alert.PROVIDER_ACCEPTANCE_ACCEPTED,
+        )
+
+        result = process_mobitech_delivery_callback(
+            {
+                "event_id": "mobitech-numeric-client-ref-event",
+                "client_ref": alert.id,
+                "status": "delivered",
+            }
+        )
+
+        self.assertEqual(result["status"], "processed")
+        self.assertEqual(AlertDeliveryEvent.objects.count(), 1)
+        alert.refresh_from_db()
+        self.assertEqual(alert.status, Alert.STATUS_DELIVERED)
 
     @override_settings(MOBITECH_DELIVERY_CALLBACK_URL="", MOBITECH_DELIVERY_CALLBACK_TOKEN="")
     def test_callback_rejects_empty_authentication_configuration(self):

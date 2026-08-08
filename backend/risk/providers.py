@@ -275,7 +275,10 @@ class MobitechSmsProvider:
                 {
                     "mobile": mobile,
                     "message": message,
-                    "client_ref": idempotency_key or str((metadata or {}).get("client_ref") or ""),
+                    "client_ref": _mobitech_client_ref(
+                        idempotency_key=idempotency_key,
+                        metadata=metadata,
+                    ),
                 }
             ],
         }
@@ -467,12 +470,23 @@ def _mobitech_msisdn(value: str) -> str:
     if not compact.isdigit():
         return ""
     if compact.startswith("0") and len(compact) == 10 and compact[1] in {"1", "7"}:
-        return f"254{compact[1:]}"
+        return f"+254{compact[1:]}"
     if compact.startswith("254") and len(compact) == 12 and compact[3] in {"1", "7"}:
-        return compact
+        return f"+{compact}"
     if len(compact) == 9 and compact[0] in {"1", "7"}:
-        return f"254{compact}"
+        return f"+254{compact}"
     return ""
+
+
+def _mobitech_client_ref(*, idempotency_key: str, metadata: dict | None = None) -> str | int:
+    """Use a provider-safe numeric reference when the alert supplies one."""
+
+    metadata = metadata or {}
+    for key in ("mobitech_client_ref", "client_ref"):
+        value = metadata.get(key)
+        if value is not None and str(value).strip():
+            return value
+    return idempotency_key or ""
 
 
 def _safe_request_metadata(

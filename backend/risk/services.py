@@ -3301,12 +3301,18 @@ def deliver_alert(alert: Alert) -> Alert:
     alert.last_attempted_at = attempted_at
 
     provider_name = alert.delivery_backend or None
+    provider_metadata = dict(alert.provider_request_metadata or {})
+    if provider_name == "mobitech":
+        # Mobitech's sendmultiple contract accepts the short numeric reference
+        # used by the working integration. Keep the UUID idempotency key for
+        # CCHIS retries and use the persisted alert id only at the provider.
+        provider_metadata.setdefault("mobitech_client_ref", alert.id)
     result = send_sms(
         alert.recipient,
         alert.message,
         provider_name=provider_name,
         idempotency_key=str(alert.idempotency_key or ""),
-        metadata=alert.provider_request_metadata or {},
+        metadata=provider_metadata,
     )
     alert.external_id = result.external_id
     alert.provider_message_id = result.external_id if result.external_delivery else ""

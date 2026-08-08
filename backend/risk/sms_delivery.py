@@ -238,7 +238,10 @@ def _find_alert(*, provider_message_id: str, client_ref: str) -> Alert | None:
         try:
             clauses.append(Q(idempotency_key=uuid.UUID(client_ref)))
         except (ValueError, AttributeError):
-            pass
+            try:
+                clauses.append(Q(pk=int(client_ref)))
+            except (TypeError, ValueError):
+                pass
     if not clauses:
         return None
     query = clauses[0]
