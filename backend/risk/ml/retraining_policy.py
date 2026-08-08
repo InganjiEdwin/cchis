@@ -22,7 +22,7 @@ from risk.models import (
 )
 
 from .registry import active_model_registry_entry
-from .surveillance_lineage import label_window_is_currently_eligible
+from risk.surveillance_lineage import label_window_is_currently_eligible
 
 
 MODEL_RETRAINING_POLICY_SCHEMA_VERSION = "ward-risk-model-retraining-policy-v1"
