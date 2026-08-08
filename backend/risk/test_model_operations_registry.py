@@ -1,14 +1,24 @@
 import json
 from datetime import timedelta
 from io import StringIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.db import IntegrityError, transaction
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
+from accounts.models import User
 from risk.ml.alignment import is_promoted_model_run
 from risk.ml.comparison import record_champion_challenger_comparison
+from risk.ml.model_registry_governance import (
+    activate_registered_model,
+    register_model_artifact,
+    request_model_approval,
+    review_model_artifact,
+)
 from risk.ml.monitoring import (
     METRIC_CALIBRATION_DRIFT,
     METRIC_FEATURE_DISTRIBUTION_DRIFT,
@@ -39,14 +49,33 @@ from risk.models import (
     ModelMonitoringThreshold,
     ModelMonitoringThresholdDirection,
     ModelPromotionEvent,
+    ModelRegistryApprovalState,
     ModelRegistryEntry,
+    ModelRegistryLifecycleState,
     ModelRegistryMonitoringState,
     ModelRegistryPromotionState,
     ModelRollbackEvent,
     ModelRetrainingRecommendation,
     ModelRetrainingRecommendationState,
     ModelRun,
+    ClimateRecord,
+    ClimateRecordQualityFlag,
+    ClimateRecordType,
+    IngestionRun,
+    PopulationBaselineRecord,
+    PopulationExposureFreshness,
+    PopulationExposureIngestionRun,
+    PopulationExposureSource,
+    PopulationExposureSourceKind,
+    PopulationExposureTruth,
     RiskScore,
+    SurveillanceCaseClass,
+    SurveillanceDiseaseCategory,
+    SurveillanceFreshnessState,
+    SurveillanceIngestionRun,
+    SurveillanceRecord,
+    SurveillanceSource,
+    SurveillanceSourceKind,
     SurveillanceLabelWindow,
     SurveillanceOutbreakLabel,
     SurveillanceTruthLevel,
@@ -62,6 +91,159 @@ class ModelOperationsTestHelpers:
             county="Migori",
             ward_code="MODEL-OPS",
         )
+        now = timezone.now()
+        self._surveillance_period_start = timezone.localdate() + timedelta(days=7)
+        self._surveillance_period_end = timezone.localdate() + timedelta(days=14)
+        self._surveillance_source = SurveillanceSource.objects.create(
+            source_name="Model operations surveillance fixture",
+            source_type=SurveillanceSource.SOURCE_TYPE_WEEKLY_AGGREGATE,
+            source_timestamp=now,
+            reporting_period_start=self._surveillance_period_start,
+            reporting_period_end=self._surveillance_period_end,
+            source_ref="model-ops-surveillance-source",
+            metadata={"source_credibility": "model-operations-test"},
+        )
+        self._surveillance_run = SurveillanceIngestionRun.objects.create(
+            source=self._surveillance_source,
+            status=SurveillanceIngestionRun.STATUS_SUCCESS,
+            source_name=self._surveillance_source.source_name,
+            source_type=self._surveillance_source.source_type,
+            source_timestamp=now,
+            reporting_period_start=self._surveillance_period_start,
+            reporting_period_end=self._surveillance_period_end,
+            source_ref="model-ops-surveillance-run",
+            adapter_key="model-operations-test",
+            input_ref="model-operations-test-input",
+            execution_mode=SurveillanceIngestionRun.EXECUTION_MANUAL,
+            records_seen=2,
+            records_loaded=2,
+            completed_at=now,
+        )
+        self._population_source = PopulationExposureSource.objects.create(
+            source_name="Model operations population fixture",
+            source_type=PopulationExposureSource.SOURCE_TYPE_POPULATION_BASELINE,
+            source_timestamp=now,
+            release_version="model-ops-test-v1",
+            source_ref="model-ops-population-source",
+        )
+        self._population_run = PopulationExposureIngestionRun.objects.create(
+            source=self._population_source,
+            status=PopulationExposureIngestionRun.STATUS_SUCCESS,
+            source_name=self._population_source.source_name,
+            source_type=self._population_source.source_type,
+            source_timestamp=now,
+            release_version="model-ops-test-v1",
+            source_ref="model-ops-population-run",
+            adapter_key="model-operations-test",
+            input_ref="model-operations-test-population-input",
+            execution_mode=PopulationExposureIngestionRun.EXECUTION_MANUAL,
+            records_seen=2,
+            records_loaded=2,
+            completed_at=now,
+        )
+        self._rainfall_run = IngestionRun.objects.create(
+            status=IngestionRun.STATUS_SUCCESS,
+            source_mode="observed",
+            source_kind=IngestionRun.SOURCE_KIND_LIVE,
+            source_name="Model operations climate fixture",
+            source_timestamp=now,
+            freshness_state=IngestionRun.FRESHNESS_FRESH,
+            records_seen=2,
+            records_loaded=2,
+            completed_at=now,
+        )
+        self._canonical_fixture_cache = {}
+        self.temp_dir = TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.settings_override = override_settings(MODEL_ARTIFACT_ROOT=Path(self.temp_dir.name))
+        self.settings_override.enable()
+        self.addCleanup(self.settings_override.disable)
+        self.artifact_path = Path(self.temp_dir.name) / "model-ops-v1.joblib"
+        self.artifact_path.write_bytes(b"model operations fixture artifact")
+        self.registry_operator = User.objects.create_user(
+            username="model-ops-registry-operator",
+            password="test-password",
+            role=User.ROLE_ADMIN,
+        )
+        self.review_requester = User.objects.create_user(
+            username="model-ops-review-requester",
+            password="test-password",
+            role=User.ROLE_ANALYST,
+        )
+        self.review_board = User.objects.create_user(
+            username="model-ops-review-board",
+            password="test-password",
+            role=User.ROLE_ADMIN,
+        )
+        self.ops_admin = User.objects.create_user(
+            username="ops-admin",
+            password="test-password",
+            role=User.ROLE_ADMIN,
+        )
+
+    def _canonical_fixture_for_ward(self, ward):
+        cached = self._canonical_fixture_cache.get(ward.id)
+        if cached is not None:
+            return cached
+
+        surveillance_record = SurveillanceRecord.objects.create(
+            ward=ward,
+            ingestion_run=self._surveillance_run,
+            source=self._surveillance_source,
+            disease_category=SurveillanceDiseaseCategory.CHOLERA,
+            case_class=SurveillanceCaseClass.CONFIRMED,
+            outbreak_label=SurveillanceOutbreakLabel.ACTIVE,
+            count_value=1,
+            reporting_period_start=self._surveillance_period_start,
+            reporting_period_end=self._surveillance_period_end,
+            truth_level=SurveillanceTruthLevel.CONFIRMED_SURVEILLANCE,
+            source_name=self._surveillance_source.source_name,
+            source_kind=SurveillanceSourceKind.LIVE,
+            freshness_state=SurveillanceFreshnessState.FRESH,
+            source_ref=f"model-ops-surveillance-record:{ward.ward_code}",
+            raw_payload={"source_credibility": "model-operations-test"},
+        )
+        climate_record = ClimateRecord.objects.create(
+            ward=ward,
+            ingestion_run=self._rainfall_run,
+            record_type=ClimateRecordType.OBSERVED,
+            source_provider="model-operations-test",
+            source_kind=IngestionRun.SOURCE_KIND_LIVE,
+            source_mode="observed",
+            valid_date=self._surveillance_period_end,
+            observed_timestamp=timezone.now(),
+            rainfall_mm=120,
+            quality_flag=ClimateRecordQualityFlag.ACCEPTED,
+            fallback_flag=False,
+            source_run="model-ops-climate-run",
+            source_ref=f"model-ops-climate-record:{ward.ward_code}",
+            identity_key=f"model-ops-climate:{ward.ward_code}",
+        )
+        population_record = PopulationBaselineRecord.objects.create(
+            ward=ward,
+            ingestion_run=self._population_run,
+            source=self._population_source,
+            recorded_at=timezone.now(),
+            population_total=10000,
+            population_under_five=1000,
+            truth_class=PopulationExposureTruth.DIRECT_POPULATION_BASELINE,
+            source_name=self._population_source.source_name,
+            source_kind=PopulationExposureSourceKind.LIVE,
+            freshness_state=PopulationExposureFreshness.FRESH,
+            release_version="model-ops-test-v1",
+            source_ref=f"model-ops-population-record:{ward.ward_code}",
+            raw_payload={"source_credibility": "model-operations-test"},
+        )
+        fixture = {
+            "surveillance_ref": f"surveillance_record:{surveillance_record.id}",
+            "climate_ref": f"climate_record:{climate_record.id}",
+            "population_ref": f"population_baseline_record:{population_record.id}",
+            "surveillance_record": surveillance_record,
+            "climate_record": climate_record,
+            "population_record": population_record,
+        }
+        self._canonical_fixture_cache[ward.id] = fixture
+        return fixture
 
     def _dataset(self, dataset_ref: str, dataset_kind: str) -> FeatureDataset:
         return FeatureDataset.objects.create(
@@ -71,7 +253,7 @@ class ModelOperationsTestHelpers:
             source_kind=FeatureDataset.SOURCE_KIND_LIVE,
             month=5,
             feature_keys=["prediction_date", "rainfall_total_14d"],
-            row_count=1,
+            row_count=0,
             lineage_metadata={"builder": "model-ops-test"},
         )
 
@@ -89,8 +271,10 @@ class ModelOperationsTestHelpers:
             training_dataset_ref=training_dataset.dataset_ref,
             inference_feature_dataset=inference_dataset,
             inference_dataset_ref=inference_dataset.dataset_ref,
+            rainfall_ingestion_run=self._rainfall_run,
             training_row_count=12,
             inference_row_count=1,
+            feature_keys=["prediction_date", "rainfall_total_14d"],
             evaluation_metrics={
                 "lead_time_recall": 0.92,
                 "precision": 0.5,
@@ -117,24 +301,136 @@ class ModelOperationsTestHelpers:
             source=RiskScore.SOURCE_MODEL,
             model_version=model_version,
         )
+        self._feature_row(training_dataset, self.ward, rainfall_total=10, quality_good=True)
+        self._feature_row(inference_dataset, self.ward, rainfall_total=120, quality_good=False)
+        self._feature_row(label_dataset, self.ward, rainfall_total=120, label=0, quality_good=True)
+        fixture = self._canonical_fixture_for_ward(self.ward)
+        training_dataset.lineage_metadata = {
+            **training_dataset.lineage_metadata,
+            "source_record_refs": [fixture["surveillance_ref"]],
+            "surveillance_label_dataset_ref": label_dataset.dataset_ref,
+            "production_truth_policy": {"eligible": True, "blocked_reason_codes": []},
+        }
+        training_dataset.save(update_fields=["lineage_metadata"])
+        label_dataset.lineage_metadata = {
+            **label_dataset.lineage_metadata,
+            "source_record_refs": [fixture["surveillance_ref"]],
+            "coverage": {"record_count": 1, "source_record_refs": [fixture["surveillance_ref"]]},
+            "production_truth_policy": {"eligible": True, "blocked_reason_codes": []},
+        }
+        label_dataset.save(update_fields=["lineage_metadata"])
+        model_run.metadata = {
+            **model_run.metadata,
+            "production_truth_policy": {"eligible": True, "blocked_reason_codes": []},
+        }
+        model_run.save(update_fields=["metadata"])
         return model_run
 
     def _feature_row(self, dataset, ward, *, rainfall_total, label=None, quality_good=True):
-        return FeatureDatasetRow.objects.create(
+        fixture = self._canonical_fixture_for_ward(ward)
+        is_inference = dataset.dataset_kind == FeatureDataset.KIND_INFERENCE
+        source_ref = fixture["climate_ref"] if is_inference else fixture["surveillance_ref"]
+        feature_values = {
+            "prediction_date": "2026-05-01",
+            "season": "long_rains",
+            "rainfall_total_14d": rainfall_total,
+            "population_total": fixture["population_record"].population_total,
+            "population_baseline_record_refs": [fixture["population_ref"]],
+            "source_record_refs": [source_ref],
+            "fallback_static_rainfall_used": False,
+            "climate_coverage_status": "sufficient" if quality_good else "insufficient_forecast_horizon",
+            "source_confidence": "high" if quality_good else "low",
+        }
+        if label is not None:
+            label_window, _ = SurveillanceLabelWindow.objects.get_or_create(
+                ward=ward,
+                feature_dataset=dataset,
+                defaults={
+                    "schema_version": "model-ops-test-v1",
+                    "dataset_ref": dataset.dataset_ref,
+                    "label_window_start": self._surveillance_period_start,
+                    "label_window_end": self._surveillance_period_end,
+                    "suspected_case_count": 0,
+                    "confirmed_case_count": fixture["surveillance_record"].count_value,
+                    "proxy_case_count": 0,
+                    "outbreak_label": SurveillanceOutbreakLabel.ACTIVE,
+                    "label_truth_level": SurveillanceTruthLevel.CONFIRMED_SURVEILLANCE,
+                    "generation_mode": "model_operations_test_fixture",
+                    "source_coverage_summary": {
+                        "record_count": 1,
+                        "source_record_refs": [fixture["surveillance_ref"]],
+                    },
+                    "generated_from_record_refs": [fixture["surveillance_ref"]],
+                    "source_record_count": 1,
+                },
+            )
+            feature_values.update(
+                {
+                    "surveillance_label_window_refs": [f"surveillance_label_window:{label_window.id}"],
+                    "suspected_case_count": label_window.suspected_case_count,
+                    "confirmed_case_count": label_window.confirmed_case_count,
+                    "proxy_case_count": label_window.proxy_case_count,
+                    "source_record_count": label_window.source_record_count,
+                    "label_truth_level": label_window.label_truth_level,
+                    "outbreak_label": label_window.outbreak_label,
+                }
+            )
+        row = FeatureDatasetRow.objects.create(
             dataset=dataset,
             ward=ward,
             ward_name_snapshot=ward.name,
             month=5,
             label=label,
-            feature_values={
-                "prediction_date": "2026-05-01",
-                "season": "long_rains",
-                "rainfall_total_14d": rainfall_total,
-                "population_total": 10000,
-                "fallback_static_rainfall_used": not quality_good,
-                "climate_coverage_status": "sufficient" if quality_good else "insufficient_forecast_horizon",
-            },
+            feature_values=feature_values,
         )
+        dataset.row_count = FeatureDatasetRow.objects.filter(dataset=dataset).count()
+        dataset.save(update_fields=["row_count"])
+        return row
+
+    def _feature_row_once(self, dataset, ward, **kwargs):
+        existing = FeatureDatasetRow.objects.filter(dataset=dataset, ward=ward).first()
+        return existing or self._feature_row(dataset, ward, **kwargs)
+
+    def _governed_registry_entry(
+        self,
+        model_run,
+        *,
+        owner="model-ops",
+        promoted_by="unit-test",
+        review_due_date=None,
+        source="model_operations_test",
+    ):
+        entry = register_model_artifact(
+            model_run=model_run,
+            artifact_path=str(self.artifact_path),
+            actor=self.registry_operator.username,
+            reason="Register source-backed model-operations fixture",
+        )
+        if review_due_date is not None:
+            entry.review_due_date = review_due_date
+            entry.save(update_fields=["review_due_date", "updated_at"])
+        request_model_approval(
+            entry=entry,
+            actor=self.review_requester.username,
+            reason="Request source-backed model-operations fixture review",
+        )
+        review_model_artifact(
+            entry=entry,
+            actor=self.review_board.username,
+            reason="Approve source-backed model-operations fixture",
+            approve=True,
+        )
+        activated = activate_registered_model(
+            entry=entry,
+            actor=self.review_board.username,
+            reason=f"Activate {source} fixture promoted by {promoted_by} for {owner}",
+        )
+        # Creating the OneToOne registry entry can populate Django's reverse
+        # relation cache on this in-memory ModelRun. Refresh it after the
+        # governed transition so alignment assertions observe the persisted
+        # active registry state rather than the initial candidate object.
+        model_run.refresh_from_db()
+        return activated
 
     def _phase_two_ready_registry_entry(self):
         model_run = self._promoted_run("ops-phase2-v1")
@@ -153,17 +449,17 @@ class ModelOperationsTestHelpers:
             model_version=model_run.model_version,
         )
 
-        self._feature_row(model_run.training_feature_dataset, self.ward, rainfall_total=10, quality_good=True)
-        self._feature_row(model_run.training_feature_dataset, second_ward, rainfall_total=12, quality_good=True)
-        self._feature_row(model_run.inference_feature_dataset, self.ward, rainfall_total=120, quality_good=False)
-        self._feature_row(model_run.inference_feature_dataset, second_ward, rainfall_total=130, quality_good=False)
+        self._feature_row_once(model_run.training_feature_dataset, self.ward, rainfall_total=10, quality_good=True)
+        self._feature_row_once(model_run.training_feature_dataset, second_ward, rainfall_total=12, quality_good=True)
+        self._feature_row_once(model_run.inference_feature_dataset, self.ward, rainfall_total=120, quality_good=False)
+        self._feature_row_once(model_run.inference_feature_dataset, second_ward, rainfall_total=130, quality_good=False)
 
         label_dataset = FeatureDataset.objects.get(
             dataset_ref=model_run.metadata["ward_risk_classification_label_dataset_ref"]
         )
-        self._feature_row(label_dataset, self.ward, rainfall_total=120, label=0, quality_good=True)
-        self._feature_row(label_dataset, second_ward, rainfall_total=130, label=1, quality_good=True)
-        entry = ensure_registry_entry_for_promoted_run(
+        self._feature_row_once(label_dataset, self.ward, rainfall_total=120, label=0, quality_good=True)
+        self._feature_row_once(label_dataset, second_ward, rainfall_total=130, label=1, quality_good=True)
+        entry = self._governed_registry_entry(
             model_run=model_run,
             owner="model-ops",
             promoted_by="unit-test",
@@ -230,7 +526,7 @@ class ModelOperationsTestHelpers:
         first_score.risk_level = Ward.RISK_LOW
         first_score.predicted_cases = 0
         first_score.save(update_fields=["score", "risk_level", "predicted_cases"])
-        first_entry = ensure_registry_entry_for_promoted_run(
+        first_entry = self._governed_registry_entry(
             model_run=first_run,
             owner="model-ops",
             promoted_by="unit-test",
@@ -242,7 +538,7 @@ class ModelOperationsTestHelpers:
         second_score.risk_level = Ward.RISK_HIGH
         second_score.predicted_cases = 9
         second_score.save(update_fields=["score", "risk_level", "predicted_cases"])
-        second_entry = ensure_registry_entry_for_promoted_run(
+        second_entry = self._governed_registry_entry(
             model_run=second_run,
             owner="model-ops",
             promoted_by="unit-test",
@@ -274,7 +570,7 @@ class ModelOperationsRegistryPhaseZeroOneTests(ModelOperationsTestHelpers, TestC
 
     def test_phase_one_registry_sync_creates_active_entry_and_queryable_rollback_target(self):
         first_run = self._promoted_run("ops-phase1-v1")
-        first_entry = ensure_registry_entry_for_promoted_run(
+        first_entry = self._governed_registry_entry(
             model_run=first_run,
             owner="model-ops",
             promoted_by="unit-test",
@@ -286,7 +582,7 @@ class ModelOperationsRegistryPhaseZeroOneTests(ModelOperationsTestHelpers, TestC
         self.assertTrue(is_promoted_model_run(first_run))
 
         second_run = self._promoted_run("ops-phase1-v2")
-        second_entry = ensure_registry_entry_for_promoted_run(
+        second_entry = self._governed_registry_entry(
             model_run=second_run,
             owner="model-ops",
             promoted_by="unit-test",
@@ -295,6 +591,7 @@ class ModelOperationsRegistryPhaseZeroOneTests(ModelOperationsTestHelpers, TestC
 
         first_entry.refresh_from_db()
         second_entry.refresh_from_db()
+        first_run.refresh_from_db()
         self.assertEqual(first_entry.promotion_state, ModelRegistryPromotionState.RETIRED)
         self.assertIsNotNone(first_entry.active_until)
         self.assertEqual(second_entry.rollback_target, first_entry)
@@ -304,33 +601,29 @@ class ModelOperationsRegistryPhaseZeroOneTests(ModelOperationsTestHelpers, TestC
         self.assertFalse(is_promoted_model_run(first_run))
         self.assertTrue(is_promoted_model_run(second_run))
 
-    def test_sync_command_backfills_selected_promoted_model_run(self):
+    def test_sync_command_reports_missing_explicit_registry_entry(self):
         model_run = self._promoted_run("ops-sync-command-v1")
         output = StringIO()
 
-        call_command(
-            "sync_model_registry_entry",
-            "--model-run-id",
-            str(model_run.id),
-            "--owner",
-            "model-ops",
-            stdout=output,
-        )
+        with self.assertRaisesMessage(CommandError, "model_artifact_registry_entry_required"):
+            call_command(
+                "sync_model_registry_entry",
+                "--model-run-id",
+                str(model_run.id),
+                "--owner",
+                "model-ops",
+                stdout=output,
+            )
 
-        entry = ModelRegistryEntry.objects.get(model_run=model_run)
-        self.assertEqual(entry.promotion_state, ModelRegistryPromotionState.ACTIVE_PROMOTED)
-        self.assertIn('"model_version": "ops-sync-command-v1"', output.getvalue())
-
-    def test_phase_one_resyncing_retired_model_starts_new_active_window(self):
+    def test_phase_one_resyncing_retired_model_requires_explicit_new_registration(self):
         first_run = self._promoted_run("ops-phase1-window-v1")
-        first_entry = ensure_registry_entry_for_promoted_run(
+        first_entry = self._governed_registry_entry(
             model_run=first_run,
             owner="model-ops",
             promoted_by="unit-test",
         )
-        original_active_from = first_entry.active_from
         second_run = self._promoted_run("ops-phase1-window-v2")
-        second_entry = ensure_registry_entry_for_promoted_run(
+        second_entry = self._governed_registry_entry(
             model_run=second_run,
             owner="model-ops",
             promoted_by="unit-test",
@@ -339,22 +632,15 @@ class ModelOperationsRegistryPhaseZeroOneTests(ModelOperationsTestHelpers, TestC
         self.assertEqual(first_entry.promotion_state, ModelRegistryPromotionState.RETIRED)
         self.assertIsNotNone(first_entry.active_until)
 
-        reactivated_entry = ensure_registry_entry_for_promoted_run(
-            model_run=first_run,
-            owner="model-ops",
-            promoted_by="unit-test-reactivation",
-            source="manual_model_ops_sync",
-        )
-
-        reactivated_entry.refresh_from_db()
-        second_entry.refresh_from_db()
-        latest_event = reactivated_entry.promotion_events.order_by("-occurred_at", "-id").first()
-        self.assertEqual(reactivated_entry.promotion_state, ModelRegistryPromotionState.ACTIVE_PROMOTED)
-        self.assertGreater(reactivated_entry.active_from, original_active_from)
-        self.assertEqual(reactivated_entry.rollback_target, second_entry)
-        self.assertEqual(second_entry.promotion_state, ModelRegistryPromotionState.RETIRED)
-        self.assertEqual(latest_event.previous_registry_entry, second_entry)
-        self.assertEqual(latest_event.active_from, reactivated_entry.active_from)
+        with self.assertRaisesMessage(ValueError, "model_registry_approval_required"):
+            ensure_registry_entry_for_promoted_run(
+                model_run=first_run,
+                owner="model-ops",
+                promoted_by="unit-test-reactivation",
+                source="manual_model_ops_sync",
+            )
+        self.assertIsNotNone(first_entry.active_from)
+        self.assertEqual(second_entry.promotion_state, ModelRegistryPromotionState.ACTIVE_PROMOTED)
 
     def test_phase_one_active_registry_entry_requires_open_active_window_at_database_level(self):
         missing_start_run = self._promoted_run("ops-phase1-db-window-missing-start-v1")
@@ -479,16 +765,29 @@ class ModelOperationsMonitoringPhaseTwoTests(ModelOperationsTestHelpers, TestCas
 
 class ModelOperationsRetrainingPolicyPhaseThreeTests(ModelOperationsTestHelpers, TestCase):
     def _label_window(self, *, ward, risk_score, outbreak_label):
-        return SurveillanceLabelWindow.objects.create(
+        start = (risk_score.generated_at + timedelta(days=7)).date()
+        end = (risk_score.generated_at + timedelta(days=14)).date()
+        window = SurveillanceLabelWindow.objects.filter(
             ward=ward,
-            label_window_start=(risk_score.generated_at + timedelta(days=7)).date(),
-            label_window_end=(risk_score.generated_at + timedelta(days=14)).date(),
-            outbreak_label=outbreak_label,
-            label_truth_level=SurveillanceTruthLevel.CONFIRMED_SURVEILLANCE,
-            suspected_case_count=8 if outbreak_label == SurveillanceOutbreakLabel.ACTIVE else 0,
-            confirmed_case_count=2 if outbreak_label == SurveillanceOutbreakLabel.ACTIVE else 0,
-            source_record_count=1,
-        )
+            label_window_start=start,
+            label_window_end=end,
+        ).first()
+        if window is None:
+            return SurveillanceLabelWindow.objects.create(
+                ward=ward,
+                label_window_start=start,
+                label_window_end=end,
+                outbreak_label=outbreak_label,
+                label_truth_level=SurveillanceTruthLevel.CONFIRMED_SURVEILLANCE,
+                suspected_case_count=8 if outbreak_label == SurveillanceOutbreakLabel.ACTIVE else 0,
+                confirmed_case_count=2 if outbreak_label == SurveillanceOutbreakLabel.ACTIVE else 0,
+                source_record_count=1,
+            )
+        window.outbreak_label = outbreak_label
+        window.suspected_case_count = 8 if outbreak_label == SurveillanceOutbreakLabel.ACTIVE else 0
+        window.confirmed_case_count = 2 if outbreak_label == SurveillanceOutbreakLabel.ACTIVE else 0
+        window.save(update_fields=["outbreak_label", "suspected_case_count", "confirmed_case_count"])
+        return window
 
     def _phase_three_ready_entry(self):
         entry, label_dataset = self._phase_two_ready_registry_entry()
@@ -670,8 +969,7 @@ class ModelOperationsRollbackPhaseFiveTests(ModelOperationsTestHelpers, TestCase
             rolled_back_from=second_entry,
             rollback_target=first_entry,
             reason="Phase 5 safety rollback",
-            rolled_back_by="ops-admin",
-            authorized_role="model_operations",
+            rolled_back_by=self.ops_admin.username,
         )
 
         first_entry.refresh_from_db()
@@ -722,7 +1020,7 @@ class ModelOperationsRollbackPhaseFiveTests(ModelOperationsTestHelpers, TestCase
 
     def test_phase_five_alert_guard_rejects_metadata_promoted_run_without_registry_when_registry_exists(self):
         active_run = self._promoted_run("ops-phase5-active-registry-v1")
-        ensure_registry_entry_for_promoted_run(
+        self._governed_registry_entry(
             model_run=active_run,
             owner="model-ops",
             promoted_by="unit-test",
@@ -780,7 +1078,7 @@ class ModelOperationsRollbackPhaseFiveTests(ModelOperationsTestHelpers, TestCase
                 rolled_back_from=entry,
                 rollback_target=bad_target,
                 reason="Invalid public helper target",
-                rolled_back_by="unit-test",
+                rolled_back_by=self.ops_admin.username,
             )
 
     def test_phase_five_record_model_rollback_rejects_phase4_target_without_promotion_event(self):
@@ -791,8 +1089,12 @@ class ModelOperationsRollbackPhaseFiveTests(ModelOperationsTestHelpers, TestCase
             model_version=target_run.model_version,
             model_run=target_run,
             promotion_state=ModelRegistryPromotionState.RETIRED,
+            approval_state=ModelRegistryApprovalState.APPROVED,
+            lifecycle_state=ModelRegistryLifecycleState.RETIRED,
             active_from=timezone.now() - timedelta(days=30),
             active_until=timezone.now() - timedelta(days=1),
+            approved_at=timezone.now() - timedelta(days=31),
+            approved_by=self.review_board.username,
             owner="model-ops",
             metadata={"fixture": "phase_5_missing_promotion_event"},
         )
@@ -802,7 +1104,7 @@ class ModelOperationsRollbackPhaseFiveTests(ModelOperationsTestHelpers, TestCase
                 rolled_back_from=entry,
                 rollback_target=bad_target,
                 reason="Invalid missing promotion-event target",
-                rolled_back_by="unit-test",
+                rolled_back_by=self.ops_admin.username,
             )
 
 
@@ -810,7 +1112,7 @@ class ModelOperationsFrontendHealthPhaseSixTests(ModelOperationsTestHelpers, Tes
     def test_phase_six_health_dashboard_exposes_active_monitoring_challenger_and_rollback_state(self):
         first_entry, label_dataset = self._phase_two_ready_registry_entry()
         second_run = self._promoted_run("ops-phase6-v2")
-        second_entry = ensure_registry_entry_for_promoted_run(
+        second_entry = self._governed_registry_entry(
             model_run=second_run,
             owner="model-ops",
             promoted_by="unit-test",
@@ -819,8 +1121,7 @@ class ModelOperationsFrontendHealthPhaseSixTests(ModelOperationsTestHelpers, Tes
             rolled_back_from=second_entry,
             rollback_target=first_entry,
             reason="Phase 6 dashboard rollback evidence",
-            rolled_back_by="ops-admin",
-            authorized_role="model_operations",
+            rolled_back_by=self.ops_admin.username,
         )
         first_entry.refresh_from_db()
         run_model_monitoring(registry_entry=first_entry, label_dataset_ref=label_dataset.dataset_ref)
@@ -876,7 +1177,7 @@ class ModelOperationsFrontendHealthPhaseSixTests(ModelOperationsTestHelpers, Tes
 
     def test_phase_six_health_dashboard_marks_promoted_metadata_without_registry_as_missing_registry(self):
         active_run = self._promoted_run("ops-phase6-active-registry-v1")
-        ensure_registry_entry_for_promoted_run(
+        self._governed_registry_entry(
             model_run=active_run,
             owner="model-ops",
             promoted_by="unit-test",
@@ -1004,7 +1305,7 @@ class ModelOperationsAuditGovernancePhaseSevenTests(ModelOperationsTestHelpers, 
 
     def test_phase_seven_audit_flags_phase4_promoted_run_without_registry_entry(self):
         active_run = self._promoted_run("ops-phase7-active-registry-v1")
-        ensure_registry_entry_for_promoted_run(
+        self._governed_registry_entry(
             model_run=active_run,
             owner="model-ops",
             promoted_by="unit-test",
@@ -1024,7 +1325,7 @@ class ModelOperationsAuditGovernancePhaseSevenTests(ModelOperationsTestHelpers, 
     def test_phase_seven_audit_flags_champion_registry_mismatch_in_comparison(self):
         first_entry, _first_label_dataset = self._phase_two_ready_registry_entry()
         second_run = self._promoted_run("ops-phase7-comparison-mismatch-v2")
-        second_entry = ensure_registry_entry_for_promoted_run(
+        second_entry = self._governed_registry_entry(
             model_run=second_run,
             owner="model-ops",
             promoted_by="unit-test",

@@ -15,6 +15,7 @@ from risk.ml.backtesting import (
     persist_temporal_backtest_report,
 )
 from risk.models import FeatureDataset, FeatureDatasetRow, ModelRun, RiskScore, Ward
+from risk.registry_test_fixtures import seed_approved_active_registry_entry
 from risk.serializers import RiskScoreSerializer
 from risk.services import create_alerts_for_riskscore
 from risk.surveillance_labels import (
@@ -337,6 +338,12 @@ class WardRiskTemporalBacktestingPhaseFourTestCase(TestCase):
         self.assertEqual(serialized_score["model_run_promotion_target"], "live_baseline")
         self.assertTrue(serialized_score["model_run_phase_4_promotion_evidence_persisted"])
         self.assertTrue(serialized_score["model_run_phase_4_promotion_gates_passed"])
+
+        seed_approved_active_registry_entry(
+            self,
+            model_run,
+            reason="Phase 4 temporal-backtest workflow fixture is approved for alert evidence assertions",
+        )
 
         dashboard_alert = create_alerts_for_riskscore(risk_score)[0]
         model_run_evidence = dashboard_alert.guided_request_metadata["model_run_evidence"]

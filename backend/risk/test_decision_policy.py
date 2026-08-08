@@ -19,6 +19,7 @@ from risk.models import (
     SystemControlState,
     Ward,
 )
+from risk.registry_test_fixtures import seed_approved_active_registry_entry
 from risk.serializers import RiskScoreSerializer
 from risk.services import create_alerts_for_riskscore, sync_alert_workflow_for_ward
 
@@ -246,6 +247,12 @@ class WardRiskDecisionPolicyPhaseFiveTestCase(TestCase):
             source=RiskScore.SOURCE_MODEL,
             model_version="lr-phase5-v1",
             decision_policy=decision,
+        )
+
+        seed_approved_active_registry_entry(
+            self,
+            model_run,
+            reason="Decision-policy workflow fixture uses an approved active model registry entry",
         )
 
         workflow = sync_alert_workflow_for_ward(self.ward)

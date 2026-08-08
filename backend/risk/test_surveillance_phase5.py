@@ -16,6 +16,7 @@ from risk.models import (
     SurveillanceSource,
     Ward,
 )
+from risk.registry_test_fixtures import seed_approved_active_registry_entry
 from risk.services import build_alert_intelligence_snapshot, create_alerts_for_riskscore, sync_alert_workflow_for_ward
 from risk.surveillance_ingestion import run_surveillance_csv_ingestion
 from risk.surveillance_features import build_surveillance_feature_snapshot
@@ -175,6 +176,12 @@ class SurveillancePhaseFiveIntegrationTestCase(TestCase):
             source_name="diarrheal-proxy-weekly-report",
         )
         self._build_labels(dataset_role="evaluation")
+
+        seed_approved_active_registry_entry(
+            self,
+            self.live_model_run,
+            reason="Phase 5 surveillance alert workflow fixture uses an approved active model registry entry",
+        )
 
         workflow = sync_alert_workflow_for_ward(self.ward, as_of=self.as_of)
         labels = {item["label"] for item in workflow.trigger_reason_items}
