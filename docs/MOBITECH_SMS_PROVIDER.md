@@ -9,6 +9,7 @@ The delivery-report contract is based on Mobitech’s published [developer API c
 The CCHIS adapter follows the proven Linda Mwananchi integration:
 
 - `POST` to `MOBITECH_API_URL` using JSON and the `h_api_key` header.
+- The HTTP transport matches the working Linda integration: direct `http.client` POST, preserving the configured double-slash path and sending only `Content-Type` and `h_api_key` headers.
 - Payload fields are `serviceId`, `shortcode`, and one `messages` item containing provider-confirmed E.164 Kenyan `mobile` (`+254…`), `message`, and a short numeric `client_ref` derived from the persisted alert ID. The UUID remains CCHIS’s internal idempotency key for retries.
 - Acceptance parsing uses Mobitech `status_code`, `status_desc`, `schedule_details[].message_id`, `schedule_status`, and `schedule_desc` values.
 - Only timeouts, connection failures and HTTP 5xx responses are retryable. Authentication, validation, invalid-number, malformed-response and provider-rejection failures are terminal.
@@ -39,6 +40,6 @@ When no valid callback is available in a shared environment, startup requires an
 
 Local stub delivery is recorded as `SIMULATED`, has no provider message identifier, and cannot be represented as external delivery. A configured Mobitech send is only `QUEUED` with provider acceptance until a final callback changes the provider delivery state.
 
-Sanitized controlled-run evidence (2026-08-08): the authorized single-recipient test was dispatched through `trigger_alerts_task` and the Celery `deliver_alert_task`; the alert and task execution persisted. The provider-confirmed E.164 mobile representation was implemented, but the task-driven attempts still received HTTP 200 application-level rejection (`status_code=1006`), with no provider message identifier or acceptance and no delivery event persisted. The account’s logged-in web session was not available to the connected browser, and local callback/polling reconciliation was not configured. Adapter complete; external delivery verification blocked.
+Sanitized controlled-run evidence (2026-08-08): the authorized single-recipient test was dispatched through `trigger_alerts_task` and the Celery `deliver_alert_task`; the alert and task execution persisted. After aligning CCHIS with Linda’s direct HTTP transport and exact header contract, Mobitech returned HTTP 200 application acceptance (`status_code=1000`) and a provider message identifier, which is retained in CCHIS and represented in evidence only by a hash. The alert remains `QUEUED` with provider delivery `pending` because the account’s logged-in web session was not available to the connected browser and local callback/polling reconciliation was not configured. Adapter complete; external delivery verification blocked.
 
 This blocked attempt is not end-to-end completion, so the technical capability audit remains unchanged and the overall repository remains not production ready. A later run requires an accepted provider message, a provider-reachable callback or supported authenticated polling result, final delivery status, and an idempotent delivery event before the audit may be updated.

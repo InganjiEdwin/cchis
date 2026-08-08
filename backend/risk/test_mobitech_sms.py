@@ -19,6 +19,7 @@ from risk.providers import (
     MobitechSmsProvider,
     ParkedAfricasTalkingSmsProvider,
     StubSmsProvider,
+    _post_mobitech_json,
     get_sms_provider,
 )
 from risk.services import deliver_alert
@@ -94,6 +95,46 @@ class MobitechSmsTests(TestCase):
         self.assertEqual(post_json.call_args.kwargs["timeout_seconds"], 7)
         self.assertNotIn("712345678", json.dumps(result.request_metadata))
         self.assertNotIn("Test alert body", json.dumps(result.request_metadata))
+
+    @patch("risk.providers.http.client.HTTPSConnection")
+    def test_mobitech_transport_matches_linda_direct_http_contract(self, connection_class):
+        connection = connection_class.return_value
+        response = MagicMock()
+        response.status = 200
+        response.read.return_value = b'{"status_code":1000}'
+        connection.getresponse.return_value = response
+        payload = {
+            "serviceId": "0",
+            "shortcode": "LM_KENYA",
+            "messages": [
+                {
+                    "mobile": "+254700000000",
+                    "message": "fixture body",
+                    "client_ref": 6481,
+                }
+            ],
+        }
+
+        status_code, response_body = _post_mobitech_json(
+            "https://app.mobitechtechnologies.com//sms/sendmultiple",
+            payload,
+            api_key="fixture-api-key",
+            timeout_seconds=7,
+        )
+
+        self.assertEqual(status_code, 200)
+        self.assertEqual(response_body, '{"status_code":1000}')
+        connection_class.assert_called_once_with("app.mobitechtechnologies.com", timeout=7)
+        connection.request.assert_called_once_with(
+            "POST",
+            "//sms/sendmultiple",
+            body=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "h_api_key": "fixture-api-key",
+            },
+        )
+        connection.close.assert_called_once_with()
 
     @override_settings(
         MOBITECH_API_URL="https://mobitech.example.test/sms/sendmultiple",

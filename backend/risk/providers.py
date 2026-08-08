@@ -1,4 +1,5 @@
 import hashlib
+import http.client
 import json
 import logging
 import urllib.error
@@ -308,7 +309,7 @@ class MobitechSmsProvider:
                 status_code=status_code,
                 response_body=response_body,
             )
-        except (urllib.error.URLError, OSError):
+        except (urllib.error.URLError, OSError, http.client.HTTPException):
             return _mobitech_failure(
                 request_metadata=request_metadata,
                 error_code="connection_error",
@@ -419,18 +420,34 @@ def _post_mobitech_json(
     api_key: str,
     timeout_seconds: int,
 ) -> tuple[int, str]:
-    request = urllib.request.Request(
-        api_url,
-        data=json.dumps(payload).encode("utf-8"),
-        method="POST",
-        headers={
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "h_api_key": api_key,
-        },
+    parsed = urllib.parse.urlsplit(api_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("Invalid Mobitech API URL.")
+
+    connection_class = (
+        http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
     )
-    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+    connection = connection_class(
+        parsed.netloc,
+        timeout=max(int(timeout_seconds or 20), 1),
+    )
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    try:
+        connection.request(
+            "POST",
+            path,
+            body=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "h_api_key": api_key,
+            },
+        )
+        response = connection.getresponse()
         return int(response.status), response.read().decode("utf-8", errors="replace")
+    finally:
+        connection.close()
 
 
 def _mobitech_reference_and_error(data: dict) -> tuple[str, str, dict]:
