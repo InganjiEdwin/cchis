@@ -859,16 +859,11 @@ def persist_temporal_backtest_report(
     model_run.metadata = metadata
     model_run.save(update_fields=["evaluation_metrics", "metadata"])
     if promote:
-        from .registry import ensure_registry_entry_for_promoted_run
-
-        ensure_registry_entry_for_promoted_run(
-            model_run=model_run,
-            promoted_by="phase_4_temporal_backtest",
-            owner=metadata.get("model_owner", "model_operations"),
-            source="phase_4_temporal_backtest",
-            metadata={
-                "promotion_decision_source": metadata.get("promotion_decision_source"),
-                "materialized_ward_count": materialized_ward_count,
-            },
-        )
+        model_run.metadata = {
+            **(model_run.metadata or {}),
+            "registry_registration_required": True,
+            "operational_activation_requires_artifact_review": True,
+            "artifact_registry_side_effect": "none",
+        }
+        model_run.save(update_fields=["metadata"])
     return model_run

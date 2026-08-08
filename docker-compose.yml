@@ -68,6 +68,7 @@ x-backend-environment: &backend-environment
   CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
   CHANNEL_REDIS_URL: ${CHANNEL_REDIS_URL:-redis://redis:6379/0}
   SOURCE_DATA_UPLOAD_ROOT: ${SOURCE_DATA_UPLOAD_ROOT:-/var/lib/cchis/source_uploads}
+  MODEL_ARTIFACT_ROOT: ${MODEL_ARTIFACT_ROOT:-/var/lib/cchis/model_artifacts}
 
 services:
   db:
@@ -115,6 +116,7 @@ services:
       - ./docs:/docs:ro
       - ./docker-compose.yml:/docker-compose.yml:ro
       - source_uploads:/var/lib/cchis/source_uploads
+      - model_artifacts:/var/lib/cchis/model_artifacts
     ports:
       - "8000:8000"
     depends_on:
@@ -142,6 +144,7 @@ services:
       - ./docs:/docs:ro
       - ./docker-compose.yml:/docker-compose.yml:ro
       - source_uploads:/var/lib/cchis/source_uploads
+      - model_artifacts:/var/lib/cchis/model_artifacts
     depends_on:
       db:
         condition: service_healthy
@@ -167,6 +170,7 @@ services:
       - ./docs:/docs:ro
       - ./docker-compose.yml:/docker-compose.yml:ro
       - celerybeat_runtime:/var/run/cchis/celerybeat
+      - model_artifacts:/var/lib/cchis/model_artifacts:ro
     depends_on:
       db:
         condition: service_healthy
@@ -207,3 +211,4 @@ volumes:
   postgres_data:
   source_uploads:
   celerybeat_runtime:
+  model_artifacts:

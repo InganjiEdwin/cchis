@@ -11,7 +11,7 @@ from risk.models import ModelRun
 
 
 class Command(BaseCommand):
-    help = "Create or update a ModelRegistryEntry for a Phase 4-promoted ward-risk ModelRun."
+    help = "Deprecated compatibility guard; implicit model registry activation is disabled."
 
     def add_arguments(self, parser):
         parser.add_argument("--model-run-id", type=int, default=None)

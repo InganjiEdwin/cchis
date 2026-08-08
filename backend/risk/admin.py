@@ -59,6 +59,7 @@ from .models import (
     InteroperabilityRunItem,
     MessageTemplate,
     ModelChampionChallengerComparison,
+    ModelGovernanceEvent,
     ModelMonitoringSnapshot,
     ModelMonitoringThreshold,
     ModelPromotionEvent,
@@ -1081,11 +1082,35 @@ class ModelRunAdmin(admin.ModelAdmin):
         return obj.metadata.get("promotion_target", "unknown")
 
 
+class ModelGovernanceEventInline(admin.TabularInline):
+    model = ModelGovernanceEvent
+    extra = 0
+    can_delete = False
+    readonly_fields = (
+        "event_type",
+        "actor",
+        "reason",
+        "previous_approval_state",
+        "resulting_approval_state",
+        "previous_lifecycle_state",
+        "resulting_lifecycle_state",
+        "request_id",
+        "occurred_at",
+    )
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
 @admin.register(ModelRegistryEntry)
 class ModelRegistryEntryAdmin(admin.ModelAdmin):
     list_display = (
         "model_version",
         "algorithm",
+        "registry_version",
+        "approval_state",
+        "lifecycle_state",
+        "deployment_target",
         "promotion_state",
         "monitoring_state",
         "active_from",
@@ -1093,10 +1118,35 @@ class ModelRegistryEntryAdmin(admin.ModelAdmin):
         "review_due_date",
         "owner",
     )
-    search_fields = ("model_version", "algorithm", "owner", "model_run__model_version")
-    list_filter = ("promotion_state", "monitoring_state", "algorithm", "review_due_date")
-    raw_id_fields = ("model_run", "promotion_event", "rollback_target")
-    readonly_fields = ("public_id", "created_at", "updated_at")
+    search_fields = ("model_version", "algorithm", "owner", "model_run__model_version", "artifact_sha256")
+    list_filter = (
+        "approval_state",
+        "lifecycle_state",
+        "deployment_target",
+        "promotion_state",
+        "monitoring_state",
+        "algorithm",
+        "review_due_date",
+    )
+    raw_id_fields = ("model_run", "promotion_event", "rollback_target", "challenger_of")
+    inlines = [ModelGovernanceEventInline]
+    readonly_fields = (
+        "public_id",
+        "registry_version",
+        "artifact_sha256",
+        "artifact_size_bytes",
+        "created_at",
+        "updated_at",
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(ModelPromotionEvent)
@@ -1120,6 +1170,46 @@ class ModelRollbackEventAdmin(admin.ModelAdmin):
     list_filter = ("occurred_at",)
     raw_id_fields = ("rolled_back_from", "rollback_target")
     readonly_fields = ("public_id", "occurred_at")
+
+
+@admin.register(ModelGovernanceEvent)
+class ModelGovernanceEventAdmin(admin.ModelAdmin):
+    list_display = (
+        "event_type",
+        "registry_entry",
+        "actor",
+        "previous_approval_state",
+        "resulting_approval_state",
+        "previous_lifecycle_state",
+        "resulting_lifecycle_state",
+        "occurred_at",
+    )
+    search_fields = ("registry_entry__model_version", "actor", "reason", "request_id")
+    list_filter = ("event_type", "resulting_approval_state", "resulting_lifecycle_state", "occurred_at")
+    raw_id_fields = ("registry_entry",)
+    readonly_fields = (
+        "public_id",
+        "registry_entry",
+        "event_type",
+        "actor",
+        "reason",
+        "previous_approval_state",
+        "resulting_approval_state",
+        "previous_lifecycle_state",
+        "resulting_lifecycle_state",
+        "evidence_snapshot",
+        "request_id",
+        "occurred_at",
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(ModelMonitoringThreshold)

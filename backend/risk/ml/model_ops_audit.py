@@ -29,6 +29,7 @@ from .registry import (
     active_model_registry_entry,
     promoted_model_runs_from_phase_4_metadata,
 )
+from .model_registry_audit import build_model_registry_audit
 
 
 MODEL_OPERATIONS_AUDIT_SCHEMA_VERSION = "ward-risk-model-operations-audit-v1"
@@ -144,9 +145,9 @@ def _active_model_without_registry_entry_check(active_entry: ModelRegistryEntry 
         answer = "A Phase 4-promoted model exists but no active ModelRegistryEntry controls operations."
         gaps = ["active_model_registry_entry_missing"]
     elif active_entry is None:
-        status = AUDIT_WARNING
-        answer = "No Phase 4-promoted model or active registry entry is present."
-        gaps = ["no_active_model_to_audit"]
+        status = AUDIT_PASS
+        answer = "No Phase 4-promoted model or active registry entry is present; operational readiness remains separate."
+        gaps = []
     else:
         status = AUDIT_PASS
         answer = "The active model is governed by a ModelRegistryEntry."
@@ -309,10 +310,10 @@ def _stale_model_without_review_warning_check(
     if active_entry is None:
         return _check(
             check_id="stale_model_without_review_warning",
-            status=AUDIT_WARNING,
-            answer="No active registry entry is present for stale-model governance checks.",
+            status=AUDIT_PASS,
+            answer="No active registry entry is present; stale-model review is not applicable.",
             evidence={"active_registry_entry": None, "review_cadence_days": stale_review_days},
-            gaps=["no_active_model_to_audit"],
+            gaps=[],
             remediation="Create or sync the active ModelRegistryEntry before running stale-model review.",
         )
 
@@ -701,6 +702,7 @@ def build_model_operations_audit(
 
     now = timezone.now()
     active_entry = active_model_registry_entry()
+    registry_audit = build_model_registry_audit()
     checks = [
         _active_model_without_registry_entry_check(active_entry),
         _active_registry_without_phase_4_gates_check(active_entry),
@@ -718,6 +720,7 @@ def build_model_operations_audit(
         _rollback_event_governance_provenance_check(),
         _challenger_scores_used_as_alerts_check(),
         _champion_challenger_integrity_check(),
+        *registry_audit["checks"],
     ]
     status_counts = {
         AUDIT_PASS: sum(1 for check in checks if check["status"] == AUDIT_PASS),
@@ -735,7 +738,11 @@ def build_model_operations_audit(
             "failed_check_count": status_counts[AUDIT_FAIL],
             "active_model_present": active_entry is not None,
             "active_registry_entry_id": active_entry.id if active_entry else None,
+            "active_model_count": registry_audit["summary"]["active_model_count"],
+            "operational_model_available": registry_audit["summary"]["operational_model_available"],
         },
+        "registry": registry_audit,
+        "readiness": registry_audit["readiness"],
         "governance": {
             "review_cadence_days": stale_review_days,
             "review_due_date_source": "ModelRegistryEntry.review_due_date",

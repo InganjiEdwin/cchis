@@ -4,7 +4,14 @@ from typing import Iterable
 
 from django.core.exceptions import ObjectDoesNotExist
 
-from risk.models import ModelRegistryEntry, ModelRegistryPromotionState, ModelRun, RiskScore
+from risk.models import (
+    ModelRegistryApprovalState,
+    ModelRegistryEntry,
+    ModelRegistryLifecycleState,
+    ModelRegistryPromotionState,
+    ModelRun,
+    RiskScore,
+)
 
 from .model import (
     ALGORITHM_LIGHTGBM,
@@ -60,15 +67,17 @@ def is_promoted_model_run(run: ModelRun | None) -> bool:
     try:
         registry_entry = run.registry_entry
     except ObjectDoesNotExist:
-        registry_exists = ModelRegistryEntry.objects.exists()
-        if not registry_exists:
-            return True
         return False
+    from .model_artifacts import verify_registry_artifact
+
     return (
-        registry_entry.promotion_state == ModelRegistryPromotionState.ACTIVE_PROMOTED
+        registry_entry.approval_state == ModelRegistryApprovalState.APPROVED
+        and registry_entry.lifecycle_state == ModelRegistryLifecycleState.ACTIVE
+        and registry_entry.promotion_state == ModelRegistryPromotionState.ACTIVE_PROMOTED
         and registry_entry.active_from is not None
         and registry_entry.active_until is None
         and registry_entry_has_promotion_event_provenance(registry_entry)
+        and verify_registry_artifact(registry_entry).get("valid")
     )
 
 

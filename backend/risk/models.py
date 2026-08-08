@@ -3467,10 +3467,37 @@ class ModelRegistryMonitoringState(models.TextChoices):
     REVIEW_REQUIRED = "REVIEW_REQUIRED", "Review required"
 
 
+class ModelRegistryApprovalState(models.TextChoices):
+    NOT_REVIEWED = "NOT_REVIEWED", "Not reviewed"
+    PENDING_REVIEW = "PENDING_REVIEW", "Pending review"
+    APPROVED = "APPROVED", "Approved"
+    REJECTED = "REJECTED", "Rejected"
+
+
+class ModelRegistryLifecycleState(models.TextChoices):
+    CANDIDATE = "CANDIDATE", "Candidate"
+    CHALLENGER = "CHALLENGER", "Challenger"
+    ACTIVE = "ACTIVE", "Active"
+    RETIRED = "RETIRED", "Retired"
+    ROLLED_BACK = "ROLLED_BACK", "Rolled back"
+
+
+def _default_model_registry_version() -> str:
+    return str(uuid.uuid4())
+
+
 class ModelRegistryEntry(models.Model):
     public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    registry_version = models.CharField(
+        max_length=180,
+        default=_default_model_registry_version,
+        unique=True,
+        editable=False,
+    )
     algorithm = models.CharField(max_length=80)
+    model_family = models.CharField(max_length=120, blank=True)
     model_version = models.CharField(max_length=80)
+    feature_schema_version = models.CharField(max_length=80, blank=True)
     model_run = models.OneToOneField(
         "risk.ModelRun",
         on_delete=models.PROTECT,
@@ -3488,6 +3515,38 @@ class ModelRegistryEntry(models.Model):
         choices=ModelRegistryPromotionState.choices,
         default=ModelRegistryPromotionState.CANDIDATE,
     )
+    approval_state = models.CharField(
+        max_length=32,
+        choices=ModelRegistryApprovalState.choices,
+        default=ModelRegistryApprovalState.NOT_REVIEWED,
+    )
+    lifecycle_state = models.CharField(
+        max_length=32,
+        choices=ModelRegistryLifecycleState.choices,
+        default=ModelRegistryLifecycleState.CANDIDATE,
+    )
+    deployment_target = models.CharField(max_length=80, default="live_baseline")
+    artifact_location = models.CharField(max_length=500, blank=True)
+    artifact_format = models.CharField(max_length=32, blank=True)
+    artifact_size_bytes = models.PositiveBigIntegerField(default=0)
+    artifact_sha256 = models.CharField(max_length=64, blank=True)
+    training_feature_dataset_ref = models.CharField(max_length=160, blank=True)
+    inference_feature_dataset_ref = models.CharField(max_length=160, blank=True)
+    training_label_dataset_ref = models.CharField(max_length=160, blank=True)
+    feature_contract = models.JSONField(default=list, blank=True)
+    code_commit = models.CharField(max_length=160, blank=True)
+    training_started_at = models.DateTimeField(null=True, blank=True)
+    training_completed_at = models.DateTimeField(null=True, blank=True)
+    evaluation_started_at = models.DateTimeField(null=True, blank=True)
+    evaluation_completed_at = models.DateTimeField(null=True, blank=True)
+    metrics = models.JSONField(default=dict, blank=True)
+    truth_source_classification = models.CharField(max_length=80, blank=True)
+    intended_use = models.TextField(blank=True)
+    prohibited_uses = models.JSONField(default=list, blank=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+    approved_by = models.CharField(max_length=160, blank=True)
+    approval_reason = models.TextField(blank=True)
+    registration_reason = models.TextField(blank=True)
     active_from = models.DateTimeField(null=True, blank=True)
     active_until = models.DateTimeField(null=True, blank=True)
     retired_reason = models.TextField(blank=True)
@@ -3497,6 +3556,13 @@ class ModelRegistryEntry(models.Model):
         null=True,
         blank=True,
         related_name="rollback_sources",
+    )
+    challenger_of = models.ForeignKey(
+        "self",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="challengers",
     )
     monitoring_state = models.CharField(
         max_length=32,
@@ -3515,13 +3581,9 @@ class ModelRegistryEntry(models.Model):
             models.Index(fields=["promotion_state", "active_from"], name="risk_modelreg_state_active_idx"),
             models.Index(fields=["algorithm", "model_version"], name="risk_modelreg_alg_ver_idx"),
             models.Index(fields=["monitoring_state", "review_due_date"], name="risk_modelreg_monitor_idx"),
+            models.Index(fields=["lifecycle_state", "deployment_target"], name="risk_modelreg_life_target_idx"),
         ]
         constraints = [
-            models.UniqueConstraint(
-                fields=["promotion_state"],
-                condition=models.Q(promotion_state=ModelRegistryPromotionState.ACTIVE_PROMOTED),
-                name="risk_modelreg_one_active_promoted",
-            ),
             models.CheckConstraint(
                 check=(
                     models.Q(active_until__isnull=True)
@@ -3540,6 +3602,41 @@ class ModelRegistryEntry(models.Model):
                 ),
                 name="risk_modelreg_active_window_required",
             ),
+            models.UniqueConstraint(
+                fields=["deployment_target", "lifecycle_state"],
+                condition=models.Q(lifecycle_state=ModelRegistryLifecycleState.ACTIVE),
+                name="risk_modelreg_one_active_per_target",
+            ),
+            models.CheckConstraint(
+                check=(
+                    ~models.Q(lifecycle_state=ModelRegistryLifecycleState.ACTIVE)
+                    | (
+                        models.Q(approval_state=ModelRegistryApprovalState.APPROVED)
+                        & models.Q(promotion_state=ModelRegistryPromotionState.ACTIVE_PROMOTED)
+                        & models.Q(promotion_event__isnull=False)
+                        & models.Q(active_from__isnull=False)
+                        & models.Q(active_until__isnull=True)
+                    )
+                ),
+                name="risk_modelreg_active_requires_approval",
+            ),
+            models.CheckConstraint(
+                check=(
+                    ~models.Q(approval_state=ModelRegistryApprovalState.APPROVED)
+                    | (
+                        models.Q(approved_at__isnull=False)
+                        & models.Q(approved_by__regex=r"\S")
+                    )
+                ),
+                name="risk_modelreg_approved_requires_evidence",
+            ),
+            models.CheckConstraint(
+                check=(
+                    ~models.Q(lifecycle_state=ModelRegistryLifecycleState.CHALLENGER)
+                    | models.Q(challenger_of__isnull=False)
+                ),
+                name="risk_modelreg_challenger_requires_target",
+            ),
         ]
 
     def clean(self):
@@ -3550,6 +3647,16 @@ class ModelRegistryEntry(models.Model):
                 raise ValidationError("Active promoted registry entries require active_until to be empty.")
             if self.promotion_event_id is None:
                 raise ValidationError("Active promoted registry entries require promotion_event.")
+        if self.lifecycle_state == ModelRegistryLifecycleState.ACTIVE:
+            if self.approval_state != ModelRegistryApprovalState.APPROVED:
+                raise ValidationError("Active registry entries require approval.")
+            if self.promotion_state != ModelRegistryPromotionState.ACTIVE_PROMOTED:
+                raise ValidationError("Active registry entries require active promotion state.")
+        if self.approval_state == ModelRegistryApprovalState.APPROVED:
+            if self.approved_at is None or not (self.approved_by or "").strip():
+                raise ValidationError("Approved registry entries require approval evidence.")
+        if self.lifecycle_state == ModelRegistryLifecycleState.CHALLENGER and not self.challenger_of_id:
+            raise ValidationError("Challenger registry entries require a champion target.")
         if self.active_until is not None and self.active_from is not None and self.active_until < self.active_from:
             raise ValidationError("active_until must be after active_from.")
         if self.promotion_event_id and self.id:
@@ -3557,6 +3664,51 @@ class ModelRegistryEntry(models.Model):
                 raise ValidationError("Registry entry promotion_event must point back to the registry entry.")
             if self.promotion_event.model_run_id != self.model_run_id:
                 raise ValidationError("Registry entry promotion_event must reference the same model run.")
+
+    _IMMUTABLE_AFTER_APPROVAL_FIELDS = (
+        "registry_version",
+        "algorithm",
+        "model_family",
+        "model_version",
+        "model_run_id",
+        "feature_schema_version",
+        "deployment_target",
+        "artifact_location",
+        "artifact_format",
+        "artifact_size_bytes",
+        "artifact_sha256",
+        "training_feature_dataset_ref",
+        "inference_feature_dataset_ref",
+        "training_label_dataset_ref",
+        "feature_contract",
+        "code_commit",
+        "training_started_at",
+        "training_completed_at",
+        "evaluation_started_at",
+        "evaluation_completed_at",
+        "metrics",
+        "truth_source_classification",
+        "intended_use",
+        "prohibited_uses",
+    )
+
+    def save(self, *args, **kwargs):
+        if self.pk and not self._state.adding:
+            previous = type(self).objects.filter(pk=self.pk).first()
+            if previous and previous.approval_state == ModelRegistryApprovalState.APPROVED:
+                for field_name in self._IMMUTABLE_AFTER_APPROVAL_FIELDS:
+                    if getattr(previous, field_name) != getattr(self, field_name):
+                        raise ValidationError(
+                            f"Approved registry entries are immutable: {field_name}."
+                        )
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        if self.approval_state == ModelRegistryApprovalState.APPROVED or (
+            self.pk and self.governance_events.exists()
+        ):
+            raise ValidationError("Registered entries with governance history cannot be deleted.")
+        return super().delete(*args, **kwargs)
 
     def __str__(self) -> str:
         return f"{self.algorithm} {self.model_version} [{self.promotion_state}]"
@@ -3651,6 +3803,72 @@ class ModelRollbackEvent(models.Model):
 
     def __str__(self) -> str:
         return f"Rollback {self.rolled_back_from_id} -> {self.rollback_target_id} at {self.occurred_at}"
+
+
+class ModelGovernanceEvent(models.Model):
+    EVENT_REGISTERED = "REGISTERED"
+    EVENT_APPROVAL_REQUESTED = "APPROVAL_REQUESTED"
+    EVENT_APPROVED = "APPROVED"
+    EVENT_REJECTED = "REJECTED"
+    EVENT_CHALLENGER_DESIGNATED = "CHALLENGER_DESIGNATED"
+    EVENT_ACTIVATED = "ACTIVATED"
+    EVENT_RETIRED = "RETIRED"
+    EVENT_ROLLED_BACK = "ROLLED_BACK"
+    EVENT_CHOICES = [
+        (EVENT_REGISTERED, "Registered"),
+        (EVENT_APPROVAL_REQUESTED, "Approval requested"),
+        (EVENT_APPROVED, "Approved"),
+        (EVENT_REJECTED, "Rejected"),
+        (EVENT_CHALLENGER_DESIGNATED, "Challenger designated"),
+        (EVENT_ACTIVATED, "Activated"),
+        (EVENT_RETIRED, "Retired"),
+        (EVENT_ROLLED_BACK, "Rolled back"),
+    ]
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    registry_entry = models.ForeignKey(
+        ModelRegistryEntry,
+        on_delete=models.PROTECT,
+        related_name="governance_events",
+    )
+    event_type = models.CharField(max_length=40, choices=EVENT_CHOICES)
+    actor = models.CharField(max_length=160)
+    reason = models.TextField()
+    previous_approval_state = models.CharField(max_length=32, blank=True)
+    resulting_approval_state = models.CharField(max_length=32, blank=True)
+    previous_lifecycle_state = models.CharField(max_length=32, blank=True)
+    resulting_lifecycle_state = models.CharField(max_length=32, blank=True)
+    evidence_snapshot = models.JSONField(default=dict, blank=True)
+    request_id = models.CharField(max_length=160, blank=True)
+    occurred_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["-occurred_at", "-id"]
+        indexes = [
+            models.Index(fields=["registry_entry", "occurred_at"], name="risk_modelgov_entry_time_idx"),
+            models.Index(fields=["event_type", "occurred_at"], name="risk_modelgov_type_time_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(actor__regex=r"\S"),
+                name="risk_modelgov_actor_not_blank",
+            ),
+            models.CheckConstraint(
+                check=models.Q(reason__regex=r"\S"),
+                name="risk_modelgov_reason_not_blank",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ValidationError("Model governance events are immutable.")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Model governance events are immutable.")
+
+    def __str__(self) -> str:
+        return f"{self.event_type} {self.registry_entry_id} at {self.occurred_at}"
 
 
 class ModelMonitoringState(models.TextChoices):

@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 from uuid import uuid4
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
@@ -28,7 +29,10 @@ from .model import (
 )
 from .decision_policy import current_ward_risk_decision_policy, evaluate_ward_risk_decision_policy
 from .trust import alerts_allowed_for_snapshot, build_operational_trust_snapshot, predictions_blocked_for_snapshot
-from ..truth_policy import production_feature_dataset_blockers
+from ..truth_policy import (
+    PRODUCTION_ALERT_ACTIVE_REGISTRY_REQUIRED,
+    production_feature_dataset_blockers,
+)
 
 
 ml_logger = logging.getLogger("risk.ml")
@@ -499,6 +503,11 @@ def run_mock_prediction_pipeline(
         training_dataset=training_dataset,
         inference_dataset=inference_dataset,
     )
+    if settings.CCHIS_ENVIRONMENT == "production":
+        production_truth_blockers = [
+            *production_truth_blockers,
+            PRODUCTION_ALERT_ACTIVE_REGISTRY_REQUIRED,
+        ]
     decision_policy = current_ward_risk_decision_policy()
 
     ml_logger.info(

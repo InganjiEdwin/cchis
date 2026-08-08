@@ -22,6 +22,9 @@ PRODUCTION_INVALID_FEATURE_ROW_BLOCKED = "production_invalid_feature_row_blocked
 PRODUCTION_ALERT_MODEL_RUN_REQUIRED = "production_alert_model_run_required"
 PRODUCTION_ALERT_MODEL_RUN_NOT_SUCCESS = "production_alert_model_run_not_success"
 PRODUCTION_ALERT_ACTIVE_REGISTRY_REQUIRED = "production_alert_active_registry_required"
+PRODUCTION_ACTIVE_ARTIFACT_INTEGRITY_REQUIRED = "production_active_artifact_integrity_required"
+PRODUCTION_ACTIVE_MODEL_APPROVAL_REQUIRED = "production_active_model_approval_required"
+PRODUCTION_ACTIVE_DEPLOYMENT_TARGET_REQUIRED = "production_active_deployment_target_required"
 PRODUCTION_ALERT_ELIGIBILITY_BLOCKED = "production_alert_eligibility_blocked"
 
 
@@ -1049,6 +1052,25 @@ def production_alert_eligibility_blockers(risk_score) -> list[str]:
     active_entry = active_model_registry_entry()
     if active_entry is None or active_entry.model_run_id != getattr(model_run, "id", None):
         _append_unique(blockers, PRODUCTION_ALERT_ACTIVE_REGISTRY_REQUIRED)
+    else:
+        from risk.models import ModelRegistryApprovalState, ModelRegistryLifecycleState
+
+        if active_entry.lifecycle_state != ModelRegistryLifecycleState.ACTIVE:
+            _append_unique(blockers, PRODUCTION_ALERT_ACTIVE_REGISTRY_REQUIRED)
+        if active_entry.approval_state != ModelRegistryApprovalState.APPROVED:
+            _append_unique(blockers, PRODUCTION_ACTIVE_MODEL_APPROVAL_REQUIRED)
+        if active_entry.deployment_target != "live_baseline":
+            _append_unique(blockers, PRODUCTION_ACTIVE_DEPLOYMENT_TARGET_REQUIRED)
+        from risk.ml.model_artifacts import verify_registry_artifact
+
+        if not verify_registry_artifact(active_entry).get("valid"):
+            _append_unique(blockers, PRODUCTION_ACTIVE_ARTIFACT_INTEGRITY_REQUIRED)
+        from risk.ml.model_registry_governance import model_artifact_approval_blockers
+
+        _append_unique(
+            blockers,
+            *model_artifact_approval_blockers(active_entry),
+        )
     return blockers
 
 
