@@ -23,7 +23,6 @@ from risk.climate.connectors.chirps import (
 )
 from risk.lead_time_features import (
     LEAD_TIME_FEATURE_SCHEMA_VERSION,
-    _rainfall_window_features,
     build_lead_time_feature_dataset,
 )
 from risk.models import ClimateRecord, ClimateRecordType, FeatureDataset, FeatureDatasetRow, IngestionRun, Ward
@@ -63,7 +62,12 @@ def _raster_bytes(values: np.ndarray, *, nodata: float = -9999.0) -> bytes:
         return memory_file.read()
 
 
-def _window(values: np.ndarray) -> ChirpsRasterWindow:
+def _window(
+    values: np.ndarray,
+    *,
+    source_date: date = date(2020, 1, 1),
+    variant: str = "sat",
+) -> ChirpsRasterWindow:
     transform = from_origin(0, 2, 1, 1)
     masked = np.ma.masked_equal(values.astype("float32"), -9999.0)
     return ChirpsRasterWindow(
@@ -73,8 +77,8 @@ def _window(values: np.ndarray) -> ChirpsRasterWindow:
         nodata=-9999.0,
         resolution=(1.0, 1.0),
         transform_values=(1.0, 0.0, 0.0, 0.0, -1.0, 2.0),
-        source_url=build_chirps_asset_url(date(2020, 1, 1), variant="sat"),
-        asset_filename="chirps-v3.0.sat.2020.01.01.cog",
+        source_url=build_chirps_asset_url(source_date, variant=variant),
+        asset_filename=f"chirps-v3.0.{variant}.{source_date:%Y.%m.%d}.cog",
         etag='"fixture-etag"',
         last_modified="Wed, 01 Jan 2020 00:00:00 GMT",
         content_length=123,
@@ -265,7 +269,15 @@ class ChirpsIngestionTests(DjangoTestCase):
                 "prediction_date": "2020-01-02",
                 "source_cutoff_timestamp": "2020-01-02T00:00:00+00:00",
                 "chirps_daily_variant": "sat",
-                "source_lineage": {"rainfall": {"chirps_source_refs": [record.source_ref]}},
+                "chirps_observed_rainfall_total_7d": record.rainfall_mm,
+                "chirps_observed_rainfall_total_14d": record.rainfall_mm,
+                "chirps_observed_rainfall_total_30d": record.rainfall_mm,
+                "source_lineage": {
+                    "rainfall": {
+                        "chirps_daily_variant": "sat",
+                        "chirps_source_refs": [record.source_ref],
+                    }
+                },
             },
         )
 
@@ -273,6 +285,80 @@ class ChirpsIngestionTests(DjangoTestCase):
         self.assertEqual(summary["status"], IngestionRun.STATUS_SUCCESS)
         self.assertEqual(audit["overall_status"], "pass")
         self.assertTrue(all(check["status"] == "pass" for check in audit["checks"]))
+
+    def test_audit_recomputes_feature_totals_and_requires_same_ward_references(self):
+        ingest_chirps_rainfall(
+            start_date=date(2020, 1, 1),
+            end_date=date(2020, 1, 1),
+            variant="sat",
+            connector=StubConnector(_window(np.array([[1, 2], [3, 4]], dtype=np.float32))),
+        )
+        record_b = ClimateRecord.objects.get(ward=self.ward_b)
+        dataset = FeatureDataset.objects.create(
+            dataset_ref="chirps-audit-recompute-fixture",
+            dataset_kind=FeatureDataset.KIND_INFERENCE,
+            schema_version=LEAD_TIME_FEATURE_SCHEMA_VERSION,
+            source_kind=FeatureDataset.SOURCE_KIND_LIVE,
+            feature_keys=[
+                "chirps_observed_rainfall_total_7d",
+                "chirps_observed_rainfall_total_14d",
+                "chirps_observed_rainfall_total_30d",
+            ],
+            row_count=1,
+            lineage_metadata={
+                "chirps_daily_variant": "sat",
+                "chirps_historical_feature_policy": {"daily_variant": "sat"},
+            },
+        )
+        FeatureDatasetRow.objects.create(
+            dataset=dataset,
+            ward=self.ward_a,
+            ward_name_snapshot=self.ward_a.name,
+            month=1,
+            feature_values={
+                "prediction_date": "2020-01-02",
+                "source_cutoff_timestamp": "2020-01-02T00:00:00+00:00",
+                "chirps_daily_variant": "sat",
+                "chirps_observed_rainfall_total_7d": 999.0,
+                "chirps_observed_rainfall_total_14d": 999.0,
+                "chirps_observed_rainfall_total_30d": 999.0,
+                "source_lineage": {
+                    "rainfall": {
+                        "chirps_daily_variant": "sat",
+                        "chirps_source_refs": [record_b.source_ref],
+                    }
+                },
+            },
+        )
+
+        audit = build_chirps_ingestion_audit()
+        temporal_check = next(
+            check for check in audit["checks"] if check["id"] == "chirps_feature_temporal_cutoffs"
+        )
+        messages = [issue["message"] for issue in temporal_check["issues"]]
+        self.assertEqual(temporal_check["status"], "fail")
+        self.assertTrue(any("different ward" in message for message in messages))
+        self.assertTrue(any("does not match" in message for message in messages))
+
+    def test_audit_requires_accepted_quality_and_canonical_source_identity(self):
+        ingest_chirps_rainfall(
+            start_date=date(2020, 1, 1),
+            end_date=date(2020, 1, 1),
+            variant="sat",
+            connector=StubConnector(_window(np.array([[1, 2], [3, 4]], dtype=np.float32))),
+        )
+        record = ClimateRecord.objects.get(ward=self.ward_a)
+        record.quality_flag = "unknown"
+        record.source_ref = "tampered-source-ref"
+        record.save(update_fields=["quality_flag", "source_ref"])
+
+        audit = build_chirps_ingestion_audit()
+        quality_check = next(check for check in audit["checks"] if check["id"] == "chirps_quality_flags_accepted")
+        identity_check = next(
+            check for check in audit["checks"] if check["id"] == "canonical_chirps_url_identity_and_source_refs"
+        )
+        self.assertEqual(quality_check["status"], "fail")
+        self.assertEqual(identity_check["status"], "fail")
 
     def test_retrospective_mode_persists_chirps_backed_feature_rows(self):
         source_date = date(2020, 1, 1)
@@ -373,6 +459,56 @@ class ChirpsIngestionTests(DjangoTestCase):
                 chirps_variant="sat",
             )
 
+    def test_feature_loader_scopes_variant_selection_to_its_30_day_window(self):
+        older_variant_date = date(2019, 12, 1)
+        selected_variant_date = date(2020, 1, 30)
+        ingest_chirps_rainfall(
+            start_date=older_variant_date,
+            end_date=older_variant_date,
+            variant="rnl",
+            connector=StubConnector(
+                _window(
+                    np.full((2, 2), 4.0, dtype=np.float32),
+                    source_date=older_variant_date,
+                    variant="rnl",
+                )
+            ),
+        )
+        ingest_chirps_rainfall(
+            start_date=selected_variant_date,
+            end_date=selected_variant_date,
+            variant="sat",
+            connector=StubConnector(
+                _window(
+                    np.full((2, 2), 10.0, dtype=np.float32),
+                    source_date=selected_variant_date,
+                    variant="sat",
+                )
+            ),
+        )
+
+        snapshot = build_lead_time_feature_dataset(
+            [self.ward_a],
+            prediction_dates=[date(2020, 2, 1)],
+            retrospective_chirps=True,
+            chirps_variant="sat",
+        )
+        row = FeatureDatasetRow.objects.get(dataset=snapshot.feature_dataset)
+        refs = row.feature_values["source_lineage"]["rainfall"]["chirps_source_refs"]
+        selected_record = ClimateRecord.objects.get(
+            source_provider=CHIRPS_PROVIDER,
+            valid_date=selected_variant_date,
+            ward=self.ward_a,
+        )
+        older_record = ClimateRecord.objects.get(
+            source_provider=CHIRPS_PROVIDER,
+            valid_date=older_variant_date,
+            ward=self.ward_a,
+        )
+        self.assertIn(selected_record.source_ref, refs)
+        self.assertNotIn(older_record.source_ref, refs)
+        self.assertEqual(row.feature_values["chirps_daily_variant"], "sat")
+
     def test_audit_does_not_pass_without_persisted_feature_rows(self):
         ingest_chirps_rainfall(
             start_date=date(2020, 1, 1),
@@ -402,51 +538,64 @@ class ChirpsIngestionTests(DjangoTestCase):
         self.assertFalse(run.fallback_used)
         self.assertEqual(run.source_kind, IngestionRun.SOURCE_KIND_LIVE)
 
-    def test_future_chirps_record_cannot_change_an_earlier_feature_window(self):
-        cutoff = datetime(2020, 1, 10, tzinfo=timezone.utc)
-        observations = [
-            {
-                "ingestion_run_id": 1,
-                "rainfall_mm": 10.0,
-                "observed_at": datetime(2020, 1, 9, tzinfo=timezone.utc),
-                "source": CHIRPS_PROVIDER,
-                "source_kind": IngestionRun.SOURCE_KIND_LIVE,
-                "source_mode": "final-sat",
-                "canonical_record_ref": "past",
-                "source_record_ref": "climate_record:past",
-                "valid_date": date(2020, 1, 9),
-                "record_type": "observed",
-                "quality_flag": "accepted",
-            },
-            {
-                "ingestion_run_id": 2,
-                "rainfall_mm": 1.0,
-                "observed_at": datetime(2020, 1, 11, tzinfo=timezone.utc),
-                "source": CHIRPS_PROVIDER,
-                "source_kind": IngestionRun.SOURCE_KIND_LIVE,
-                "source_mode": "final-sat",
-                "canonical_record_ref": "future",
-                "source_record_ref": "climate_record:future",
-                "valid_date": date(2020, 1, 11),
-                "record_type": "observed",
-                "quality_flag": "accepted",
-            },
-        ]
-        base, _ = _rainfall_window_features(
-            observations=observations,
-            prediction_date=date(2020, 1, 10),
-            source_cutoff=cutoff,
-            heavy_rain_threshold_mm=50,
+    def test_future_chirps_record_cannot_change_an_earlier_feature_window_through_real_loader(self):
+        past_date = date(2020, 1, 9)
+        future_date = date(2020, 1, 11)
+        past_summary = ingest_chirps_rainfall(
+            start_date=past_date,
+            end_date=past_date,
+            variant="sat",
+            connector=StubConnector(
+                _window(
+                    np.full((2, 2), 10.0, dtype=np.float32),
+                    source_date=past_date,
+                )
+            ),
         )
-        observations[-1]["rainfall_mm"] = 9999.0
-        changed_future, _ = _rainfall_window_features(
-            observations=observations,
-            prediction_date=date(2020, 1, 10),
-            source_cutoff=cutoff,
-            heavy_rain_threshold_mm=50,
+        before_future = build_lead_time_feature_dataset(
+            [self.ward_a],
+            prediction_dates=[date(2020, 1, 10)],
+            retrospective_chirps=True,
+            chirps_variant="sat",
         )
-        self.assertEqual(base["chirps_observed_rainfall_total_7d"], 10.0)
-        self.assertEqual(base["chirps_observed_rainfall_total_7d"], changed_future["chirps_observed_rainfall_total_7d"])
+        before_row = FeatureDatasetRow.objects.get(dataset=before_future.feature_dataset)
+        before_values = before_row.feature_values
+
+        future_summary = ingest_chirps_rainfall(
+            start_date=future_date,
+            end_date=future_date,
+            variant="sat",
+            connector=StubConnector(
+                _window(
+                    np.full((2, 2), 9999.0, dtype=np.float32),
+                    source_date=future_date,
+                )
+            ),
+        )
+        after_future = build_lead_time_feature_dataset(
+            [self.ward_a],
+            prediction_dates=[date(2020, 1, 10)],
+            retrospective_chirps=True,
+            chirps_variant="sat",
+        )
+        after_row = FeatureDatasetRow.objects.get(dataset=after_future.feature_dataset)
+        after_values = after_row.feature_values
+
+        self.assertEqual(past_summary["records_created"], 2)
+        self.assertEqual(future_summary["records_created"], 2)
+        self.assertEqual(before_values["chirps_observed_rainfall_total_7d"], 10.0)
+        self.assertEqual(after_values["chirps_observed_rainfall_total_7d"], 10.0)
+        self.assertEqual(
+            before_values["source_lineage"]["rainfall"]["chirps_source_refs"],
+            after_values["source_lineage"]["rainfall"]["chirps_source_refs"],
+        )
+        self.assertNotIn(
+            ClimateRecord.objects.get(
+                source_run="chirps-ingestion:v3.0:final:sat:2020-01-11",
+                ward=self.ward_a,
+            ).source_ref,
+            after_values["source_lineage"]["rainfall"]["chirps_source_refs"],
+        )
 
     def test_chirps_audit_detects_missing_records_as_strict_failure(self):
         audit = build_chirps_ingestion_audit()

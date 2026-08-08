@@ -78,13 +78,13 @@ Implementation evidence:
 - Migration `0077_chirps_identity_and_ingestion_lineage` adds durable identity and run lineage storage. `rasterio==1.4.3` and `shapely==2.0.7` are pinned and the Docker image includes the required C++ build toolchain.
 - `backend/risk/lead_time_features.py` now exposes CHIRPS observed 7-, 14- and 30-day rainfall totals with source references and an explicit `--retrospective-chirps` mode. Retrospective mode exempts CHIRPS ingestion completion time only; every selected CHIRPS record still requires `valid_date < prediction_date`. The feature schema is `lead-time-feature-v2-chirps-historical`.
 - Feature datasets pin one CHIRPS daily variant in lineage (`sat` or `rnl`); the loader and audit reject mixed variants rather than silently combining them.
-- `audit_chirps_ingestion --strict` checks genuine LIVE observed records, version/status/variant, complete active-ward coverage, canonical identity, finite non-negative values, no fallback, provenance, coverage, date-range exceptions, persisted CHIRPS-backed feature rows, variant pinning and feature cutoffs.
+- `audit_chirps_ingestion --strict` checks genuine LIVE observed records, accepted quality flags, version/status/variant, complete active-ward coverage, canonical ward identity, canonical URL/identity/source-ref/source-run reconstruction, finite non-negative values, no fallback, provenance, coverage, date-range exceptions, persisted CHIRPS-backed feature rows, same-ward feature references, recomputed 7/14/30-day totals, variant pinning and feature cutoffs.
 
 Verification performed on 2026-08-07, with the live CHIRPS backfill and post-run audit completed on 2026-08-08:
 
 | Check | Result |
 |---|---|
-| `docker compose exec -T backend python manage.py test risk.test_chirps_ingestion -v 1` | **11/11 passed**; includes persisted retrospective loading, mixed-variant rejection, non-vacuous audit failure and strict-audit success. |
+| `docker compose exec -T backend python manage.py test risk.test_chirps_ingestion -v 1` | **14/14 passed**; includes persisted retrospective loading, dataset-scoped variant selection, real-loader future leakage, recomputation/ward checks, non-vacuous audit failure and strict-audit success. |
 | `docker compose exec -T backend python manage.py test risk.test_lead_time_features -v 1` | **9/9 passed**. |
 | `docker compose exec -T backend python manage.py makemigrations risk --check --dry-run` | Passed; no pending model changes. |
 | Official source HEAD and one-day remote COG window | **Passed** for `chirps-v3.0.sat.2024.01.01.cog`; HTTP content length `17162842`, ETag and Last-Modified were retained, and the extracted window hash was `ab8704666697a0710457d693b6eddc721ac725c337cdc0e0767e58c849decdf1`. |
@@ -92,40 +92,71 @@ Verification performed on 2026-08-07, with the live CHIRPS backfill and post-run
 | Managed geometry repair | **Passed**; the two exact noncanonical rows `Phase9 Other Ward dac83567` and `Phase9 Supervisor Ward dac83567` were deactivated after confirming they had no managed polygons. They were not hard-deleted because protected historical dependencies exist. The active ward set is now 40/40 covered by the managed geometry version. |
 | Live 30-day CHIRPS ingestion | **Passed** with run `36`: 30/30 official assets processed, 1,200 `LIVE` `chirps-v3.0` records created, zero rejected/unavailable assets. Resume run `37` skipped all 1,200 stable identities; normalization rerun `38` updated all 1,200 records without changing identity or row count. |
 | Persisted CHIRPS-backed feature dataset | **Passed**: `build_lead_time_feature_dataset --prediction-date 2024-01-31 --retrospective-chirps --chirps-variant sat` created dataset `lead-time-features-lead-time-feature-v2-chirps-historical-2024-01-31-f941018d` with 40 persisted rows; all 40 rows contain CHIRPS references and nonzero 7/14/30-day windows. |
-| Strict post-ingestion audit | **Passed**: `audit_chirps_ingestion --strict` scanned 1,200 records across 3 ingestion runs and passed all 10 checks, including persisted feature evidence, temporal cutoffs and single-variant pinning. |
+| Strict post-ingestion audit | **Passed**: `audit_chirps_ingestion --strict` scanned 1,200 records across 3 ingestion runs and passed all 12 checks, including accepted quality, canonical source identity, persisted feature evidence, same-ward references, recomputed totals, temporal cutoffs and single-variant pinning. |
 
 The original geometry blocker was resolved by deactivating only those two exact noncanonical rows; their protected historical dependencies remain intact. The requested command then completed against the 40 active canonical wards and persisted 1,200 records for 2024-01-01 through 2024-01-30. The retrospective feature build explicitly permits those 2026-ingested historical records while retaining `valid_date < prediction_date`; it persisted 40 CHIRPS-backed rows for prediction date 2024-01-31. The dataset is pinned to `sat` and the strict audit rejects zero-feature or mixed-variant states.
 
-Independent CHIRPS-backed ward-value spot checks from the persisted dataset (`prediction_date=2024-01-31`, millimetres):
+Independent CHIRPS-backed ward-value spot checks (`prediction_date=2024-01-31`, millimetres). The persisted feature totals were compared with a separate calculation from the 30 official `daily/final/sat` COG windows using the same managed ward geometries and fractional-cell zonal aggregation; the independent calculation did not read the persisted `ClimateRecord` or `FeatureDatasetRow` values. Acceptance tolerance was ±0.01 mm per window.
 
-| Ward | 7-day total | 14-day total | 30-day total | CHIRPS source refs |
-|---|---:|---:|---:|---:|
-| Bukira Centrl/Ikerege | 24.51 | 65.27 | 143.42 | 30 |
-| Bukira East | 23.70 | 70.13 | 155.13 | 30 |
-| Central Kamagambo | 36.06 | 87.68 | 198.78 | 30 |
+| Ward | Persisted 7d | Raster 7d | Persisted 14d | Raster 14d | Persisted 30d | Raster 30d | Max abs diff | Source refs |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Bukira Centrl/Ikerege | 24.51 | 24.51 | 65.27 | 65.27 | 143.42 | 143.42 | 0.00 mm | 30 |
+| Bukira East | 23.70 | 23.70 | 70.13 | 70.13 | 155.13 | 155.13 | 0.00 mm | 30 |
+| Central Kamagambo | 36.06 | 36.06 | 87.68 | 87.68 | 198.78 | 198.78 | 0.00 mm | 30 |
 
-Sanitized lineage example (identifiers intentionally redacted):
+Complete sanitized CHIRPS record lineage example (identifiers and volatile retrieval values intentionally redacted):
 
 ```json
 {
-  "dataset_schema": "lead-time-feature-v2-chirps-historical",
-  "prediction_date": "2024-01-31",
-  "retrospective_chirps_mode": true,
-  "chirps_daily_variant": "sat",
-  "source_cutoff_policy": "exclusive_before_prediction_date_midnight",
-  "chirps_valid_date_policy": "valid_date < prediction_date",
-  "source_lineage": {
-    "rainfall": {
-      "chirps_source_provider": "chirps-v3.0",
-      "chirps_daily_variant": "sat",
-      "chirps_source_record_count": 30,
-      "chirps_source_refs": ["chirps:v3.0:final:sat:2024-01-01:ward:<redacted>", "... 29 more ..."]
-    }
+  "record": {
+    "source_provider": "chirps-v3.0",
+    "source_kind": "LIVE",
+    "source_mode": "final-sat",
+    "record_type": "observed",
+    "valid_date": "2024-01-01",
+    "observed_timestamp": "2024-01-01T00:00:00+00:00",
+    "rainfall_mm": "<source value redacted>",
+    "quality_flag": "accepted",
+    "fallback_flag": false,
+    "source_run": "chirps-ingestion:v3.0:final:sat:2024-01-01",
+    "source_ref": "chirps:v3.0:final:sat:2024-01-01:ward:<redacted>",
+    "identity_key": "chirps-v3.0|v3.0|final|sat|2024-01-01|<ward-public-id-redacted>|chirps-fractional-zonal-v1"
   },
-  "leakage_proof": {
-    "retrospective_chirps_mode": true,
-    "chirps_valid_date_policy": "valid_date < prediction_date",
-    "passes_cutoff_check": true
+  "lineage_metadata": {
+    "provider": "chirps-v3.0",
+    "chirps_version": "v3.0",
+    "product_status": "final",
+    "daily_variant": "sat",
+    "source_date": "2024-01-01",
+    "official_asset_url": "https://data.chc.ucsb.edu/products/CHIRPS/v3.0/daily/final/sat/cogs/2024/chirps-v3.0.sat.2024.01.01.cog",
+    "asset_filename": "chirps-v3.0.sat.2024.01.01.cog",
+    "retrieval_timestamp": "<redacted>",
+    "raster_crs": "EPSG:4326",
+    "raster_transform": ["<redacted>"],
+    "raster_resolution": ["<redacted>"],
+    "raster_nodata": "<redacted>",
+    "aggregation_method": "fractional_cell_area_weighted_zonal_mean",
+    "valid_pixel_count": "<redacted>",
+    "ward_coverage_fraction": "<redacted; >= 0.95>",
+    "ward_public_id": "<redacted>",
+    "ward_geometry_dataset_version": "migori-ward-boundaries:2026-04-25-backfill-clean",
+    "ward_geometry_hash": "<redacted>",
+    "processing_code_version": "chirps-fractional-zonal-v1",
+    "chirps_daily_disaggregation_method": "IMERG Late V07 disaggregation of CHIRPS pentad totals",
+    "daily_interval_start": "2024-01-01T00:00:00+00:00",
+    "daily_interval_end": "2024-01-02T00:00:00+00:00",
+    "daily_interval_timezone": "UTC",
+    "etag": "<redacted>",
+    "last_modified": "<redacted>",
+    "content_length": "<redacted>",
+    "hashes": {
+      "full_asset_sha256": null,
+      "extracted_window_sha256": "<redacted>"
+    },
+    "source_access_mode": "remote_window",
+    "identity_key": "chirps-v3.0|v3.0|final|sat|2024-01-01|<ward-public-id-redacted>|chirps-fractional-zonal-v1",
+    "source_ref": "chirps:v3.0:final:sat:2024-01-01:ward:<redacted>",
+    "source_run": "chirps-ingestion:v3.0:final:sat:2024-01-01"
   }
 }
 ```

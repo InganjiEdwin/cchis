@@ -398,12 +398,14 @@ def _climate_records_by_ward_id(
     records_by_ward_id: dict[int, list[dict]] = defaultdict(list)
     source_refs_seen: set[str] = set()
     eligible_chirps_variants: set[str] = set()
+    chirps_window_start = prediction_date - timedelta(days=max(CHIRPS_RAINFALL_WINDOWS_DAYS))
     ward_names_by_id = dict(Ward.objects.filter(id__in=ward_ids).values_list("id", "name"))
 
     eligibility = Q(ingestion_run__completed_at__lt=source_cutoff)
     if retrospective_chirps:
         eligibility |= Q(
             source_provider=CHIRPS_PROVIDER,
+            valid_date__gte=chirps_window_start,
             valid_date__lt=prediction_date,
         )
     climate_records = (
@@ -427,12 +429,16 @@ def _climate_records_by_ward_id(
                     "CHIRPS feature loading requires every eligible CHIRPS record to declare a valid daily variant. "
                     f"source_ref={normalized['source_ref']}"
                 )
-            eligible_chirps_variants.add(variant)
-            if variant != chirps_variant:
-                raise ValueError(
-                    "CHIRPS feature dataset variant mismatch: requested "
-                    f"'{chirps_variant}' but eligible record {normalized['source_ref']} uses '{variant}'."
-                )
+            observed_at = _parse_datetime(normalized.get("observed_timestamp"))
+            if (
+                chirps_window_start <= valid_date < prediction_date
+                and normalized["record_type"] == ClimateRecordType.OBSERVED
+                and normalized["source_kind"] == IngestionRun.SOURCE_KIND_LIVE
+                and not normalized.get("fallback_flag")
+                and observed_at is not None
+                and observed_at < source_cutoff
+            ):
+                eligible_chirps_variants.add(variant)
         source_ward_name = _normalise_identity(normalized.get("source_ward_name"))
         if source_ward_name and source_ward_name != _normalise_identity(ward_names_by_id.get(normalized["ward_id"])):
             continue
@@ -467,12 +473,16 @@ def _climate_records_by_ward_id(
                         "CHIRPS feature loading requires every eligible CHIRPS result to declare a valid daily variant. "
                         f"source_ref={normalized['source_ref']}"
                     )
-                eligible_chirps_variants.add(variant)
-                if variant != chirps_variant:
-                    raise ValueError(
-                        "CHIRPS feature dataset variant mismatch: requested "
-                        f"'{chirps_variant}' but eligible result {normalized['source_ref']} uses '{variant}'."
-                    )
+                observed_at = _parse_datetime(normalized.get("observed_timestamp"))
+                if (
+                    chirps_window_start <= valid_date < prediction_date
+                    and normalized["record_type"] == ClimateRecordType.OBSERVED
+                    and normalized["source_kind"] == IngestionRun.SOURCE_KIND_LIVE
+                    and not normalized.get("fallback_flag")
+                    and observed_at is not None
+                    and observed_at < source_cutoff
+                ):
+                    eligible_chirps_variants.add(variant)
             source_ward_name = _normalise_identity(normalized.get("source_ward_name") or normalized.get("ward_name"))
             if source_ward_name and source_ward_name != _normalise_identity(ward_names_by_id.get(normalized["ward_id"])):
                 continue
@@ -483,6 +493,12 @@ def _climate_records_by_ward_id(
         raise ValueError(
             "CHIRPS feature dataset cannot mix daily variants: "
             f"{', '.join(sorted(eligible_chirps_variants))}."
+        )
+    if eligible_chirps_variants and chirps_variant not in eligible_chirps_variants:
+        raise ValueError(
+            "CHIRPS feature dataset variant mismatch: requested "
+            f"'{chirps_variant}' but the selected feature window contains "
+            f"'{', '.join(sorted(eligible_chirps_variants))}'."
         )
 
     return records_by_ward_id
@@ -637,6 +653,8 @@ def _rainfall_window_features(
             and not item.get("fallback_flag")
             and not item.get("fallback_reason")
             and _parse_date(item.get("valid_date")) is not None
+            and _parse_date(item.get("valid_date"))
+            >= prediction_date - timedelta(days=max(CHIRPS_RAINFALL_WINDOWS_DAYS))
             and _parse_date(item.get("valid_date")) < prediction_date
         )
     ]

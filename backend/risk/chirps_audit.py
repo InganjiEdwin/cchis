@@ -15,14 +15,29 @@ from risk.climate.connectors.chirps import (
     CHIRPS_PRODUCT_STATUS_FINAL,
     CHIRPS_PROVIDER,
     CHIRPS_VERSION,
+    build_chirps_asset_url,
     chirps_min_coverage_fraction,
 )
-from risk.chirps_ingestion import load_active_migori_ward_polygons
+from risk.chirps_ingestion import (
+    chirps_identity_key,
+    chirps_source_ref,
+    chirps_source_run_ref,
+    load_active_migori_ward_polygons,
+)
 from risk.lead_time_features import LEAD_TIME_FEATURE_SCHEMA_VERSION
-from risk.models import ClimateRecord, ClimateRecordType, FeatureDataset, FeatureDatasetRow, IngestionRun, Ward
+from risk.models import (
+    ClimateRecord,
+    ClimateRecordQualityFlag,
+    ClimateRecordType,
+    FeatureDataset,
+    FeatureDatasetRow,
+    IngestionRun,
+    Ward,
+)
 
 
 CHIRPS_AUDIT_SCHEMA_VERSION = "chirps-ingestion-audit-v1"
+CHIRPS_FEATURE_TOTAL_TOLERANCE_MM = 0.01
 CHIRPS_REQUIRED_LINEAGE_FIELDS = (
     "chirps_version",
     "product_status",
@@ -245,6 +260,122 @@ def _completeness_check(records: list[ClimateRecord], active_wards: list[Ward], 
     )
 
 
+def _quality_flag_check(records: list[ClimateRecord]) -> dict:
+    issues = [
+        _issue(
+            severity="fail",
+            message="CHIRPS records must have quality_flag=accepted.",
+            record=record,
+            context={"quality_flag": record.quality_flag},
+        )
+        for record in records
+        if record.quality_flag != ClimateRecordQualityFlag.ACCEPTED
+    ]
+    return _check(
+        "chirps_quality_flags_accepted",
+        "fail" if issues else "pass" if records else "warning",
+        evidence={
+            "records_scanned": len(records),
+            "accepted_record_count": sum(
+                1 for record in records if record.quality_flag == ClimateRecordQualityFlag.ACCEPTED
+            ),
+            "invalid_quality_flag_count": len(issues),
+        },
+        issues=issues,
+    )
+
+
+def _canonical_source_identity_check(records: list[ClimateRecord]) -> dict:
+    issues: list[dict] = []
+    fields_checked = [
+        "official_asset_url",
+        "identity_key",
+        "source_ref",
+        "source_run",
+    ]
+    for record in records:
+        lineage = record.lineage_metadata if isinstance(record.lineage_metadata, dict) else {}
+        source_date = _parse_date(lineage.get("source_date"))
+        variant = lineage.get("daily_variant")
+        product_status = lineage.get("product_status")
+        if source_date is None or variant not in CHIRPS_DAILY_VARIANTS or not product_status:
+            continue
+
+        ward_public_id = str(record.ward.public_id) if record.ward_id else ""
+        expected = {}
+        try:
+            expected = {
+                "official_asset_url": build_chirps_asset_url(
+                    source_date,
+                    variant=variant,
+                    product_status=product_status,
+                ),
+                "identity_key": chirps_identity_key(
+                    source_date=source_date,
+                    variant=variant,
+                    product_status=product_status,
+                    ward_public_id=ward_public_id,
+                ),
+                "source_ref": chirps_source_ref(
+                    source_date=source_date,
+                    variant=variant,
+                    product_status=product_status,
+                    ward_public_id=ward_public_id,
+                ),
+                "source_run": chirps_source_run_ref(
+                    source_date=source_date,
+                    variant=variant,
+                    product_status=product_status,
+                ),
+            }
+        except (TypeError, ValueError) as exc:
+            issues.append(
+                _issue(
+                    severity="fail",
+                    message="CHIRPS canonical source identity could not be recomputed.",
+                    record=record,
+                    context={"error": str(exc)},
+                )
+            )
+            continue
+
+        actual = {
+            "official_asset_url": lineage.get("official_asset_url"),
+            "identity_key": record.identity_key,
+            "source_ref": record.source_ref,
+            "source_run": record.source_run,
+        }
+        mismatches = {
+            field: {"expected": expected[field], "actual": actual[field]}
+            for field in fields_checked
+            if actual[field] != expected[field]
+        }
+        lineage_mismatches = {
+            field: {"expected": expected[field], "actual": lineage.get(field)}
+            for field in ("identity_key", "source_ref", "source_run")
+            if lineage.get(field) != expected[field]
+        }
+        if mismatches or lineage_mismatches:
+            issues.append(
+                _issue(
+                    severity="fail",
+                    message="CHIRPS canonical URL, identity, source reference or source-run value does not match its source fields.",
+                    record=record,
+                    context={
+                        "mismatches": mismatches,
+                        "lineage_mismatches": lineage_mismatches,
+                    },
+                )
+            )
+
+    return _check(
+        "canonical_chirps_url_identity_and_source_refs",
+        "fail" if issues else "pass" if records else "warning",
+        evidence={"records_scanned": len(records), "fields_recomputed": fields_checked},
+        issues=issues,
+    )
+
+
 def _feature_temporal_cutoff_check(records: list[ClimateRecord]) -> dict:
     source_refs = {record.source_ref: record for record in records}
     rows = list(
@@ -254,6 +385,9 @@ def _feature_temporal_cutoff_check(records: list[ClimateRecord]) -> dict:
     )
     issues: list[dict] = []
     referenced_chirps = 0
+    feature_rows_with_recomputed_totals = 0
+    ward_reference_mismatch_count = 0
+    duplicate_reference_count = 0
     if not rows:
         issues.append(
             _issue(
@@ -269,6 +403,33 @@ def _feature_temporal_cutoff_check(records: list[ClimateRecord]) -> dict:
         refs = rainfall_lineage.get("chirps_source_refs") or []
         if not isinstance(refs, list):
             refs = []
+        refs = [str(ref) for ref in refs if ref]
+        if prediction_date is None:
+            issues.append(
+                _issue(
+                    severity="fail",
+                    message="CHIRPS feature row is missing a valid prediction_date.",
+                    context={"feature_row_id": row.id},
+                )
+            )
+        if source_cutoff is None:
+            issues.append(
+                _issue(
+                    severity="fail",
+                    message="CHIRPS feature row is missing a valid source_cutoff_timestamp.",
+                    context={"feature_row_id": row.id},
+                )
+            )
+        if len(refs) != len(set(refs)):
+            duplicate_reference_count += len(refs) - len(set(refs))
+            issues.append(
+                _issue(
+                    severity="fail",
+                    message="CHIRPS feature row repeats a source reference.",
+                    context={"feature_row_id": row.id},
+                )
+            )
+        referenced_records: list[ClimateRecord] = []
         for ref in refs:
             referenced_chirps += 1
             record = source_refs.get(ref)
@@ -281,6 +442,21 @@ def _feature_temporal_cutoff_check(records: list[ClimateRecord]) -> dict:
                     )
                 )
                 continue
+            referenced_records.append(record)
+            if row.ward_id is None or record.ward_id != row.ward_id:
+                ward_reference_mismatch_count += 1
+                issues.append(
+                    _issue(
+                        severity="fail",
+                        message="CHIRPS feature lineage references a source record from a different ward.",
+                        record=record,
+                        context={
+                            "feature_row_id": row.id,
+                            "feature_ward_id": row.ward_id,
+                            "source_ward_id": record.ward_id,
+                        },
+                    )
+                )
             if record.record_type != ClimateRecordType.OBSERVED or record.fallback_flag:
                 issues.append(
                     _issue(
@@ -290,7 +466,9 @@ def _feature_temporal_cutoff_check(records: list[ClimateRecord]) -> dict:
                         context={"feature_row_id": row.id},
                     )
                 )
-            if prediction_date and record.valid_date and record.valid_date >= prediction_date:
+            if prediction_date is not None and (
+                record.valid_date is None or record.valid_date >= prediction_date
+            ):
                 issues.append(
                     _issue(
                         severity="fail",
@@ -299,7 +477,16 @@ def _feature_temporal_cutoff_check(records: list[ClimateRecord]) -> dict:
                         context={"feature_row_id": row.id, "prediction_date": prediction_date.isoformat()},
                     )
                 )
-            if source_cutoff and record.observed_timestamp and record.observed_timestamp >= source_cutoff:
+            if record.observed_timestamp is None:
+                issues.append(
+                    _issue(
+                        severity="fail",
+                        message="CHIRPS feature lineage references a record without observed_timestamp.",
+                        record=record,
+                        context={"feature_row_id": row.id},
+                    )
+                )
+            elif source_cutoff and record.observed_timestamp >= source_cutoff:
                 issues.append(
                     _issue(
                         severity="fail",
@@ -308,6 +495,66 @@ def _feature_temporal_cutoff_check(records: list[ClimateRecord]) -> dict:
                         context={"feature_row_id": row.id},
                     )
                 )
+
+        if prediction_date is not None and source_cutoff is not None and referenced_records:
+            for window_days in (7, 14, 30):
+                window_start = source_cutoff - timedelta(days=window_days)
+                expected_total = round(
+                    sum(
+                        float(record.rainfall_mm)
+                        for record in referenced_records
+                        if (
+                            record.record_type == ClimateRecordType.OBSERVED
+                            and record.source_kind == IngestionRun.SOURCE_KIND_LIVE
+                            and record.quality_flag == ClimateRecordQualityFlag.ACCEPTED
+                            and not record.fallback_flag
+                            and record.valid_date is not None
+                            and record.valid_date < prediction_date
+                            and record.observed_timestamp is not None
+                            and window_start <= record.observed_timestamp < source_cutoff
+                        )
+                    ),
+                    2,
+                )
+                feature_key = f"chirps_observed_rainfall_total_{window_days}d"
+                actual_total = values.get(feature_key)
+                try:
+                    actual_total_float = float(actual_total)
+                except (TypeError, ValueError):
+                    actual_total_float = None
+                if actual_total_float is None or not math.isfinite(actual_total_float):
+                    issues.append(
+                        _issue(
+                            severity="fail",
+                            message="CHIRPS feature row is missing a finite recomputable rainfall total.",
+                            context={
+                                "feature_row_id": row.id,
+                                "feature_key": feature_key,
+                                "expected_total_mm": expected_total,
+                                "actual_total_mm": actual_total,
+                            },
+                        )
+                    )
+                elif not math.isclose(
+                    actual_total_float,
+                    expected_total,
+                    rel_tol=0.0,
+                    abs_tol=CHIRPS_FEATURE_TOTAL_TOLERANCE_MM,
+                ):
+                    issues.append(
+                        _issue(
+                            severity="fail",
+                            message="CHIRPS feature rainfall total does not match its referenced source records.",
+                            context={
+                                "feature_row_id": row.id,
+                                "feature_key": feature_key,
+                                "expected_total_mm": expected_total,
+                                "actual_total_mm": actual_total_float,
+                                "tolerance_mm": CHIRPS_FEATURE_TOTAL_TOLERANCE_MM,
+                            },
+                        )
+                    )
+            feature_rows_with_recomputed_totals += 1
 
     if records and referenced_chirps == 0:
         issues.append(
@@ -327,6 +574,10 @@ def _feature_temporal_cutoff_check(records: list[ClimateRecord]) -> dict:
             "feature_rows_scanned": len(rows),
             "chirps_source_references_scanned": referenced_chirps,
             "feature_rows_required": True,
+            "feature_rows_with_recomputed_totals": feature_rows_with_recomputed_totals,
+            "ward_reference_mismatch_count": ward_reference_mismatch_count,
+            "duplicate_reference_count": duplicate_reference_count,
+            "feature_total_tolerance_mm": CHIRPS_FEATURE_TOTAL_TOLERANCE_MM,
         },
         issues=issues,
     )
@@ -658,6 +909,8 @@ def build_chirps_ingestion_audit() -> dict:
             evidence={"records_scanned": len(records), "required_lineage_fields": list(CHIRPS_REQUIRED_LINEAGE_FIELDS)},
             issues=provenance_issues,
         ),
+        _quality_flag_check(records),
+        _canonical_source_identity_check(records),
         _check(
             "durable_identity_and_ward_date_uniqueness",
             "fail" if duplicate_issues else "pass" if records else "warning",
