@@ -12,6 +12,7 @@ from risk.ml.pipeline import run_mock_prediction_pipeline
 from risk.models import Alert, ETLHeartbeat, PopulationExposureIngestionRun, RiskScore, SourceDataUploadBatch, SourceDataUploadEvent, SurveillanceIngestionRun, Ward
 from risk.population_exposure_ingestion import parse_source_timestamp, run_population_exposure_csv_ingestion
 from risk.services import deliver_alert, trigger_alerts_for_riskscore
+from risk.sms_delivery import poll_mobitech_delivery_status
 from risk.source_data.imports import run_confirmed_source_data_import
 from risk.source_data.downstream import run_source_data_downstream_action
 from risk.source_data.events import record_source_data_upload_system_event
@@ -431,6 +432,21 @@ def deliver_alert_task(self, alert_id: int) -> str:
         },
     )
     return alert.status
+
+
+@shared_task(bind=True)
+def poll_mobitech_delivery_status_task(self, alert_id: int) -> str:
+    alert = Alert.objects.get(id=alert_id)
+    result = poll_mobitech_delivery_status(alert)
+    logger.info(
+        "poll_mobitech_delivery_status_task_completed",
+        extra={
+            "alert_id": alert.id,
+            "reconciliation_status": result.get("status"),
+            "delivery_status": result.get("delivery_status", ""),
+        },
+    )
+    return str(result.get("status", "ignored"))
 
 
 

@@ -1,13 +1,18 @@
 import io
 import json
 import urllib.error
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from core.mobitech_config import (
+    collect_mobitech_reconciliation_configuration_errors,
+    is_valid_mobitech_callback_configuration,
+    is_valid_mobitech_polling_configuration,
+)
 from risk.models import Alert, AlertDeliveryEvent, RiskScore, Ward
 from risk.providers import (
     AfricasTalkingSmsProvider,
@@ -17,7 +22,7 @@ from risk.providers import (
     get_sms_provider,
 )
 from risk.services import deliver_alert
-from risk.sms_delivery import process_mobitech_delivery_callback
+from risk.sms_delivery import poll_mobitech_delivery_status, process_mobitech_delivery_callback
 from risk.tasks import trigger_alerts_task
 
 
@@ -197,7 +202,12 @@ class MobitechSmsTests(TestCase):
         send_sms.assert_called_once()
         self.assertEqual(send_sms.call_args.kwargs["idempotency_key"], str(alert.idempotency_key))
 
-    @override_settings(MOBITECH_DELIVERY_CALLBACK_TOKEN="callback-token")
+    @override_settings(
+        MOBITECH_DELIVERY_CALLBACK_URL=(
+            "https://app.example.test/api/v1/sms/mobitech/callback/callback-token/"
+        ),
+        MOBITECH_DELIVERY_CALLBACK_TOKEN="callback-token",
+    )
     def test_callback_reconciliation_is_idempotent_and_updates_final_delivery(self):
         alert = self._alert(
             status=Alert.STATUS_QUEUED,
@@ -214,16 +224,14 @@ class MobitechSmsTests(TestCase):
         }
 
         first = APIClient().post(
-            reverse("mobitech-delivery-callback"),
+            reverse("mobitech-delivery-callback", kwargs={"route_token": "callback-token"}),
             payload,
             format="json",
-            HTTP_X_MOBITECH_CALLBACK_TOKEN="callback-token",
         )
         second = APIClient().post(
-            reverse("mobitech-delivery-callback"),
+            reverse("mobitech-delivery-callback", kwargs={"route_token": "callback-token"}),
             payload,
             format="json",
-            HTTP_X_MOBITECH_CALLBACK_TOKEN="callback-token",
         )
 
         self.assertEqual(first.status_code, 200)
@@ -247,7 +255,12 @@ class MobitechSmsTests(TestCase):
         self.assertEqual(alert.status, Alert.STATUS_DELIVERED)
         self.assertEqual(alert.provider_delivery_status, Alert.PROVIDER_DELIVERY_DELIVERED)
 
-    @override_settings(MOBITECH_DELIVERY_CALLBACK_TOKEN="callback-token")
+    @override_settings(
+        MOBITECH_DELIVERY_CALLBACK_URL=(
+            "https://app.example.test/api/v1/sms/mobitech/callback/callback-token/"
+        ),
+        MOBITECH_DELIVERY_CALLBACK_TOKEN="callback-token",
+    )
     def test_invalid_callback_token_does_not_mutate_delivery_state(self):
         self._alert(
             provider_message_id="mobitech-message-1",
@@ -255,13 +268,149 @@ class MobitechSmsTests(TestCase):
             provider_acceptance_status=Alert.PROVIDER_ACCEPTANCE_ACCEPTED,
         )
         response = APIClient().post(
-            reverse("mobitech-delivery-callback"),
+            reverse("mobitech-delivery-callback", kwargs={"route_token": "wrong-token"}),
             {"message_id": "mobitech-message-1", "status": "delivered"},
             format="json",
-            HTTP_X_MOBITECH_CALLBACK_TOKEN="wrong-token",
         )
         self.assertEqual(response.status_code, 403)
         self.assertFalse(AlertDeliveryEvent.objects.exists())
+
+    @override_settings(MOBITECH_DELIVERY_CALLBACK_URL="", MOBITECH_DELIVERY_CALLBACK_TOKEN="")
+    def test_callback_rejects_empty_authentication_configuration(self):
+        self._alert(
+            provider_message_id="mobitech-message-1",
+            external_id="mobitech-message-1",
+            provider_acceptance_status=Alert.PROVIDER_ACCEPTANCE_ACCEPTED,
+        )
+        response = APIClient().post(
+            reverse("mobitech-delivery-callback", kwargs={"route_token": "unconfigured"}),
+            {"message_id": "mobitech-message-1", "status": "delivered"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(AlertDeliveryEvent.objects.exists())
+
+    @override_settings(
+        MOBITECH_DELIVERY_CALLBACK_URL=(
+            "https://app.example.test/api/v1/sms/mobitech/callback/another-token/"
+        ),
+        MOBITECH_DELIVERY_CALLBACK_TOKEN="callback-token",
+    )
+    def test_callback_rejects_when_secret_is_not_embedded_in_provider_url(self):
+        response = APIClient().post(
+            reverse("mobitech-delivery-callback", kwargs={"route_token": "callback-token"}),
+            {"message_id": "mobitech-message-1", "status": "delivered"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(AlertDeliveryEvent.objects.exists())
+
+    def test_shared_environment_requires_callback_or_official_polling_configuration(self):
+        errors = collect_mobitech_reconciliation_configuration_errors(
+            shared_environment=True,
+            callback_url="",
+            callback_token="",
+            api_key="fixture-api-key",
+            status_url="",
+            status_auth_scheme="bearer",
+        )
+        self.assertTrue(errors)
+
+        self.assertTrue(
+            is_valid_mobitech_callback_configuration(
+                "https://app.example.test/api/v1/sms/mobitech/callback/fixture-route-token/",
+                "fixture-route-token",
+                require_https=True,
+            )
+        )
+        self.assertEqual(
+            collect_mobitech_reconciliation_configuration_errors(
+                shared_environment=True,
+                callback_url=(
+                    "https://app.example.test/api/v1/sms/mobitech/callback/fixture-route-token/"
+                ),
+                callback_token="fixture-route-token",
+                api_key="fixture-api-key",
+                status_url="",
+                status_auth_scheme="bearer",
+            ),
+            [],
+        )
+
+        official_receipts_url = "https://subapi.mobitechtechnologies.co.ke/api/messages/{message_id}/receipts"
+        self.assertTrue(
+            is_valid_mobitech_polling_configuration(
+                official_receipts_url,
+                "fixture-api-key",
+                "bearer",
+                require_https=True,
+            )
+        )
+        self.assertEqual(
+            collect_mobitech_reconciliation_configuration_errors(
+                shared_environment=True,
+                callback_url="",
+                callback_token="",
+                api_key="fixture-api-key",
+                status_url=official_receipts_url,
+                status_auth_scheme="bearer",
+            ),
+            [],
+        )
+
+    @override_settings(
+        MOBITECH_API_KEY="fixture-api-key",
+        MOBITECH_STATUS_API_URL=(
+            "https://subapi.mobitechtechnologies.co.ke/api/messages/{message_id}/receipts"
+        ),
+        MOBITECH_STATUS_AUTH_SCHEME="bearer",
+        MOBITECH_STATUS_HTTP_TIMEOUT_SECONDS=7,
+    )
+    @patch("risk.sms_delivery.urlopen")
+    def test_official_polling_reconciles_and_repeats_idempotently(self, urlopen_mock):
+        alert = self._alert(
+            status=Alert.STATUS_QUEUED,
+            provider_message_id="mobitech-message-1",
+            external_id="mobitech-message-1",
+            provider_acceptance_status=Alert.PROVIDER_ACCEPTANCE_ACCEPTED,
+        )
+        response = MagicMock()
+        response.getcode.return_value = 200
+        response.read.return_value = json.dumps(
+            {
+                "receipts": [
+                    {
+                        "smsId": "mobitech-message-1",
+                        "status": 1,
+                        "statusDescription": "DeliveredToTerminal",
+                        "subscriber": "254712345678",
+                    }
+                ]
+            }
+        ).encode("utf-8")
+        response_context = MagicMock()
+        response_context.__enter__.return_value = response
+        response_context.__exit__.return_value = False
+        urlopen_mock.return_value = response_context
+
+        first = poll_mobitech_delivery_status(alert)
+        second = poll_mobitech_delivery_status(alert)
+
+        self.assertEqual(first["status"], "processed")
+        self.assertEqual(second["status"], "duplicate")
+        self.assertEqual(AlertDeliveryEvent.objects.count(), 1)
+        alert.refresh_from_db()
+        self.assertEqual(alert.status, Alert.STATUS_DELIVERED)
+        self.assertEqual(alert.provider_delivery_status, Alert.PROVIDER_DELIVERY_DELIVERED)
+        self.assertNotIn(
+            "254712345678",
+            json.dumps(AlertDeliveryEvent.objects.get().sanitized_payload),
+        )
+        request = urlopen_mock.call_args_list[0].args[0]
+        self.assertIn("/mobitech-message-1/receipts", request.full_url)
+        self.assertEqual(request.get_header("Authorization"), "Bearer fixture-api-key")
 
     @override_settings(SMS_PROVIDER="mobitech")
     @patch("risk.services.send_sms")

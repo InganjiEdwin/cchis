@@ -3,12 +3,19 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import uuid
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
+
+from core.mobitech_config import is_valid_mobitech_polling_configuration
 
 from .models import Alert, AlertDeliveryEvent
 
@@ -17,7 +24,11 @@ logger = logging.getLogger("risk.sms")
 MOBITECH_PROVIDER = "mobitech"
 
 
-def process_mobitech_delivery_callback(payload: dict[str, Any]) -> dict[str, Any]:
+def process_mobitech_delivery_callback(
+    payload: dict[str, Any],
+    *,
+    reconciliation_method: str = "callback",
+) -> dict[str, Any]:
     """Reconcile one Mobitech delivery report without persisting sensitive payload data."""
 
     normalized_payload = _normalise_callback_payload(payload)
@@ -38,9 +49,7 @@ def process_mobitech_delivery_callback(payload: dict[str, Any]) -> dict[str, Any
         "smsId",
     )
     client_ref = _first_value(normalized_payload, "client_ref", "clientRef", "idempotency_key")
-    status = _normalise_delivery_status(
-        _first_value(normalized_payload, "status", "delivery_status", "schedule_status")
-    )
+    status = _delivery_status_from_payload(normalized_payload)
     if not status:
         return {
             "status": "ignored",
@@ -80,6 +89,7 @@ def process_mobitech_delivery_callback(payload: dict[str, Any]) -> dict[str, Any
         provider_message_id=provider_message_id,
         client_ref=client_ref,
         status=status,
+        reconciliation_method=reconciliation_method,
     )
 
     with transaction.atomic():
@@ -130,6 +140,94 @@ def process_mobitech_delivery_callback(payload: dict[str, Any]) -> dict[str, Any
         "delivery_status": event.status,
         "payload_hash": event.payload_hash,
     }
+
+
+def poll_mobitech_delivery_status(alert: Alert) -> dict[str, Any]:
+    """Poll an explicitly configured official Mobitech receipts/stats endpoint."""
+
+    message_id = str(getattr(alert, "provider_message_id", "") or "").strip()
+    status_url = str(getattr(settings, "MOBITECH_STATUS_API_URL", "") or "").strip()
+    api_key = str(getattr(settings, "MOBITECH_API_KEY", "") or "").strip()
+    auth_scheme = str(getattr(settings, "MOBITECH_STATUS_AUTH_SCHEME", "bearer") or "").strip()
+    if not message_id:
+        return {"status": "ignored", "reason": "missing_provider_message_id"}
+    if not is_valid_mobitech_polling_configuration(status_url, api_key, auth_scheme):
+        return {"status": "blocked", "reason": "polling_not_configured"}
+
+    request_url = status_url.replace("{message_id}", quote(message_id, safe=""))
+    request = Request(
+        request_url,
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="GET",
+    )
+    try:
+        with urlopen(
+            request,
+            timeout=max(int(getattr(settings, "MOBITECH_STATUS_HTTP_TIMEOUT_SECONDS", 20)), 1),
+        ) as response:
+            response_code = int(response.getcode() or 0)
+            response_body = response.read()
+    except HTTPError as error:
+        return {"status": "error", "reason": f"http_{error.code}"}
+    except (URLError, TimeoutError, OSError, ValueError):
+        return {"status": "error", "reason": "transport_error"}
+
+    response_hash = _sha256(response_body.decode("utf-8", errors="replace"))
+    if response_code < 200 or response_code >= 300:
+        return {
+            "status": "error",
+            "reason": f"http_{response_code}",
+            "response_hash": response_hash,
+        }
+    try:
+        response_payload = json.loads(response_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {
+            "status": "ignored",
+            "reason": "malformed_response",
+            "response_hash": response_hash,
+        }
+
+    receipt = _select_mobitech_receipt(response_payload, message_id=message_id)
+    if not receipt and status_url.rstrip("/").rsplit("/", 1)[-1].lower() == "stats":
+        receipt = _stats_response_as_receipt(response_payload, message_id=message_id)
+    if not receipt:
+        return {
+            "status": "ignored",
+            "reason": "receipt_not_found",
+            "response_hash": response_hash,
+        }
+    delivery_status = _delivery_status_from_payload(receipt)
+    if not delivery_status:
+        return {
+            "status": "ignored",
+            "reason": "unsupported_status",
+            "response_hash": response_hash,
+        }
+
+    # A polling response may have one stable provider message id across status
+    # transitions. Make the status plus response hash the event identity so a
+    # repeated poll is idempotent while a later status is still reconciled.
+    provider_event_id = f"poll-{_sha256(f'{message_id}:{delivery_status}:{response_hash}')[:40]}"
+    callback_payload = {
+        "provider_event_id": provider_event_id,
+        "provider_message_id": message_id,
+        "client_ref": _first_value(receipt, "client_ref", "clientRef", "idempotency_key"),
+        "status": delivery_status,
+        "status_code": _first_value(receipt, "status", "status_code", "statusCode"),
+        "statusDescription": _first_value(receipt, "statusDescription", "status_description", "description"),
+        "subscriber": _first_value(receipt, "subscriber", "mobile", "phone", "to", "destination"),
+        "dateModified": _first_value(receipt, "dateModified", "date_modified", "timestamp"),
+    }
+    result = process_mobitech_delivery_callback(
+        callback_payload,
+        reconciliation_method="polling",
+    )
+    result["response_hash"] = response_hash
+    return result
 
 
 def _find_alert(*, provider_message_id: str, client_ref: str) -> Alert | None:
@@ -209,6 +307,7 @@ def _sanitized_callback_payload(
     provider_message_id: str,
     client_ref: str,
     status: str,
+    reconciliation_method: str,
 ) -> dict[str, Any]:
     timestamp = _first_value(payload, "timestamp", "dateModified", "date_modified", "delivery_date")
     status_code = _first_value(payload, "status_code", "statusCode", "code")
@@ -220,6 +319,7 @@ def _sanitized_callback_payload(
         "provider_message_id": provider_message_id,
         "client_ref": client_ref,
         "status": status,
+        "reconciliation_method": reconciliation_method if reconciliation_method in {"callback", "polling"} else "callback",
         "status_code": status_code,
         "status_description_hash": _sha256(status_description),
         "destination_hash": _sha256(destination),
@@ -228,22 +328,114 @@ def _sanitized_callback_payload(
 
 
 def _normalise_delivery_status(value: Any) -> str:
-    normalized = str(value or "").strip().lower().replace(" ", "_")
-    if normalized in {"delivered", "delivery_success", "success", "successful", "dlvrd", "1"}:
+    normalized = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+    if normalized in {
+        "delivered",
+        "delivered_to_terminal",
+        "deliveredterminal",
+        "delivery_success",
+        "success",
+        "successful",
+        "dlvrd",
+        "1",
+    }:
         return Alert.PROVIDER_DELIVERY_DELIVERED
     if normalized in {
         "failed",
         "failure",
         "undelivered",
+        "not_delivered",
+        "notdelivered",
+        "delivery_failed",
+        "failed_to_deliver",
+        "undeliverable",
         "rejected",
         "expired",
         "blocked",
         "0",
     }:
         return Alert.PROVIDER_DELIVERY_FAILED
-    if normalized in {"pending", "queued", "scheduled", "sent", "accepted", "in_progress", "2"}:
+    if normalized in {
+        "pending",
+        "queued",
+        "scheduled",
+        "sent",
+        "submitted",
+        "accepted",
+        "in_progress",
+        "2",
+    }:
         return Alert.PROVIDER_DELIVERY_PENDING
     return ""
+
+
+def _delivery_status_from_payload(payload: dict[str, Any]) -> str:
+    for key in (
+        "status",
+        "delivery_status",
+        "statusDescription",
+        "status_description",
+        "schedule_status",
+    ):
+        status = _normalise_delivery_status(payload.get(key))
+        if status:
+            return status
+    return ""
+
+
+def _select_mobitech_receipt(payload: Any, *, message_id: str) -> dict[str, Any]:
+    candidates: list[dict[str, Any]] = []
+
+    def visit(value: Any) -> None:
+        if isinstance(value, list):
+            for item in value:
+                visit(item)
+            return
+        if not isinstance(value, dict):
+            return
+        if any(
+            key in value
+            for key in (
+                "status",
+                "delivery_status",
+                "statusDescription",
+                "status_description",
+                "schedule_status",
+            )
+        ):
+            candidates.append(value)
+        for key in ("receipts", "receipt", "data", "results", "messages"):
+            nested = value.get(key)
+            if isinstance(nested, (dict, list)):
+                visit(nested)
+
+    visit(payload)
+    matching = [
+        item
+        for item in candidates
+        if _first_value(item, "smsId", "sms_id", "message_id", "messageId", "id") == message_id
+    ]
+    if len(matching) == 1:
+        return matching[0]
+    return candidates[0] if len(candidates) == 1 else {}
+
+
+def _stats_response_as_receipt(payload: Any, *, message_id: str) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    try:
+        delivered = int(payload.get("delivered"))
+        total_sent = int(payload.get("totalSent"))
+    except (TypeError, ValueError):
+        return {}
+    if total_sent <= 0 or delivered < 0:
+        return {}
+    status = Alert.PROVIDER_DELIVERY_DELIVERED if delivered >= total_sent else Alert.PROVIDER_DELIVERY_PENDING
+    return {
+        "smsId": message_id,
+        "status": status,
+        "statusDescription": "Delivered" if status == Alert.PROVIDER_DELIVERY_DELIVERED else "Pending",
+    }
 
 
 def _first_value(payload: dict[str, Any], *keys: str) -> str:

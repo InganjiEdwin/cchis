@@ -23,6 +23,8 @@ from accounts.role_capabilities import user_is_admin_equivalent
 from accounts.step_up import RequireFreshStepUp
 from accounts.throttles import AuthScopedRateThrottle
 
+from core.mobitech_config import is_valid_mobitech_callback_configuration
+
 from .tasks import deliver_alert_task, run_risk_model_task, trigger_alerts_task
 from .sms_delivery import process_mobitech_delivery_callback
 
@@ -3261,17 +3263,25 @@ class UssdMenuVersionApprovalAPIView(APIView):
 
 
 class MobitechDeliveryCallbackAPIView(APIView):
-    """Public, token-gated Mobitech callback endpoint with idempotent reconciliation."""
+    """Public, secret-route-gated Mobitech callback endpoint with idempotent reconciliation."""
 
     authentication_classes = []
     permission_classes = [permissions.AllowAny]
 
-    def post(self, request):
-        expected_token = str(getattr(settings, "MOBITECH_DELIVERY_CALLBACK_TOKEN", "") or "")
-        if expected_token:
-            supplied_token = request.headers.get("X-Mobitech-Callback-Token", "")
-            if not hmac.compare_digest(str(supplied_token), expected_token):
-                return Response({"detail": "Invalid callback token."}, status=status.HTTP_403_FORBIDDEN)
+    def post(self, request, route_token):
+        expected_token = str(getattr(settings, "MOBITECH_DELIVERY_CALLBACK_TOKEN", "") or "").strip()
+        callback_url = str(getattr(settings, "MOBITECH_DELIVERY_CALLBACK_URL", "") or "").strip()
+        if not is_valid_mobitech_callback_configuration(
+            callback_url,
+            expected_token,
+            require_https=bool(getattr(settings, "IS_SHARED_ENVIRONMENT", False)),
+        ):
+            return Response(
+                {"detail": "Mobitech callback authentication is not configured."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if not hmac.compare_digest(str(route_token or ""), expected_token):
+            return Response({"detail": "Invalid callback token."}, status=status.HTTP_403_FORBIDDEN)
 
         payload = request.data if isinstance(request.data, dict) else dict(request.data)
         result = process_mobitech_delivery_callback(payload)

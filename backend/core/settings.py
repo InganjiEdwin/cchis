@@ -6,6 +6,8 @@ from decouple import config
 from celery.schedules import crontab
 from django.core.exceptions import ImproperlyConfigured
 
+from .mobitech_config import collect_mobitech_reconciliation_configuration_errors
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -787,6 +789,13 @@ MOBITECH_SERVICE_ID = config("MOBITECH_SERVICE_ID", default="0").strip() or "0"
 MOBITECH_DELIVERY_CALLBACK_URL = config("MOBITECH_DELIVERY_CALLBACK_URL", default="").strip()
 MOBITECH_DELIVERY_CALLBACK_TOKEN = config("MOBITECH_DELIVERY_CALLBACK_TOKEN", default="").strip()
 MOBITECH_HTTP_TIMEOUT_SECONDS = config("MOBITECH_HTTP_TIMEOUT_SECONDS", default=20, cast=int)
+MOBITECH_STATUS_API_URL = config("MOBITECH_STATUS_API_URL", default="").strip()
+MOBITECH_STATUS_AUTH_SCHEME = config("MOBITECH_STATUS_AUTH_SCHEME", default="bearer").strip().lower()
+MOBITECH_STATUS_HTTP_TIMEOUT_SECONDS = config(
+    "MOBITECH_STATUS_HTTP_TIMEOUT_SECONDS",
+    default=20,
+    cast=int,
+)
 
 if SMS_PROVIDER == "africastalking":
     if not AFRICAS_TALKING_ENABLED and IS_SHARED_ENVIRONMENT:
@@ -823,6 +832,17 @@ if SMS_PROVIDER == "mobitech" and IS_SHARED_ENVIRONMENT:
             f"Mobitech SMS delivery requires these settings: {missing_values}."
         )
 
+    mobitech_reconciliation_errors = collect_mobitech_reconciliation_configuration_errors(
+        shared_environment=IS_SHARED_ENVIRONMENT,
+        callback_url=MOBITECH_DELIVERY_CALLBACK_URL,
+        callback_token=MOBITECH_DELIVERY_CALLBACK_TOKEN,
+        api_key=MOBITECH_API_KEY,
+        status_url=MOBITECH_STATUS_API_URL,
+        status_auth_scheme=MOBITECH_STATUS_AUTH_SCHEME,
+    )
+    if mobitech_reconciliation_errors:
+        raise ImproperlyConfigured(" ".join(mobitech_reconciliation_errors))
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -838,6 +858,12 @@ LOGGING = {
         "console": {
             "class": "logging.StreamHandler",
             "formatter": "standard",
+            "filters": ["redact_mobitech_callback_path"],
+        },
+    },
+    "filters": {
+        "redact_mobitech_callback_path": {
+            "()": "risk.middleware.MobitechCallbackPathRedactionFilter",
         },
     },
     "loggers": {
