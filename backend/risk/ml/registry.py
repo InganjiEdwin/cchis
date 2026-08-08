@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import F
 from django.utils import timezone
 
@@ -22,7 +22,104 @@ from .alignment import (
     model_run_has_phase_4_promotion_metadata,
     registry_entry_has_promotion_event_provenance,
 )
-from ..truth_policy import production_model_run_blockers
+from .model_governance_identity import (
+    MODEL_REGISTRY_GOVERNANCE_ROLES,
+    ModelGovernanceIdentityError,
+    resolve_governance_actor,
+)
+def _append_unique(blockers: list[str], *values: str) -> None:
+    for value in values:
+        if value and value not in blockers:
+            blockers.append(value)
+
+
+def _lock_deployment_target(deployment_target: str) -> None:
+    """Serialize activation attempts for a target, including when it has no active row."""
+
+    if connection.vendor != "postgresql":
+        return
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT pg_advisory_xact_lock(hashtext(%s))",
+            [f"cchis:model-registry:{deployment_target}"],
+        )
+
+
+def registered_inference_scoring_blockers(
+    *,
+    model_version: str,
+    algorithm: str,
+    feature_contract: list[str],
+    training_dataset,
+    inference_dataset,
+) -> list[str]:
+    """Evaluate whether production scoring can use the governed registered artifact path.
+
+    The current pipeline still trains on demand and has no trusted artifact loader. A
+    valid registry entry therefore receives an honest path-required blocker rather
+    than being silently treated as the artifact-backed inference path.
+    """
+
+    from ..truth_policy import (
+        PRODUCTION_ACTIVE_ARTIFACT_INTEGRITY_REQUIRED,
+        PRODUCTION_ACTIVE_DEPLOYMENT_TARGET_REQUIRED,
+        PRODUCTION_ACTIVE_MODEL_APPROVAL_REQUIRED,
+        PRODUCTION_ALERT_ACTIVE_REGISTRY_REQUIRED,
+        PRODUCTION_REGISTERED_DATASET_REFERENCE_MISMATCH,
+        PRODUCTION_REGISTERED_FEATURE_CONTRACT_MISMATCH,
+        PRODUCTION_REGISTERED_INFERENCE_PATH_REQUIRED,
+        PRODUCTION_REGISTERED_MODEL_RUN_MISMATCH,
+        strict_persisted_feature_dataset_blockers,
+        strict_persisted_truth_blockers,
+    )
+    from .model_artifacts import verify_registry_artifact
+
+    active_entry = active_model_registry_entry(deployment_target="live_baseline")
+    if active_entry is None:
+        return [PRODUCTION_ALERT_ACTIVE_REGISTRY_REQUIRED]
+
+    blockers: list[str] = []
+    if active_entry.approval_state != ModelRegistryApprovalState.APPROVED:
+        _append_unique(blockers, PRODUCTION_ACTIVE_MODEL_APPROVAL_REQUIRED)
+    if active_entry.lifecycle_state != ModelRegistryLifecycleState.ACTIVE:
+        _append_unique(blockers, PRODUCTION_ALERT_ACTIVE_REGISTRY_REQUIRED)
+    if active_entry.deployment_target != "live_baseline":
+        _append_unique(blockers, PRODUCTION_ACTIVE_DEPLOYMENT_TARGET_REQUIRED)
+    if not verify_registry_artifact(active_entry).get("valid"):
+        _append_unique(blockers, PRODUCTION_ACTIVE_ARTIFACT_INTEGRITY_REQUIRED)
+
+    registered_run = active_entry.model_run
+    if registered_run is None or registered_run.model_version != model_version:
+        _append_unique(blockers, PRODUCTION_REGISTERED_MODEL_RUN_MISMATCH)
+    registered_algorithm = str(active_entry.algorithm or "").strip()
+    if registered_algorithm not in {str(algorithm).strip(), str(getattr(registered_run, "algorithm_name", "")).strip()}:
+        _append_unique(blockers, PRODUCTION_REGISTERED_MODEL_RUN_MISMATCH)
+    if list(active_entry.feature_contract or []) != list(feature_contract or []):
+        _append_unique(blockers, PRODUCTION_REGISTERED_FEATURE_CONTRACT_MISMATCH)
+
+    training_feature_dataset = getattr(training_dataset, "feature_dataset", None)
+    inference_feature_dataset = getattr(inference_dataset, "feature_dataset", None)
+    if (
+        training_feature_dataset is None
+        or active_entry.training_feature_dataset_ref != training_feature_dataset.dataset_ref
+        or inference_feature_dataset is None
+        or active_entry.inference_feature_dataset_ref != inference_feature_dataset.dataset_ref
+    ):
+        _append_unique(blockers, PRODUCTION_REGISTERED_DATASET_REFERENCE_MISMATCH)
+
+    if registered_run is not None:
+        _append_unique(blockers, *strict_persisted_truth_blockers(registered_run))
+    _append_unique(
+        blockers,
+        *strict_persisted_feature_dataset_blockers(
+            training_dataset=training_dataset,
+            inference_dataset=inference_dataset,
+        ),
+    )
+
+    if not blockers:
+        blockers.append(PRODUCTION_REGISTERED_INFERENCE_PATH_REQUIRED)
+    return blockers
 
 
 MODEL_REGISTRY_SCHEMA_VERSION = "ward-risk-model-registry-v1"
@@ -30,8 +127,6 @@ MODEL_ROLLBACK_WORKFLOW_SCHEMA_VERSION = "ward-risk-model-rollback-workflow-v1"
 DEFAULT_MODEL_REVIEW_INTERVAL_DAYS = 90
 AUTHORIZED_ROLLBACK_ROLES = {
     "admin",
-    "model_operations",
-    "county_operator",
 }
 
 
@@ -116,7 +211,9 @@ def ensure_registry_entry_for_promoted_run(
     Registration, review, and activation are intentionally separate governed
     transitions. Existing callers must migrate to those explicit services.
     """
-    truth_blockers = production_model_run_blockers(model_run)
+    from ..truth_policy import strict_persisted_truth_blockers
+
+    truth_blockers = strict_persisted_truth_blockers(model_run)
     if truth_blockers:
         raise ValueError(f"production_truth_policy_blocked:{','.join(truth_blockers)}")
     if not model_run_has_phase_4_promotion_metadata(model_run):
@@ -141,11 +238,14 @@ def rollback_target_for_entry(entry: ModelRegistryEntry | None = None) -> ModelR
     return entry.rollback_target if entry.rollback_target_id else None
 
 
-def _validate_rollback_authorization(*, rolled_back_by: str, authorized_role: str) -> None:
-    if not (rolled_back_by or "").strip():
-        raise ValueError("rollback_operator_required")
-    if authorized_role not in AUTHORIZED_ROLLBACK_ROLES:
-        raise ValueError("rollback_role_not_authorized")
+def _validate_rollback_authorization(*, rolled_back_by: str):
+    try:
+        return resolve_governance_actor(
+            rolled_back_by,
+            required_roles=MODEL_REGISTRY_GOVERNANCE_ROLES,
+        )
+    except ModelGovernanceIdentityError as error:
+        raise ValueError(error.code) from error
 
 
 def _validate_rollback_target(*, rolled_back_from: ModelRegistryEntry, rollback_target: ModelRegistryEntry) -> None:
@@ -171,6 +271,10 @@ def _validate_rollback_target(*, rolled_back_from: ModelRegistryEntry, rollback_
 
     if not verify_registry_artifact(rollback_target).get("valid"):
         raise ValueError("rollback_target_artifact_integrity_failed")
+    from ..truth_policy import strict_persisted_truth_blockers
+
+    if strict_persisted_truth_blockers(rollback_target.model_run):
+        raise ValueError("rollback_target_truth_policy_blocked")
 
 
 def _validate_rollback_event_target(*, rolled_back_from: ModelRegistryEntry, rollback_target: ModelRegistryEntry) -> None:
@@ -190,6 +294,10 @@ def _validate_rollback_event_target(*, rolled_back_from: ModelRegistryEntry, rol
         raise ValueError("rollback_target_deployment_mismatch")
     if not registry_entry_has_promotion_event_provenance(rollback_target):
         raise ValueError("rollback_target_missing_promotion_event")
+    from ..truth_policy import strict_persisted_truth_blockers
+
+    if strict_persisted_truth_blockers(rollback_target.model_run):
+        raise ValueError("rollback_target_truth_policy_blocked")
 
 
 def materialize_registry_entry_current_risk(registry_entry: ModelRegistryEntry) -> dict:
@@ -231,16 +339,20 @@ def execute_model_rollback(
     rollback_target: ModelRegistryEntry | None = None,
     reason: str,
     rolled_back_by: str,
-    authorized_role: str = "model_operations",
     materialize_current_risk: bool = True,
     metadata: dict | None = None,
 ) -> ModelRollbackEvent:
     reason = (reason or "").strip()
     if not reason:
         raise ValueError("rollback_reason_required")
-    _validate_rollback_authorization(
+    actor_user = _validate_rollback_authorization(
         rolled_back_by=rolled_back_by,
-        authorized_role=authorized_role,
+    )
+    rolled_back_by = actor_user.get_username()
+    actual_actor_role = (
+        "admin"
+        if actor_user.is_superuser
+        else str(getattr(actor_user, "role", "") or "").lower()
     )
 
     with transaction.atomic():
@@ -305,6 +417,8 @@ def execute_model_rollback(
         }
         target_previous_state = {
             "registry_entry_id": rollback_target.id,
+            "approval_state": rollback_target.approval_state,
+            "lifecycle_state": rollback_target.lifecycle_state,
             "promotion_state": rollback_target.promotion_state,
             "active_from": rollback_target.active_from.isoformat() if rollback_target.active_from else None,
             "active_until": rollback_target.active_until.isoformat() if rollback_target.active_until else None,
@@ -376,9 +490,16 @@ def execute_model_rollback(
             rollback_target=rollback_target,
             reason=reason,
             rolled_back_by=rolled_back_by,
+            rolled_back_by_user=actor_user,
             metadata={
                 "schema_version": MODEL_ROLLBACK_WORKFLOW_SCHEMA_VERSION,
-                "authorized_role": authorized_role,
+                "authorized_role": actual_actor_role,
+                "actor_identity": {
+                    "user_id": actor_user.id,
+                    "username": actor_user.get_username(),
+                    "role": actual_actor_role,
+                    "is_superuser": bool(actor_user.is_superuser),
+                },
                 "previous_active": previous_active_metadata,
                 "target_previous_state": target_previous_state,
                 "new_active": {
@@ -400,15 +521,17 @@ def execute_model_rollback(
         }
         rollback_target.save(update_fields=["metadata", "updated_at"])
         from risk.models import ModelGovernanceEvent
+        from .model_registry_governance import _record_event
 
-        ModelGovernanceEvent.objects.create(
-            registry_entry=rolled_back_from,
+        _record_event(
+            entry=rolled_back_from,
             event_type=ModelGovernanceEvent.EVENT_ROLLED_BACK,
+            actor_user=actor_user,
             actor=rolled_back_by,
             reason=reason,
-            resulting_approval_state=rolled_back_from.approval_state,
+            previous_approval_state=rolled_back_from.approval_state,
             previous_lifecycle_state=ModelRegistryLifecycleState.ACTIVE,
-            resulting_lifecycle_state=ModelRegistryLifecycleState.ROLLED_BACK,
+            previous_promotion_state=ModelRegistryPromotionState.ACTIVE_PROMOTED,
             evidence_snapshot={
                 "rollback_event_id": event.id,
                 "rolled_back_from_registry_entry_id": rolled_back_from.id,
@@ -417,14 +540,15 @@ def execute_model_rollback(
             },
             request_id=str((metadata or {}).get("request_id") or ""),
         )
-        ModelGovernanceEvent.objects.create(
-            registry_entry=rollback_target,
+        _record_event(
+            entry=rollback_target,
             event_type=ModelGovernanceEvent.EVENT_ROLLED_BACK,
+            actor_user=actor_user,
             actor=rolled_back_by,
             reason=reason,
-            resulting_approval_state=rollback_target.approval_state,
-            previous_lifecycle_state=ModelRegistryLifecycleState.RETIRED,
-            resulting_lifecycle_state=ModelRegistryLifecycleState.ACTIVE,
+            previous_approval_state=rollback_target.approval_state,
+            previous_lifecycle_state=target_previous_state["lifecycle_state"],
+            previous_promotion_state=target_previous_state["promotion_state"],
             evidence_snapshot={
                 "rollback_event_id": event.id,
                 "rolled_back_from_registry_entry_id": rolled_back_from.id,
@@ -442,14 +566,15 @@ def record_model_rollback(
     rollback_target: ModelRegistryEntry,
     reason: str,
     rolled_back_by: str = "",
+    rolled_back_by_user=None,
     metadata: dict | None = None,
 ) -> ModelRollbackEvent:
     reason = (reason or "").strip()
     if not reason:
         raise ValueError("rollback_reason_required")
-    rolled_back_by = (rolled_back_by or "").strip()
-    if not rolled_back_by:
-        raise ValueError("rollback_operator_required")
+    if rolled_back_by_user is None:
+        rolled_back_by_user = _validate_rollback_authorization(rolled_back_by=rolled_back_by)
+    rolled_back_by = rolled_back_by_user.get_username()
     _validate_rollback_event_target(
         rolled_back_from=rolled_back_from,
         rollback_target=rollback_target,
@@ -459,5 +584,6 @@ def record_model_rollback(
         rollback_target=rollback_target,
         reason=reason,
         rolled_back_by=rolled_back_by,
+        rolled_back_by_user=rolled_back_by_user,
         metadata=metadata or {},
     )

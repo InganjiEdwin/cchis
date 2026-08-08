@@ -3735,6 +3735,13 @@ class ModelPromotionEvent(models.Model):
     )
     source = models.CharField(max_length=120, default="phase_4_temporal_backtest")
     promoted_by = models.CharField(max_length=160, blank=True)
+    promoted_by_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="model_promotions_governed",
+    )
     active_from = models.DateTimeField(default=timezone.now)
     review_due_date = models.DateField(null=True, blank=True)
     evidence_metadata = models.JSONField(default=dict, blank=True)
@@ -3764,6 +3771,13 @@ class ModelRollbackEvent(models.Model):
         related_name="rollback_events_as_target",
     )
     rolled_back_by = models.CharField(max_length=160, blank=True)
+    rolled_back_by_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="model_rollbacks_governed",
+    )
     reason = models.TextField()
     metadata = models.JSONField(default=dict, blank=True)
     occurred_at = models.DateTimeField(default=timezone.now)
@@ -3805,6 +3819,14 @@ class ModelRollbackEvent(models.Model):
         return f"Rollback {self.rolled_back_from_id} -> {self.rollback_target_id} at {self.occurred_at}"
 
 
+class ImmutableModelGovernanceEventQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValidationError("Model governance events are immutable.")
+
+    def delete(self):
+        raise ValidationError("Model governance events are immutable.")
+
+
 class ModelGovernanceEvent(models.Model):
     EVENT_REGISTERED = "REGISTERED"
     EVENT_APPROVAL_REQUESTED = "APPROVAL_REQUESTED"
@@ -3833,11 +3855,20 @@ class ModelGovernanceEvent(models.Model):
     )
     event_type = models.CharField(max_length=40, choices=EVENT_CHOICES)
     actor = models.CharField(max_length=160)
+    actor_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="model_governance_events",
+    )
     reason = models.TextField()
     previous_approval_state = models.CharField(max_length=32, blank=True)
     resulting_approval_state = models.CharField(max_length=32, blank=True)
     previous_lifecycle_state = models.CharField(max_length=32, blank=True)
     resulting_lifecycle_state = models.CharField(max_length=32, blank=True)
+    previous_promotion_state = models.CharField(max_length=32, blank=True)
+    resulting_promotion_state = models.CharField(max_length=32, blank=True)
     evidence_snapshot = models.JSONField(default=dict, blank=True)
     request_id = models.CharField(max_length=160, blank=True)
     occurred_at = models.DateTimeField(default=timezone.now)
@@ -3859,9 +3890,19 @@ class ModelGovernanceEvent(models.Model):
             ),
         ]
 
+    objects = ImmutableModelGovernanceEventQuerySet.as_manager()
+
     def save(self, *args, **kwargs):
         if self.pk:
             raise ValidationError("Model governance events are immutable.")
+        if not self.actor_user_id:
+            raise ValidationError("Model governance events require an active actor user.")
+        if self.actor_user_id and not self.actor_user.is_active:
+            raise ValidationError("Model governance events require an active actor user.")
+        if self.actor_user_id and self.actor:
+            actor_username = self.actor_user.get_username()
+            if self.actor != actor_username:
+                raise ValidationError("Model governance event actor snapshot does not match actor user.")
         return super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):

@@ -16,7 +16,6 @@ class Command(BaseCommand):
         parser.add_argument("--rolled-back-from", default="")
         parser.add_argument("--actor", required=True)
         parser.add_argument("--reason", required=True)
-        parser.add_argument("--authorized-role", default="model_operations")
         parser.add_argument("--review-only-current-risk", action="store_true")
         parser.add_argument("--request-id", default="")
 
@@ -35,7 +34,6 @@ class Command(BaseCommand):
                 rollback_target=rollback_target,
                 reason=options["reason"],
                 rolled_back_by=options["actor"],
-                authorized_role=options["authorized_role"],
                 materialize_current_risk=not options["review_only_current_risk"],
                 metadata={
                     "source": "rollback_registered_model_command",

@@ -30,9 +30,9 @@ from .model import (
 from .decision_policy import current_ward_risk_decision_policy, evaluate_ward_risk_decision_policy
 from .trust import alerts_allowed_for_snapshot, build_operational_trust_snapshot, predictions_blocked_for_snapshot
 from ..truth_policy import (
-    PRODUCTION_ALERT_ACTIVE_REGISTRY_REQUIRED,
     production_feature_dataset_blockers,
 )
+from .registry import registered_inference_scoring_blockers
 
 
 ml_logger = logging.getLogger("risk.ml")
@@ -506,7 +506,13 @@ def run_mock_prediction_pipeline(
     if settings.CCHIS_ENVIRONMENT == "production":
         production_truth_blockers = [
             *production_truth_blockers,
-            PRODUCTION_ALERT_ACTIVE_REGISTRY_REQUIRED,
+            *registered_inference_scoring_blockers(
+                model_version=model_version,
+                algorithm=algorithm,
+                feature_contract=FEATURE_KEYS,
+                training_dataset=training_dataset,
+                inference_dataset=inference_dataset,
+            ),
         ]
     decision_policy = current_ward_risk_decision_policy()
 

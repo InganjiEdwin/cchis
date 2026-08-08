@@ -28,7 +28,14 @@ from risk.models import (
 
 from .alignment import model_run_has_phase_4_promotion_metadata
 from .model_artifacts import inspect_artifact, sanitized_artifact_evidence, verify_registry_artifact
-from .registry import default_review_due_date
+from .model_governance_identity import (
+    MODEL_REGISTRY_GOVERNANCE_ROLES,
+    MODEL_REGISTRY_REQUEST_ROLES,
+    ModelGovernanceIdentityError,
+    actor_identity_snapshot,
+    resolve_governance_actor,
+)
+from .registry import _lock_deployment_target, default_review_due_date
 
 
 OPERATIONAL_DEPLOYMENT_TARGET = "live_baseline"
@@ -42,14 +49,20 @@ class ModelRegistryGovernanceError(ValueError):
         super().__init__(self.detail)
 
 
-def _required_actor_reason(actor: str, reason: str) -> tuple[str, str]:
-    actor = (actor or "").strip()
+def _required_actor_reason(
+    actor,
+    reason: str,
+    *,
+    required_roles=frozenset(MODEL_REGISTRY_REQUEST_ROLES),
+):
     reason = (reason or "").strip()
-    if not actor:
-        raise ModelRegistryGovernanceError("governance_actor_required")
     if not reason:
         raise ModelRegistryGovernanceError("governance_reason_required")
-    return actor, reason
+    try:
+        actor_user = resolve_governance_actor(actor, required_roles=required_roles)
+    except ModelGovernanceIdentityError as error:
+        raise ModelRegistryGovernanceError(error.code, error.detail) from error
+    return actor_user, actor_user.get_username(), reason
 
 
 def _event_snapshot(entry: ModelRegistryEntry, *, artifact_inspection: dict | None = None) -> dict:
@@ -71,6 +84,9 @@ def _event_snapshot(entry: ModelRegistryEntry, *, artifact_inspection: dict | No
         "feature_contract": list(entry.feature_contract or []),
         "metrics": dict(entry.metrics or {}),
         "artifact": sanitized_artifact_evidence(entry, artifact_inspection),
+        "approval_state": entry.approval_state,
+        "lifecycle_state": entry.lifecycle_state,
+        "promotion_state": entry.promotion_state,
     }
 
 
@@ -78,23 +94,30 @@ def _record_event(
     *,
     entry: ModelRegistryEntry,
     event_type: str,
+    actor_user,
     actor: str,
     reason: str,
     previous_approval_state: str = "",
     previous_lifecycle_state: str = "",
+    previous_promotion_state: str = "",
     evidence_snapshot: dict | None = None,
     request_id: str = "",
 ) -> ModelGovernanceEvent:
+    snapshot = dict(evidence_snapshot or _event_snapshot(entry))
+    snapshot.setdefault("actor_identity", actor_identity_snapshot(actor_user))
     return ModelGovernanceEvent.objects.create(
         registry_entry=entry,
         event_type=event_type,
         actor=actor,
+        actor_user=actor_user,
         reason=reason,
         previous_approval_state=previous_approval_state,
         resulting_approval_state=entry.approval_state,
         previous_lifecycle_state=previous_lifecycle_state,
         resulting_lifecycle_state=entry.lifecycle_state,
-        evidence_snapshot=evidence_snapshot or _event_snapshot(entry),
+        previous_promotion_state=previous_promotion_state,
+        resulting_promotion_state=entry.promotion_state,
+        evidence_snapshot=snapshot,
         request_id=(request_id or "").strip(),
     )
 
@@ -146,7 +169,7 @@ def register_model_artifact(
     artifact_format: str = "",
     request_id: str = "",
 ) -> ModelRegistryEntry:
-    actor, reason = _required_actor_reason(actor, reason)
+    actor_user, actor, reason = _required_actor_reason(actor, reason)
     if deployment_target not in ALLOWED_DEPLOYMENT_TARGETS:
         raise ModelRegistryGovernanceError("deployment_target_unsupported")
     if model_run is None or model_run.status != ModelRun.STATUS_SUCCESS:
@@ -229,6 +252,7 @@ def register_model_artifact(
         _record_event(
             entry=entry,
             event_type=ModelGovernanceEvent.EVENT_REGISTERED,
+            actor_user=actor_user,
             actor=actor,
             reason=reason,
             evidence_snapshot=_event_snapshot(entry, artifact_inspection=inspection),
@@ -249,7 +273,7 @@ def _entry_for_update(entry_id: int) -> ModelRegistryEntry:
 
 
 def request_model_approval(*, entry: ModelRegistryEntry, actor: str, reason: str, request_id: str = "") -> ModelRegistryEntry:
-    actor, reason = _required_actor_reason(actor, reason)
+    actor_user, actor, reason = _required_actor_reason(actor, reason)
     with transaction.atomic():
         locked = _entry_for_update(entry.id)
         if locked.lifecycle_state not in {
@@ -265,9 +289,12 @@ def request_model_approval(*, entry: ModelRegistryEntry, actor: str, reason: str
         _record_event(
             entry=locked,
             event_type=ModelGovernanceEvent.EVENT_APPROVAL_REQUESTED,
+            actor_user=actor_user,
             actor=actor,
             reason=reason,
             previous_approval_state=previous,
+            previous_lifecycle_state=locked.lifecycle_state,
+            previous_promotion_state=locked.promotion_state,
             request_id=request_id,
         )
         return locked
@@ -374,6 +401,9 @@ def model_artifact_approval_blockers(entry: ModelRegistryEntry) -> list[str]:
         blockers.append("truth_policy_evidence_missing")
     elif isinstance(truth_evidence, dict) and truth_evidence.get("blocked_reason_codes"):
         blockers.extend(str(code) for code in truth_evidence["blocked_reason_codes"])
+    from ..truth_policy import strict_persisted_truth_blockers
+
+    blockers.extend(strict_persisted_truth_blockers(model_run))
     return list(dict.fromkeys(code for code in blockers if code))
 
 
@@ -385,11 +415,20 @@ def review_model_artifact(
     approve: bool,
     request_id: str = "",
 ) -> ModelRegistryEntry:
-    actor, reason = _required_actor_reason(actor, reason)
+    actor_user, actor, reason = _required_actor_reason(
+        actor,
+        reason,
+        required_roles=MODEL_REGISTRY_GOVERNANCE_ROLES,
+    )
     with transaction.atomic():
         locked = _entry_for_update(entry.id)
         if locked.approval_state != ModelRegistryApprovalState.PENDING_REVIEW:
             raise ModelRegistryGovernanceError("approval_review_not_pending")
+        if approve and locked.governance_events.filter(
+            event_type=ModelGovernanceEvent.EVENT_APPROVAL_REQUESTED,
+            actor_user_id=actor_user.id,
+        ).exists():
+            raise ModelRegistryGovernanceError("governance_self_approval_forbidden")
         previous = locked.approval_state
         if approve:
             blockers = model_artifact_approval_blockers(locked)
@@ -410,9 +449,12 @@ def review_model_artifact(
         _record_event(
             entry=locked,
             event_type=event_type,
+            actor_user=actor_user,
             actor=actor,
             reason=reason,
             previous_approval_state=previous,
+            previous_lifecycle_state=locked.lifecycle_state,
+            previous_promotion_state=locked.promotion_state,
             request_id=request_id,
         )
         return locked
@@ -426,7 +468,7 @@ def designate_model_challenger(
     champion: ModelRegistryEntry | None = None,
     request_id: str = "",
 ) -> ModelRegistryEntry:
-    actor, reason = _required_actor_reason(actor, reason)
+    actor_user, actor, reason = _required_actor_reason(actor, reason)
     with transaction.atomic():
         locked = _entry_for_update(entry.id)
         if locked.lifecycle_state not in {
@@ -452,9 +494,12 @@ def designate_model_challenger(
         _record_event(
             entry=locked,
             event_type=ModelGovernanceEvent.EVENT_CHALLENGER_DESIGNATED,
+            actor_user=actor_user,
             actor=actor,
             reason=reason,
+            previous_approval_state=locked.approval_state,
             previous_lifecycle_state=previous,
+            previous_promotion_state=locked.promotion_state,
             request_id=request_id,
         )
         return locked
@@ -467,10 +512,15 @@ def activate_registered_model(
     reason: str,
     request_id: str = "",
 ) -> ModelRegistryEntry:
-    actor, reason = _required_actor_reason(actor, reason)
+    actor_user, actor, reason = _required_actor_reason(
+        actor,
+        reason,
+        required_roles=MODEL_REGISTRY_GOVERNANCE_ROLES,
+    )
     if entry.deployment_target != OPERATIONAL_DEPLOYMENT_TARGET:
         raise ModelRegistryGovernanceError("deployment_target_not_operational")
     with transaction.atomic():
+        _lock_deployment_target(entry.deployment_target)
         locked = _entry_for_update(entry.id)
         if locked.approval_state != ModelRegistryApprovalState.APPROVED:
             raise ModelRegistryGovernanceError("model_not_approved")
@@ -480,9 +530,9 @@ def activate_registered_model(
         }:
             raise ModelRegistryGovernanceError("activation_invalid_lifecycle")
         blockers = model_artifact_approval_blockers(locked)
-        from ..truth_policy import production_model_run_blockers
+        from ..truth_policy import strict_persisted_truth_blockers
 
-        blockers.extend(production_model_run_blockers(locked.model_run))
+        blockers.extend(strict_persisted_truth_blockers(locked.model_run))
         blockers = list(dict.fromkeys(blockers))
         if blockers:
             raise ModelRegistryGovernanceError(blockers[0], ",".join(blockers))
@@ -498,11 +548,13 @@ def activate_registered_model(
         )
         activated_at = timezone.now()
         previous_lifecycle_state = locked.lifecycle_state
+        previous_promotion_state = locked.promotion_state
         previous_active = next((item for item in active_entries if item.id != locked.id), None)
         for old_entry in active_entries:
             if old_entry.id == locked.id:
                 continue
             old_previous = old_entry.lifecycle_state
+            old_previous_promotion = old_entry.promotion_state
             old_entry.lifecycle_state = ModelRegistryLifecycleState.RETIRED
             old_entry.promotion_state = ModelRegistryPromotionState.RETIRED
             old_entry.active_until = activated_at
@@ -511,9 +563,12 @@ def activate_registered_model(
             _record_event(
                 entry=old_entry,
                 event_type=ModelGovernanceEvent.EVENT_RETIRED,
+                actor_user=actor_user,
                 actor=actor,
                 reason=f"Superseded by activation of registry entry {locked.id}. {reason}",
+                previous_approval_state=old_entry.approval_state,
                 previous_lifecycle_state=old_previous,
+                previous_promotion_state=old_previous_promotion,
                 request_id=request_id,
             )
 
@@ -523,6 +578,7 @@ def activate_registered_model(
             previous_registry_entry=previous_active,
             source="model_artifact_registry",
             promoted_by=actor,
+            promoted_by_user=actor_user,
             active_from=activated_at,
             review_due_date=locked.review_due_date,
             evidence_metadata={
@@ -550,9 +606,12 @@ def activate_registered_model(
         _record_event(
             entry=locked,
             event_type=ModelGovernanceEvent.EVENT_ACTIVATED,
+            actor_user=actor_user,
             actor=actor,
             reason=reason,
+            previous_approval_state=locked.approval_state,
             previous_lifecycle_state=previous_lifecycle_state,
+            previous_promotion_state=previous_promotion_state,
             evidence_snapshot=_event_snapshot(locked, artifact_inspection=verify_registry_artifact(locked)),
             request_id=request_id,
         )
@@ -560,12 +619,17 @@ def activate_registered_model(
 
 
 def retire_registered_model(*, entry: ModelRegistryEntry, actor: str, reason: str, request_id: str = "") -> ModelRegistryEntry:
-    actor, reason = _required_actor_reason(actor, reason)
+    actor_user, actor, reason = _required_actor_reason(
+        actor,
+        reason,
+        required_roles=MODEL_REGISTRY_GOVERNANCE_ROLES,
+    )
     with transaction.atomic():
         locked = _entry_for_update(entry.id)
         if locked.lifecycle_state != ModelRegistryLifecycleState.ACTIVE:
             raise ModelRegistryGovernanceError("retirement_requires_active_model")
         previous = locked.lifecycle_state
+        previous_promotion_state = locked.promotion_state
         retired_at = timezone.now()
         locked.lifecycle_state = ModelRegistryLifecycleState.RETIRED
         locked.promotion_state = ModelRegistryPromotionState.RETIRED
@@ -575,9 +639,12 @@ def retire_registered_model(*, entry: ModelRegistryEntry, actor: str, reason: st
         _record_event(
             entry=locked,
             event_type=ModelGovernanceEvent.EVENT_RETIRED,
+            actor_user=actor_user,
             actor=actor,
             reason=reason,
+            previous_approval_state=locked.approval_state,
             previous_lifecycle_state=previous,
+            previous_promotion_state=previous_promotion_state,
             request_id=request_id,
         )
         return locked

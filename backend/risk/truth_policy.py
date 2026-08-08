@@ -25,6 +25,10 @@ PRODUCTION_ALERT_ACTIVE_REGISTRY_REQUIRED = "production_alert_active_registry_re
 PRODUCTION_ACTIVE_ARTIFACT_INTEGRITY_REQUIRED = "production_active_artifact_integrity_required"
 PRODUCTION_ACTIVE_MODEL_APPROVAL_REQUIRED = "production_active_model_approval_required"
 PRODUCTION_ACTIVE_DEPLOYMENT_TARGET_REQUIRED = "production_active_deployment_target_required"
+PRODUCTION_REGISTERED_MODEL_RUN_MISMATCH = "production_registered_model_run_mismatch"
+PRODUCTION_REGISTERED_FEATURE_CONTRACT_MISMATCH = "production_registered_feature_contract_mismatch"
+PRODUCTION_REGISTERED_DATASET_REFERENCE_MISMATCH = "production_registered_dataset_reference_mismatch"
+PRODUCTION_REGISTERED_INFERENCE_PATH_REQUIRED = "production_registered_inference_path_required"
 PRODUCTION_ALERT_ELIGIBILITY_BLOCKED = "production_alert_eligibility_blocked"
 
 
@@ -810,11 +814,8 @@ def _feature_dataset_row_blockers(
     return blockers
 
 
-def production_feature_dataset_blockers(*, training_dataset=None, inference_dataset=None) -> list[str]:
-    """Return blockers for production scoring, without mutating any records."""
-
-    if not is_production_environment():
-        return []
+def _persisted_feature_dataset_blockers(*, training_dataset=None, inference_dataset=None) -> list[str]:
+    """Evaluate persisted feature truth without consulting the environment."""
 
     blockers: list[str] = []
     training_feature_dataset = getattr(training_dataset, "feature_dataset", None)
@@ -891,6 +892,26 @@ def production_feature_dataset_blockers(*, training_dataset=None, inference_data
     return list(dict.fromkeys(blockers))
 
 
+def strict_persisted_feature_dataset_blockers(*, training_dataset=None, inference_dataset=None) -> list[str]:
+    """Run the canonical persisted feature truth policy in every environment."""
+
+    return _persisted_feature_dataset_blockers(
+        training_dataset=training_dataset,
+        inference_dataset=inference_dataset,
+    )
+
+
+def production_feature_dataset_blockers(*, training_dataset=None, inference_dataset=None) -> list[str]:
+    """Return blockers for production scoring, without mutating any records."""
+
+    if not is_production_environment():
+        return []
+    return _persisted_feature_dataset_blockers(
+        training_dataset=training_dataset,
+        inference_dataset=inference_dataset,
+    )
+
+
 def _production_label_dataset_blockers(model_run) -> list[str]:
     metadata = getattr(model_run, "metadata", None) or {}
     if not isinstance(metadata, dict):
@@ -965,11 +986,8 @@ def _declared_label_dataset_ids(metadata: dict) -> set[int]:
     ) | set(FeatureDataset.objects.filter(id__in=label_ids).values_list("id", flat=True))
 
 
-def production_model_run_blockers(model_run) -> list[str]:
-    """Check persisted lineage before a model can be promoted or used operationally."""
-
-    if not is_production_environment():
-        return []
+def _persisted_model_run_blockers(model_run) -> list[str]:
+    """Evaluate a persisted model run without consulting the environment."""
 
     class _DatasetRef:
         def __init__(self, feature_dataset, rainfall_ingestion_run=None):
@@ -986,7 +1004,7 @@ def production_model_run_blockers(model_run) -> list[str]:
         getattr(model_run, "rainfall_ingestion_run", None),
     )
     training_dataset = _DatasetRef(training_feature_dataset)
-    blockers = production_feature_dataset_blockers(
+    blockers = _persisted_feature_dataset_blockers(
         training_dataset=training_dataset,
         inference_dataset=inference_dataset,
     )
@@ -1022,6 +1040,20 @@ def production_model_run_blockers(model_run) -> list[str]:
         if isinstance(truth_gate, dict) and truth_gate.get("proxy_only_as_confirmed_allowed") is True:
             blockers.append(PRODUCTION_PROXY_NOT_CONFIRMED)
     return list(dict.fromkeys(blockers))
+
+
+def strict_persisted_truth_blockers(model_run) -> list[str]:
+    """Run the complete canonical truth policy in local, CI, and shared environments."""
+
+    return _persisted_model_run_blockers(model_run)
+
+
+def production_model_run_blockers(model_run) -> list[str]:
+    """Check persisted lineage before a model can be promoted or used operationally."""
+
+    if not is_production_environment():
+        return []
+    return _persisted_model_run_blockers(model_run)
 
 
 def production_alert_eligibility_blockers(risk_score) -> list[str]:

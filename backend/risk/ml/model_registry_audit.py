@@ -50,11 +50,184 @@ def _entry_ref(entry: ModelRegistryEntry) -> dict:
     }
 
 
+def _governance_event_issues(entry: ModelRegistryEntry) -> list[str]:
+    """Validate the persisted event sequence against the current entry state."""
+
+    events = list(entry.governance_events.order_by("occurred_at", "id"))
+    issues: list[str] = []
+    event_types = [event.event_type for event in events]
+    if event_types.count(ModelGovernanceEvent.EVENT_REGISTERED) == 0:
+        issues.append("governance_registration_event_missing")
+    elif event_types.count(ModelGovernanceEvent.EVENT_REGISTERED) != 1:
+        issues.append("governance_registration_event_duplicate")
+    if events and events[0].event_type != ModelGovernanceEvent.EVENT_REGISTERED:
+        issues.append("governance_registration_event_not_first")
+
+    for event in events:
+        if not event.actor_user_id:
+            issues.append("governance_event_actor_missing")
+        else:
+            if not event.actor_user.is_active:
+                issues.append("governance_event_actor_inactive")
+            if event.actor != event.actor_user.get_username():
+                issues.append("governance_event_actor_snapshot_mismatch")
+        actor_identity = (event.evidence_snapshot or {}).get("actor_identity") or {}
+        if actor_identity and actor_identity.get("user_id") != event.actor_user_id:
+            issues.append("governance_event_identity_snapshot_mismatch")
+
+    state = None
+    for event in events:
+        current = (
+            event.previous_approval_state,
+            event.previous_lifecycle_state,
+            event.previous_promotion_state,
+        )
+        resulting = (
+            event.resulting_approval_state,
+            event.resulting_lifecycle_state,
+            event.resulting_promotion_state,
+        )
+        if event.event_type == ModelGovernanceEvent.EVENT_REGISTERED:
+            if any(current) or resulting != (
+                ModelRegistryApprovalState.NOT_REVIEWED,
+                ModelRegistryLifecycleState.CANDIDATE,
+                ModelRegistryPromotionState.CANDIDATE,
+            ):
+                issues.append("governance_registration_state_invalid")
+        elif state is None or current != state:
+            issues.append("governance_event_sequence_invalid")
+
+        valid_transition = True
+        if event.event_type == ModelGovernanceEvent.EVENT_APPROVAL_REQUESTED:
+            valid_transition = (
+                resulting[0] == ModelRegistryApprovalState.PENDING_REVIEW
+                and resulting[1] == current[1]
+                and resulting[2] == current[2]
+                and current[0]
+                in {
+                    ModelRegistryApprovalState.NOT_REVIEWED,
+                    ModelRegistryApprovalState.REJECTED,
+                }
+            )
+        elif event.event_type in {
+            ModelGovernanceEvent.EVENT_APPROVED,
+            ModelGovernanceEvent.EVENT_REJECTED,
+        }:
+            expected_result = (
+                ModelRegistryApprovalState.APPROVED
+                if event.event_type == ModelGovernanceEvent.EVENT_APPROVED
+                else ModelRegistryApprovalState.REJECTED
+            )
+            valid_transition = (
+                current[0] == ModelRegistryApprovalState.PENDING_REVIEW
+                and resulting[0] == expected_result
+                and resulting[1:] == current[1:]
+            )
+        elif event.event_type == ModelGovernanceEvent.EVENT_CHALLENGER_DESIGNATED:
+            valid_transition = (
+                current[1]
+                in {
+                    ModelRegistryLifecycleState.CANDIDATE,
+                    ModelRegistryLifecycleState.CHALLENGER,
+                }
+                and resulting[1] == ModelRegistryLifecycleState.CHALLENGER
+                and resulting[0] == current[0]
+                and resulting[2] == current[2]
+            )
+        elif event.event_type == ModelGovernanceEvent.EVENT_ACTIVATED:
+            valid_transition = (
+                current[0] == ModelRegistryApprovalState.APPROVED
+                and current[1]
+                in {
+                    ModelRegistryLifecycleState.CANDIDATE,
+                    ModelRegistryLifecycleState.CHALLENGER,
+                }
+                and current[2] == ModelRegistryPromotionState.CANDIDATE
+                and resulting == (
+                    ModelRegistryApprovalState.APPROVED,
+                    ModelRegistryLifecycleState.ACTIVE,
+                    ModelRegistryPromotionState.ACTIVE_PROMOTED,
+                )
+            )
+        elif event.event_type == ModelGovernanceEvent.EVENT_RETIRED:
+            valid_transition = (
+                current == (
+                    ModelRegistryApprovalState.APPROVED,
+                    ModelRegistryLifecycleState.ACTIVE,
+                    ModelRegistryPromotionState.ACTIVE_PROMOTED,
+                )
+                and resulting == (
+                    ModelRegistryApprovalState.APPROVED,
+                    ModelRegistryLifecycleState.RETIRED,
+                    ModelRegistryPromotionState.RETIRED,
+                )
+            )
+        elif event.event_type == ModelGovernanceEvent.EVENT_ROLLED_BACK:
+            valid_transition = (
+                current[0] == ModelRegistryApprovalState.APPROVED
+                and resulting[0] == ModelRegistryApprovalState.APPROVED
+                and (
+                    current[1:] == (
+                        ModelRegistryLifecycleState.ACTIVE,
+                        ModelRegistryPromotionState.ACTIVE_PROMOTED,
+                    )
+                    and resulting[1:] == (
+                        ModelRegistryLifecycleState.ROLLED_BACK,
+                        ModelRegistryPromotionState.ROLLED_BACK,
+                    )
+                    or current[1:] in {
+                        (
+                            ModelRegistryLifecycleState.RETIRED,
+                            ModelRegistryPromotionState.RETIRED,
+                        ),
+                        (
+                            ModelRegistryLifecycleState.ROLLED_BACK,
+                            ModelRegistryPromotionState.ROLLED_BACK,
+                        ),
+                    }
+                    and resulting[1:] == (
+                        ModelRegistryLifecycleState.ACTIVE,
+                        ModelRegistryPromotionState.ACTIVE_PROMOTED,
+                    )
+                )
+            )
+        elif event.event_type != ModelGovernanceEvent.EVENT_REGISTERED:
+            valid_transition = False
+        if not valid_transition:
+            issues.append(f"governance_event_transition_invalid:{event.event_type}")
+        state = resulting
+
+    required_event_by_state = {
+        ModelRegistryApprovalState.PENDING_REVIEW: ModelGovernanceEvent.EVENT_APPROVAL_REQUESTED,
+        ModelRegistryApprovalState.APPROVED: ModelGovernanceEvent.EVENT_APPROVED,
+        ModelRegistryApprovalState.REJECTED: ModelGovernanceEvent.EVENT_REJECTED,
+    }
+    required_lifecycle_event = {
+        ModelRegistryLifecycleState.CHALLENGER: ModelGovernanceEvent.EVENT_CHALLENGER_DESIGNATED,
+        ModelRegistryLifecycleState.ACTIVE: ModelGovernanceEvent.EVENT_ACTIVATED,
+        ModelRegistryLifecycleState.RETIRED: ModelGovernanceEvent.EVENT_RETIRED,
+        ModelRegistryLifecycleState.ROLLED_BACK: ModelGovernanceEvent.EVENT_ROLLED_BACK,
+    }
+    approval_event = required_event_by_state.get(entry.approval_state)
+    if approval_event and approval_event not in event_types:
+        issues.append(f"governance_{approval_event.lower()}_event_missing")
+    lifecycle_event = required_lifecycle_event.get(entry.lifecycle_state)
+    if lifecycle_event and lifecycle_event not in event_types:
+        issues.append(f"governance_{lifecycle_event.lower()}_event_missing")
+    if state is not None and state != (
+        entry.approval_state,
+        entry.lifecycle_state,
+        entry.promotion_state,
+    ):
+        issues.append("governance_latest_state_mismatch")
+    return list(dict.fromkeys(issues))
+
+
 def _entry_issues(entry: ModelRegistryEntry) -> list[str]:
     issues: list[str] = []
     model_run = getattr(entry, "model_run", None)
     if model_run is None:
-        return ["model_run_missing"]
+        return ["model_run_missing", *_governance_event_issues(entry)]
     if not entry.registry_version:
         issues.append("registry_version_missing")
     artifact = verify_registry_artifact(entry)
@@ -96,6 +269,7 @@ def _entry_issues(entry: ModelRegistryEntry) -> list[str]:
             issues.append("approved_entry_missing_approval_event")
     elif entry.approved_at is not None or (entry.approved_by or "").strip():
         issues.append("unapproved_entry_has_approval_evidence")
+    issues.extend(_governance_event_issues(entry))
     if (
         entry.lifecycle_state != ModelRegistryLifecycleState.ACTIVE
         and entry.promotion_state == ModelRegistryPromotionState.ACTIVE_PROMOTED
@@ -151,6 +325,9 @@ def _entry_issues(entry: ModelRegistryEntry) -> list[str]:
         from .model_registry_governance import model_artifact_approval_blockers
 
         issues.extend(f"approval_evidence:{code}" for code in model_artifact_approval_blockers(entry))
+    from ..truth_policy import strict_persisted_truth_blockers
+
+    issues.extend(f"truth_policy:{code}" for code in strict_persisted_truth_blockers(model_run))
     return list(dict.fromkeys(issue for issue in issues if issue))
 
 
@@ -179,6 +356,9 @@ def build_model_registry_audit(*, strict: bool = False) -> dict:
         for entry in entries
     ]
     invalid_entries = [item for item in entry_findings if item["issues"]]
+    event_integrity_failures = [
+        item for item in entry_findings if any(str(issue).startswith("governance_") for issue in item["issues"])
+    ]
     registry_version_counts = Counter(str(entry.registry_version) for entry in entries)
     duplicate_registry_versions = {
         version: count for version, count in registry_version_counts.items() if count > 1
@@ -194,7 +374,12 @@ def build_model_registry_audit(*, strict: bool = False) -> dict:
         if (
             linked_entry is None
             or linked_entry.approval_state != ModelRegistryApprovalState.APPROVED
-            or linked_entry.lifecycle_state != ModelRegistryLifecycleState.ACTIVE
+            or linked_entry.lifecycle_state
+            not in {
+                ModelRegistryLifecycleState.ACTIVE,
+                ModelRegistryLifecycleState.RETIRED,
+                ModelRegistryLifecycleState.ROLLED_BACK,
+            }
         ):
             operational_runs_without_active_entry.append(
                 {"model_run_id": run.id, "model_version": run.model_version}
@@ -221,26 +406,16 @@ def build_model_registry_audit(*, strict: bool = False) -> dict:
         ),
         _check(
             "governance_event_immutability_and_provenance",
-            AUDIT_FAIL
-            if any(
-                entry.approval_state in {ModelRegistryApprovalState.APPROVED}
-                and not entry.governance_events.exists()
-                for entry in entries
-            )
-            else AUDIT_PASS,
-            "Governed state changes have persisted event provenance."
-            if not any(
-                entry.approval_state == ModelRegistryApprovalState.APPROVED and not entry.governance_events.exists()
-                for entry in entries
-            )
-            else "An approved entry has no governance event history.",
+            AUDIT_FAIL if event_integrity_failures else AUDIT_PASS,
+            "Governed state changes have persisted immutable, sequenced event provenance."
+            if not event_integrity_failures
+            else "One or more entries have incomplete or contradictory governance event history.",
             {
                 "event_count": ModelGovernanceEvent.objects.count(),
-                "approved_entries_without_events": [entry.id for entry in entries if entry.approval_state == ModelRegistryApprovalState.APPROVED and not entry.governance_events.exists()],
+                "event_integrity_failure_count": len(event_integrity_failures),
+                "entries": event_integrity_failures[:50],
             },
-            ["approved_entry_event_history_missing"]
-            if any(entry.approval_state == ModelRegistryApprovalState.APPROVED and not entry.governance_events.exists() for entry in entries)
-            else [],
+            ["governance_event_integrity_failed"] if event_integrity_failures else [],
         ),
         _check(
             "registry_version_uniqueness",
@@ -269,8 +444,13 @@ def build_model_registry_audit(*, strict: bool = False) -> dict:
     fail_count = sum(check["status"] == AUDIT_FAIL for check in checks)
     warning_count = sum(check["status"] == AUDIT_WARNING for check in checks)
     active_model_count = len(active_entries)
+    valid_entry_ids = {
+        item["registry_entry_id"] for item in entry_findings if not item["issues"]
+    }
     operational_active_entries = [
-        entry for entry in active_entries if entry.deployment_target == "live_baseline"
+        entry
+        for entry in active_entries
+        if entry.deployment_target == "live_baseline" and entry.id in valid_entry_ids
     ]
     operational_model_available = bool(operational_active_entries)
     readiness = (

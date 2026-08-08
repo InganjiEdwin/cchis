@@ -1,4 +1,7 @@
+import hashlib
 from datetime import date, timedelta
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -12,7 +15,6 @@ from accounts.models import StepUpGrant, User
 
 from risk.lead_time_features import build_lead_time_feature_dataset
 from risk.ml.data import InferenceDataset, TrainingDataset
-from risk.ml.registry import ensure_registry_entry_for_promoted_run
 from risk.ml.pipeline import run_mock_prediction_pipeline
 from risk.models import (
     Alert,
@@ -23,6 +25,11 @@ from risk.models import (
     FeatureDataset,
     FeatureDatasetRow,
     IngestionRun,
+    ModelPromotionEvent,
+    ModelRegistryApprovalState,
+    ModelRegistryEntry,
+    ModelRegistryLifecycleState,
+    ModelRegistryPromotionState,
     ModelRun,
     PopulationBaselineRecord,
     PopulationExposureFreshness,
@@ -170,6 +177,16 @@ class ProductionAlertEligibilityTestCase(APITestCase):
             county="Migori",
             ward_code="PROD-GATE-001",
         )
+        self.artifact_dir = TemporaryDirectory()
+        self.addCleanup(self.artifact_dir.cleanup)
+        self.artifact_settings_override = override_settings(
+            MODEL_ARTIFACT_ROOT=Path(self.artifact_dir.name),
+        )
+        self.artifact_settings_override.enable()
+        self.addCleanup(self.artifact_settings_override.disable)
+        self.artifact_path = Path(self.artifact_dir.name) / "production-gate-v1.joblib"
+        self.artifact_bytes = b"source-backed production gate test artifact"
+        self.artifact_path.write_bytes(self.artifact_bytes)
         self.period_start = date(2026, 7, 1)
         self.period_end = date(2026, 7, 7)
         source_timestamp = timezone.now()
@@ -289,6 +306,7 @@ class ProductionAlertEligibilityTestCase(APITestCase):
             schema_version="production-gate-label-v1",
             source_kind=FeatureDataset.SOURCE_KIND_LIVE,
             month=8,
+            feature_keys=["rainfall_total_7d"],
             row_count=1,
             lineage_metadata=self._lineage_metadata(include_climate=False),
         )
@@ -324,17 +342,13 @@ class ProductionAlertEligibilityTestCase(APITestCase):
         self.inference_row = self._dataset_row(self.inference_dataset)
         self.model_run = self._model_run("production-gate-v1")
         self.risk_score = self._risk_score(self.model_run, generated_at=timezone.now())
-        self.registry_entry = ensure_registry_entry_for_promoted_run(
-            model_run=self.model_run,
-            promoted_by="production-gate-test",
-            owner="production-gate-test",
-        )
         self.admin = User.objects.create_user(
             username="production-gate-admin",
             password="ChangeMe123!",
             role=User.ROLE_ADMIN,
             ward=self.ward,
         )
+        self.registry_entry = self._active_registry_entry()
 
     def _dataset(self, kind: str) -> FeatureDataset:
         dataset_kind = (
@@ -348,6 +362,7 @@ class ProductionAlertEligibilityTestCase(APITestCase):
             schema_version="production-gate-v1",
             source_kind=FeatureDataset.SOURCE_KIND_LIVE,
             month=8,
+            feature_keys=["rainfall_total_7d"],
             row_count=1,
             lineage_metadata=self._lineage_metadata(include_climate=True),
         )
@@ -420,6 +435,7 @@ class ProductionAlertEligibilityTestCase(APITestCase):
             status=status,
             month=8,
             feature_schema_version="production-gate-v1",
+            feature_keys=["rainfall_total_7d"],
             training_dataset_ref=self.training_dataset.dataset_ref,
             inference_dataset_ref=self.inference_dataset.dataset_ref,
             training_row_count=1,
@@ -434,9 +450,61 @@ class ProductionAlertEligibilityTestCase(APITestCase):
                 "phase_4_promotion_gates_passed": True,
                 "alert_eligible": True,
                 "surveillance_label_dataset_ref": self.label_dataset.dataset_ref,
+                "production_truth_policy": {"eligible": True, "blocked_reason_codes": []},
             },
+            evaluation_metrics={"precision": 0.8, "lead_time_recall": 0.7},
             completed_at=timezone.now() if status == ModelRun.STATUS_SUCCESS else None,
         )
+
+    def _active_registry_entry(self):
+        now = timezone.now()
+        entry = ModelRegistryEntry.objects.create(
+            registry_version=f"production-gate-{self.model_run.model_version}",
+            algorithm="logistic_regression",
+            model_family="ward_risk_classification",
+            model_version=self.model_run.model_version,
+            feature_schema_version=self.model_run.feature_schema_version,
+            model_run=self.model_run,
+            approval_state=ModelRegistryApprovalState.APPROVED,
+            lifecycle_state=ModelRegistryLifecycleState.CANDIDATE,
+            promotion_state=ModelRegistryPromotionState.CANDIDATE,
+            deployment_target="live_baseline",
+            artifact_location=f"file://{self.artifact_path}",
+            artifact_format="joblib",
+            artifact_size_bytes=len(self.artifact_bytes),
+            artifact_sha256=hashlib.sha256(self.artifact_bytes).hexdigest(),
+            training_feature_dataset_ref=self.training_dataset.dataset_ref,
+            inference_feature_dataset_ref=self.inference_dataset.dataset_ref,
+            training_label_dataset_ref=self.label_dataset.dataset_ref,
+            feature_contract=["rainfall_total_7d"],
+            metrics=self.model_run.evaluation_metrics,
+            truth_source_classification="confirmed_source_backed_fixture",
+            approved_at=now,
+            approved_by=self.admin.username,
+            approval_reason="Ephemeral source-backed truth-policy fixture",
+            owner=self.admin.username,
+            active_from=now,
+        )
+        promotion_event = ModelPromotionEvent.objects.create(
+            registry_entry=entry,
+            model_run=self.model_run,
+            source="focused-truth-policy-test",
+            promoted_by=self.admin.username,
+            promoted_by_user=self.admin,
+            active_from=now,
+        )
+        entry.lifecycle_state = ModelRegistryLifecycleState.ACTIVE
+        entry.promotion_state = ModelRegistryPromotionState.ACTIVE_PROMOTED
+        entry.promotion_event = promotion_event
+        entry.save(
+            update_fields=[
+                "lifecycle_state",
+                "promotion_state",
+                "promotion_event",
+                "updated_at",
+            ]
+        )
+        return entry
 
     def _risk_score(self, model_run: ModelRun | None, *, generated_at=None) -> RiskScore:
         return RiskScore.objects.create(

@@ -1089,11 +1089,14 @@ class ModelGovernanceEventInline(admin.TabularInline):
     readonly_fields = (
         "event_type",
         "actor",
+        "actor_user",
         "reason",
         "previous_approval_state",
         "resulting_approval_state",
         "previous_lifecycle_state",
         "resulting_lifecycle_state",
+        "previous_promotion_state",
+        "resulting_promotion_state",
         "request_id",
         "occurred_at",
     )
@@ -1186,17 +1189,20 @@ class ModelGovernanceEventAdmin(admin.ModelAdmin):
     )
     search_fields = ("registry_entry__model_version", "actor", "reason", "request_id")
     list_filter = ("event_type", "resulting_approval_state", "resulting_lifecycle_state", "occurred_at")
-    raw_id_fields = ("registry_entry",)
+    raw_id_fields = ("registry_entry", "actor_user")
     readonly_fields = (
         "public_id",
         "registry_entry",
         "event_type",
         "actor",
+        "actor_user",
         "reason",
         "previous_approval_state",
         "resulting_approval_state",
         "previous_lifecycle_state",
         "resulting_lifecycle_state",
+        "previous_promotion_state",
+        "resulting_promotion_state",
         "evidence_snapshot",
         "request_id",
         "occurred_at",

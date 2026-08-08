@@ -506,6 +506,7 @@ def _rollback_to_non_promoted_run_check() -> dict:
     events = ModelRollbackEvent.objects.select_related(
         "rolled_back_from__model_run",
         "rollback_target__model_run",
+        "rolled_back_by_user",
     ).order_by("-occurred_at", "-id")
     for event in events:
         target = event.rollback_target
@@ -564,9 +565,23 @@ def _rollback_event_governance_provenance_check() -> dict:
             missing.append("reason")
         if not (event.rolled_back_by or "").strip():
             missing.append("rolled_back_by")
+        if not event.rolled_back_by_user_id:
+            missing.append("rolled_back_by_user")
+        elif not event.rolled_back_by_user.is_active:
+            missing.append("rolled_back_by_user_inactive")
+        elif not (
+            event.rolled_back_by_user.is_superuser
+            or event.rolled_back_by_user.role == "ADMIN"
+        ):
+            missing.append("rolled_back_by_user_role")
         if metadata.get("schema_version") != MODEL_ROLLBACK_WORKFLOW_SCHEMA_VERSION:
             missing.append("metadata.schema_version")
-        if authorized_role not in AUTHORIZED_ROLLBACK_ROLES:
+        expected_role = (
+            "admin"
+            if event.rolled_back_by_user_id and event.rolled_back_by_user.is_superuser
+            else str(getattr(event.rolled_back_by_user, "role", "") or "").lower()
+        )
+        if authorized_role != expected_role or authorized_role not in AUTHORIZED_ROLLBACK_ROLES:
             missing.append("metadata.authorized_role")
         if not metadata.get("previous_active"):
             missing.append("metadata.previous_active")

@@ -7,6 +7,8 @@ __pycache__/
 db.sqlite3
 repomix-output.*
 backend/risk/data/source_cache/
+model_artifacts/
+backend/model_artifacts/
 backend/celerybeat-schedule
 backend/celerybeat-schedule.*
 node_modules/
@@ -14,6 +16,7 @@ node_modules/
 /docs/*
 !/docs/
 !/docs/CCHIS_TECHNICAL_CAPABILITY_AUDIT_2026-08-07.md
+!/docs/MODEL_ARTIFACT_REGISTRY.md
 !/docs/CCHIS_DATA_SOURCE_FEEDS.md
 !/docs/MIGORI_KNBS_WORLDPOP_INGESTION_PLAN.md
 !/docs/SOURCE_DATA_API_CONNECTORS.md
