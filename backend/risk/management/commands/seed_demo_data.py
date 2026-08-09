@@ -3,7 +3,6 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.contrib.gis.geos import Point
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
@@ -29,6 +28,7 @@ from risk.models import (
     TriageSession,
     Ward,
 )
+from risk.migori_facility_seed import build_seed_facility_payload
 from risk.seed_kenya_administrative_areas import (
     reconcile_ward_codes_from_reference,
     seed_kenya_counties_and_wards,
@@ -169,6 +169,7 @@ class Command(BaseCommand):
         CatchmentPopulationRecord.objects.filter(source_name__startswith="seed-scenario-").delete()
         PopulationExposureIngestionRun.objects.filter(source_name__startswith="seed-scenario-").delete()
         PopulationExposureSource.objects.filter(source_name__startswith="seed-scenario-").delete()
+        HealthFacility.objects.filter(facility_code__startswith="P9-").update(is_active=False)
 
     def _build_ward_profiles(self, selected_scenarios: list[str]):
         predefined_names = {
@@ -198,15 +199,7 @@ class Command(BaseCommand):
                     {"model_version": "v0-demo-seeded-24h", "score": 0.15, "risk_level": Ward.RISK_LOW, "predicted_cases": 1, "hours_ago": 24},
                     {"model_version": "v0-demo", "score": 0.12, "risk_level": Ward.RISK_LOW, "predicted_cases": 1, "hours_ago": 2},
                 ],
-                "facility": {
-                    "name": f"{fallback_ward.name} Health Centre",
-                    "facility_code": "CCHIS-HF-005",
-                    "facility_type": HealthFacility.TYPE_HEALTH_CENTER,
-                    "ownership": HealthFacility.OWNERSHIP_PUBLIC,
-                    "level": HealthFacility.LEVEL_3,
-                    "contact_phone": "+254720000005",
-                    "point": Point(34.5000, -1.0000, srid=4326),
-                },
+                "facility": build_seed_facility_payload("CCHIS-HF-005"),
                 "chv_count": 1,
                 "alerts": [],
                 "field_feedback": {"triage": 0, "sync": 0},
@@ -220,15 +213,7 @@ class Command(BaseCommand):
                     {"model_version": "v0-demo-seeded-24h", "score": 0.47, "risk_level": Ward.RISK_MEDIUM, "predicted_cases": 4, "hours_ago": 24},
                     {"model_version": "v0-demo", "score": 0.58, "risk_level": Ward.RISK_MEDIUM, "predicted_cases": 5, "hours_ago": 2},
                 ],
-                "facility": {
-                    "name": "North Kadem Health Centre",
-                    "facility_code": "CCHIS-HF-002",
-                    "facility_type": HealthFacility.TYPE_HEALTH_CENTER,
-                    "ownership": HealthFacility.OWNERSHIP_PUBLIC,
-                    "level": HealthFacility.LEVEL_3,
-                    "contact_phone": "+254720000002",
-                    "point": Point(34.3063, -1.0865, srid=4326),
-                },
+                "facility": build_seed_facility_payload("CCHIS-HF-002"),
                 "chv_count": 1,
                 "alerts": [],
                 "field_feedback": {"triage": 1, "sync": 0},
@@ -242,15 +227,7 @@ class Command(BaseCommand):
                     {"model_version": "v0-demo-seeded-24h", "score": 0.71, "risk_level": Ward.RISK_HIGH, "predicted_cases": 11, "hours_ago": 24},
                     {"model_version": "v0-demo", "score": 0.88, "risk_level": Ward.RISK_HIGH, "predicted_cases": 18, "hours_ago": 2},
                 ],
-                "facility": {
-                    "name": "North Kamagambo Dispensary",
-                    "facility_code": "CCHIS-HF-001",
-                    "facility_type": HealthFacility.TYPE_DISPENSARY,
-                    "ownership": HealthFacility.OWNERSHIP_PUBLIC,
-                    "level": HealthFacility.LEVEL_2,
-                    "contact_phone": "+254720000001",
-                    "point": Point(34.6410, -0.9876, srid=4326),
-                },
+                "facility": build_seed_facility_payload("CCHIS-HF-001"),
                 "chv_count": 2,
                 "alerts": [
                     {
@@ -285,15 +262,7 @@ class Command(BaseCommand):
                     {"model_version": "v0-demo-seeded-24h", "score": 0.68, "risk_level": Ward.RISK_HIGH, "predicted_cases": 10, "hours_ago": 24},
                     {"model_version": "v0-demo", "score": 0.81, "risk_level": Ward.RISK_HIGH, "predicted_cases": 14, "hours_ago": 2},
                 ],
-                "facility": {
-                    "name": "Macalder Mission Hospital",
-                    "facility_code": "CCHIS-HF-003",
-                    "facility_type": HealthFacility.TYPE_HOSPITAL,
-                    "ownership": HealthFacility.OWNERSHIP_FAITH,
-                    "level": HealthFacility.LEVEL_4,
-                    "contact_phone": "+254720000003",
-                    "point": Point(34.2871, -1.1212, srid=4326),
-                },
+                "facility": build_seed_facility_payload("CCHIS-HF-003"),
                 "chv_count": 1,
                 "alerts": [
                     {
@@ -330,15 +299,7 @@ class Command(BaseCommand):
                     {"model_version": "v0-demo-seeded-24h", "score": 0.67, "risk_level": Ward.RISK_HIGH, "predicted_cases": 9, "hours_ago": 24},
                     {"model_version": "v0-demo", "score": 0.84, "risk_level": Ward.RISK_HIGH, "predicted_cases": 16, "hours_ago": 2},
                 ],
-                "facility": {
-                    "name": "Got Kachola Dispensary",
-                    "facility_code": "CCHIS-HF-004",
-                    "facility_type": HealthFacility.TYPE_DISPENSARY,
-                    "ownership": HealthFacility.OWNERSHIP_PUBLIC,
-                    "level": HealthFacility.LEVEL_2,
-                    "contact_phone": "+254720000004",
-                    "point": Point(34.5122, -1.0634, srid=4326),
-                },
+                "facility": build_seed_facility_payload("CCHIS-HF-004"),
                 "chv_count": 1,
                 "alerts": [
                     {
